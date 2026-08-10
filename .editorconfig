@@ -1,0 +1,23 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.go]
+indent_style = tab
+indent_size = 4
+
+[*.{yml,yaml,json,md}]
+indent_style = space
+indent_size = 2
+
+# Markdown uses trailing double-space as a hard line break, and the ADRs
+# rely on it (for example the "Status: Accepted" / "Date:" line pair on
+# line 3 of every ADR). Trimming trailing whitespace on these files would
+# silently collapse that formatting and produce noise diffs on documents
+# this project treats as authoritative, so override the [*] default here.
+[*.md]
+trim_trailing_whitespace = false

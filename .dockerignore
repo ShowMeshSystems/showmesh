@@ -1,0 +1,40 @@
+# Version control and CI metadata: irrelevant to the build, and .git in
+# particular can be large and changes on every commit, defeating layer
+# caching.
+.git
+.gitignore
+.github
+
+# Local build output, never an input to the container build.
+bin
+dist
+
+# Documentation and decision records: large, changes often, not needed to
+# compile the binaries. README.md is kept at the repo root because some
+# Go tooling (e.g. pkg.go.dev rendering, module metadata) expects it, but
+# it plays no role in `docker build` either way.
+docs
+*.md
+
+# Deployment bundle and local dev scratch: these consume the Dockerfile
+# they build against, not the other way around, so they must never be
+# part of the build context sent to the daemon.
+deploy
+
+# OS and editor cruft.
+.DS_Store
+.vscode
+.idea
+
+# Test artifacts and coverage output.
+*.test
+*.out
+coverage.*
+
+# Explicitly keep the Go build inputs even though *.md above would not
+# touch them; listed here for clarity that these are never excluded.
+!go.mod
+!go.sum
+!cmd
+!internal
+!pkg

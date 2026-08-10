@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Default to read-only; no job needs to write to the repo or packages.
+permissions:
+  contents: read
+
+# Cancel superseded runs from repeated pushes to the same PR/branch instead
+# of letting them pile up and burn runner minutes in parallel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Test both the minimum Go version this project claims to support
+      # (go.mod) and the compiler the Dockerfile actually ships the
+      # coordinator binary on, so the two never silently diverge. These are
+      # literal versions, not go-version-file, precisely so this matrix
+      # doesn't collapse back into one entry; update both by hand when
+      # either go.mod's `go` directive or the Dockerfile's golang: tag
+      # changes.
+      matrix:
+        go-version: ["1.25.0", "1.26.5"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race detector)
+        run: go test -race ./...
+
+      - name: Build CGo-free (ADR-012)
+        # ADR-012 requires the coordinator build CGo-free so the image can
+        # be a static binary on a distroless base and cross-compile cleanly
+        # for arm64; `go test -race` above requires cgo and would not catch
+        # a dependency that silently needs it, so build it out explicitly.
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Check formatting
+        # gofmt -l lists files that are not formatted; fail the job if it
+        # prints anything, since a clean `-l` output is empty.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          # Version pinned so lint results don't drift with an unrelated
+          # golangci-lint release; bump deliberately alongside .golangci.yml.
+          # Matches GOLANGCI_LINT_VERSION in the Makefile's lint fallback.
+          version: v2.6.2
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # No QEMU here: the builder stage uses --platform=$BUILDPLATFORM and
+      # cross-compiles with CGO_ENABLED=0, and the runtime stage has no RUN
+      # instructions, so the arm64 leg is proven by cross compilation from
+      # the build platform, not emulation. This stays true only while the
+      # runtime stage has no RUN instructions; if one is ever added, QEMU
+      # would need to come back to actually exercise it.
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build multi-arch image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          load: false
+          build-args: |
+            VERSION=${{ github.sha }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}

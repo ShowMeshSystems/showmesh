@@ -1,0 +1,95 @@
+# ShowMesh coordinator appliance bundle.
+#
+# Bring the stack up from this directory with:
+#   docker compose up -d --build
+#
+# `version:` is intentionally omitted; it is obsolete in current Docker
+# Compose (the CLI warns if present) and both services declare everything
+# they need without it.
+
+services:
+  mosquitto:
+    # Pinned to the 2.x line without a floating "2" tag drift risk beyond
+    # patch releases; bump deliberately when validated against a newer
+    # minor. See ADR-008 for why Mosquitto is the reference broker.
+    image: eclipse-mosquitto:2.0.22
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    ports:
+      - "${MOSQUITTO_PORT:-1883}:1883"
+    healthcheck:
+      # mosquitto_sub with a 1-second wait is the standard liveness probe
+      # for this image; it ships in the image so no extra tooling is
+      # needed. A failed connect exits non-zero.
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  coordinator:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${SHOWMESH_VERSION:-dev}
+        COMMIT: ${SHOWMESH_COMMIT:-none}
+        BUILD_DATE: ${SHOWMESH_BUILD_DATE:-unknown}
+    # Once published images exist, prefer pulling instead of building
+    # locally on every `up`. Uncomment and set the tag, and drop `build:`
+    # above if you never intend to build from source on this host.
+    # image: ghcr.io/showmeshsystems/showmesh-coordinator:${SHOWMESH_VERSION:-latest}
+    restart: unless-stopped
+    # Shutdown budget: the coordinator's own shutdown path allocates 10s
+    # shared between draining the HTTP server and disconnecting from MQTT.
+    # Docker's default stop_grace_period is also 10s, so a single lingering
+    # keep-alive connection could consume the whole budget and leave the
+    # MQTT disconnect unrun before SIGKILL arrives. Harmless today (no Last
+    # Will is set yet), but ADR-008 makes LWT the liveness mechanism from
+    # Step 2 onward, at which point a skipped disconnect on every planned
+    # restart would fire a spurious Last Will and flip nodes to unknown.
+    stop_grace_period: 30s
+    env_file:
+      # `required: false` means `docker compose up`/`config` work even
+      # before `.env` is created from `.env.example`; every setting also
+      # has a `${VAR:-default}` fallback below.
+      - path: .env
+        required: false
+    environment:
+      # Points the coordinator at the bundled broker by default; override
+      # in .env to point at an external broker instead (see README.md).
+      SHOWMESH_MQTT_BROKER: ${SHOWMESH_MQTT_BROKER:-tcp://mosquitto:1883}
+      SHOWMESH_HTTP_ADDR: ${SHOWMESH_HTTP_ADDR:-:8080}
+      SHOWMESH_MQTT_CLIENT_ID: ${SHOWMESH_MQTT_CLIENT_ID:-showmesh-coordinator}
+      SHOWMESH_MQTT_USERNAME: ${SHOWMESH_MQTT_USERNAME:-}
+      SHOWMESH_MQTT_PASSWORD: ${SHOWMESH_MQTT_PASSWORD:-}
+      SHOWMESH_DATA_DIR: ${SHOWMESH_DATA_DIR:-/var/lib/showmesh}
+      SHOWMESH_LOG_LEVEL: ${SHOWMESH_LOG_LEVEL:-info}
+    volumes:
+      # Named volume, not a bind mount: SQLite (ADR-009) needs a
+      # filesystem with normal POSIX locking semantics and consistent
+      # ownership, which a host bind mount cannot guarantee portably
+      # across macOS/Windows Docker Desktop and Linux hosts.
+      - showmesh-data:/var/lib/showmesh
+    ports:
+      - "${SHOWMESH_HTTP_PORT:-8080}:8080"
+    depends_on:
+      # service_started, not service_healthy: ADR-008 states broker loss is
+      # a management-plane outage only, and the coordinator must start and
+      # stay up with no broker reachable at all. Gating on the mosquitto
+      # healthcheck would leave the coordinator container stuck in
+      # `Created` whenever that healthcheck fails, for example an operator
+      # who points at an external broker per README.md but leaves the
+      # bundled service defined and unreachable. The healthcheck itself
+      # stays on the mosquitto service below as useful signal; it just must
+      # not gate the coordinator's own startup.
+      mosquitto:
+        condition: service_started
+
+volumes:
+  mosquitto-data:
+  mosquitto-log:
+  showmesh-data:
