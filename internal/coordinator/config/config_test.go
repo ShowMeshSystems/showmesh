@@ -1,4 +1,4 @@
-package coordinator
+package config
 
 import (
 	"log/slog"

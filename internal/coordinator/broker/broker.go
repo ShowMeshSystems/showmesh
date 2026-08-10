@@ -1,4 +1,7 @@
-package coordinator
+// Package broker owns the coordinator's connection to the MQTT broker: the
+// connection manager, the observed BrokerState, and the readiness rule
+// derived from it. See NewBrokerManager and Readiness.
+package broker
 
 import (
 	"context"
@@ -10,6 +13,9 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 )
 
 // brokerProbeInterval is how often the background probe goroutine re-checks
@@ -20,6 +26,27 @@ const brokerProbeInterval = 5 * time.Second
 // brokerProbeTimeout bounds each individual probe so a hung check cannot
 // delay the next one or block shutdown.
 const brokerProbeTimeout = 250 * time.Millisecond
+
+// evidenceStalenessWindow bounds how old BrokerState.ObservedAt may be
+// before Readiness treats a "connected" observation as unknown rather than
+// healthy, per ADR-011 (stale or insufficient evidence becomes unknown, not
+// healthy). Partition detection latency is ultimately bounded by the MQTT
+// keepalive interval (see NewBrokerManager's KeepAlive setting below), so
+// this window is a floor on confidence, not a guarantee: a connection can
+// go silently dead and still read as fresh for up to one keepalive cycle
+// after the partition starts.
+const evidenceStalenessWindow = 15 * time.Second
+
+// keepAliveSeconds is evidenceStalenessWindow expressed in the uint16
+// seconds autopaho's KeepAlive field requires. This is a constant
+// conversion (evidenceStalenessWindow and time.Second are both constants),
+// so if evidenceStalenessWindow is ever raised past 65535 seconds this
+// fails to compile instead of silently wrapping the way a runtime
+// uint16(float64) conversion would. Keeping this at or below
+// evidenceStalenessWindow is what makes that window a meaningful floor on
+// confidence rather than a number disconnected from the mechanism that
+// actually detects loss — see evidenceStalenessWindow's doc comment.
+const keepAliveSeconds = uint16(evidenceStalenessWindow / time.Second)
 
 // BrokerState is evidence about the broker connection, not just a flag.
 // ADR-011 requires observations to carry freshness; a value with no
@@ -48,8 +75,7 @@ type BrokerState struct {
 // coordinator to exit because the broker is unreachable — the underlying
 // autopaho connection manager retries forever with backoff.
 type BrokerManager struct {
-	cm     *autopaho.ConnectionManager
-	logger *slog.Logger
+	cm *autopaho.ConnectionManager
 
 	// now is the clock BrokerManager uses to stamp BrokerState. It is a
 	// field (rather than a direct time.Now call) so tests can drive state
@@ -70,7 +96,7 @@ type BrokerManager struct {
 // The probe goroutine that periodically re-confirms BrokerState is tied to
 // ctx: it exits when ctx is done, so callers must cancel ctx (or call
 // Disconnect) on shutdown to avoid leaking it.
-func NewBrokerManager(ctx context.Context, cfg Config, logger *slog.Logger) (*BrokerManager, error) {
+func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logger) (*BrokerManager, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -83,20 +109,22 @@ func NewBrokerManager(ctx context.Context, cfg Config, logger *slog.Logger) (*Br
 		return nil, fmt.Errorf("parsing mqtt broker url %q: %w", cfg.MQTTBroker, err)
 	}
 
-	bm := &BrokerManager{logger: logger, now: time.Now}
+	bm := &BrokerManager{now: time.Now}
 	initAt := bm.now()
 	bm.state = BrokerState{Connected: false, Since: initAt, ObservedAt: initAt}
 
 	clientCfg := autopaho.ClientConfig{
 		ServerUrls: []*url.URL{serverURL},
-		// KeepAlive is deliberately tied to readyzStalenessWindow (see
-		// server.go): partition detection latency is ultimately bounded by
-		// this interval, since a silent network partition (no TCP FIN) is
-		// only caught when a keepalive round-trip fails. Keeping it at or
-		// below the staleness window is what makes that window a meaningful
-		// floor on confidence rather than a number disconnected from the
-		// mechanism that actually detects loss.
-		KeepAlive:        uint16(readyzStalenessWindow.Seconds()),
+		// KeepAlive is deliberately tied to evidenceStalenessWindow (above):
+		// partition detection latency is ultimately bounded by this
+		// interval, since a silent network partition (no TCP FIN) is only
+		// caught when a keepalive round-trip fails. Keeping it at or below
+		// the staleness window is what makes that window a meaningful floor
+		// on confidence rather than a number disconnected from the
+		// mechanism that actually detects loss. See keepAliveSeconds for why
+		// this is a compile-time constant conversion rather than a runtime
+		// one.
+		KeepAlive:        keepAliveSeconds,
 		ConnectTimeout:   10 * time.Second,
 		ReconnectBackoff: autopaho.DefaultExponentialBackoff(),
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) {
@@ -184,13 +212,71 @@ func (b *BrokerManager) State() BrokerState {
 	return b.state
 }
 
+// Readiness reports readiness from BrokerState, per ADR-011: an observation
+// is only as good as its freshness.
+//
+//   - Connected and evidence fresh (ObservedAt within evidenceStalenessWindow):
+//     Ready.
+//   - Not connected: not ready, reason "mqtt broker not connected".
+//   - Connected but evidence stale: not ready. Per ADR-011 this is unknown,
+//     not healthy, so it is reported as not-ready rather than papering over
+//     the missing confirmation.
+func (b *BrokerManager) Readiness() readiness.Report {
+	state := b.State()
+
+	if !state.Connected {
+		return readiness.Report{
+			Ready:      false,
+			Reason:     "mqtt broker not connected",
+			ObservedAt: state.ObservedAt,
+			Details: map[string]any{
+				"connected": state.Connected,
+			},
+		}
+	}
+
+	age := time.Since(state.ObservedAt)
+	if age > evidenceStalenessWindow {
+		return readiness.Report{
+			Ready:      false,
+			Reason:     "mqtt broker evidence is stale",
+			ObservedAt: state.ObservedAt,
+			Details: map[string]any{
+				"connected": state.Connected,
+			},
+		}
+	}
+
+	return readiness.Report{
+		Ready:      true,
+		ObservedAt: state.ObservedAt,
+	}
+}
+
 // Disconnect shuts down the broker connection cleanly, honoring ctx's
 // deadline. The probe goroutine is stopped via ctx cancellation by the
-// caller (the same ctx passed to NewBrokerManager); Disconnect itself only
-// tears down the MQTT connection.
+// caller (the same ctx passed to NewBrokerManager, which the caller must
+// cancel before or during the call to Disconnect); Disconnect then waits
+// for that goroutine to actually exit before returning, so shutdown joins
+// it instead of leaking it. The wait is bounded by ctx: a probe goroutine
+// that fails to exit (e.g. because the caller never canceled its ctx)
+// cannot block shutdown past ctx's own deadline.
 func (b *BrokerManager) Disconnect(ctx context.Context) error {
-	if b.cm == nil {
-		return nil
+	var err error
+	if b.cm != nil {
+		err = b.cm.Disconnect(ctx)
 	}
-	return b.cm.Disconnect(ctx)
+
+	probeDone := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(probeDone)
+	}()
+
+	select {
+	case <-probeDone:
+	case <-ctx.Done():
+	}
+
+	return err
 }
