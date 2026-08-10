@@ -4,6 +4,8 @@
 
 - [Architecture specification](architecture/ARCHITECTURE.md) — vision, system boundaries, components, synchronization, state, commands, deployment, and roadmap.
 - [Observability specification](architecture/OBSERVABILITY.md) — signal model, collectors, dashboard, preview monitoring, diagnostics, readiness evidence, and alerting.
+- [Operator UI specification](architecture/OPERATOR-UI.md) — the browser client architecture: isolation, API contract, real-time updates, staleness handling, information architecture, and responsiveness. What the dashboard displays stays in the observability specification.
+- [Audio Engine specification](architecture/AUDIO-ENGINE.md) — authority model, playback sessions, drift policy, clock domains, buses and routing, output adapters, mixing, and failure behavior for audience-facing audio.
 - [Reference installation](reference-installation.md) — the concrete hardware, network, and timing topology that anchors research test matrices.
 - [Research tracker](research/README.md) — open technical questions and the evidence required to resolve them.
 - [Architecture decision records](decisions/README.md) — durable decisions, their context, and consequences.

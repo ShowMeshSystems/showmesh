@@ -14,13 +14,14 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-004](RES-004-virtual-matrix-renderer-performance.md) | Virtual-matrix renderer performance | unresearched | critical | RES-002 |
 | [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | unresearched | critical | RES-004, RES-006 |
 | [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (L1) | high | — |
-| [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | unresearched | critical | RES-002 |
+| [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench, L0) | critical | RES-002 |
 | [RES-008](RES-008-configuration-model.md) | Configuration model | unresearched | high | — |
 | [RES-009](RES-009-failure-mode-testing.md) | Failure-mode testing | planned | critical | all records |
 | [RES-010](RES-010-projection-preview-monitoring.md) | Projection preview monitoring | planned (L1) | critical | RES-005, RES-006 |
 | [RES-011](RES-011-pixel-current-diagnostics.md) | Pixel-current diagnostics | planned (L1) | critical | — |
 | [RES-012](RES-012-device-telemetry-adapters.md) | Device telemetry adapters | planned (L1) | high | — |
 | [RES-013](RES-013-telemetry-storage-and-alerting.md) | Telemetry storage and alerting | planned | high | RES-010, RES-011, RES-012 |
+| [RES-014](RES-014-control-provider-model.md) | Control-provider model | unresearched | medium | RES-012 |
 
 ## Verification levels
 

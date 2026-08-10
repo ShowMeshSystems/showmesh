@@ -9,16 +9,22 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-001](ADR-001-fpp-is-authoritative.md) | FPP is the authoritative scheduler | Accepted |
 | [ADR-002](ADR-002-capability-based-nodes.md) | Nodes are modeled by capabilities | Accepted |
 | [ADR-003](ADR-003-desired-and-observed-state.md) | Desired and observed state remain separate | Accepted |
-| [ADR-004](ADR-004-layered-commands-and-fallback.md) | Use primitives, macros, and reduced local fallback | Accepted |
+| [ADR-004](ADR-004-layered-commands-and-fallback.md) | Use primitives, macros, and reduced local fallback | Accepted (narrowed by ADR-016, ADR-019) |
 | [ADR-005](ADR-005-pluggable-media-transport.md) | Media transport is pluggable | Accepted |
-| [ADR-006](ADR-006-go-implementation-language.md) | Go is the implementation language | Accepted |
+| [ADR-006](ADR-006-go-implementation-language.md) | Go is the implementation language | Accepted (frontend clause closed by ADR-014, ADR-015) |
 | [ADR-007](ADR-007-gstreamer-media-engine.md) | Node agent supervises GStreamer as media engine | Accepted |
 | [ADR-008](ADR-008-mqtt-control-plane.md) | MQTT is the coordinator↔agent transport | Accepted |
 | [ADR-009](ADR-009-sqlite-configuration-storage.md) | SQLite authoritative store; YAML portable bundles | Accepted |
 | [ADR-010](ADR-010-apache-2-license.md) | Apache-2.0 license | Accepted |
 | [ADR-011](ADR-011-context-aware-observability.md) | Health and alerts are context-aware | Accepted |
-| [ADR-012](ADR-012-docker-coordinator-deployment.md) | Docker is the primary coordinator deployment | Accepted |
+| [ADR-012](ADR-012-docker-coordinator-deployment.md) | Docker is the primary coordinator deployment | Accepted (bundle extended by ADR-014) |
 | [ADR-013](ADR-013-no-fpp-control-port-sharing.md) | ShowMesh must not share the FPP control port with a running fppd | Accepted |
+| [ADR-014](ADR-014-operator-ui-is-an-api-client.md) | The Operator UI is an optional client of a versioned public control API | Accepted |
+| [ADR-015](ADR-015-typescript-spa-frontend.md) | The Operator UI is a TypeScript single-page application | Accepted |
+| [ADR-016](ADR-016-controlled-devices-and-control-providers.md) | Externally controlled devices are driven by control providers | Accepted |
+| [ADR-017](ADR-017-showmesh-owns-audience-audio.md) | ShowMesh owns audience audio; nodes play local media | Accepted |
+| [ADR-018](ADR-018-program-and-ltc-share-a-clock-domain.md) | Program audio and LTC share one clock domain | Accepted |
+| [ADR-019](ADR-019-audio-device-loss-fails-silent.md) | Audio device loss fails silent, no automatic FPP fallback | Accepted |
 
 ## Record template
 

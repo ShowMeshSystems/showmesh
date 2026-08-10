@@ -1,6 +1,6 @@
 # Architecture Specification
 
-[Documentation index](../README.md) · [Observability specification](OBSERVABILITY.md) · [Research tracker](../research/README.md) · [Decision records](../decisions/README.md)
+[Documentation index](../README.md) · [Observability specification](OBSERVABILITY.md) · [Operator UI specification](OPERATOR-UI.md) · [Audio Engine specification](AUDIO-ENGINE.md) · [Research tracker](../research/README.md) · [Decision records](../decisions/README.md)
 
 Status: Draft architecture baseline  
 Audience: Maintainers, contributors, show designers, and integration authors
@@ -26,7 +26,7 @@ See [ADR-001](../decisions/ADR-001-fpp-is-authoritative.md).
 
 ### 2.2 Capabilities over hardware identities
 
-A node advertises what it can do, not what model of computer it is. Workloads are assigned against capabilities such as `video.render`, `matrix.render`, `transport.ndi.send`, `display.hdmi`, `audio.playback`, or `timecode.ltc.generate`.
+A node advertises what it can do, not what model of computer it is. Workloads are assigned against capabilities such as `video.render`, `matrix.render`, `transport.ndi.send`, `display.hdmi`, `audio.engine`, or `audio.output.ltc`.
 
 This permits reassignment after hardware failure and avoids embedding x86, Raspberry Pi, Windows, or Resolume assumptions into core interfaces. See [ADR-002](../decisions/ADR-002-capability-based-nodes.md).
 
@@ -86,6 +86,8 @@ Coordinator control plane <----> Operators / integrations
 | Sequence creation and model layout | xLights |
 | Calendar, playlist order, and scheduled start | FPP |
 | Lifecycle orchestration and reconciliation | Coordinator |
+| Audience-facing audio: sessions, routing, mixing, output assignment | Coordinator ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md)) |
+| Audio playback clock, PCM rendering, local audio device state | Active audio node |
 | Local media execution and device health | Node agent |
 | Projection composition and mapping | Resolume, when present |
 | Emergency local fallback | FPP plugin and node policy |
@@ -122,7 +124,9 @@ One logical surface per projector is the preferred authoring model unless perfor
 
 Audio is a first-class node capability rather than a mandatory responsibility of the primary FPP controller. An audio-capable node may provide show playback, background music, announcements, fades, multichannel routing, Dante integration, metering, and LTC generation.
 
-Clock ownership, transition semantics, and failure behavior remain open in [audio-node research](../research/RES-007-audio-node-architecture.md).
+ShowMesh is authoritative for audience-facing audio, and audio nodes play complete local media files against their own audio clock rather than following a sample stream ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md)). Program audio and LTC share one clock domain ([ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md)), and audio device loss fails silent with no automatic fallback to FPP audio ([ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)). Rendering — mixing, fades, ducking, interleave, LTC generation — is agent-supervised GStreamer per [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md); ShowMesh code owns session state, sync policy, supervision, and health.
+
+The full contract is [AUDIO-ENGINE.md](AUDIO-ENGINE.md). All of it is design intent: viability, the drift budget, and achieved program-to-LTC alignment are open bench items in [audio-node research](../research/RES-007-audio-node-architecture.md), which remains critical-risk at L0.
 
 ### 4.6 Resolume adapter
 
@@ -137,6 +141,18 @@ Media transport is pluggable. NDI is a preferred candidate for high-bandwidth sh
 Collectors normalize state and telemetry from FPP, Resolume, nodes, controllers, projectors, transports, network equipment, power systems, and environmental sensors. The coordinator correlates those observations with topology, lifecycle state, sequence position, diagnostics, commands, and maintenance windows.
 
 The operator surface includes a central overview, physical/logical house map, resource drill-down, projection preview wall, readiness results, active alerts, and historical events. Alert evaluation is context-aware and preserves the evidence behind suppressed, acknowledged, and resolved conditions. The detailed contract is defined in [OBSERVABILITY.md](OBSERVABILITY.md).
+
+### 4.9 Operator UI
+
+The Operator UI is the browser-based operator surface, deployed as its own container and consuming the coordinator's versioned public control API and real-time state stream. It is an optional client: it holds no orchestration behavior of its own, and a running show must continue correctly with the UI crashed, upgraded, unreachable, or entirely absent. See [ADR-014](../decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-015](../decisions/ADR-015-typescript-spa-frontend.md), and the client contract in [OPERATOR-UI.md](OPERATOR-UI.md).
+
+Because the UI is one client among possible others, the control API is a public contract designed to be usable without it — by a CLI, an automation system, or an alternate client.
+
+### 4.10 Controlled devices and control providers
+
+Projectors, displays, amplifiers, AV receivers, smart relays, power controllers, and network-controlled audio devices run no ShowMesh code and cannot advertise capabilities the way nodes do. They are modeled as **controlled devices**: a distinct coordinator resource class with a persistent definition, desired state, and observed state, driven by **control providers** that declare their own configuration, actions, and telemetry as machine-readable metadata.
+
+Network-reachable providers may run in the coordinator; providers requiring physical attachment run in a node agent and are advertised as a node capability. Providers never enter the timing or media path, but device control is show-affecting: because a controlled device holds no fallback of its own, any macro step depending on a coordinator-hosted provider must be labelled coordinator-required per [ADR-004](../decisions/ADR-004-layered-commands-and-fallback.md). See [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md); the metadata contract and the viability of metadata-generated operator surfaces are open in [RES-014](../research/RES-014-control-provider-model.md), and the normalized telemetry side is [RES-012](../research/RES-012-device-telemetry-adapters.md).
 
 ## 5. Synchronization model
 
@@ -157,6 +173,12 @@ Nodes must define behavior for start, pause, seek, restart, late join, packet lo
 ### 5.4 Readiness
 
 Before a live set, the platform should verify media presence, renderer readiness, output availability, audio route, timecode lock, transport health, and acceptable clock offset. Exact thresholds are research outputs rather than assumptions.
+
+### 5.5 Clock domains
+
+The show timeline clock, a node's audio playback and device clock, and any network audio clock are distinct and must never be assumed identical. Signals whose phase relationship matters must originate in one domain: program audio and LTC always qualify, and [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) makes sharing a domain a requirement rather than a preference.
+
+Timing coupling is not one policy across the system. The lighting timeline follows FPP remote semantics, correcting continuously by slew and jump; program audio aligns at start and is corrected discretely, because rate manipulation is audible ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md)). Both satisfy §5.1 — neither runs unbounded and unmeasured — and the difference between them is deliberate.
 
 ## 6. Node capabilities
 
@@ -188,12 +210,17 @@ Initial vocabulary:
 - `display.hdmi`
 - `transport.ndi.send`
 - `transport.ndi.receive`
-- `audio.playback`
-- `audio.multichannel`
-- `audio.dante`
-- `timecode.ltc.generate`
+- `audio.engine`
+- `audio.output.local`
+- `audio.output.fm`
+- `audio.output.ltc`
+- `audio.output.dante`
 - `timecode.ltc.observe`
 - `process.supervise`
+
+Audio is split by output rather than by aggregate ability, because output is what actually drives placement: a node either has the interface, the routing, and the media or it does not. This replaces the earlier `audio.playback`, `audio.multichannel`, `audio.dante`, and `timecode.ltc.generate` identifiers, which are withdrawn — nothing advertises them yet. Channel count and device detail belong in attributes. See [AUDIO-ENGINE §13](AUDIO-ENGINE.md#13-capabilities).
+
+Capability placement must respect clock relationships as a hard constraint: [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) requires `audio.output.ltc` and the program output to resolve to the same interface, which can pin both to one node.
 
 Assignments include required capabilities, preferred node, fallback candidates, and resource constraints. A node may provide any compatible combination.
 
@@ -245,6 +272,11 @@ Show macros are named operational transitions composed from primitives. Examples
 
 FPP schedules the macro through a native command. The coordinator expands and supervises it. A macro definition must label which reduced steps may be executed locally when the coordinator is unavailable.
 
+Two classes of step cannot carry a local fallback at all, and a macro definition must say so rather than leaving the omission to be discovered during an outage:
+
+- A step driving a controlled device through a coordinator-hosted provider is **coordinator-required** ([ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md)). If the step is genuinely show-critical, the provider belongs on a node instead of in the coordinator.
+- A step depending on an audio output device declares **silence** as its reduced local behavior ([ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)). There is no handover to FPP's own audio path, and a macro must not imply one.
+
 ### 8.3 Example
 
 `Begin Set` may:
@@ -256,11 +288,15 @@ FPP schedules the macro through a native command. The coordinator expands and su
 5. Enable presentation layers.
 6. Confirm timing lock and desired state.
 
+Steps 2 and 3 are audio steps, so this macro's definition must state that their reduced local behavior is silence. `Blackout` and `Enter Pre-Show Mode` will each touch controlled devices, so their device steps must be labelled coordinator-required unless the provider is hosted on a node.
+
 Partial failure must produce an explicit degraded state and execute a defined compensating or safe action.
 
 ## 9. Configuration model
 
 The active configuration requires revisions, schema validation, transactional changes, secret separation, export, import, dry runs, and rollback. The coordinator holds the authoritative configuration while agents retain only the signed or verified subset required for current assignments and fallback.
+
+Controlled-device definitions (§4.10) are configuration and follow the same revision, validation, export, and rollback rules as everything else; per-device credentials are secrets and stay out of exported bundles (§10.4).
 
 Portable YAML bundles support backup, review, and migration; the runtime source of truth is embedded SQLite per [ADR-009](../decisions/ADR-009-sqlite-configuration-storage.md). Schema shape, merge semantics, and stale-node reconciliation remain tracked in [configuration research](../research/RES-008-configuration-model.md).
 
@@ -270,9 +306,13 @@ Portable YAML bundles support backup, review, and migration; the runtime source 
 
 The preferred early deployment is a documented container bundle on Linux with persistent storage, a message broker where required, health checks, backups, and upgrade/rollback support. The default should run on `linux/amd64` and `linux/arm64`.
 
+The bundle contains the coordinator, a broker, and the Operator UI as separate containers per [ADR-012](../decisions/ADR-012-docker-coordinator-deployment.md) and [ADR-014](../decisions/ADR-014-operator-ui-is-an-api-client.md). The UI is independently upgradeable, and the stack must remain fully functional with the UI container absent.
+
 ### 10.2 Media nodes
 
 Agents run natively under the platform service manager. Packaging should begin with the platforms required by the reference show, then expand without changing the protocol or capability model.
+
+Linux is the reference and supported platform for the audio node ([AUDIO-ENGINE §12](AUDIO-ENGINE.md#12-platform)). Windows is a platform exception for specific hardware or software dependencies, not a baseline, and no output technology may dictate the audio node's operating system: where a Dante implementation requires Windows, the Dante output capability may move to a separate node rather than the Audio Engine moving with it — subject to the clock-domain and transport costs recorded in AUDIO-ENGINE §12.
 
 ### 10.3 Network
 
@@ -294,14 +334,16 @@ Detection, degraded operation, autonomous recovery, operator notification, and p
 
 - Inventory, topology, and timestamped health collection.
 - FPP, Resolume, controller, projector, and media-node status.
-- Central dashboard, active faults, and event history.
+- Versioned read-only control API, published as a public contract rather than a UI-private interface.
+- Central dashboard, active faults, and event history, delivered by a read-only Operator UI over that API.
 - Six low-resolution projection previews for the reference installation.
 - Dashboard and Discord notification path.
 
 ### Phase 1 — Show-critical coordination
 
 - Native FPP lifecycle commands.
-- Resting/background audio with deterministic fades into and out of shows.
+- Resting/background audio with deterministic fades into and out of shows, on a ShowMesh audio node rather than FPP's own output.
+- Documented manual audio recovery, which ADR-019 makes mandatory rather than optional.
 - Stable projection through Resolume using at least one proven transport.
 - Readiness checks, blackout, and reduced coordinator-loss fallback.
 - Documented manual recovery procedures.
@@ -310,8 +352,9 @@ Detection, degraded operation, autonomous recovery, operator notification, and p
 
 - Coordinator inventory and desired/observed state.
 - Node agent, capability advertisement, media cache, and renderer supervision.
-- Dedicated audio capability and LTC path.
+- Dedicated audio capability and LTC path on a shared clock domain.
 - Initial Resolume adapter.
+- Controlled-device definitions and the first control provider, for projectors.
 - Pixel-current baselines and known-load readiness diagnostics.
 - Lifecycle-aware alerts and post-show evidence.
 - Integrated failure and restart tests.

@@ -28,6 +28,10 @@ This decision applies to the coordinator only. Node agents continue to run nativ
 
 Native packages and systemd units only were rejected as higher friction for the primary audience and more support burden across distributions, though nothing prevents adding them later alongside the container path. Kubernetes or a Helm chart as the primary target was rejected as disproportionate for a single-host, single-writer appliance. Snap or Flatpak was rejected as narrower reach and awkward for a long-running networked service. No packaging opinion at all, build from source, was rejected because it makes the easiest deployment the least supported.
 
+## Later decisions narrowing this one
+
+[ADR-014](ADR-014-operator-ui-is-an-api-client.md) (2026-08-10) adds the Operator UI to the reference bundle as a third container, independently upgradeable. The bundle described above is therefore coordinator, broker, and UI; the coordinator-only scope of the *CGo-free* and *native agents* consequences is unchanged.
+
 ## Related research
 
 [Configuration model](../research/RES-008-configuration-model.md) · [Failure testing](../research/RES-009-failure-mode-testing.md)

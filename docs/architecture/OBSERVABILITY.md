@@ -1,6 +1,6 @@
 # Observability and Alerting Specification
 
-[Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Research tracker](../research/README.md) · [ADR-011](../decisions/ADR-011-context-aware-observability.md)
+[Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Operator UI specification](OPERATOR-UI.md) · [Research tracker](../research/README.md) · [ADR-011](../decisions/ADR-011-context-aware-observability.md)
 
 Status: Draft architecture baseline  
 Audience: Operators, maintainers, integration authors, and contributors
@@ -136,6 +136,8 @@ Polling rates, protocol support, and safe controller load are research outputs. 
 
 ## 6. Operator dashboard
 
+This section defines **what the operator surface must show**. How the client that shows it is built — isolation, the API contract, real-time transport, reconnection and staleness behavior, responsiveness, controls, and authorization — is defined in [OPERATOR-UI.md](OPERATOR-UI.md). Requirements belong in exactly one of the two documents; restating either list in the other will drift.
+
 ### 6.1 Global behavior
 
 The web dashboard is the primary monitoring interface. It must show current data age, distinguish unknown from healthy, support a show-time high-contrast mode, and keep critical controls separate from exploratory views. Every aggregate health indicator must allow drill-down to its contributing evidence.
@@ -163,7 +165,7 @@ Health is overlaid without relying on color alone. Selecting an item opens curre
 
 ### 6.4 Detail views
 
-Resource detail views show desired state, observed state, freshness, raw and normalized telemetry, related resources, current assignment, configuration revision, recent commands, diagnostic history, alerts, and logs or evidence links. Destructive or show-affecting actions require clear confirmation and authorization.
+Resource detail views show desired state, observed state, freshness, raw and normalized telemetry, related resources, current assignment, configuration revision, recent commands, diagnostic history, alerts, and logs or evidence links. Confirmation and authorization requirements for destructive or show-affecting actions are defined in [OPERATOR-UI §11](OPERATOR-UI.md#11-controls-and-safety).
 
 ## 7. Projection preview monitoring
 
@@ -290,6 +292,7 @@ Readiness is a persisted workflow whose result includes every check, observation
 - Select and verify the intended Resolume composition.
 - Confirm SMPTE receiver lock and acceptable offset.
 - Validate the intended audio device and route.
+- Measure program-to-LTC alignment on the audio node and confirm both resolve to one clock domain, per [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md). The acceptable bound is a bench output of [RES-007](../research/RES-007-audio-node-architecture.md) and is not yet known; until it is, this check records the measurement rather than passing or failing against a threshold.
 - Resolve, override, or inhibit all critical readiness failures.
 
 ### Show start and live operation
@@ -313,6 +316,8 @@ An alert progresses through `pending`, `active`, `acknowledged`, `resolved`, or 
 - **Informational:** expected transitions such as sequence start, resting-scene activation, projector warm-up, or completed preload.
 - **Warning:** degraded but serviceable conditions such as current deviation, dropped frames, elevated temperature, degraded preview, elevated latency, or a noncritical offline resource.
 - **Critical:** conditions that threaten safety or the live presentation, including excessive current, unsafe enclosure temperature, lost SMPTE lock, failed audio, missing main output, frozen active feed, offline required controller, or multiple failed media nodes.
+
+Loss of an audience-facing audio output device is always critical and is never downgraded by lifecycle state, because [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) makes the system's response silence rather than recovery. The alert is the only thing that turns that silence into an actionable condition, and recovery is operator work.
 
 Severity is policy-driven and may change with lifecycle state. Safety conditions cannot be downgraded merely because the show is idle.
 
