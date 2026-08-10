@@ -8,7 +8,7 @@ Implementation started 2026-08-10. The design package remains authoritative: doc
 
 **Read `docs/build/BUILD-LOG.md` first in any new session.** Its "Current state" block says what actually works right now and what the next action is. `docs/build/BUILD-PLAN.md` holds the ordered steps and their status.
 
-Module path is `github.com/showmeshsystems/showmesh`. Step 0 (foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary) is complete and verified locally. Nothing is pushed yet; there is no remote and CI has never run on a real runner.
+Module path is `github.com/showmeshsystems/showmesh`. Step 0 (foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary) and Step 1 (`pkg/multisync` plus the bench probe) are complete and verified locally. RES-002 is still L1: nothing has been run against a real FPP player. CI has not yet run on a real runner.
 
 ## Repository map
 
@@ -16,7 +16,7 @@ Module path is `github.com/showmeshsystems/showmesh`. Step 0 (foundation: scaffo
 - `docs/build/BUILD-PLAN.md` — the ordered implementation steps that deliver the roadmap phases, with status.
 - `docs/architecture/ARCHITECTURE.md` — the architecture baseline (vision, components, sync model, state/command models, roadmap phases 0–4; Phase 0 is read-only observability).
 - `docs/architecture/OBSERVABILITY.md` — observability/alerting spec: signal model, collectors, dashboard, preview wall, pixel-current diagnostics, readiness evidence, alert model, phases O1–O5.
-- `docs/decisions/` — ADRs. ADR-001..012 are Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR.
+- `docs/decisions/` — ADRs. ADR-001..013 are Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR.
 - `docs/research/` — research records RES-001..013 with an evidence ladder (L0 assumption → L1 source-verified → L2 bench → L3 integrated → L4 resilient). Empty evidence sections are work queues, not conclusions.
 - `docs/reference-installation.md` — the concrete reference show topology that anchors test matrices.
 - `deploy/` — the Compose bundle (coordinator plus Mosquitto) and its operator documentation.
@@ -36,6 +36,7 @@ Module path is `github.com/showmeshsystems/showmesh`. Step 0 (foundation: scaffo
 11. **License is Apache-2.0** (ADR-010). Never vendor or link NDI runtime binaries; dlopen only.
 12. **Health and alerts are context-aware** (ADR-011). Evidence has provenance and freshness; stale = `unknown`, never healthy; lifecycle/maintenance context changes alert meaning; monitoring is read-only before it controls anything.
 13. **Docker is the primary coordinator deployment** (ADR-012). Coordinator only; agents stay native because they need GPU/HDMI/audio/EDID/NDI access. The coordinator must build CGo-free (static, distroless, clean arm64 cross-compile), so pure-Go dependencies only: `modernc.org/sqlite`, never `mattn/go-sqlite3`. Nothing at the deployment layer may reintroduce a dependency the architecture forbids; the coordinator must start and stay up with no broker reachable.
+14. **Never share UDP 32320 with a running fppd** (ADR-013). `SO_REUSEPORT` load-balances unicast datagrams by 4-tuple hash, so a co-located listener can silently steal FPP's own unicast sync stream and desync a live show. Port sharing defaults to off and a bind conflict must fail loudly. Where co-location is unavoidable, use FPP's plugin callback boundary, not a second socket.
 
 ## Working conventions
 

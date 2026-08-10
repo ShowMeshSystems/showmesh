@@ -18,6 +18,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-010](ADR-010-apache-2-license.md) | Apache-2.0 license | Accepted |
 | [ADR-011](ADR-011-context-aware-observability.md) | Health and alerts are context-aware | Accepted |
 | [ADR-012](ADR-012-docker-coordinator-deployment.md) | Docker is the primary coordinator deployment | Accepted |
+| [ADR-013](ADR-013-no-fpp-control-port-sharing.md) | ShowMesh must not share the FPP control port with a running fppd | Accepted |
 
 ## Record template
 
