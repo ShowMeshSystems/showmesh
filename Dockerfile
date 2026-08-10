@@ -85,7 +85,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["/usr/local/bin/showmesh-coordinator"]
 
-LABEL org.opencontainers.image.source="https://github.com/showmeshsystems/showmesh" \
+LABEL org.opencontainers.image.source="https://github.com/ShowMeshSystems/showmesh" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.title="showmesh-coordinator" \
       org.opencontainers.image.description="ShowMesh coordinator: orchestration and observation appliance for FPP/xLights/Resolume holiday light displays."
