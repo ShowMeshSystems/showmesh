@@ -30,7 +30,9 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-Steps 0 (Foundation) and 1 (`pkg/multisync`) are complete. Both were verified to the limit of what unit tests and local runs can establish; neither has been exercised against real show hardware.
+Steps 0 (Foundation) and 1 (`pkg/multisync`) are complete, and Step 2 (control plane skeleton) is in progress with round 1 done. All of it was verified to the limit of what unit tests and local runs can establish; none of it has been exercised against real show hardware, a real broker, or a real agent.
+
+Step 2 round 1 delivered `pkg/mqttproto`, `pkg/capability`, and the `internal/coordinator` split into `config`, `broker`, `httpapi`, and `readiness`. **No acceptance criterion for Step 2 is met yet.** All three require a broker and belong to round 2, which is the coordinator's SQLite store and inventory plus the agent's hello, Last Will, and heartbeat, together with a Mosquitto service container in CI so the criteria are re-proven on every push rather than verified once by hand.
 
 `pkg/multisync` holds the MultiSync wire codec, a listener that receives multicast, broadcast, and unicast on UDP 32320, a timeline state machine implementing FPP remote semantics on an injectable clock, and an opt-in discover-ping responder. `cmd/showmesh-multisync-probe` is the bench instrument built to close RES-002's five open items; it has not been run against a real FPP player yet, so RES-002 remains at L1 and its status is still `planned`. Changing that status is the owner's call once real captures exist, per `docs/bench/RES-002-capture-procedure.md`.
 
@@ -49,6 +51,44 @@ The immediate next action is Step 2, the control plane skeleton. Its first task 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 One housekeeping item is open. The third-party product name discussed under "Conflicts found" in the audio session entry below was removed from the working copy of `docs/reference-installation.md`, but it remains in the git history of the initial commit and therefore on the private remote. Removing it from the working tree does not remove it from history. This is inert while the repository stays private and unshared, and it must be resolved by a history rewrite before the repository is made public or shared with anyone outside the project.
+
+---
+
+## 2026-08-10 (Step 2 round 1)
+
+**Goal:** commit the pending documentation package, then build the two independent seams of the control-plane skeleton that need no broker: the shared models, and the `internal/coordinator` split that Step 0 deferred to here.
+
+**Completed:**
+
+- Reviewed and committed the Operator UI and Audio Engine documentation package.
+- `pkg/mqttproto`: ADR-008 v1 topic builders and parser, versioned JSON envelope with an opaque payload, hello/health/last-will payloads, and the per-kind retain and QoS policy exported as data.
+- `pkg/capability`: identifier syntax validation, sets, and a canonical encoding.
+- `internal/coordinator` split into `config`, `broker`, `httpapi`, and `readiness`, with the run loop moved out of `cmd/showmesh-coordinator/main.go`.
+
+**Decisions made:**
+
+- **The envelope is the sole carrier of node identity and send time.** The first implementation duplicated both into the hello and health payloads on a self-describing-payload argument. Rejected: payloads never travel apart from their envelopes, the coordinator records observations with its own receipt time and provenance per ADR-011 rather than storing bare payloads, and a duplicated send time inside a payload invites exactly the freshness misuse the envelope's own doc comment warns against. It also left the last-will payload following a different rule than its two siblings for no stated reason.
+- **`readiness` is its own package so the transport layer does not depend on the HTTP layer.** The first implementation had `broker` importing `httpapi` to return its report type. In Step 3 the SQLite store and the FPP collectors also report readiness, and that shape would have every one of them importing the HTTP package to describe its own health.
+- **Unknown capability identifiers are accepted, not rejected.** ADR-002 exists so hardware support expands without core changes, and OPERATOR-UI requires an unrecognized capability to render as a generic panel. Syntax is validated; the known vocabulary is informational only.
+- **Subagent build workflow recorded in CLAUDE.md.** Specification and review folding stay with the orchestrating session; implementation is delegated per independent seam; review is delegated with the binding ADRs named.
+
+**Findings from review that mattered:**
+
+- **ADR-011 freshness had degraded from a structural guarantee to a convention.** Before the split, the HTTP handler computed the observation age itself, so a readiness response could not omit it. After, the typed observation timestamp was set by the broker and read by nothing, and the age reaching the body was a hand-built map key. Every current source happens to set it; a Step 3 source that did not would emit a health verdict carrying no freshness at all, which is the bare-boolean defect a Step 0 review already caught once in this project, reintroduced one layer up. The HTTP layer now derives the age from the typed field.
+- **A null payload decoded as a valid capability advertisement.** Unmarshalling JSON `null` is a no-op that returns no error, so a retained hello with a null payload was accepted as genuine with an empty boot ID, and boot ID is the only signal distinguishing an agent restart from a continuous session. The envelope had explicit required-field validation precisely because strict decoding was rejected as the mechanism, and that principle had been dropped one level down, at the layer where data arrives from an untrusted node.
+- **The canonical capability encoding was not canonical.** Two sets differing only in the ordering of a duplicate identifier produced different bytes while the doc promised byte equality for logically identical sets, so a checksum-based change detector would report a capability change from pure reordering, which ADR-003 makes consequential.
+- The keepalive derived from the staleness window through a runtime float-to-integer conversion that would wrap silently rather than fail, the same never-panics numeric shape a Step 1 review found. It is now a constant conversion that does not compile on overflow.
+- `Disconnect` never joined the broker probe goroutine, so its wait group read as synchronization while being decoration.
+- The review confirmed the split's no-behavior-change claim by running the pre-split and post-split binaries side by side rather than by reading the diff, and could not defeat the node-identifier validation across roughly a dozen injection attempts including unicode lookalikes and line terminators.
+
+**Questions raised with the owner:** how far to automate Step 2's acceptance criteria (answer: a Mosquitto service container in CI, so they are re-proven on every push); whether the RES-002 bench run happens alongside Step 2 (answer: no bench time yet, so RES-002 stays at L1 and the probe is untouched); and how to handle a third-party product name left in git history (answer: rewrite history and force-push while the repository is private and has five commits).
+
+**Deferred:**
+
+- All of Step 2 round 2: the SQLite store, inventory, and the agent's hello, Last Will, and heartbeat, plus the CI broker harness they need.
+- Running the probe against the real FPP player. RES-002 stays at L1 with status `planned`.
+
+**Verification gates:** `make check` passing with lint at 0 issues; `go test -race ./...` passing; `CGO_ENABLED=0 go build ./...` clean; builds clean for `linux/amd64`, `linux/arm64`, `darwin/arm64`, and `windows/amd64`; `FuzzDecodeEnvelope` clean; the coordinator serving `/healthz` 200 and `/readyz` 503 against an unreachable broker, with an identical response body before and after the split, and exiting cleanly on SIGTERM. Not verified: anything involving a real broker, a real agent, or real hardware. Step 2's own acceptance criteria are all unmet, because all three require a broker.
 
 ---
 

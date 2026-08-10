@@ -78,7 +78,7 @@ Step 1 completing does not move RES-002 past L1. Unit tests raise nothing above 
 
 ## Step 2: Control plane skeleton
 
-Status: not started
+Status: in progress (round 1 complete 2026-08-10)
 
 **Goal:** the coordinator and an agent can see each other and agree on state, with no show logic yet.
 
@@ -95,7 +95,13 @@ Status: not started
 - The agent disappears into `unknown` after an unclean kill via Last Will.
 - The coordinator restores state from retained topics after its own restart.
 
-**Bound by:** ADR-002, ADR-003, ADR-008, ADR-009, ADR-012, RES-008.
+**Bound by:** ADR-002, ADR-003, ADR-008, ADR-009, ADR-011, ADR-012, RES-008.
+
+**Round 1, complete 2026-08-10:** `pkg/mqttproto` (topic conventions, versioned envelope, hello/health/last-will payloads, exported delivery policy), `pkg/capability` (identifier syntax, sets, canonical encoding), and the `internal/coordinator` split into `config`, `broker`, `httpapi`, and `readiness` with the wiring moved out of `main.go`. No MQTT client code, no persistence, and no agent behavior: none of this step's acceptance criteria are met yet, because all three require a broker.
+
+**Round 2, not started:** the coordinator's SQLite store and inventory, and the agent's hello, Last Will, and heartbeat. The three acceptance criteria above are all round 2, and none can be proven without a real broker, so the round 2 deliverables include a Mosquitto service container in CI plus integration tests behind a build tag. That harness is a deliverable rather than a follow-up because otherwise the criteria are verified once by hand and decay on the next change; RES-009 failure testing needs the same harness.
+
+**Why `readiness` is its own package:** health evidence is a coordinator concern rather than an HTTP one. Step 3 adds the SQLite store and the FPP collectors as readiness contributors, and had the report type stayed in `httpapi`, each of them would import the HTTP package to describe its own health. `readiness` depends on neither `broker` nor `httpapi`.
 
 ## Step 3: Read-only FPP observability
 
