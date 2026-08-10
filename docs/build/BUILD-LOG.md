@@ -30,11 +30,56 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
+Steps 0 (Foundation) and 1 (`pkg/multisync`) are complete and verified at L1.
+
+`pkg/multisync` holds the MultiSync wire codec, a listener that receives multicast, broadcast, and unicast on UDP 32320, a timeline state machine implementing FPP remote semantics on an injectable clock, and an opt-in discover-ping responder. `cmd/showmesh-multisync-probe` is the bench instrument built to close RES-002's five open items; it has not been run against a real FPP player yet, so RES-002 remains at L1 and its status is still `planned`. Changing that status is the owner's call once real captures exist, per `docs/bench/RES-002-capture-procedure.md`.
+
+Step 0 detail follows.
+
 Step 0 (Foundation) is complete and verified. The repository builds, tests, and lints clean; the coordinator image builds for `linux/amd64` and `linux/arm64` and runs; the Compose bundle brings up Mosquitto and the coordinator together and the coordinator reaches ready. The coordinator survives an unreachable broker, a broker stopped and restarted underneath it, and SIGTERM in every one of those states. There is no show logic, no MQTT topic work, and no persistence yet: `/healthz`, `/readyz`, and `/version` are the entire surface.
 
 Nothing has been pushed. The `showmeshsystems` GitHub organization does not exist yet, so commits are local only and CI has never run on a real runner. Creating the org and pushing is the first thing to do when that is possible, because the CI workflow is unproven until then.
 
-The immediate next action is Step 1, `pkg/multisync`. Read BUILD-PLAN.md's Step 1 section and RES-002 before starting; the L1 versus L2 split in Step 1's acceptance criteria matters and is easy to get wrong.
+The immediate next action is Step 2, the control plane skeleton. Its first task is splitting `internal/coordinator` into focused packages before the SQLite store, inventory, and reconciliation land on top of the current flat one. Two items are waiting on the owner: whether the port 32320 sharing constraint becomes an ADR, and whether the GitHub organization exists so this can be pushed.
+
+Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
+
+---
+
+## 2026-08-10 (Step 1, later in the same session)
+
+**Goal:** implement `pkg/multisync`, the FPP MultiSync wire protocol and timeline model, plus the bench probe that can close RES-002's five open items.
+
+**Completed:**
+
+- `pkg/multisync/packet.go`: codec for the `FPPD` header and packet types 0x01 sync, 0x03 blank, 0x04 ping and discover, and 0x06 FPP command. The byte-offset table in `doc.go` was derived from FPP's `ControlProtocol.txt`, `MultiSync.h`, and `MultiSync.cpp`, then independently re-verified field by field during review.
+- `pkg/multisync/timeline.go`: the state machine on an injectable clock. Free-runs through sync silence (RES-002 is emphatic that silence is not a teardown trigger), classifies corrections, holds a blank delay after STOP, tolerates START without OPEN and a bare SYNC, and ages into `unsynchronized` while continuing to run.
+- `pkg/multisync/listener.go`: multicast, broadcast, and unicast on one socket, per-interface join reporting, and an opt-in discover-ping responder.
+- `cmd/showmesh-multisync-probe`: the bench instrument, with JSONL evidence output and a summary organized explicitly by RES-002's five open items.
+- `docs/bench/RES-002-capture-procedure.md`: the operator procedure for running the captures.
+
+**Findings from review that mattered:**
+
+- The discover-ping responder replied to the datagram's source port. FPP's send sockets are unbound, so its pings arrive from an ephemeral port and the reply went nowhere. As written the responder could never have worked, and the failure would have looked like a protocol or device-type problem rather than a delivery one.
+- Competing-master detection was keyed on `ip:port`. A single FPP master fans out over several unbound sockets and therefore appears under several ports, so the timeline treated one master as many, dropped 40 consecutive syncs, and wedged with a frozen position until the filename changed.
+- A non-finite or absurd `SecondsElapsed` float poisoned the position estimate through an out-of-range float to int conversion, producing a large negative position on `linux/amd64` and a large positive one on `darwin/arm64`, with no state change to signal it. Fuzzing could not find this because it never panics.
+- `SO_REUSEPORT` on port 32320 load balances unicast datagrams by 4-tuple hash rather than fanning them out, so a co-located listener can intercept fppd's own unicast sync stream. Verified on Linux. See the decision note below.
+
+**Decisions made:**
+
+- Port sharing (`SO_REUSEPORT`) defaults to OFF in the listener configuration. With it off, a bind conflict against a running fppd fails loudly, which is the correct outcome. With it on, ShowMesh could silently take FPP's unicast sync traffic, which would put ShowMesh inside the timing path in violation of ADR-001 and standing constraint 6. Recorded here and in the capture procedure. Whether this rises to an ADR is an open question for the owner.
+- Callers supply the timeline's source identity and must key it on IP, never `ip:port`. The contract is documented on `Observe` rather than enforced by stripping ports inside the package, because the package should not silently reinterpret what a caller passes.
+- Several thresholds are ShowMesh hypotheses rather than FPP-derived values, and are labelled as such in the code: the silence interval before `unsynchronized`, the no-correction band, the slew ramp fraction, and the accepted bound on `SecondsElapsed`. The FPP-derived values (slew at four frames or fewer, jump beyond 0.5 seconds, roughly five frames of blank delay) are marked separately with their RES-002 provenance. That separation is deliberate and should be preserved.
+
+**Questions raised with the owner:** whether the port 32320 sharing constraint becomes ADR-013, and whether the `showmeshsystems` organization exists yet so this can be pushed. Both open at the end of the session.
+
+**Deferred:**
+
+- Running the probe against the real FPP player. Nothing here has been seen by real FPP traffic, so RES-002 stays at L1 with status `planned`.
+- Whether ShowMesh actually appears in the FPP MultiSync UI once discover responses are enabled. Unverified, and part of RES-002 open item 5.
+- Splitting `internal/coordinator`, still carried into Step 2.
+
+**Verification gates:** `make check` passing; `go test -race ./...` passing; builds clean for `darwin/arm64`, `linux/amd64`, `linux/arm64`, and `windows/amd64`; `make lint` reporting 0 issues; `FuzzDecode` clean across roughly 17 million total executions. The probe was exercised end to end against a synthetic loopback sender, including the two-source-port case that reproduced the competing-master wedge, which now applies both ports under one identity and reaches `stopped` correctly. Not verified: anything involving real FPP traffic, and CI, which still has never run on a real runner.
 
 ---
 

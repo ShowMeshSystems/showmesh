@@ -43,7 +43,7 @@ Status: complete (2026-08-10)
 
 ## Step 1: pkg/multisync
 
-Status: not started
+Status: complete (2026-08-10), L1 only
 
 **Goal:** the FPP MultiSync wire protocol and a timeline model, since RES-002 is the critical-risk record this project depends on most and is still only L1 (source-verified).
 
@@ -69,6 +69,12 @@ What only a capture against a real FPP 9.x or 10.x player can establish (L2, the
 **Bound by:** ADR-001, ADR-006, RES-002.
 
 Step 1 completing does not move RES-002 past L1. Unit tests raise nothing above L1; only a capture against a real FPP 9.x or 10.x player moves RES-002 to L2.
+
+**Verified 2026-08-10:** `make check` passes; the package builds for `darwin/arm64`, `linux/amd64`, `linux/arm64`, and `windows/amd64`; `FuzzDecode` ran clean across roughly 17 million total executions; the probe was exercised end to end against a synthetic sender over loopback. The byte-offset table in `pkg/multisync/doc.go` was independently re-verified field by field against FPP's `ControlProtocol.txt`, `MultiSync.h`, and `MultiSync.cpp` during review, including the ping body layout and the little-endian/big-endian split.
+
+**Known follow-up:** the probe's discover-ping responder has never been answered by a real FPP instance, so whether ShowMesh actually appears in the FPP MultiSync UI is unverified. That is part of RES-002 open item 5 and is what the first real capture should check.
+
+**Operational hazard recorded during this step:** running a MultiSync listener on the FPP player host with port sharing enabled can intercept fppd's own unicast sync stream, because `SO_REUSEPORT` load balances unicast datagrams by 4-tuple hash rather than fanning them out. That would place ShowMesh inside the timing path, which ADR-001 and the standing constraints forbid. Port sharing is therefore off by default in the listener configuration, and the bench capture procedure warns against running the probe on the player host during a show. See `docs/bench/RES-002-capture-procedure.md`.
 
 ## Step 2: Control plane skeleton
 

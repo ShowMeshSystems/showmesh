@@ -2,6 +2,7 @@ MODULE      := github.com/showmeshsystems/showmesh
 BIN_DIR     := ./bin
 COORDINATOR := $(BIN_DIR)/showmesh-coordinator
 AGENT       := $(BIN_DIR)/showmesh-agent
+MULTISYNC_PROBE := $(BIN_DIR)/showmesh-multisync-probe
 
 VERSION     ?= dev
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -16,6 +17,7 @@ build:
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(COORDINATOR) ./cmd/showmesh-coordinator
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(AGENT) ./cmd/showmesh-agent
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(MULTISYNC_PROBE) ./cmd/showmesh-multisync-probe
 
 .PHONY: test
 test:
