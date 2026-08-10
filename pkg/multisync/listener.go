@@ -203,17 +203,22 @@ type ListenerConfig struct {
 	// to sleep real time waiting for a response.
 	DiscoverResponseDelay func() time.Duration
 
-	// AllowPortSharing, if true, additionally sets SO_REUSEPORT on the
+	// AllowPortSharing, if true, sets SO_REUSEADDR and SO_REUSEPORT on the
 	// listen socket (unix platforms only), letting this Listener bind
 	// FPPCtrlPort even while fppd or another process already holds it.
-	// Defaults to false.
+	// Defaults to false, which sets neither option, so the bind fails
+	// whenever anything else holds the port. That loud failure is the
+	// intended behavior, not a limitation to work around.
 	//
 	// WARNING: this can silently steal fppd's own unicast MultiSync traffic
 	// away from it instead of receiving a copy alongside it, and on Linux
 	// still requires this process to run as the same UID as the other
-	// bound process to work at all. Read setSocketOptions's doc comment in
-	// sockopts_unix.go in full before enabling this. Leave it false unless
-	// you have a specific, understood reason not to.
+	// bound process to work at all. Both options are gated, not just
+	// SO_REUSEPORT: on Linux, two sockets setting only SO_REUSEADDR also
+	// share a UDP port and one of them takes all the unicast traffic.
+	// Read setSocketOptions's doc comment in sockopts_unix.go in full
+	// before enabling this, and see ADR-013. Leave it false unless you have
+	// a specific, understood reason not to.
 	AllowPortSharing bool
 
 	// Logger receives structured diagnostics: join results, decode-error

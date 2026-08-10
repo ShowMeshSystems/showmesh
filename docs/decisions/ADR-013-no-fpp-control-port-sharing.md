@@ -30,13 +30,18 @@ That is not merely a bug. [ADR-001](ADR-001-fpp-is-authoritative.md) makes FPP a
 
 ShowMesh components must not share UDP 32320 with a running fppd.
 
-Port sharing is exposed as listener configuration and defaults to off. With it off, a bind conflict against a running fppd fails loudly at startup, which is the correct and recoverable outcome. Enabling it is permitted only for diagnostics on a host where no show is running, and the option carries that warning at its definition.
+Port sharing is exposed as listener configuration and defaults to off. With it off, ShowMesh sets **neither** `SO_REUSEADDR` nor `SO_REUSEPORT`, so a bind conflict against a running fppd fails loudly at startup, which is the correct and recoverable outcome. Enabling it is permitted only for diagnostics on a host where no show is running, and the option carries that warning at its definition.
+
+Both options are gated, not just `SO_REUSEPORT`. The first implementation set `SO_REUSEADDR` unconditionally, on the assumption that for UDP it cannot by itself permit two processes to bind the same port. That assumption is false on Linux, and the first CI run on a Linux runner is what exposed it. Verified in a Linux container: two sockets setting only `SO_REUSEADDR` both bind the same UDP port, and 20 unicast datagrams sent to that port were delivered 20 to one socket and 0 to the other. macOS does not behave this way, which is why local testing missed it.
+
+Gating both options also removes a dependency this decision should not have. With `SO_REUSEADDR` on by default, ShowMesh was protected from binding alongside fppd only because fppd happens to set `SO_REUSEPORT` and never `SO_REUSEADDR`, so the mismatched pair fails. That is an accident of FPP's current implementation, not a property of ours. Were a future FPP release to add `SO_REUSEADDR`, the accident would evaporate and ShowMesh would silently begin intercepting. Setting no sharing options at all makes the guarantee ShowMesh's own: the bind fails whenever anything else holds the port, whatever options that other process chose.
 
 A ShowMesh component that needs MultiSync timing must run on a host that is not running fppd. Where co-location is genuinely required, the supported boundary is the FPP plugin callback interface that [RES-002](../research/RES-002-fpp-multisync-compatibility.md) documents (`addMultiSyncPlugin`, which delivers parsed sync callbacks in-process), not a second socket on the same port. FPP's REST and MQTT interfaces remain available for supervision-grade status, but they are not frame-accurate and are not a timing path.
 
 ## Consequences
 
 - A bind conflict is a loud startup failure rather than a silent show hazard. Operators get an actionable error instead of an intermittently desynchronized show.
+- Two ShowMesh processes cannot listen on UDP 32320 on the same host by default either. That is intended: the Linux result above shows one of them would take all the unicast traffic regardless, so permitting the bind would only hide the problem. A host needing both an agent and a diagnostic capture must run the capture elsewhere.
 - Node agents requiring MultiSync timing must be separate hosts from FPP players. This is a real constraint on reference and community topologies, and it removes the appealing option of adding a listener to an existing FPP box. The cost is accepted deliberately.
 - The bench probe must be run from a separate machine on the same segment during any live show. [The capture procedure](../bench/RES-002-capture-procedure.md) states this.
 - The privileged configuration is not pursued. Running ShowMesh as root to satisfy Linux UID matching would still not address unicast interception, and it would add a privilege requirement the project does not otherwise need.

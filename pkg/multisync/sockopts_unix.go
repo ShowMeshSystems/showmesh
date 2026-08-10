@@ -11,27 +11,45 @@ import (
 // setSocketOptions is the net.ListenConfig.Control hook used when binding
 // the MultiSync listen socket.
 //
-// SO_REUSEADDR is always set. On its own, for UDP, this does NOT let two
-// processes bind the exact same address:port at once; that is a common
-// misconception carried over from TCP. It only helps this process rebind
-// promptly after its own previous socket on the port has not yet fully
-// released. It does not achieve coexistence with fppd, or with a second
-// ShowMesh instance, by itself, and the doc comment that used to live here
-// claimed otherwise. It did not: that claim was never verified and is
-// wrong.
+// NEITHER SO_REUSEADDR NOR SO_REUSEPORT is set unless allowPortSharing is
+// true (see ListenerConfig.AllowPortSharing), and it defaults to false. Do
+// not flip AllowPortSharing on just to make a "bind: address already in
+// use" error go away without reading the rest of this comment; here is what
+// it costs.
 //
-// SO_REUSEPORT is set only when allowPortSharing is true (see
-// ListenerConfig.AllowPortSharing), and it defaults to false. Do not flip
-// AllowPortSharing on just to make a "bind: address already in use" error
-// go away without reading the rest of this comment; here is what it costs.
+// Why SO_REUSEADDR is also gated, which is not obvious: a previous version
+// of this file set SO_REUSEADDR unconditionally, on the stated belief that
+// for UDP it cannot by itself let two processes bind the same address:port,
+// and that the TCP intuition does not carry over. That belief is wrong on
+// Linux, and CI on a Linux runner is what caught it. Verified in a Linux
+// container: two sockets that set ONLY SO_REUSEADDR both bind the same UDP
+// port successfully, and 20 unicast datagrams sent to that port were
+// delivered 20 to one socket and 0 to the other. So SO_REUSEADDR alone
+// reproduces the same interception hazard described below. macOS does not
+// behave this way, which is why local testing missed it.
+//
+// Leaving SO_REUSEADDR on by default would also have made ADR-013's
+// protection depend on FPP's exact socket options rather than on ours.
+// Today fppd sets SO_REUSEPORT only, so a ShowMesh socket setting
+// SO_REUSEADDR only fails to bind alongside it, and the mismatch happens to
+// protect us. If a future FPP release added SO_REUSEADDR, that accident
+// would evaporate and ShowMesh would silently begin intercepting. Setting
+// no sharing options at all makes the guarantee ours: the bind fails
+// whenever anything else holds the port, whatever options that other
+// process chose.
+//
+// UDP has no TIME_WAIT, so nothing here is needed to rebind promptly after
+// this process restarts, and a single listener joins a multicast group
+// perfectly well without either option.
 //
 // What FPP itself does: FPP's own MultiSync.cpp sets ONLY SO_REUSEPORT on
 // its receive socket (around line 2401 as of the version read for
 // RES-002), and never sets SO_REUSEADDR at all.
 //
 // The Linux UID trap: Linux's UDP bind-conflict check allows two sockets on
-// the same address:port only if EITHER both have SO_REUSEADDR set, OR both
-// have SO_REUSEPORT set AND belong to the same UID. fppd on a real show
+// the same address:port only if EITHER both have SO_REUSEADDR set (see
+// above, this is the case that was missed), OR both have SO_REUSEPORT set
+// AND belong to the same UID. fppd on a real show
 // host typically runs as root. A ShowMesh listener that also sets
 // SO_REUSEPORT, but runs as a non-root user, will therefore FAIL to bind
 // alongside it even with AllowPortSharing enabled: "bind: address already
@@ -70,11 +88,14 @@ import (
 func setSocketOptions(_, _ string, c syscall.RawConn, allowPortSharing bool) error {
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
-		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
-			sockErr = err
+		if !allowPortSharing {
+			// Default path: set nothing. The bind then fails whenever
+			// anything else already holds the port, which is the loud,
+			// correct outcome ADR-013 requires.
 			return
 		}
-		if !allowPortSharing {
+		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+			sockErr = err
 			return
 		}
 		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {

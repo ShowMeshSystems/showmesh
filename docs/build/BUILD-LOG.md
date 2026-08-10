@@ -79,7 +79,13 @@ Separately, the probe is ready to run against the real FPP player whenever the o
 - Whether ShowMesh actually appears in the FPP MultiSync UI once discover responses are enabled. Unverified, and part of RES-002 open item 5.
 - Splitting `internal/coordinator`, still carried into Step 2.
 
-**Verification gates:** `make check` passing; `go test -race ./...` passing; builds clean for `darwin/arm64`, `linux/amd64`, `linux/arm64`, and `windows/amd64`; `make lint` reporting 0 issues; `FuzzDecode` clean across roughly 17 million total executions. The probe was exercised end to end against a synthetic loopback sender, including the two-source-port case that reproduced the competing-master wedge, which now applies both ports under one identity and reaches `stopped` correctly. Not verified: anything involving real FPP traffic, and CI, which still has never run on a real runner.
+**What the first CI run caught, and why it matters:** the repository was pushed to `github.com/ShowMeshSystems/showmesh` (private) and CI ran on a real runner for the first time. It failed, on a test that passes on macOS. `SO_REUSEADDR` was being set unconditionally on the assumption that for UDP it cannot by itself let two processes share a port. That is true on BSD and false on Linux. Verified in a Linux container: two sockets setting only `SO_REUSEADDR` both bind the same UDP port, and 20 unicast datagrams went 20 to one socket and 0 to the other, reproducing the exact interception hazard ADR-013 exists to prevent.
+
+The fix gates both options behind `AllowPortSharing` rather than only `SO_REUSEPORT`, so the default path sets nothing. That also removed a dependency the decision should never have had: previously ShowMesh was protected from binding alongside fppd only because fppd sets `SO_REUSEPORT` and not `SO_REUSEADDR`, so the mismatch failed. That is an accident of FPP's implementation, not a property of ours, and a future FPP release adding `SO_REUSEADDR` would have silently removed it. ADR-013 was updated to record both the finding and the reasoning.
+
+The general lesson worth keeping: a socket-semantics claim verified only on macOS is not verified for a project that deploys on Linux. This is the same L1 versus L2 discipline the research records apply, applied to platform behavior.
+
+**Verification gates:** `make check` passing; `go test -race ./...` passing on macOS and, in a Linux container, on Linux; builds clean for `darwin/arm64`, `linux/amd64`, `linux/arm64`, and `windows/amd64`; `make lint` reporting 0 issues; `FuzzDecode` clean across roughly 17 million total executions. The probe was exercised end to end against a synthetic loopback sender, including the two-source-port case that reproduced the competing-master wedge, which now applies both ports under one identity and reaches `stopped` correctly. Not verified: anything involving real FPP traffic, and CI, which still has never run on a real runner.
 
 ---
 
