@@ -50,7 +50,7 @@ The immediate next action is Step 2, the control plane skeleton. Its first task 
 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
-One housekeeping item is open. The third-party product name discussed under "Conflicts found" in the audio session entry below was removed from the working copy of `docs/reference-installation.md`, but it remains in the git history of the initial commit and therefore on the private remote. Removing it from the working tree does not remove it from history. This is inert while the repository stays private and unshared, and it must be resolved by a history rewrite before the repository is made public or shared with anyone outside the project.
+The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
 
 ---
 
@@ -87,6 +87,8 @@ One housekeeping item is open. The third-party product name discussed under "Con
 
 - All of Step 2 round 2: the SQLite store, inventory, and the agent's hello, Last Will, and heartbeat, plus the CI broker harness they need.
 - Running the probe against the real FPP player. RES-002 stays at L1 with status `planned`.
+
+**History rewrite:** the git history was rewritten in this session to remove a third-party product name that survived in the initial commit after being taken out of the working tree, and the result was force-pushed. Every commit hash changed. A pre-rewrite bundle was taken first and verified complete. GitHub may retain the pre-rewrite objects internally for some period; that was accepted rather than deleting and recreating the repository, which would have discarded the CI history including the run that caught the `SO_REUSEADDR` bug.
 
 **Verification gates:** `make check` passing with lint at 0 issues; `go test -race ./...` passing; `CGO_ENABLED=0 go build ./...` clean; builds clean for `linux/amd64`, `linux/arm64`, `darwin/arm64`, and `windows/amd64`; `FuzzDecodeEnvelope` clean; the coordinator serving `/healthz` 200 and `/readyz` 503 against an unreachable broker, with an identical response body before and after the split, and exiting cleanly on SIGTERM. Not verified: anything involving a real broker, a real agent, or real hardware. Step 2's own acceptance criteria are all unmet, because all three require a broker.
 
