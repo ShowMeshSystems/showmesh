@@ -103,6 +103,15 @@ What that promotion rests on, stated so a later reader can judge it rather than 
 
 Items 4 and 5 stay where they were. No container promoted them and none will.
 
+### First contact with the real deployed fleet (2026-08-11, read-only REST, still L1)
+
+Read-only `GET /api/system/info` and `GET /api/fppd/status` against the three deployed hosts recorded in the [reference installation](../reference-installation.md). No packets were captured and no probe was run, so **this changes nothing about the wire-protocol evidence level**; it is recorded because the bench tier 2 work will run against exactly these hosts and their state is now known rather than assumed.
+
+- The player (`FPP-Main`, Pi 3 Model B+, FPP 9.4) reports **`multisync: true`** in `/api/fppd/status`. The detection path described below therefore reads a live `true` on the real rig, not only a container-default `false`, which is the case the collector's test could not previously exercise against real hardware.
+- The fleet is **not uniform**: 9.4 on the player and one remote, and a master-branch build (`9.x-master-822-g56515e4d`) on the other remote, run deliberately because a bug hit during last season's display was fixed in master. A MultiSync capture is therefore a capture across mixed FPP builds, and the versions of every participant must be recorded with it rather than assumed equal.
+- The player's own `warnings` array reported `MQTT Disconnected` and `A Log Level is set to Debug` at probe time. Both are FPP-side conditions unrelated to MultiSync, noted so a future capture is not read against an assumed-clean baseline.
+- The operator intends to move the fleet to a 9.x release or trial the FPP 10 beta before the season. That is a material environment change: captures taken before it do not carry forward.
+
 ### How ShowMesh detects that MultiSync is off (2026-08-10, tier 1)
 
 The note above says ShowMesh must be able to report "MultiSync is disabled"

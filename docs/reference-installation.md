@@ -17,13 +17,15 @@ The architecture spec and every research test matrix refer to "the reference ins
 
 | Role | Hardware | OS / firmware | Software + version | Notes |
 |---|---|---|---|---|
-| FPP player (authoritative scheduler) | Raspberry Pi 4 B+ | | FPP v - latest | |
-| FPP remotes (if any) | Kulp K16 Max (Pocket begal) Kulp K16 BBB, Kulp K16 Pro (pocket begal) | | FPP - Latest on all | K16-Max and K16A-B (eFuse variant, operator-confirmed) both have per-string current monitoring; K16-Pro is standby only, blade-fused, no current telemetry |
+| FPP player (authoritative scheduler) | Raspberry Pi **3** Model B+ (`FPP-Main`, 192.168.133.159) | OS v2025-09 | FPP **9.4** (branch v9.4) | Probed live 2026-08-11. `multisync: true`. Was recorded as a Pi 4 B+ and "latest"; both were wrong, see the version note below |
+| FPP remotes (if any) | Kulp K16A-B on BeagleBone Black (`FPP-remote-01`, 192.168.133.70); Kulp K16-Max on PocketBeagle2 (`FPP-remote-04`, 192.168.133.61); Kulp K16-Pro (standby, not probed) | OS v2025-11 on both probed remotes | remote-01: **9.x-master-822-g56515e4d** (master branch, not a release); remote-04: 9.4 | K16-Max and K16A-B (eFuse variant, operator-confirmed) both have per-string current monitoring; K16-Pro is standby only, blade-fused, no current telemetry. **remote-01 runs master deliberately**: a bug hit during last year's display was fixed in master, and the operator chose not to move to a release mid-show while master was working |
 | Sequencing workstation | MacBook Pro M1 Max | | xLights v - latest| |
 | Resolume host | Hackintosh may sawp to windows | | Arena v 7.23.2 | Arena license required for SMPTE input |
 | Media node candidates | Dell Micro 7040 i5 | Linux, probably| | |
 | Audio node candidate | Dell Micro 7040 i5 | Linux, or windows depending on audio support | | |
-| Smart receivers | Older Kulp differential receivers (pre-V5 protocol) | | | No current/fuse telemetry — known blind spots; planned replacement with V5-protocol receivers that report per-output current |
+| Smart receivers | Older Kulp differential receivers (pre-V5 protocol) | | | No current/fuse telemetry — known blind spots; planned replacement with V5-protocol receivers that report per-output current. Confirmed live 2026-08-11: these appear in `/api/fppd/ports` as entries carrying only `col`, `name`, `row`, and `smartReceivers: true`, with no `ma` key at all |
+
+**Software version state, and the plan for this season.** The versions above are what was installed for last season and left untouched; they are a point-in-time observation from 2026-08-11, not a target. The intent for this season is to move the fleet to a **9.x release**, or to trial the **FPP 10 beta**, rather than stay on this mix. That decision is open. Until it is made, treat the fleet as deliberately non-uniform, and treat any ShowMesh behaviour verified against these versions as verified against *these* versions only. A fleet-wide version move is a material environment change and moves affected research conclusions to `stale` per the research workflow.
 
 ## Network
 

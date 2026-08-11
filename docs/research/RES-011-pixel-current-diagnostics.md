@@ -48,6 +48,20 @@ Desk research 2026-08-10 (vendor pages, FPP source read, release notes, forums; 
 - eFuse trip is interrupt-driven: port force-disabled, optional auto-retry (`eFuseRetryCount`/`eFuseRetryInterval`), and a **command preset hook `EFUSE_TRIGGERED`** — event push, not polling. FPP commands `Set Port Status`/`Outputs On/Off` give the desired-state side (ADR-003 pairing). [src]
 - eFuse support and the Current Monitor UI landed in FPP 7.0; per-port reset in 7.5. [doc]
 
+### Live probe of the deployed boards (2026-08-11, L1 for shape, NOT evidence that current telemetry works)
+
+Read-only `GET /api/fppd/ports` against both deployed Kulp boards, off-season, display de-energized, no outputs enabled. Versions and hosts per [reference installation](../reference-installation.md).
+
+- **The response is a heterogeneous JSON array, not a uniform one.** Two distinct entry shapes arrive in the same list, and a decoder declaring one struct for all elements is wrong:
+  - real ports: `{bank, col, enabled, ma, name, row, status}` — 16 on each board;
+  - smart-receiver positions: `{col, name, row, smartReceivers: true}` — **no `ma`, `status`, `enabled`, or `bank` key at all**. 16 of these on the K16A-B (32 entries total), 32 on the K16-Max (48 entries total).
+- This is the same class of hazard Step 3 recorded for `/api/fppd/status` (numeric-looking fields arriving as JSON strings): a Go struct that assumes every element carries `ma` will either fail to unmarshal or silently read a zero-valued current for positions that have no current reading at all. The second outcome is worse, because zero milliamps is a plausible reading rather than an obviously wrong one, and it would be indistinguishable from a dark port.
+- **`pixelCount` was absent from every entry on both boards.** The L1 source-derived claim above lists it as a field of this endpoint. Both observations can hold: the operator confirms the FPP pixel-count operation (`GET /api/fppd/ports/pixelCount`) has **never been run** on these hosts, so the field is plausibly populated only once a count exists. Recorded as an open question rather than as a contradiction, and **not** resolved by this probe. Do not model `pixelCount` as always-present.
+- **Every `ma` read `0`, as an integer**, on all 32 real ports across both boards. With nothing running and no outputs enabled this is the expected reading and it is **not evidence that current telemetry functions**. It confirms the field's presence and type, nothing more. Raising RES-011 above L1 requires readings from an energized display with known load, per the acceptance criteria above.
+- `status` was `true` and `enabled` was `false` on every real port, consistent with a configured-but-idle board.
+
+**What this does and does not license.** It licenses building the collector against the real schema, including the heterogeneous-array handling, rather than against the documented one. It licenses nothing about eFuse behaviour, trip reporting, current accuracy, or per-branch blind spots.
+
 ### Smart receivers
 
 - FPP implements the **Falcon V5 smart-receiver query protocol** (PRU-assisted): sub-receivers A–F per port report `ma`, `pixelCount`, enabled/tripped upstream over the differential pair, surfaced in the same `/api/fppd/ports` payload; remote fuse reset supported. Falcon V4-protocol receivers are send-only (no telemetry). [src: `src/non-gpl/FalconV5Support/`]
