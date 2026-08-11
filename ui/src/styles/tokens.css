@@ -1,0 +1,126 @@
+/*
+ * Design tokens: plain CSS custom properties, per spec section 3 ("no CSS
+ * framework and no component library: the show-time high-contrast mode is
+ * then a variable swap rather than a theme system").
+ *
+ * Two independent axes:
+ *   - light/dark, following the operator's OS preference
+ *     (prefers-color-scheme), because setup work happens in daylight and
+ *     live operation happens after dark;
+ *   - show-time high-contrast, an explicit operator toggle
+ *     ([data-contrast="high"] on <html>), which overrides either theme
+ *     with one fixed, maximum-legibility palette. This is deliberately
+ *     NOT tied to prefers-color-scheme: it is a mode the operator turns on
+ *     for outdoor/night/gloved conditions (spec section 6.6), not a
+ *     preference the OS infers.
+ *
+ * Status colors are never the only signal (OBSERVABILITY section 6.3,
+ * spec section 6.6): every component that reads a --status-* color also
+ * renders an icon glyph and a text label. These tokens exist for the
+ * background/foreground pairing only.
+ */
+
+:root {
+  /* Surfaces */
+  --color-bg: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #c9ccd3;
+  --color-text: #1a1d23;
+  --color-text-muted: #565c66;
+  --color-accent: #1f5fbf;
+  --color-focus-ring: #1f5fbf;
+  --color-link: #1f5fbf;
+
+  /* Status pairs: background + foreground, used together, never alone */
+  --status-good-bg: #e3f5e9;
+  --status-good-fg: #14652f;
+  --status-warn-bg: #fff2d9;
+  --status-warn-fg: #7a4b00;
+  --status-bad-bg: #fde3e1;
+  --status-bad-fg: #942119;
+  --status-unknown-bg: #e8eaee;
+  --status-unknown-fg: #40454e;
+
+  /* Connection banner is visually distinct from resource-evidence status:
+     spec section 6.3 (the two failure modes must not share a visual
+     language). It uses its own tokens rather than reusing --status-bad-*. */
+  --connection-problem-bg: #2b1620;
+  --connection-problem-fg: #ffe3e9;
+  --connection-problem-border: #8a2a44;
+  --connection-live-fg: var(--status-good-fg);
+
+  /* Spacing (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* Type */
+  --font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+
+  /* Outdoors-with-gloves: minimum touch target, generous by default */
+  --touch-target-min: 48px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #14161a;
+    --color-surface: #1d2027;
+    --color-surface-raised: #262a33;
+    --color-border: #3a3f4a;
+    --color-text: #eef0f4;
+    --color-text-muted: #a7acb8;
+    --color-accent: #6ba3ff;
+    --color-focus-ring: #6ba3ff;
+    --color-link: #6ba3ff;
+
+    --status-good-bg: #163322;
+    --status-good-fg: #6bdb92;
+    --status-warn-bg: #3a2c05;
+    --status-warn-fg: #ffcf6b;
+    --status-bad-bg: #3a1210;
+    --status-bad-fg: #ff9d94;
+    --status-unknown-bg: #2a2d35;
+    --status-unknown-fg: #b7bcc6;
+  }
+}
+
+/*
+ * Show-time high-contrast mode. A hard override, not a tint: pure black
+ * background, pure white text, saturated status colors, thicker borders.
+ * Deliberately identical regardless of light/dark preference, because the
+ * point is legibility outdoors at night, not aesthetics.
+ */
+:root[data-contrast='high'] {
+  --color-bg: #000000;
+  --color-surface: #000000;
+  --color-surface-raised: #0d0d0d;
+  --color-border: #ffffff;
+  --color-text: #ffffff;
+  --color-text-muted: #e0e0e0;
+  --color-accent: #66d9ff;
+  --color-focus-ring: #ffff00;
+  --color-link: #7fd0ff;
+
+  --status-good-bg: #003d17;
+  --status-good-fg: #4dff8f;
+  --status-warn-bg: #4a3300;
+  --status-warn-fg: #ffd23f;
+  --status-bad-bg: #4a0000;
+  --status-bad-fg: #ff6b60;
+  --status-unknown-bg: #262626;
+  --status-unknown-fg: #ffffff;
+
+  --connection-problem-bg: #4a0000;
+  --connection-problem-fg: #ffffff;
+  --connection-problem-border: #ff6b60;
+}

@@ -70,13 +70,23 @@ lint:
 tidy:
 	go mod tidy
 
+# Go source lives only under these four directories; listing them
+# explicitly, rather than gofmt'ing ".", is what keeps this scoped to the
+# project's own code now that ui/ exists alongside it. gofmt is a plain
+# filesystem walk with no notion of Go module boundaries (unlike
+# `go build ./...`, which the ui/go.mod nested-module marker already keeps
+# out of ui/node_modules) — found during Step 4, when `gofmt -l .` walked
+# into ui/node_modules and would have flagged or silently reformatted a
+# vendored third-party .go file some npm package happens to ship.
+GOFMT_DIRS := cmd internal pkg test
+
 .PHONY: fmt
 fmt:
-	gofmt -w .
+	gofmt -w $(GOFMT_DIRS)
 
 .PHONY: fmt-check
 fmt-check:
-	@unformatted="$$(gofmt -l .)"; \
+	@unformatted="$$(gofmt -l $(GOFMT_DIRS))"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needs to be run on:"; \
 		echo "$$unformatted"; \
@@ -95,10 +105,57 @@ clean:
 run-coordinator: build
 	$(COORDINATOR)
 
+# Operator UI (ADR-014, ADR-015). Deliberately NOT a prerequisite of `test`
+# or `build` above: those two Go-only targets must keep working on a
+# machine with no Node installed at all, which is also why CI runs the Go
+# job and the UI job as separate jobs rather than one. `check` is the
+# exception, folding the UI in on purpose (spec section 4.5) so a
+# constraint violation in either half fails the same command an operator
+# or CI would actually run before trusting a change.
+#
+# ui-install is a prerequisite of every other ui-* target rather than
+# something a developer has to remember to run first; `npm ci` against a
+# committed, unmodified package-lock.json is fast when node_modules is
+# already current and is what CI needs to trust the exact locked tree
+# rather than whatever `npm install` would resolve today.
+.PHONY: ui-install
+ui-install:
+	cd ui && npm ci
+
+.PHONY: ui-lint
+ui-lint: ui-install
+	cd ui && npm run lint
+
+.PHONY: ui-test
+ui-test: ui-install
+	cd ui && npm test
+
+.PHONY: ui-build
+ui-build: ui-install
+	cd ui && npm run build
+
+# Regenerates ui/src/api/generated/schema.d.ts from api/openapi.yaml and
+# fails if that regeneration produces a diff against what's committed.
+# This is what makes ADR-015's "generated from or verified against the Go
+# types" a checked property instead of a one-time claim: api/openapi.yaml
+# is itself conformance-tested against real coordinator responses, so a
+# client type that has drifted from the spec has drifted from the Go types
+# it describes, and this target is what catches that before it ships.
+.PHONY: ui-gen-check
+ui-gen-check: ui-install
+	cd ui && npm run gen:api
+	@if ! git diff --quiet -- ui/src/api/generated/schema.d.ts; then \
+		echo "ui/src/api/generated/schema.d.ts is stale relative to api/openapi.yaml."; \
+		echo "Run 'npm run gen:api' in ui/ and commit the result."; \
+		git diff -- ui/src/api/generated/schema.d.ts; \
+		exit 1; \
+	fi
+
 .PHONY: check
-check: fmt-check vet lint test
+check: fmt-check vet lint test ui-lint ui-test ui-build ui-gen-check
 
 IMAGE       ?= showmesh
+UI_IMAGE    ?= showmesh-operator-ui
 DOCKER      ?= docker
 
 .PHONY: docker-build
@@ -108,6 +165,7 @@ docker-build:
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-t $(IMAGE):$(VERSION) .
+	$(DOCKER) build -t $(UI_IMAGE):$(VERSION) ./ui
 
 .PHONY: docker-run
 docker-run:

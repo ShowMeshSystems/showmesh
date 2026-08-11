@@ -1,0 +1,17 @@
+# Build context is ui/ (see Dockerfile). Exclude everything that isn't an
+# input to `npm ci && npm run build`, same layer-caching and build-context
+# reasoning as the repository root .dockerignore.
+node_modules
+dist
+.vite
+
+# Version control and editor cruft.
+.git
+.DS_Store
+.vscode
+.idea
+
+# Test and coverage output: never a build input.
+coverage
+*.test.ts
+*.test.tsx

@@ -10,7 +10,7 @@ cp .env.example .env   # edit as needed, especially before exposing beyond an is
 docker compose up -d --build
 ```
 
-This builds the coordinator image from the repo root Dockerfile and starts it alongside the bundled Mosquitto broker. Check status with `docker compose ps` and `curl -fsS localhost:8080/healthz`.
+This builds the coordinator image from the repo root Dockerfile, the Operator UI image from `../ui/Dockerfile`, and starts both alongside the bundled Mosquitto broker. Check status with `docker compose ps` and `curl -fsS localhost:8080/healthz`.
 
 ## The read-only control API
 
@@ -36,6 +36,22 @@ Everything the API reports carries provenance and freshness, and absent evidence
 [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.** The bundled Mosquitto also allows anonymous access, and that is the larger exposure of the two, since publish rights there affect coordinator state while the API only discloses it.
 
 There are no write operations at all in this release. Nothing reachable through this API can change a device, a playlist, or a show.
+
+## The Operator UI
+
+The `ui` service is a separate container built from `../ui/Dockerfile`: a static TypeScript SPA served by nginx, which also proxies `/api/*` to the coordinator so the browser sees one origin ([ADR-014](../docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-015](../docs/decisions/ADR-015-typescript-spa-frontend.md), [ADR-022](../docs/decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). Point a browser at:
+
+```
+http://localhost:8081
+```
+
+(the published host port; override with `SHOWMESH_UI_PORT` in `.env`.)
+
+**The browser talks only to this container**, never to the coordinator's own port directly. The UI container forwards every `/api/*` request through unchanged and forwards responses back unchanged; it performs no aggregation, retry, rewriting, or caching of API responses ([ADR-022](../docs/decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). If `SHOWMESH_API_TOKEN` is set on the coordinator, the browser itself receives the resulting `401` on first use, prompts the operator for the secret, and keeps it in that browser tab's `sessionStorage` — **the UI container is deliberately never given a copy of the token** and cannot be configured with one. There is no login, identity, or logout beyond closing the tab; that is what ADR-021 and ADR-022 decided for this release, not an oversight.
+
+**ShowMesh terminates no TLS**, in this container or the coordinator's. A deployment that needs TLS puts a reverse proxy of its own in front of the `ui` service; nothing here does it.
+
+This container is a client, not a dependency: the coordinator, the broker, and any running show are unaffected by the `ui` service being stopped, restarted, rebuilt, or removed from `docker-compose.yml` entirely. There is no `depends_on` between them in either direction, and its healthcheck never contacts the coordinator — a coordinator outage shows up as the *application* reporting disconnected, not as this container reporting unhealthy.
 
 ## Using an external broker
 
@@ -92,15 +108,16 @@ Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only la
 
 ## Preparing for an offline install
 
-ADR-012 requires the stack to start and run with no internet access once images are present, but the bring-up path in this document (`docker compose up -d --build`) needs the Go module proxy to fetch dependencies, and the backup commands above pull the `alpine` image, so neither is offline-capable as written. Genuinely offline installation is possible today only by preparing the bundle on a connected machine first:
+ADR-012 requires the stack to start and run with no internet access once images are present, and [ADR-015](../docs/decisions/ADR-015-typescript-spa-frontend.md) extends the same requirement to the Operator UI: no CDN fonts, scripts, or stylesheets fetched at runtime, everything shipped in the image. Neither the bring-up path in this document (`docker compose up -d --build`) nor the UI build is offline-capable *as written*, though: the coordinator build needs the Go module proxy, the UI build needs the npm registry (`npm ci` in `../ui/Dockerfile`), and the backup commands above pull the `alpine` image. Genuinely offline installation is possible today only by preparing the bundle on a connected machine first:
 
 ```sh
 # On a connected machine:
 docker build -t showmesh-coordinator:offline ..
-docker save showmesh-coordinator:offline eclipse-mosquitto:2.0.22 -o showmesh-bundle.tar
+docker build -t showmesh-operator-ui:offline ../ui
+docker save showmesh-coordinator:offline showmesh-operator-ui:offline eclipse-mosquitto:2.0.22 -o showmesh-bundle.tar
 
 # Transfer showmesh-bundle.tar to the offline host, then:
 docker load -i showmesh-bundle.tar
 ```
 
-Then, on the offline host, edit `docker-compose.yml` to comment out `build:` and set `image: showmesh-coordinator:offline` (or a tag of your choosing) for the coordinator service, and run `docker compose up -d`, which only needs the images already loaded, not a build. This is a manual, unpublished-image workaround, not the polished tag-pull workflow described above; expect to redo it for every version until published images exist.
+Then, on the offline host, edit `docker-compose.yml` to comment out `build:` and set `image: showmesh-coordinator:offline` for the coordinator service and `image: showmesh-operator-ui:offline` for the `ui` service (or tags of your choosing), and run `docker compose up -d`, which only needs the images already loaded, not a build. This is a manual, unpublished-image workaround, not a polished tag-pull workflow; expect to redo it for every version until published images exist. Runtime operation of the built UI image genuinely needs no network access — it is the *build* step that does, and only on a connected machine.

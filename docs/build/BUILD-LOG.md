@@ -30,11 +30,25 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), and 3 (read-only FPP observability plus the versioned public API) are complete. Nothing has been exercised against real show hardware.
+Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), 3 (read-only FPP observability plus the versioned public API), and 4 (the read-only Operator UI) are complete. Nothing has been exercised against real show hardware.
+
+There is now an operator-facing surface. `ui/` is a React and Vite TypeScript SPA served from its own `nginx:alpine` container, which also forwards `/api/*` to the coordinator so the browser sees one origin ([ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). It renders the dashboard, node and capability views, FPP instances, and event history, all composed from advertised capabilities rather than fixed node classes. Its API types are generated from `api/openapi.yaml` and CI fails on any diff, which makes ADR-015's "generated from or verified against the Go types" a gate rather than an intention: the OpenAPI document is already conformance-tested against real handler responses in both directions.
+
+**Three things a future session should know before touching the UI.**
+
+**A test environment that differs from the deployment environment reports success on exactly that difference.** The client invoked `fetch` as `this.fetchImpl(...)`, so its receiver was the client instance. A browser's `fetch` is a WebIDL operation on `Window` and answers any other receiver with `Illegal invocation`; Node's does not check. The app could not make a single request in Chrome while 99 unit tests passed, including the ones driving a real `node:http` server. Three reviews and a build of the shipped image did not find it. Loading the page did, immediately.
+
+**Ages must keep advancing when responses stop.** Evidence ages were computed against the last response's `serverTime` as a fixed "now", so with the coordinator stopped for 100 seconds the banner and the last-updated notice correctly reported the disconnection while the evidence panel still read `current` and "observed just now". Ages now advance from the last `serverTime` by real elapsed browser time, which keeps clock skew visible while making elapsed time true, and evidence carries an explicit as-of qualifier while disconnected. The coordinator's `state` verdict is deliberately left untouched: it has provenance, and the UI inventing its own is what ADR-011 forbids.
+
+**`env_file` loads every variable in the file, not the ones you named.** The UI service declared only two environment variables and inherited `SHOWMESH_API_TOKEN` and the broker password alongside them, readable through `docker inspect`. Three separate comments in the bundle asserted that the container never holds the token. ADR-022 decision 2 forbids *holding* it, not merely injecting it as a header, because holding it makes reaching the UI equivalent to reaching the API. Compose still interpolates `${VAR}` from `.env` without `env_file`, so removing it cost nothing.
+
+Timeouts, backoff bounds, idle deadlines, retained-event caps, and the clock-skew warning threshold in the UI are unmeasured ShowMesh hypotheses, labelled as such in code, and belong to RES-009 and RES-013 along with their coordinator-side counterparts.
+
+Step 3 detail follows.
 
 The coordinator now polls configured FPP instances read-only over REST, normalizes what it finds into the OBSERVABILITY §4.1 observation model with provenance and freshness, persists observations and an event history in SQLite, and serves all of it through a versioned public API at `/api/v1` with a Server-Sent Events change stream. `showmeshctl` is a second, deliberately independent client of that API: an enforced import-graph test forbids it from importing any coordinator package, so a JSON tag rename breaks it rather than silently renaming the field on both sides. `api/openapi.yaml` is the machine-readable contract and is conformance-tested against real handler responses in both directions.
 
-There is still no UI, no commands, no write operations of any kind, and no show logic. Step 4 is the read-only Operator UI, and it is the first consumer that will exercise the API's version negotiation for real.
+There are still no commands, no write operations of any kind, and no show logic. Step 4 supplied the UI, and its version negotiation is now exercised for real against a coordinator that refuses the client's version.
 
 RES-002 stays **L2 for protocol semantics** and **L1 for anything hardware- or network-dependent**, unchanged by this step. Step 3 added REST-level evidence about FPP (recorded in RES-002's evidence section) but nothing about the MultiSync wire protocol, the hardware clock, or the reference switch. L2 licenses further building, not a live show.
 
@@ -50,15 +64,66 @@ Step 0 (Foundation) is complete and verified. The repository builds, tests, and 
 
 The repository is pushed to `github.com/ShowMeshSystems/showmesh`, currently private, and CI has run on a real GitHub runner. It earned its keep on the first run by failing a test that passes on macOS, which is what exposed the `SO_REUSEADDR` behavior difference recorded in ADR-013.
 
-No UI code exists. The Operator UI was specified on 2026-08-10 (ADR-014..016, `docs/architecture/OPERATOR-UI.md`, RES-014) and sequenced as build Step 4, behind the read-only observability API in Step 3. Everything in that package is design intent; none of it has been implemented or verified.
+No audio code exists. The Audio Engine was specified in the same session (ADR-017..019, `docs/architecture/AUDIO-ENGINE.md`, RES-007 rewritten) and deliberately left unsequenced: RES-007 is critical-risk at L0, the multichannel interface has not been purchased, and every load-bearing claim is a bench fact. The next audio action is the RES-007 prototype, not implementation.
 
-No audio code exists either. The Audio Engine was specified in the same session (ADR-017..019, `docs/architecture/AUDIO-ENGINE.md`, RES-007 rewritten) and deliberately left unsequenced: RES-007 is critical-risk at L0, the multichannel interface has not been purchased, and every load-bearing claim is a bench fact. The next audio action is the RES-007 prototype, not implementation.
-
-The immediate next action is Step 2, the control plane skeleton. Its first task is splitting `internal/coordinator` into focused packages before the SQLite store, inventory, and reconciliation land on top of the current flat one. Nothing in Step 2 is waiting on the owner.
+The next action is not yet sequenced, and the reason is worth stating plainly: **every remaining roadmap item that does something rather than shows something is a write operation, and ADR-021 rule 5 bars the first write endpoint** until a superseding record decides authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. ARCHITECTURE Phase 1 is entirely write work. So the identity and authorization ADR is the critical path out of Phase 0, not a chore to fit in later. Work available without it: FPP MQTT ingestion (deferred from Step 3 with the reason recorded), RES-008's configuration model, and `pkg/pjlink` as a protocol library at L1.
 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-11 (Step 4)
+
+**Goal:** the first operator-facing surface, and the two decisions ADR-021 and OPERATOR-UI §4 deferred to the step that builds it.
+
+**Completed:**
+
+- [ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md), settling UI-to-API topology and browser token handling before any UI code was written.
+- `ui/`: a React and Vite TypeScript SPA. API client with a hand-written `text/event-stream` parser, a connection state machine with bounded backoff and jitter, version negotiation, and a framework-free model exposed to React through `useSyncExternalStore`. Dashboard, node list and detail, capability grouping, FPP list and detail, and event history. Plain CSS with custom properties, no framework, no component library, no runtime fetch of anything.
+- `ui/Dockerfile` and `ui/nginx.conf`: a static-asset container that also forwards `/api/*`, and the `ui` service in the Compose bundle.
+- API types generated from `api/openapi.yaml`, committed, with a CI check that fails on any diff.
+- 111 unit tests, including a real `node:http` server driving the store rather than a mocked `fetch`.
+
+**Decisions made:**
+
+- **The UI container serves the API same-origin** (ADR-022 decision 1). Not chosen on architectural purity, which favored the direct alternative, but on the two operator-facing costs it removes: a runtime base-URL document written at container start, and a CORS allow-list whose misconfiguration is indistinguishable from an outage.
+- **The proxy forwards credentials and never holds or mints them** (decision 2). This is the load-bearing rule and it outlives the shared-secret posture that motivated it. Its test is that removing the proxy and pointing a client straight at the coordinator changes nothing except the origin.
+- **The browser holds the ADR-021 secret in `sessionStorage`** (decision 4), prompted by a `401`, with no login, identity, expiry, or logout. ADR-021 feared that answering early would force a session model the superseding ADR must unwind; the answer chosen is small enough to delete.
+- **The dashboard renders only subsystems the coordinator models.** No empty audio, SMPTE, projector, or weather panels. An empty panel asserts that a subsystem exists and is not reporting, which is a false statement about the system. Deliberately not the same rule as evidence absence within a modeled subsystem.
+- **The UI does not recompute the coordinator's health verdict**, even when disconnected and the evidence is provably old. The verdict has provenance; the UI inventing its own is what ADR-011 forbids. What was corrected was the age claim attached to it.
+
+**Questions raised with the owner:** the ADR-021 topology and token questions above, the framework choice ADR-015 left open (React and Vite), and whether a disconnected client should degrade the coordinator's evidence badge itself (answer: no, keep the verdict, fix the age).
+
+**What only a running browser could catch, and why it matters more than the fixes:**
+
+- **The client could not make a single request in Chrome.** `fetch` was invoked as `this.fetchImpl(...)`, so its receiver was the client instance rather than `Window`, which a browser rejects with `Illegal invocation` and Node does not check. This survived 99 passing unit tests, three independent reviews, and a clean build of the shipped image. The generalizable lesson is not "run the app": it is that **a test environment differing from the deployment environment in one detail will report success on exactly that detail**, and the closer the harness gets to real (a real HTTP server, real SSE bytes) the more convincing that false success looks.
+- **Evidence ages froze while the freshness notice advanced.** Stopping the coordinator for 100 seconds left the evidence panel reading `current` and "observed just now" while the banner correctly reported the disconnection. Ages were anchored to the last response's `serverTime` as a fixed "now", so they stopped moving exactly when an operator most needs them. Fourth appearance of this project's recurring defect: a time presented more favorably than the evidence supports.
+
+**Findings from review that mattered:**
+
+Three reviews ran: constraints and ADRs, test honesty, and a fix-verification pass. The test-honesty review applied 87 mutations to production code and attacked all 51 tests then present.
+
+- **`env_file` put `SHOWMESH_API_TOKEN` and the broker password into the UI container.** Only two variables were named under `environment:`, and `env_file` loads the whole file. Three comments in the bundle asserted the container never holds the token. Confirmed by resolving the config with a real `.env` present, and confirmed fixed the same way.
+- **The client loaded the hundred *oldest* retained events and labelled them "Recent events".** `since` defaults to 0 and is an exclusive lower bound in ascending order, so the initial fetch returned the beginning of history, which was then reversed and rendered as newest-first. `latestEventSeq` sits in the snapshot for exactly this and was unused. Confirmed by driving the real store against a server implementing the coordinator's own `/events` semantics with 250 events.
+- **A half-open connection rendered as "Live" indefinitely.** No idle deadline on the stream read and no request timeout, while the coordinator emits `: keepalive` precisely so a quiet connection can be told from a dead one.
+- **Collector state and reason were dropped entirely**, rendering a failed collector as the number `1`.
+- **The dashboard never surfaced FPP `unknown` health**, so a system that knows nothing reported "nothing needs attention".
+- **An empty `supportedVersions` rendered as a positive claim** about what the coordinator supports, made from no information.
+- **Five tests passed with the behavior they named removed.** The worst was the only test in the suite that sent an `event.recorded` frame: its dedupe assertion was "the duplicate does not appear", which is also what happens when the feature is absent, so live event delivery had no test that failed when broken. Two others were guaranteed by their own fixtures, and one carried a comment describing an assertion that did not exist.
+- The Step 3 defect shape did **not** recur: deleting the snapshot fetch outright fails five tests.
+
+**A flaky test, fixed rather than tolerated:** the full suite failed roughly one run in ten under load, from a real 15ms keepalive write interval racing a real 40ms idle deadline. Fixed with an injectable clock seam so the production path is exercised against time the test controls, not by widening the timeout, which would have discarded the claim. Verified 30 consecutive clean runs under deliberate CPU load.
+
+**Deferred:**
+
+- **The phone layout is unverified.** The responsive CSS and high-contrast mode are implemented and unit-tested, but never visually confirmed at phone width; the browser tooling would not apply the resize. OPERATOR-UI §13 makes the phone a primary operational surface, so this is a real gap.
+- No browser-driving end-to-end suite. The five acceptance criteria were verified by hand against the running stack; automating them needs a browser in CI and its own decision.
+- Desired state, assignments, and reconciliation status, which the API deliberately does not ship.
+- Alerting, the preview wall, the house topology map, controlled devices, and every write operation.
+
+**Verification gates:** `gofmt` clean; `go vet ./...` clean; `make lint` at 0 issues; `go test -race -count=1 ./...` passing; `CGO_ENABLED=0 go build ./...` clean; `make test-integration` passing against real Mosquitto with real subprocesses; UI typecheck, lint, and 111 tests passing, the suite run 30 times under load without a failure; generated API types byte-identical to a fresh generation from `api/openapi.yaml`; both images building. All five acceptance criteria verified against running containers with two real agent subprocesses advertising over the bundled broker, and a fake version-2 coordinator for the version-negotiation criterion. Not verified: anything on real show hardware, and the phone layout.
 
 ---
 

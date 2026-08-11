@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No CDN fonts, no external stylesheets, no third-party scripts: the
+         offline constraint (OPERATOR-UI section 4, CLAUDE.md constraint 16)
+         means everything the page needs ships in this image. -->
+    <!-- No maximum-scale/user-scalable lock: OPERATOR-UI section 13 requires
+         that zoom not be *needed* for normal operation, not that it be
+         disabled — blocking pinch-zoom is an accessibility regression this
+         constraint does not ask for. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ShowMesh Operator</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

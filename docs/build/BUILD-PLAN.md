@@ -166,7 +166,7 @@ All three were deferred to here by name, and all three are now recorded rather t
 
 ## Step 4: Read-only Operator UI
 
-Status: not started
+Status: complete (2026-08-11)
 
 **Goal:** the first operator-facing surface, delivering the dashboard portion of ARCHITECTURE Phase 0 and OBSERVABILITY Phase O1. Read-only, per [OBSERVABILITY §2.5](../architecture/OBSERVABILITY.md#25-read-only-monitoring-comes-first) under [ADR-011](../decisions/ADR-011-context-aware-observability.md): monitoring is read-only before it controls anything.
 
@@ -193,6 +193,31 @@ Status: not started
 **Bound by:** ADR-002, ADR-003, ADR-011, ADR-014, ADR-015.
 
 **Out of scope here:** all write operations, the preview wall (blocked on RES-010), controlled-device configuration and control (ADR-016 and RES-014), authentication mechanism selection, and anything HA-related.
+
+### Decisions this step was required to make
+
+Both were left open by name and are now recorded in
+[ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)
+rather than left to emerge from implementation.
+
+- **The UI container serves the API same-origin**, closing the question OPERATOR-UI §4 marked "open at this stage and to be settled when the UI is built". The deciding argument was operator-facing rather than architectural: the direct alternative needs a runtime base-URL document written at container start *and* a CORS allow-list whose misconfiguration is indistinguishable from an outage, and ADR-021 already names a reflected-origin misconfiguration on an unauthenticated API as a real exposure. The load-bearing rule attached to it is that **the proxy forwards credentials and never holds or mints them**, which is what stops the proxy becoming the security boundary that OPERATOR-UI §11 and ADR-014 both forbid.
+- **The browser holds the ADR-021 shared secret in `sessionStorage`**, prompted by a `401`, with no login, identity, expiry, or logout. ADR-021 deferred this because answering it early might force a session model the superseding identity ADR would then have to unwind; the answer chosen is small enough to delete.
+
+### What only a running browser could catch
+
+Two defects survived 99 passing unit tests, three independent reviews, and a build of the shipped image.
+
+- **The client could not make a single request in a browser.** `fetch` was invoked as `this.fetchImpl(...)`, so its receiver was the client instance. A real browser's `fetch` is a WebIDL operation on `Window` and answers any other receiver with `Illegal invocation`. Node's `fetch` does not check its receiver, so the entire suite passed either way, *including* the tests that drive a real `node:http` server. The lesson is narrower than "run the app": a test environment that differs from the deployment environment in one detail will report success on exactly that detail.
+- **Evidence ages froze while the freshness notice advanced.** With the coordinator stopped for 100 seconds and the page untouched, the banner and the last-updated notice correctly reported the disconnection, while the evidence panel still read `current` and "observed just now". Ages were computed against the last response's `serverTime` as a fixed "now", so they stopped moving exactly when the operator most needs them to. This is the same family as the `observedAt` defect this project has now caught four times: a time presented more favorably than the evidence supports.
+
+The fix keeps the coordinator's `state` verdict untouched, because that verdict has provenance and the UI inventing its own is what ADR-011 forbids, and corrects the age claim, which is what was actually false.
+
+### Narrowings, recorded rather than silently dropped
+
+- **No browser-driving end-to-end suite.** The five acceptance criteria were verified by hand against the running stack, with two real agent subprocesses advertising over the bundled broker and a fake version-2 coordinator for the version-negotiation criterion. Automating them needs a browser in CI and belongs to its own decision.
+- **The phone layout is unverified.** The responsive CSS and the show-time high-contrast mode are implemented and unit-tested, but the layout was never visually confirmed at phone width. OPERATOR-UI §13 makes the phone a primary operational surface, so this is a real gap, not a cosmetic one.
+- **The dashboard renders only subsystems the coordinator models.** No empty audio, SMPTE, projector, weather, or preview panels, because an empty panel asserts that a subsystem exists and is not reporting, which is a false statement about the system. This is deliberately *not* the same rule as evidence absence within a modeled subsystem, which is always rendered with its state and reason.
+- **The change stream carries no deletions in v1**, so a client's model can only shrink at a snapshot. Handled, and commented where a future contributor would otherwise add a delete handler.
 
 ## Not yet sequenced
 

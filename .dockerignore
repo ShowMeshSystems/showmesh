@@ -21,6 +21,14 @@ docs
 # part of the build context sent to the daemon.
 deploy
 
+# The Operator UI has its own image, its own Dockerfile, and its own
+# .dockerignore (ui/.dockerignore) with a build context scoped to ui/
+# itself (deploy/docker-compose.yml's `ui` service: context: ../ui). None
+# of it is an input to this Dockerfile, and ui/node_modules in particular
+# can be large enough on its own to make excluding it worth calling out
+# rather than leaving to the *.md/docs rules above, which wouldn't catch it.
+ui
+
 # OS and editor cruft.
 .DS_Store
 .vscode

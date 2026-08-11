@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Strict, per spec section 4.1: the API surface is generated from
+       api/openapi.yaml and has many nullable fields (Evidence.value,
+       observedAt, etc.) — noUncheckedIndexedAccess and
+       exactOptionalPropertyTypes exist so the compiler catches a client
+       that assumes a value is present rather than that assumption
+       surfacing at show time. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  /* vitest.setup.ts sits outside src/ but must be part of this program:
+     it imports @testing-library/jest-dom/vitest, whose ambient
+     augmentation of vitest's Assertion interface is what makes
+     toBeInTheDocument() typecheck. Vitest transpiles rather than
+     type-checking, so omitting it here fails only under `npm run
+     typecheck`, which is exactly the gap that should not be papered over
+     inside a source directory. */
+  "include": ["src", "vitest.setup.ts"]
+}

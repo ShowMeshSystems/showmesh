@@ -55,9 +55,15 @@ jobs:
 
       - name: Check formatting
         # gofmt -l lists files that are not formatted; fail the job if it
-        # prints anything, since a clean `-l` output is empty.
+        # prints anything, since a clean `-l` output is empty. Scoped to
+        # the directories that actually hold this project's Go source
+        # (matches the Makefile's GOFMT_DIRS) rather than ".": gofmt is a
+        # plain filesystem walk with no notion of Go module boundaries, so
+        # "." would also walk into ui/node_modules once that exists and
+        # can flag (or, via `gofmt -w`, silently reformat) a vendored
+        # third-party .go file some npm package happens to ship.
         run: |
-          unformatted="$(gofmt -l .)"
+          unformatted="$(gofmt -l cmd internal pkg test)"
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"
@@ -111,6 +117,54 @@ jobs:
           # golangci-lint release; bump deliberately alongside .golangci.yml.
           # Matches GOLANGCI_LINT_VERSION in the Makefile's lint fallback.
           version: v2.6.2
+
+  ui:
+    # A separate job, not a step folded into `test` above, specifically so
+    # a Node/UI failure is legible as a Node failure at a glance rather
+    # than buried inside the Go job's log — same reasoning the `integration`
+    # job's own comment gives for its separation. This job needs no Go
+    # toolchain and the Go jobs above need no Node, which is the ADR-006
+    # boundary CLAUDE.md draws around the Operator UI being the one
+    # TypeScript exception (ADR-015): the two toolchains stay independent
+    # in CI the same way they stay independent in the repository layout.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # `npm ci`, not `npm install`: fails on a package.json/lockfile
+      # mismatch instead of silently rewriting the committed lockfile,
+      # and installs exactly what's locked rather than whatever satisfies
+      # the version ranges today.
+      - name: Install
+        run: cd ui && npm ci
+
+      - name: Lint
+        run: cd ui && npm run lint
+
+      - name: Typecheck
+        run: cd ui && npm run typecheck
+
+      - name: Unit tests
+        run: cd ui && npm test
+
+      - name: Build
+        run: cd ui && npm run build
+
+      # Regenerates src/api/generated/schema.d.ts from api/openapi.yaml and
+      # fails the job on any diff against what's committed — see the
+      # Makefile's ui-gen-check target, which this step also uses locally.
+      # This is what keeps ADR-015's "generated from or verified against
+      # the Go types" true on every push rather than only at the moment
+      # someone remembered to regenerate by hand.
+      - name: Generated API types are up to date
+        run: make ui-gen-check
 
   docker:
     runs-on: ubuntu-latest

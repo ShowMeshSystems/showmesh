@@ -27,3 +27,8 @@ coverage.out
 
 # Local working notes, not for the repo
 docs/private/
+
+# Operator UI (ui/). package-lock.json is committed; node_modules and the
+# Vite build output (dist/, already covered above) are not.
+ui/node_modules/
+ui/.vite/

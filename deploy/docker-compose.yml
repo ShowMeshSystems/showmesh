@@ -89,6 +89,52 @@ services:
       mosquitto:
         condition: service_started
 
+  ui:
+    # Operator UI (ADR-014, ADR-015): its own container, own image, and its
+    # own release cadence, independent of the coordinator. Build context is
+    # ui/ itself, not the repo root, per ui/Dockerfile's own comment: the
+    # committed generated API types are the only thing this build needs
+    # from outside that directory, and they're already inside it.
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # NO `env_file:` here, and its absence is load-bearing rather than an
+    # oversight. `env_file` loads *every* variable in .env into the
+    # container, not only the ones named under `environment:` below, so
+    # this service would receive SHOWMESH_API_TOKEN and
+    # SHOWMESH_MQTT_PASSWORD along with the two it actually needs —
+    # readable via `docker inspect ui` and /proc/1/environ. ADR-022
+    # decision 2 forbids this container from *holding* the coordinator's
+    # shared secret, not merely from injecting it as a header, precisely
+    # because holding it makes reaching the UI equivalent to reaching the
+    # API. Compose still interpolates ${VAR} below from .env without
+    # `env_file`, so the two settings this service does need keep working.
+    # This was caught by review after three comments in this bundle
+    # asserted the property the configuration did not have.
+    environment:
+      # What the container's nginx proxies /api/* to (ADR-022, ui/nginx.conf).
+      # Defaults match this bundle's own coordinator service name and
+      # container-internal port, so nothing needs setting for the stack as
+      # shipped; point these at an external coordinator's host:port instead
+      # to run the UI against one.
+      SHOWMESH_COORDINATOR_HOST: ${SHOWMESH_COORDINATOR_HOST:-coordinator}
+      SHOWMESH_COORDINATOR_PORT: ${SHOWMESH_COORDINATOR_PORT:-8080}
+    ports:
+      - "${SHOWMESH_UI_PORT:-8081}:8080"
+    # No depends_on, deliberately, and not just omitted by oversight: this
+    # is the exact trap Step 0's review caught for the mosquitto/coordinator
+    # pair, applied to the coordinator/ui pair. ADR-014's governing test is
+    # that the show survives every browser disappearing; the mirror
+    # obligation on this container is that it must start and serve —
+    # including rendering a visible disconnected state — whether or not the
+    # coordinator service exists, has started, or is healthy.
+    # ui/nginx.conf's resolver-based proxy_pass (not a literal
+    # `proxy_pass http://coordinator:8080`) is what makes "coordinator
+    # absent" a live 502 per request rather than a boot failure; a
+    # `depends_on` here would only ever reintroduce the coupling that
+    # design exists to avoid.
+
 volumes:
   mosquitto-data:
   mosquitto-log:

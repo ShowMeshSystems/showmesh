@@ -55,7 +55,9 @@ The Operator UI is deployed as its own container alongside the coordinator in th
 
 The expected stack is coordinator, Operator UI, and a broker, with supporting coordinator services added as required. Offline operation must not regress: the UI must load and function with no internet access once images are present, which forbids runtime dependencies on external CDNs, fonts, map tiles, or telemetry endpoints.
 
-Open at this stage and to be settled when the UI is built: whether the UI container serves the API through a reverse proxy or the browser addresses the coordinator directly with explicit cross-origin configuration, and where TLS terminates.
+Settled when the UI was built, in [ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md): the UI container serves the built assets and forwards `/api/*` to the coordinator, so the browser sees one origin; the container never holds or mints a credential and never caches an API response; and ShowMesh terminates no TLS, leaving that to a reverse proxy in front of the UI container where a deployment requires it.
+
+The forwarding rule is the load-bearing part and is not a proxy implementation detail. A proxy holding the credential would make reaching the UI equivalent to reaching the API, which contradicts §11's requirement that the coordinator enforce authorization and [ADR-014](../decisions/ADR-014-operator-ui-is-an-api-client.md)'s requirement that the API be equally usable with no UI deployed. The test is that removing the proxy and pointing a client straight at the coordinator changes nothing except the origin.
 
 ## 5. Control API contract
 
@@ -166,6 +168,8 @@ Commands require authenticated identities and authorization by target and action
 The initial deployment may use a simple authentication model appropriate to an isolated show VLAN, but the mechanism is an explicit decision to be recorded when the control API gains write operations — not a default that arrives by omission. A UI that can stop a show with no authentication is a defensible choice on a private VLAN and an indefensible accident otherwise.
 
 The read-only API's posture is now recorded in [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md): an optional shared secret, disabled by default, with a startup warning when it is unset. That ADR states plainly that one shared secret is not an identity and does not satisfy ARCHITECTURE §10.4, and it bars the first write endpoint until a superseding ADR decides a real mechanism. So the decision this section demands has been made for the read surface and is still outstanding for the write surface.
+
+How the browser participates in that posture is recorded in [ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md): the browser holds the shared secret in `sessionStorage` after a `401` prompts for it, and the UI container forwards the resulting header rather than supplying one. There is deliberately no login, identity, expiry, or logout beyond discarding the secret, because ADR-021's concern was that answering this early would force a session model the superseding ADR then has to unwind. The answer chosen is small enough to delete.
 
 Future role-based access may include viewer, operator, and administrator. The API and UI architecture must not block that, which in practice means authorization decisions are expressed server-side and returned to the client rather than inferred by it.
 
