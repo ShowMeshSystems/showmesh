@@ -22,6 +22,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-012](RES-012-device-telemetry-adapters.md) | Device telemetry adapters | planned (L1) | high | — |
 | [RES-013](RES-013-telemetry-storage-and-alerting.md) | Telemetry storage and alerting | planned | high | RES-010, RES-011, RES-012 |
 | [RES-014](RES-014-control-provider-model.md) | Control-provider model | unresearched | medium | RES-012 |
+| [RES-015](RES-015-fpp-plugin-distribution-model.md) | FPP plugin repository and distribution model | unresearched | medium | — |
 
 ## Verification levels
 
