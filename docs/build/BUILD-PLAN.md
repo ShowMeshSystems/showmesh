@@ -221,6 +221,36 @@ The fix keeps the coordinator's `state` verdict untouched, because that verdict 
 - **The dashboard renders only subsystems the coordinator models.** No empty audio, SMPTE, projector, weather, or preview panels, because an empty panel asserts that a subsystem exists and is not reporting, which is a false statement about the system. This is deliberately *not* the same rule as evidence absence within a modeled subsystem, which is always rendered with its state and reason.
 - **The change stream carries no deletions in v1**, so a client's model can only shrink at a snapshot. Handled, and commented where a future contributor would otherwise add a delete handler.
 
+## Step 5: Real FPP signals on the dashboard
+
+Status: specified, not started
+
+**Goal:** Step 4 built a surface with almost nothing to display. Step 5 fills it with the four signal groups the operator actually looks at, collected from the real deployed fleet rather than from a container. Still read-only; ADR-021 rule 5 continues to bar any write endpoint.
+
+**The fleet, probed read-only 2026-08-11.** Addresses, hardware, and versions are in [reference installation](../reference-installation.md). These hosts are reachable from the development machine. **Never issue a write, command, restart, or settings change against any of them.** The display is the operator's property and this step is read-only by design. The fleet is deliberately non-uniform and is expected to move to a 9.x release or the FPP 10 beta before the season, so anything verified here is verified against these versions only.
+
+**Deliverables:**
+
+- **Pixel-current collection against the real schema.** `GET /api/fppd/ports` returns a **heterogeneous array**: real ports carrying `{bank, col, enabled, ma, name, row, status}`, and smart-receiver positions carrying only `{col, name, row, smartReceivers}`. A missing `ma` must never decode to `0`, because zero milliamps is a plausible reading indistinguishable from a dark port; model absence as `unsupported` with a reason. `pixelCount` is optional and was absent on both boards. Element counts differ per board and must not be hard-coded. See [RES-011](../research/RES-011-pixel-current-diagnostics.md)'s live-probe section, which is the authority over the documented schema.
+- **Playback state**: playlist, sequence, song, position, repeat mode, scheduler status, next scheduled playlist. `seconds_played`, `seconds_remaining`, `repeat_mode`, and `current_playlist.count`/`.index` arrive as JSON **strings** on the real player; a struct declaring integers fails to unmarshal the whole document and the collector reports the FPP unreachable, which is a decoding bug wearing a network fault's clothes. `next_playlist.playlist` reads `"No playlist scheduled."`, a human sentence in a data field.
+- **Controller and network health**: `fppd` state, mode, `multisync`, bridging, channel I/O enabled, `powerBad`, `sensors[]` (model generically from `label`/`valueType`, do not hard-code "CPU temp"), `warnings[]`/`warningInfo[]`, `Utilization`, and per-host version, branch, OS, platform, and uuid. **Version skew across the fleet is itself a signal** and should be visible.
+- **FPP MQTT ingestion**, the Step 3 deferral. A second source behind the existing collector interface, not a reshaping of the observation model. Retained deliveries carry no valid observation time: `observedAt` is `null` with state `unknown_age`, never filled from collection time. MQTT and REST will report overlapping signals, so precedence must be decided and documented rather than left to arrival order. FPP's own MQTT connection state is an observable signal; the player currently reports `configured: true, connected: false`. Pointing FPP at ShowMesh's broker is operator-side work.
+- **API and UI surfacing.** New signals arrive additively under `/api/v1`; update `api/openapi.yaml` and keep the conformance test green in both directions; regenerate the UI types. Step 4's rule holds: a subsystem the coordinator does not model gets no panel, and these four groups are now modeled.
+
+**Acceptance criteria:**
+
+- Unit tests run against fixtures **captured from the real hosts**, including both port-array shapes and the string-typed numerics, not hand-written from this document.
+- A missing `ma` never renders as a current reading, and a smart-receiver blind spot is visibly distinct from a measured zero.
+- A collector decoding failure is distinguishable from an unreachable FPP, in the API and in the UI.
+- MQTT-sourced and REST-sourced values for the same `SignalID` resolve by a documented precedence rule, verified by a test.
+- A live read-only run against all three hosts, reporting what each signal actually resolved to.
+
+**Bound by:** ADR-001, ADR-003, ADR-008, ADR-011, ADR-013, ADR-020, ADR-021.
+
+**What this step may not claim.** Every `ma` currently reads `0` because the display is de-energized. That confirms shape and type and proves nothing about whether current telemetry works. **No code comment, log line, test name, or document may state that pixel-current monitoring is verified.** Raising RES-011 needs readings from an energized display with a known load.
+
+**Out of scope:** every write operation; alerting and notification paths, metric history, and retention tiers (RES-013); the preview wall (RES-010); controlled devices (ADR-016, RES-014); projectors, UPS, and switch telemetry (RES-012); the house topology map; anything requiring the identity ADR.
+
 ## Not yet sequenced
 
 These deliberately come later, and why:
