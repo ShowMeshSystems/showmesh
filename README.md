@@ -32,30 +32,6 @@ Every remaining roadmap item that *does* something rather than *shows* something
 
 ---
 
-## Design constraints worth reading about
-
-These are the decisions that shape everything else. Each links to its ADR.
-
-**The coordinator is never in the real-time timing or media path** ([ADR-008](docs/decisions/ADR-008-mqtt-control-plane.md)). A running show must survive coordinator loss *and* broker loss. Timing never traverses MQTT; FPP MultiSync is the timing path. The test for whether the Operator UI is correctly scoped is the same shape: if every browser disappeared right now, the show continues ([ADR-014](docs/decisions/ADR-014-operator-ui-is-an-api-client.md)).
-
-**FPP remains the authoritative scheduler** ([ADR-001](docs/decisions/ADR-001-fpp-is-authoritative.md)). ShowMesh never becomes a second scheduler. Lifecycle actions are exposed as native FPP commands.
-
-**Desired and observed state are separate** ([ADR-003](docs/decisions/ADR-003-desired-and-observed-state.md)). A command is not successful because it was sent; success requires evidence.
-
-**Absent evidence is stated, never omitted** ([ADR-011](docs/decisions/ADR-011-context-aware-observability.md), [ADR-020](docs/decisions/ADR-020-control-api-shape-and-change-stream.md)). Every observation carries provenance and freshness. A value the system cannot see reports *why* — never collected, collection failed, source doesn't support it, or gone stale — because a missing field renders as blank and blank reads as fine. Stale is `unknown`, never healthy.
-
-**Nodes are modeled by capabilities, not hardware types** ([ADR-002](docs/decisions/ADR-002-capability-based-nodes.md)). Namespaced, versioned capability IDs with attributes. The UI composes views from advertised capabilities rather than fixed node classes.
-
-**The control API is a public contract, not a UI convenience** ([ADR-014](docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-020](docs/decisions/ADR-020-control-api-shape-and-change-stream.md)). Versioned REST plus an SSE change stream — SSE deliberately, because a contract you cannot inspect with `curl` drifts towards private. The stream is *not* resumable by design: any interruption forces an authoritative snapshot re-fetch, because a gap in a stream is indistinguishable from a quiet system.
-
-**Never share UDP 32320 with a running `fppd`** ([ADR-013](docs/decisions/ADR-013-no-fpp-control-port-sharing.md)). `SO_REUSEPORT` load-balances unicast datagrams by 4-tuple hash, so a co-located listener can silently steal FPP's own unicast sync stream and desync a live show. Port sharing defaults to off; a bind conflict must fail loudly.
-
-**Audio deliberately does not follow the MultiSync slew/jump model** ([ADR-017](docs/decisions/ADR-017-showmesh-owns-audience-audio.md)–[ADR-019](docs/decisions/ADR-019-audio-device-loss-fails-silent.md)). Nodes play complete local files on their own audio clock, never a sample-position stream; drift is corrected discretely at track boundaries, never by continuous rate manipulation. Audio device loss fails *silent* — a recorded exception to the local-fallback rule, because uncontrolled routing and gain into an FM transmitter is worse than silence.
-
-Full set: [ADR-001 through ADR-022](docs/decisions/README.md), all Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
-
----
-
 ## Architecture at a glance
 
 ```
@@ -140,12 +116,6 @@ make test      # Go unit tests only
 | `bench/fpp-multisync/` | Bench scaffolding — a real containerized `fppd`. Never the product. |
 | `docs/` | Architecture, ADRs, research records, build plan and log |
 
-### Two structural guards worth calling out
-
-`cmd/showmeshctl` is **forbidden by an enforced import-graph test** from importing any coordinator package. If the CLI could reach into coordinator internals, a JSON tag rename would silently rename the field on both sides and the contract would quietly stop being a contract. Instead it breaks the build.
-
-The UI's API types are **generated from `api/openapi.yaml` and CI fails on any diff**, which makes "types are generated or verified, never hand-maintained twice" a gate rather than an intention.
-
 ---
 
 ## Documentation
@@ -159,20 +129,31 @@ The design package is authoritative and predates the code.
 - [Audio Engine specification](docs/architecture/AUDIO-ENGINE.md) — entirely unverified design intent, labelled as such
 - [Architecture decision records](docs/decisions/README.md) · [Research tracker](docs/research/README.md)
 - [Build plan](docs/build/BUILD-PLAN.md) · [Build log](docs/build/BUILD-LOG.md) — ordered steps with status, and the chronological session record
+- [Engineering lessons](docs/build/LESSONS.md) — defects this project has actually shipped and caught, and the rules that came out of them
 
 ---
 
-## What this project has learned the hard way
+## Design constraints
 
-The build log records these in full. They are here because they generalize past this codebase.
+These are the decisions that shape everything else. Each links to its ADR.
 
-**A test environment that differs from the deployment environment reports success on exactly that difference.** The UI's 99 unit tests passed — including tests driving a real HTTP server with real SSE bytes — while the app could not issue a single request in a browser. `fetch` was invoked with the client as its receiver; Node accepts that, a browser answers `Illegal invocation`. Three reviews and a build of the shipped image missed it. Loading the page found it immediately.
+**The coordinator is never in the real-time timing or media path** ([ADR-008](docs/decisions/ADR-008-mqtt-control-plane.md)). A running show must survive coordinator loss *and* broker loss. Timing never traverses MQTT; FPP MultiSync is the timing path. The test for whether the Operator UI is correctly scoped is the same shape: if every browser disappeared right now, the show continues ([ADR-014](docs/decisions/ADR-014-operator-ui-is-an-api-client.md)).
 
-**A test's name is a claim.** Before trusting one, break the behavior it names and confirm it fails. A review pass did exactly that and found three tests that still passed with the asserted behavior removed from production code — one of them sitting on an acceptance criterion. A test that passes whether or not the bug is present is worse than no test, because it also reports success.
+**FPP remains the authoritative scheduler** ([ADR-001](docs/decisions/ADR-001-fpp-is-authoritative.md)). ShowMesh never becomes a second scheduler. Lifecycle actions are exposed as native FPP commands.
 
-**A test can be a coin flip, and platform is the usual disguise.** One back-pressure test failed 15% of the time on Linux and never on macOS. The cause was neither slowness nor socket buffers but frames per render pass, which the two kernels schedule differently. Related, and worth knowing before designing any back-pressure test: "the client stops reading" barely creates back-pressure at all — 4.0 MB into the kernel on Linux, 1.5 MB on macOS, before a single write blocks. Construct overflow structurally; don't race a kernel.
+**Desired and observed state are separate** ([ADR-003](docs/decisions/ADR-003-desired-and-observed-state.md)). A command is not successful because it was sent; success requires evidence.
 
-**The same defect returns in new disguises.** Defaulting an unknown observation time to the collection time has been introduced and caught three separate times. It is now a `nil` pointer with an explicit `unknown_age` state and a test that panics if the wrong code path is ever taken.
+**Absent evidence is stated, never omitted** ([ADR-011](docs/decisions/ADR-011-context-aware-observability.md), [ADR-020](docs/decisions/ADR-020-control-api-shape-and-change-stream.md)). Every observation carries provenance and freshness. A value the system cannot see reports *why* — never collected, collection failed, source doesn't support it, or gone stale — because a missing field renders as blank and blank reads as fine. Stale is `unknown`, never healthy.
+
+**Nodes are modeled by capabilities, not hardware types** ([ADR-002](docs/decisions/ADR-002-capability-based-nodes.md)). Namespaced, versioned capability IDs with attributes. The UI composes views from advertised capabilities rather than fixed node classes.
+
+**The control API is a public contract, not a UI convenience** ([ADR-014](docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-020](docs/decisions/ADR-020-control-api-shape-and-change-stream.md)). Versioned REST plus an SSE change stream — SSE deliberately, because a contract you cannot inspect with `curl` drifts towards private. The stream is *not* resumable by design: any interruption forces an authoritative snapshot re-fetch, because a gap in a stream is indistinguishable from a quiet system.
+
+**Never share UDP 32320 with a running `fppd`** ([ADR-013](docs/decisions/ADR-013-no-fpp-control-port-sharing.md)). `SO_REUSEPORT` load-balances unicast datagrams by 4-tuple hash, so a co-located listener can silently steal FPP's own unicast sync stream and desync a live show. Port sharing defaults to off; a bind conflict must fail loudly.
+
+**Audio deliberately does not follow the MultiSync slew/jump model** ([ADR-017](docs/decisions/ADR-017-showmesh-owns-audience-audio.md)–[ADR-019](docs/decisions/ADR-019-audio-device-loss-fails-silent.md)). Nodes play complete local files on their own audio clock, never a sample-position stream; drift is corrected discretely at track boundaries, never by continuous rate manipulation. Audio device loss fails *silent* — a recorded exception to the local-fallback rule, because uncontrolled routing and gain into an FM transmitter is worse than silence.
+
+Full set: [ADR-001 through ADR-022](docs/decisions/README.md), all Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
 
 ---
 

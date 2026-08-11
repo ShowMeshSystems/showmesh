@@ -11,6 +11,7 @@
 - [Architecture decision records](decisions/README.md) — durable decisions, their context, and consequences.
 - [Build plan](build/BUILD-PLAN.md) — the ordered implementation sequence that delivers the roadmap phases, with status tracking.
 - [Build log](build/BUILD-LOG.md) — the chronological session record of implementation work.
+- [Engineering lessons](build/LESSONS.md) — defects this project has shipped and caught, and the conventions that came out of them.
 
 ## Reading order
 
