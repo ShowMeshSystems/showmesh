@@ -28,6 +28,16 @@ Define how a non-FPP media node participates in FPP timing and what compatibilit
 
 Capture authoritative documentation and relevant source behavior, then record packets from representative playlists. Build an isolated listener and compare its timeline with an FPP remote and physical reference. Inject delay, loss, duplication, reordering, source restart, and competing masters.
 
+### Two bench tiers, because they answer different questions
+
+**Tier 1, containerized (`bench/fpp-multisync/`).** A real `fppd` in a container drives the probe. This is a real daemon emitting real packets, so it is genuine evidence for everything that is *software* behavior: packet layout, lifecycle ordering, cadence, and the effect of a version change. It is repeatable, it does not touch the show rig, and it can run several FPP versions side by side without reflashing anything. It also satisfies [ADR-013](../decisions/ADR-013-no-fpp-control-port-sharing.md) structurally rather than by discipline, because `fppd` and the probe occupy separate network namespaces and cannot share UDP 32320.
+
+**Tier 2, physical.** The real player on the reference switch, per [the capture procedure](../bench/RES-002-capture-procedure.md). Required for anything that is a property of the hardware clock or the physical network.
+
+The distinction matters because a container result for a hardware question is not weak evidence, it is misleading evidence. Docker networking changes multicast behavior, and an x86 container's clock says nothing about a Raspberry Pi's crystal.
+
+Which tier can close which open item is recorded against each item below. Tier 1 cannot raise items 4 or 5 at all, and no amount of container work will change that.
+
 ## Evidence and findings
 
 Desk research 2026-08-10 (documentation and source reading; no packet captures yet). Confidence tags: [doc] officially documented, [src] read in FPP or third-party source, [hist] git history.
@@ -67,11 +77,23 @@ Desk research 2026-08-10 (documentation and source reading; no packet captures y
 
 ### Open items for bench (L2) verification
 
-1. Packet capture against a real FPP 9.x/10.x master to confirm endianness/padding and exact cadence/jitter under load.
-2. Pause/seek packet behavior, and whether OPEN reliably precedes START across master versions and xSchedule.
-3. Packets emitted at playlist end vs manual stop vs fppd shutdown (STOP vs BLANK combinations; orphaned no-STOP cases).
-4. Clock-drift accumulation over a 30–60 min show between sync nudges; required slew aggressiveness.
-5. Multicast IGMP behavior on the reference switch; discover-ping participation needed for the FPP UI.
+Each item records which bench tier can close it. All five remain open; the tier annotation says where the work should happen, not that it has happened.
+
+1. Packet capture against a real FPP 9.x/10.x master to confirm endianness/padding and exact cadence/jitter under load. **Tier 1**, except jitter under realistic load, which wants tier 2.
+2. Pause/seek packet behavior, and whether OPEN reliably precedes START across master versions and xSchedule. **Tier 1** for FPP masters. The xSchedule half needs a real xSchedule and is neither tier as currently built.
+3. Packets emitted at playlist end vs manual stop vs fppd shutdown (STOP vs BLANK combinations; orphaned no-STOP cases). **Tier 1.** Killing a containerized `fppd` uncleanly is easier and more repeatable than doing it to a live player.
+4. Clock-drift accumulation over a 30–60 min show between sync nudges; required slew aggressiveness. **Tier 2 only.** Drift is a property of the player's clock hardware and OS scheduling; a container on an x86 host produces a number that does not transfer to a Raspberry Pi.
+5. Multicast IGMP behavior on the reference switch; discover-ping participation needed for the FPP UI. **Tier 2 only.** Docker networking alters multicast behavior, and even a macvlan container on a hypervisor host is behind a virtual switch doing its own IGMP snooping, so it is still not the reference switch.
+
+### First corroboration against a running daemon (2026-08-10)
+
+Recorded during construction of the tier 1 bench, not as a structured capture run. It is reported here because it is the first evidence in this record that came from a running `fppd` rather than from reading documentation and source, and because one finding is operationally significant.
+
+- A containerized FPP 9.5.3 master, with **no channel outputs configured at all**, emitted `OPEN`, then `START`, then periodic `SYNC` while playing a sequence, and the probe in a separate container received and decoded the sequence with no malformed packets. Observed cadence matched the cadence recorded in this document from source: every 4 frames for the first 32, then every 10.
+- This settles a question the design had only reasoned about: **MultiSync output derives from sequence position, not from output hardware**, so a master with nothing physically attached still emits usable sync.
+- **`MultiSyncEnabled` defaults to off.** With it off, `fppd` plays sequences entirely normally and never constructs a single MultiSync packet, logging no error at default verbosity. This is worth carrying into the product, not just the bench: an operator whose FPP has never had MultiSync enabled will see a working show and no sync traffic, and ShowMesh must be able to say so rather than reporting an absence of packets as a network fault. It belongs in readiness evidence (OBSERVABILITY §10) and in whatever the FPP collector reports in Step 3.
+
+This does **not** promote the record to L2. It was an ad hoc observation while building a tool, the versions and conditions were not recorded to the standard L2 requires, and promoting the status is the owner's call once the structured captures in the procedure have been run.
 
 ## Decision, fallback, and revalidation
 

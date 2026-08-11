@@ -1,0 +1,45 @@
+# Mode B ("wire") overlay for docker-compose.yml. Run with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.macvlan.yml up
+#
+# This redefines the `bench` network as an EXTERNAL macvlan network so each
+# container gets its own MAC address on the real L2 and multicast reaches
+# an actual switch -- closer to the reference topology than Mode A's
+# bridge, and the mode the project owner will use on his Linux Docker host.
+#
+# macvlan needs a parent interface, subnet, and gateway that are specific to
+# your network. Nothing site-specific is baked in here; create the network
+# yourself first, replacing every placeholder below:
+#
+#   docker network create -d macvlan \
+#     --subnet=<YOUR_SUBNET, e.g. 192.168.1.0/24> \
+#     --gateway=<YOUR_GATEWAY, e.g. 192.168.1.1> \
+#     -o parent=<YOUR_PARENT_INTERFACE, e.g. eth0> \
+#     showmesh-bench-macvlan
+#
+# Rename the network below (and in the `docker network create` command) if
+# `showmesh-bench-macvlan` collides with something you already have.
+#
+# IMPORTANT, per README.md: even Mode B is NOT RES-002 open item 5's
+# reference switch. If your Docker host is itself a VM (for example on
+# ESXi, which is the project owner's actual topology), the hypervisor's own
+# virtual switch does its own IGMP snooping between the VM and the physical
+# network, so Mode B only gets you past Docker's bridge -- not past every
+# layer between fppd and the reference show switch. Only a capture taken on
+# or against that physical switch closes item 5's IGMP question.
+#
+# A macvlan network is generally NOT reachable from the Docker host itself
+# without an extra macvlan/ipvlan shim interface on the host (a well-known
+# Docker macvlan limitation, not specific to this bench). If you need to
+# browse fpp-master's web UI and the Docker host can't reach it directly,
+# browse from another machine on that same L2 instead, or set up that shim
+# yourself -- it is intentionally not configured here since it is
+# host-specific. The `ports:` mappings in docker-compose.yml are also
+# meaningless under macvlan (each container already has its own routable
+# IP); find each container's macvlan IP with `docker inspect` and browse to
+# it directly on port 80.
+
+networks:
+  bench:
+    external: true
+    name: showmesh-bench-macvlan

@@ -1,0 +1,4 @@
+# Local overrides and capture output; never commit either.
+.env
+captures/*.jsonl
+captures/*.log

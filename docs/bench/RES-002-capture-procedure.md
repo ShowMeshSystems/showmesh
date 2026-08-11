@@ -22,6 +22,16 @@ By default `showmesh-multisync-probe` only listens. It joins the MultiSync multi
 
 The one exception is `-respond-discover`. If you pass it, the probe answers any discover ping it observes with a Ping packet of its own, addressed back to the sender. This is a real transmission onto the show network, done specifically so the probe appears as a device in FPP's own MultiSync UI (see RES-002's item 5). Leave it off unless you specifically want to check that UI behavior; every other capture in this procedure should run without it.
 
+## Two places to run this, and which items each one settles
+
+This procedure was originally written for the real player on the show network. There is now also a containerized bench at `bench/fpp-multisync/` that runs a real `fppd` in Docker driving the probe. Read its README before choosing.
+
+**Use the containerized bench for items 1, 2, and 3.** Those are software behavior: packet layout, lifecycle ordering, cadence, and STOP/BLANK combinations. A container is a real daemon emitting real packets, it is repeatable, it does not touch the show rig, and it can run several FPP versions side by side. Killing `fppd` uncleanly to produce an orphaned no-STOP case is also far easier there than on a live player.
+
+**Items 4 and 5 require the real player on the real switch, and no amount of container work substitutes.** Clock drift is a property of the player's clock hardware and OS scheduling. IGMP behavior is a property of the physical switch. A container answer to either is not weak evidence, it is misleading evidence.
+
+**Before anything else, check that MultiSync is actually enabled on the master.** `MultiSyncEnabled` defaults to off, and with it off `fppd` plays sequences completely normally and emits no MultiSync packets at all, with no error at default log verbosity. A capture that records nothing is far more likely to be this than a network problem.
+
 ## What to run
 
 From the repository root:

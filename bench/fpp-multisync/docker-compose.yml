@@ -1,0 +1,139 @@
+# RES-002 bench: FPP in Docker driving showmesh-multisync-probe.
+#
+# THIS IS BENCH SCAFFOLDING, NOT THE SHOWMESH PRODUCT. It exists solely to
+# gather evidence for docs/research/RES-002-fpp-multisync-compatibility.md's
+# open bench items and lives under bench/, never deploy/ (see CLAUDE.md's
+# repo map: deploy/ is the operator appliance bundle and must not grow test
+# scaffolding). See README.md for exactly what this bench can and cannot
+# establish, and docs/bench/RES-002-capture-procedure.md for the capture
+# runbook this compose file feeds.
+#
+# Mode A ("contained", the default here): every service sits on one
+# user-defined bridge network. Multicast between containers on the same
+# Linux bridge works without touching the host's physical network, which is
+# why this is the mode that runs anywhere -- including this repo's own
+# macOS Docker Desktop machine, where it was built and validated (see
+# README.md "How this bench was validated"). It is NOT a substitute for the
+# reference show's actual switch.
+#
+# Mode B ("wire"): overlay docker-compose.macvlan.yml on top of this file to
+# put every service on a macvlan network with its own MAC on the real L2:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.macvlan.yml up
+#
+# See docker-compose.macvlan.yml and README.md for the docker network
+# create command and why even Mode B is not the reference switch either.
+
+services:
+  fpp-master:
+    build:
+      # Pinned by an explicit git TAG, not the floating v9.5 / v10.0-beta
+      # BRANCH names those tags sit on (both branches exist upstream and
+      # move; see README.md "Versions"). A tag pin means a rebuild months
+      # from now reproduces the same FPP, the same reason
+      # deploy/docker-compose.yml pins Mosquitto to an exact patch version
+      # rather than a floating minor tag. Override FPP_GIT_REF in .env to
+      # build the 10.0 beta target instead.
+      context: https://github.com/FalconChristmas/fpp.git#${FPP_GIT_REF:-9.5.3}
+      dockerfile: Docker/Dockerfile
+      args:
+        FPPBRANCH: ${FPP_GIT_REF:-9.5.3}
+    container_name: showmesh-bench-fpp-master
+    hostname: fpp-master
+    cap_add:
+      # Matches the run command FalconChristmas/fpp's own dockerBuild.sh
+      # documents (see README.md "Sources"). FPP's channel output thread
+      # requests real-time scheduling priority for frame timing; without
+      # this capability it still runs, just without that priority, which
+      # matters for real show output but not for this bench's purpose of
+      # observing MultiSync packets.
+      - SYS_NICE
+    networks:
+      - bench
+    volumes:
+      # /home/fpp/media, NOT /opt/fpp: confirmed directly against a running
+      # container while building this bench (see README.md's "corrections"
+      # section) that operator config, uploaded sequences, playlists, and
+      # settings all live under /home/fpp/media. /opt/fpp is the installed
+      # source tree / web root the image bakes in at build time, not
+      # runtime state, and persisting it would do nothing useful here.
+      - fpp-master-media:/home/fpp/media
+    ports:
+      - "${FPP_MASTER_HTTP_PORT:-8090}:80"
+      # 32320/udp is deliberately NOT published to the host. `-p
+      # 32320:32320/udp` forwards unicast to a host port and does not carry
+      # multicast, so publishing it here would misrepresent what this bench
+      # tests (see README.md's "two network modes" section). MultiSync
+      # traffic between fpp-master and the other services stays on the
+      # `bench` network.
+    restart: unless-stopped
+
+  probe:
+    build:
+      # Repo root context: the probe imports internal/version and
+      # pkg/multisync alongside its own cmd/ package, so it cannot build
+      # from this directory alone. Deliberately its own Dockerfile, not an
+      # extension of the root Dockerfile -- see probe.Dockerfile's header
+      # comment.
+      context: ../..
+      dockerfile: bench/fpp-multisync/probe.Dockerfile
+      args:
+        VERSION: ${SHOWMESH_VERSION:-dev}
+        COMMIT: ${SHOWMESH_COMMIT:-none}
+        BUILD_DATE: ${SHOWMESH_BUILD_DATE:-unknown}
+    container_name: showmesh-bench-probe
+    networks:
+      - bench
+    volumes:
+      # A bind mount, not a named volume: captures are the evidence this
+      # bench exists to produce. They need to land as plain files on the
+      # host, reachable after `docker compose down`, not locked inside a
+      # Docker-managed volume.
+      - ${CAPTURES_DIR:-./captures}:/captures
+    # No fixed capture command here: `docker compose run --rm probe
+    # <flags>` is how you actually drive a capture (see README.md "Running
+    # a capture"), because each of RES-002's open items needs its own
+    # invocation with its own -out path and its own manual action taken on
+    # fpp-master's web UI while it runs, per
+    # docs/bench/RES-002-capture-procedure.md. `docker compose up probe`
+    # with no override also works for ad hoc listening: the entrypoint's
+    # own default (-duration 0) runs until stopped.
+
+  fpp-remote:
+    # Optional second FPP configured as a MultiSync remote, so the operator
+    # can compare what a real FPP remote does against what the ShowMesh
+    # timeline does with the same traffic -- a stronger check than reading
+    # this bench's own probe output alone. Off by default:
+    #   docker compose --profile remote up
+    # Same pinned build as fpp-master (Docker's layer cache makes this
+    # second build near-instant once the first has run, since context,
+    # Dockerfile, and args are identical), so both are the same FPP version
+    # for a fair comparison.
+    profiles: ["remote"]
+    build:
+      context: https://github.com/FalconChristmas/fpp.git#${FPP_GIT_REF:-9.5.3}
+      dockerfile: Docker/Dockerfile
+      args:
+        FPPBRANCH: ${FPP_GIT_REF:-9.5.3}
+    container_name: showmesh-bench-fpp-remote
+    hostname: fpp-remote
+    cap_add:
+      - SYS_NICE
+    networks:
+      - bench
+    volumes:
+      - fpp-remote-media:/home/fpp/media
+    ports:
+      - "${FPP_REMOTE_HTTP_PORT:-8091}:80"
+    restart: unless-stopped
+
+networks:
+  bench:
+    # Mode A ("contained"): a plain user-defined bridge, created and owned
+    # by this compose project. docker-compose.macvlan.yml overrides this
+    # same network name to an external macvlan network for Mode B.
+    driver: bridge
+
+volumes:
+  fpp-master-media:
+  fpp-remote-media:
