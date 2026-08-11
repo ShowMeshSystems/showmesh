@@ -30,9 +30,11 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-Steps 0 (Foundation) and 1 (`pkg/multisync`) are complete, and Step 2 (control plane skeleton) is in progress with round 1 done. All of it was verified to the limit of what unit tests and local runs can establish; none of it has been exercised against real show hardware, a real broker, or a real agent.
+Steps 0 (Foundation), 1 (`pkg/multisync`), and 2 (control plane skeleton) are complete. Step 2's acceptance criteria pass against a real Mosquitto broker with the agent running as a real subprocess, in CI on every push. Nothing has been exercised against real show hardware.
 
-Step 2 round 1 delivered `pkg/mqttproto`, `pkg/capability`, and the `internal/coordinator` split into `config`, `broker`, `httpapi`, and `readiness`. **No acceptance criterion for Step 2 is met yet.** All three require a broker and belong to round 2, which is the coordinator's SQLite store and inventory plus the agent's hello, Last Will, and heartbeat, together with a Mosquitto service container in CI so the criteria are re-proven on every push rather than verified once by hand.
+An agent advertises itself over MQTT with a retained hello, a Last Will, and a health heartbeat; the coordinator records inventory and observed state in SQLite and derives liveness from that evidence plus the current time. There is still no read API, no UI, no commands, and no show logic: Step 3 is the read-only FPP observability slice and the versioned public API that ADR-014 requires.
+
+The next action is Step 3. Design the API before any UI exists, per BUILD-PLAN's note on why that ordering is what keeps ADR-014 real.
 
 `pkg/multisync` holds the MultiSync wire codec, a listener that receives multicast, broadcast, and unicast on UDP 32320, a timeline state machine implementing FPP remote semantics on an injectable clock, and an opt-in discover-ping responder. `cmd/showmesh-multisync-probe` is the bench instrument built to close RES-002's five open items; it has not been run against a real FPP player yet, so RES-002 remains at L1 and its status is still `planned`. Changing that status is the owner's call once real captures exist, per `docs/bench/RES-002-capture-procedure.md`.
 
@@ -51,6 +53,47 @@ The immediate next action is Step 2, the control plane skeleton. Its first task 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-10 (Step 2 round 2)
+
+**Goal:** finish the control plane skeleton, and prove Step 2's acceptance criteria against a real broker rather than by hand.
+
+**Completed:**
+
+- `internal/agent`: retained hello and online state republished on every connect and reconnect, a Last Will registered at CONNECT, a health heartbeat, and a clean shutdown that publishes its own offline state before disconnecting.
+- `internal/coordinator/store`: SQLite via `modernc.org/sqlite`, transactional migrations, a newer-than-known schema refused, and an observation model carrying provenance and freshness as columns.
+- `internal/coordinator/inventory`: subscription, message handling, and liveness derivation.
+- `test/integration` plus `scripts/test-integration.sh`, a `make test-integration` target, and a CI job, all sharing one script and exercising the shipped `deploy/mosquitto/mosquitto.conf` rather than a stand-in.
+
+**Decisions made:**
+
+- **A retained MQTT delivery is not evidence of the present.** The broker replays every retained message when a subscriber connects, so stamping receipt time as the observation time would make an hours-old heartbeat from a node that has since lost power read as perfectly fresh. A retained delivery records values with no observation time and can never produce a healthy verdict. A node reading `unknown` immediately after a coordinator restart is the correct behavior, resolving within one heartbeat, and the code says so to stop a future contributor "fixing" it.
+- **Liveness requires two signals.** If a node loses power and the broker is then killed uncleanly before writing its persistence file, the retained will still reads online. So `online` requires the will saying online *and* a live heartbeat inside the staleness window.
+- **Contradictory evidence resolves to `unknown`, and the rule turns on ordering.** The first version keyed on freshness, which was wrong: a clean shutdown publishes an offline will *after* its last heartbeat, which is a sequence of events rather than a conflict, and the freshness rule made the coordinator ignore a node's own announcement of its death in favour of stale history for the whole staleness window. A contradiction exists only when a live heartbeat is observed no older than the offline will.
+- **The agent advertises an empty capability set,** because it can do nothing yet and advertising otherwise would be a false claim. The environment override exists for tests, not because the agent has capabilities.
+- **`offline` means the control-plane connection is gone, not that the node is dead.** Recorded in BUILD-PLAN alongside the corrected acceptance criterion, because a running show survives coordinator and broker loss, and "offline" on an operator surface reads as "dead".
+
+**Findings from review and integration that mattered:**
+
+- **Clean shutdown never published its offline message.** `Run` passed the signal context to the connection manager, so SIGTERM made autopaho send a normal DISCONNECT, which discards the will, before the explicit publish could run. Every planned stop left the broker claiming the node was up. The unit test asserting publish-before-disconnect ordering passed throughout, because it asserted ordering inside one function against a fake connection while the real wiring did the opposite. Its name claimed more than it verified.
+- **A forged health message permanently wedged a node.** A node's boot ID is readable on its retained hello topic, so any client with publish rights could send one payload with that boot ID and the maximum sequence, after which every genuine heartbeat from that node was dropped at debug level until the agent process restarted. A sequence with the high bit set also could not be bound by `database/sql` at all, a type mismatch between the wire model and the column that nothing validated.
+- **Retained last-will evidence stored the coordinator's receipt time,** so after a restart an operator would have been shown six-hour-old state described as seconds old. Today's verdict was unaffected because the derivation never reads that field, which is exactly why it would have survived to Step 3's read API.
+- **`LWTDeliveryPolicy` shipped as `Retain: false` in round 1.** Correct for a will in the abstract, wrong here, where the topic is presence state read on subscribe: non-retained, a dead node and a never-seen node are indistinguishable. Caught only because a builder refused to follow a specification it judged wrong, and now pinned by a test carrying its own rationale.
+- **A doc comment asserted a dependency's dispatch mechanics as fact and had them wrong.** The standing rule against claiming unverified behavior applies to dependencies, not only to hardware.
+- **One integration test initially passed for the wrong reason.** Reusing the same database across a coordinator restart meant the replayed retained heartbeat carried an identical boot ID and sequence, so the anti-replay logic correctly ignored it and the path under test never ran. Caught by its author.
+
+**Questions raised with the owner:** none. The two open decisions from round 1 were settled in round 1.
+
+**Deferred:**
+
+- The heartbeat interval and staleness window remain unmeasured hypotheses, and they determine how quickly a failed node is noticed during a show. Belongs in RES-009.
+- Retention and pruning for observed-state history, which ADR-009 names as a consequence and this step does not address; the store keeps latest evidence only.
+- Any client with publish rights can create unbounded node rows by publishing on arbitrary syntactically valid node IDs. Bounded payload sizes landed; authorization did not, and ARCHITECTURE §10.4 still governs.
+- Running the probe against the real FPP player. RES-002 stays at L1 with status `planned`.
+
+**Verification gates:** `make check` with lint at 0 issues; `go test -race ./...` passing; `CGO_ENABLED=0 go build ./...` clean with zero cgo packages in the coordinator's dependency graph; builds clean for `linux/amd64`, `linux/arm64`, `darwin/arm64`, and `windows/amd64`; the integration build tag confirmed to exclude the tagged suite from an untagged `go test ./...`; and all six integration tests passing against Mosquitto 2.0.22 with the agent as a real subprocess, including SIGKILL, SIGTERM, coordinator restart, and broker restart. Not verified: anything on real show hardware, and anything about FPP.
 
 ---
 

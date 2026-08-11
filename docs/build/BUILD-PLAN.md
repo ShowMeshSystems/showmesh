@@ -78,7 +78,7 @@ Step 1 completing does not move RES-002 past L1. Unit tests raise nothing above 
 
 ## Step 2: Control plane skeleton
 
-Status: in progress (round 1 complete 2026-08-10)
+Status: complete (2026-08-10)
 
 **Goal:** the coordinator and an agent can see each other and agree on state, with no show logic yet.
 
@@ -92,14 +92,29 @@ Status: in progress (round 1 complete 2026-08-10)
 **Acceptance criteria:**
 
 - An agent appears in coordinator inventory after start.
-- The agent disappears into `unknown` after an unclean kill via Last Will.
+- The agent resolves to `offline` after an unclean kill, via Last Will.
 - The coordinator restores state from retained topics after its own restart.
+- A retained heartbeat replayed into a fresh subscription never reads as healthy.
+
+**Two corrections to the original criteria, made when they were first proven:**
+
+The second criterion said `unknown`. That was wrong in a way worth recording rather than silently editing. A Last Will is positive evidence that the session dropped, so `offline` is the accurate verdict and `unknown` is for absence or contradiction of evidence. `unknown` would have been an under-claim.
+
+But `offline` here means **the control-plane connection is gone, not that the node is dead or the show has stopped**. Under the standing constraint that a running show survives coordinator and broker loss, a node can be control-plane-offline while continuing to run a show correctly. Anything rendering this word to an operator must not imply otherwise, because "offline" on a dashboard reads as "dead".
+
+The fourth criterion is new. It is not a nicety: it is the only one that exercises the rule the whole liveness design rests on, and it is invisible to unit tests, because there the retained flag is set by the test rather than by a broker. It was added so that deleting the test would visibly remove a criterion rather than quietly remove a guard.
 
 **Bound by:** ADR-002, ADR-003, ADR-008, ADR-009, ADR-011, ADR-012, RES-008.
 
 **Round 1, complete 2026-08-10:** `pkg/mqttproto` (topic conventions, versioned envelope, hello/health/last-will payloads, exported delivery policy), `pkg/capability` (identifier syntax, sets, canonical encoding), and the `internal/coordinator` split into `config`, `broker`, `httpapi`, and `readiness` with the wiring moved out of `main.go`. No MQTT client code, no persistence, and no agent behavior: none of this step's acceptance criteria are met yet, because all three require a broker.
 
-**Round 2, not started:** the coordinator's SQLite store and inventory, and the agent's hello, Last Will, and heartbeat. The three acceptance criteria above are all round 2, and none can be proven without a real broker, so the round 2 deliverables include a Mosquitto service container in CI plus integration tests behind a build tag. That harness is a deliverable rather than a follow-up because otherwise the criteria are verified once by hand and decay on the next change; RES-009 failure testing needs the same harness.
+**Round 2, complete 2026-08-10:** the coordinator's SQLite store, inventory, and liveness derivation; the agent's hello, Last Will, and heartbeat; and the integration harness. All four acceptance criteria pass against a real Mosquitto with the agent running as a real subprocess, in CI on every push and via `make test-integration` locally, both driving one script against the shipped broker configuration rather than a stand-in.
+
+**Verified 2026-08-10:** `make check` with lint at 0 issues, race tests, a CGo-free build with zero cgo packages in the coordinator's dependency graph per ADR-012, cross compiles for `linux/amd64`, `linux/arm64`, `darwin/arm64`, and `windows/amd64`, and all six integration tests against Mosquitto 2.0.22. Not verified: anything on real show hardware. Nothing in this step raises any research record above L1.
+
+**Why the harness was a deliverable and not a follow-up.** It caught three defects on its first run that the unit suite passed over, including one where the unit test asserting the correct ordering passed continuously while the runtime did the opposite, because the assertion was made against a fake connection rather than the real wiring. RES-009 failure testing reuses this harness.
+
+**Known follow-up:** the heartbeat interval and staleness window are unmeasured ShowMesh hypotheses, labelled as such in code. They determine how quickly a failed node is noticed during a show, which is operator-visible, and nothing has measured what is appropriate. That belongs in [RES-009](../research/RES-009-failure-mode-testing.md).
 
 **Why `readiness` is its own package:** health evidence is a coordinator concern rather than an HTTP one. Step 3 adds the SQLite store and the FPP collectors as readiness contributors, and had the report type stayed in `httpapi`, each of them would import the HTTP package to describe its own health. `readiness` depends on neither `broker` nor `httpapi`.
 
