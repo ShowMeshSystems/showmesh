@@ -2,7 +2,11 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#5-synchronization-model) · [Tracker](README.md) · [FPP Connect research](RES-003-xlights-fpp-connect-compatibility.md)
 
-Status: planned (bench) · Risk: critical · Verification: L1 — source verified 2026-08-10
+Status: planned (bench) · Risk: critical · Verification: **L2 for protocol semantics** (containerized bench, 2026-08-10) · **L1 for everything hardware- or network-dependent**
+
+The split is deliberate and is the owner's call. Protocol semantics have been reproduced against a real `fppd` with recorded versions, which is what L2 means. Clock drift and switch behavior have not been reproduced at all, because no container can produce them.
+
+**This record does not support show readiness at any level yet.** Per CLAUDE.md, architecture-critical claims need L3 (integrated) before adoption and L4 (resilient) before show readiness, and this record has reached neither. L2 here means the wire protocol is proven enough to keep building against; it does not mean the sync path is trustworthy in a live show. That still requires the physical rig, and it is the gate before release rather than before the next build step.
 
 ## Decision to make
 
@@ -93,7 +97,11 @@ Recorded during construction of the tier 1 bench, not as a structured capture ru
 - This settles a question the design had only reasoned about: **MultiSync output derives from sequence position, not from output hardware**, so a master with nothing physically attached still emits usable sync.
 - **`MultiSyncEnabled` defaults to off.** With it off, `fppd` plays sequences entirely normally and never constructs a single MultiSync packet, logging no error at default verbosity. This is worth carrying into the product, not just the bench: an operator whose FPP has never had MultiSync enabled will see a working show and no sync traffic, and ShowMesh must be able to say so rather than reporting an absence of packets as a network fault. It belongs in readiness evidence (OBSERVABILITY §10) and in whatever the FPP collector reports in Step 3.
 
-This does **not** promote the record to L2. It was an ad hoc observation while building a tool, the versions and conditions were not recorded to the standard L2 requires, and promoting the status is the owner's call once the structured captures in the procedure have been run.
+**Promotion to L2 for protocol semantics, 2026-08-10, owner's decision.** The reasoning is worth recording because it is a judgement about what a bench is *for*: a containerized `fppd` is testing ShowMesh against the real protocol implementation, which is the thing that can actually be wrong in the code. Establishing that the protocol talks before touching the physical network also avoids spending an evening troubleshooting a switch for a problem that was never in the switch.
+
+What that promotion rests on, stated so a later reader can judge it rather than trust it: FPP 9.5.3-14-g422ed1ae8 in a container, no channel outputs configured, sequence started through FPP's own API, cadence observed matching the source-derived record, and a clean decode of the full OPEN/START/SYNC sequence by the probe in a separate container. The observation was made while building the harness rather than as a structured capture run, so **running the three tier-1 captures in the procedure would firm this up considerably and now costs minutes rather than an evening**.
+
+Items 4 and 5 stay where they were. No container promoted them and none will.
 
 ## Decision, fallback, and revalidation
 

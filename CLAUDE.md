@@ -8,7 +8,9 @@ Implementation started 2026-08-10. The design package remains authoritative: doc
 
 **Read `docs/build/BUILD-LOG.md` first in any new session.** Its "Current state" block says what actually works right now and what the next action is. `docs/build/BUILD-PLAN.md` holds the ordered steps and their status.
 
-Module path is `github.com/showmeshsystems/showmesh`. Steps 0 (foundation), 1 (`pkg/multisync` plus the bench probe), and 2 (control plane skeleton: shared models, agent advertisement with Last Will and heartbeat, coordinator SQLite inventory and liveness) are complete. RES-002 is still L1: nothing has been run against a real FPP player. Step 3 is next.
+Module path is `github.com/showmeshsystems/showmesh`. Steps 0 (foundation), 1 (`pkg/multisync` plus the bench probe), and 2 (control plane skeleton: shared models, agent advertisement with Last Will and heartbeat, coordinator SQLite inventory and liveness) are complete. Step 3 is next.
+
+RES-002 is **L2 for protocol semantics** and **L1 for anything hardware- or network-dependent**, a deliberate split. A containerized `fppd` (`bench/fpp-multisync/`) proved the wire protocol; clock drift and switch IGMP behavior are unreachable by any container and still require the physical rig. **L2 here means safe to keep building against, not trustworthy in a live show**: adoption needs L3 and show readiness needs L4, and neither has happened.
 
 The repository is pushed to a private remote and CI runs on a real GitHub runner. Two lessons from CI worth carrying: its first run caught a Linux-only `SO_REUSEADDR` behavior that passes on macOS, so a socket claim verified only on macOS is not verified for this project; and `make test-integration` runs the control plane against a real Mosquitto with the agent as a real subprocess, which on its first run caught three defects the unit suite passed over, including one where the unit test asserted the correct ordering against a fake while the real wiring did the opposite. **A test that passes whether or not the bug is present is worse than no test, because it also reports success.**
 
