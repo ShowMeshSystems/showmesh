@@ -1,0 +1,306 @@
+// Package config holds the ShowMesh node agent's environment-driven runtime
+// configuration. It deliberately does NOT import internal/coordinator/config:
+// the coordinator and the agent are different processes, with different
+// operators and different failure modes, and a dependency in either
+// direction would tie their configuration shapes together for no reason —
+// they are expected to diverge over time. Naming conventions, the
+// getEnvDefault/LoadConfigFrom split, and the slog.LogValuer redaction
+// pattern mirror the coordinator's config package (per the Task D spec) so
+// the two read the same way side by side, without sharing code.
+package config
+
+import (
+	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/showmeshsystems/showmesh/pkg/capability"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+)
+
+// Config holds node agent runtime configuration loaded from the process
+// environment. See docs/architecture/ARCHITECTURE.md sections 4.3 and 6,
+// and ADR-002, ADR-008.
+type Config struct {
+	// NodeID is this agent's identity: the segment embedded in every
+	// showmesh/nodes/<node-id>/... topic it publishes to. It defaults to
+	// the OS hostname and is always syntactically valid per
+	// mqttproto.ValidateNodeID by the time LoadConfig returns successfully;
+	// see LoadConfig's doc comment for why a bad hostname fails at load
+	// time rather than at first publish.
+	NodeID string
+
+	// NodeLabel is an optional human-readable name, distinct from the
+	// machine NodeID, carried in the hello payload's Label field.
+	NodeLabel string
+
+	// MQTTBroker is the broker URL, e.g. "tcp://localhost:1883".
+	MQTTBroker string
+
+	// MQTTClientID is the MQTT client identifier the agent connects with.
+	// Unlike the coordinator — a single instance, for which a fixed default
+	// client ID is fine — every agent on the network needs a distinct
+	// client ID by default, or the broker will boot whichever one connected
+	// first each time a second agent dials in with the same ID. See
+	// defaultClientID: the default is derived from NodeID rather than
+	// fixed.
+	MQTTClientID string
+
+	// MQTTUsername and MQTTPassword are optional broker credentials.
+	MQTTUsername string
+	MQTTPassword string
+
+	// LogLevel is one of "debug", "info", "warn", "error".
+	LogLevel string
+
+	// Capabilities is the capability set this agent advertises in its hello
+	// payload. It defaults to an empty (non-nil) set: this Step 2 agent has
+	// no real capability yet — no GStreamer, no media, no command handling
+	// — and ADR-002 makes a capability advertisement a claim the node must
+	// actually back up, so advertising anything else here would be exactly
+	// the false claim CLAUDE.md forbids. SHOWMESH_NODE_CAPABILITIES (see
+	// envNodeCapabilities) can populate this, but only for integration
+	// testing or a deliberate operator override — there is no production
+	// capability detection to wire it up to yet.
+	Capabilities capability.Set
+}
+
+const (
+	envNodeID           = "SHOWMESH_NODE_ID"
+	envNodeLabel        = "SHOWMESH_NODE_LABEL"
+	envNodeCapabilities = "SHOWMESH_NODE_CAPABILITIES"
+	envMQTTBroker       = "SHOWMESH_MQTT_BROKER"
+	envMQTTClientID     = "SHOWMESH_MQTT_CLIENT_ID"
+	envMQTTUsername     = "SHOWMESH_MQTT_USERNAME"
+	envMQTTPassword     = "SHOWMESH_MQTT_PASSWORD"
+	envLogLevel         = "SHOWMESH_LOG_LEVEL"
+
+	defaultBroker   = "tcp://localhost:1883"
+	defaultLogLevel = "info"
+)
+
+// validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
+var validLogLevels = map[string]bool{
+	"debug": true,
+	"info":  true,
+	"warn":  true,
+	"error": true,
+}
+
+// validBrokerSchemes enumerates the URL schemes accepted for
+// SHOWMESH_MQTT_BROKER. url.Parse alone is not sufficient validation: it
+// happily accepts a schemeless value like "broker-host:1883" by parsing
+// "broker-host" as the scheme and "1883" as an opaque part, which would
+// then fail at connect time in a confusing retry loop instead of at config
+// load. This duplicates internal/coordinator/config's list rather than
+// importing it; see the package doc comment for why.
+var validBrokerSchemes = map[string]bool{
+	"tcp":   true,
+	"ssl":   true,
+	"tls":   true,
+	"mqtt":  true,
+	"mqtts": true,
+	"ws":    true,
+	"wss":   true,
+}
+
+var validBrokerSchemesList = []string{"tcp", "ssl", "tls", "mqtt", "mqtts", "ws", "wss"}
+
+// LoadConfig reads agent configuration from the environment and the OS
+// hostname, applying defaults for unset variables, and validates the
+// result. On failure the returned error names the offending environment
+// variable. SHOWMESH_MQTT_PASSWORD is never included in any error or log
+// output.
+func LoadConfig() (Config, error) {
+	return LoadConfigFrom(os.LookupEnv, os.Hostname)
+}
+
+// LoadConfigFrom is LoadConfig with the environment lookup and hostname
+// source made explicit, so tests can exercise both the unset-variable path
+// and the hostname-fallback path (including an invalid hostname) without
+// touching real process/OS state.
+func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string, error)) (Config, error) {
+	nodeID, explicit, err := resolveNodeID(lookup, hostname)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := mqttproto.ValidateNodeID(nodeID); err != nil {
+		if explicit {
+			return Config{}, fmt.Errorf("%s=%q: %w", envNodeID, nodeID, err)
+		}
+		return Config{}, fmt.Errorf(
+			"%s is unset and the OS hostname %q is not a valid node ID: %w; set %s explicitly to a valid node ID",
+			envNodeID, nodeID, err, envNodeID)
+	}
+
+	capabilities, err := parseCapabilities(getEnvDefault(lookup, envNodeCapabilities, ""))
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", envNodeCapabilities, err)
+	}
+
+	cfg := Config{
+		NodeID:       nodeID,
+		NodeLabel:    getEnvDefault(lookup, envNodeLabel, ""),
+		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
+		MQTTClientID: getEnvDefault(lookup, envMQTTClientID, defaultClientID(nodeID)),
+		MQTTUsername: getEnvDefault(lookup, envMQTTUsername, ""),
+		MQTTPassword: getEnvDefault(lookup, envMQTTPassword, ""),
+		LogLevel:     getEnvDefault(lookup, envLogLevel, defaultLogLevel),
+		Capabilities: capabilities,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// resolveNodeID returns SHOWMESH_NODE_ID when set to a non-empty value
+// (explicit=true), or the OS hostname otherwise (explicit=false). explicit
+// is reported back so LoadConfigFrom can phrase a validation error
+// differently depending on whether the operator chose the value or it was
+// merely inherited from the OS.
+func resolveNodeID(lookup func(string) (string, bool), hostname func() (string, error)) (id string, explicit bool, err error) {
+	if v, ok := lookup(envNodeID); ok && v != "" {
+		return v, true, nil
+	}
+	h, err := hostname()
+	if err != nil {
+		return "", false, fmt.Errorf("%s is not set and the OS hostname could not be determined: %w", envNodeID, err)
+	}
+	return h, false, nil
+}
+
+// defaultClientID derives the default MQTT client ID from nodeID; see
+// Config.MQTTClientID's doc comment for why the agent cannot share the
+// coordinator's fixed-string default.
+func defaultClientID(nodeID string) string {
+	return "showmesh-agent-" + nodeID
+}
+
+// parseCapabilities parses SHOWMESH_NODE_CAPABILITIES: a comma-separated
+// list of "id" or "id:version" entries (version defaults to 1 when
+// omitted). Surrounding whitespace on each entry is trimmed, and empty
+// entries (e.g. from a trailing comma) are skipped. An empty or
+// whitespace-only raw string yields an empty, non-nil Set — see
+// Config.Capabilities' doc comment for why "explicitly empty" (encodes as
+// JSON "[]") matters here, not merely "absent" (which a nil slice would
+// encode as JSON "null"). This format cannot express Capability.Attributes;
+// that is acceptable because this variable exists for testing/override, not
+// as a real capability-declaration mechanism.
+func parseCapabilities(raw string) (capability.Set, error) {
+	raw = strings.TrimSpace(raw)
+	set := capability.Set{}
+	if raw == "" {
+		return set, nil
+	}
+
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		id, versionStr, hasVersion := strings.Cut(entry, ":")
+		version := 1
+		if hasVersion {
+			v, err := strconv.Atoi(strings.TrimSpace(versionStr))
+			if err != nil {
+				return nil, fmt.Errorf("entry %q: version %q is not an integer: %w", entry, versionStr, err)
+			}
+			version = v
+		}
+
+		set = append(set, capability.Capability{ID: capability.ID(id), Version: version})
+	}
+
+	if err := set.Validate(); err != nil {
+		// set.Validate's own error already names the offending capability;
+		// LoadConfigFrom's caller wraps whatever this function returns with
+		// "%s: %w" (envNodeCapabilities: err), so wrapping again here would
+		// only have added a redundant layer with no new context.
+		return nil, err
+	}
+
+	return set, nil
+}
+
+// Validate checks that the configuration is internally consistent. It does
+// not attempt to reach the network. NodeID and Capabilities are validated
+// during LoadConfigFrom itself (before Config is even fully built), so
+// Validate does not repeat those checks.
+func (c Config) Validate() error {
+	if c.MQTTBroker == "" {
+		return fmt.Errorf("%s must not be empty", envMQTTBroker)
+	}
+	brokerURL, err := url.Parse(c.MQTTBroker)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid URL: %w, must have one of the schemes %s",
+			envMQTTBroker, c.MQTTBroker, err, strings.Join(validBrokerSchemesList, ", "))
+	}
+	if !validBrokerSchemes[brokerURL.Scheme] {
+		return fmt.Errorf("%s %q must use one of the schemes %s",
+			envMQTTBroker, c.MQTTBroker, strings.Join(validBrokerSchemesList, ", "))
+	}
+	if brokerURL.Host == "" {
+		return fmt.Errorf("%s %q must include a host, e.g. %s://broker:1883",
+			envMQTTBroker, c.MQTTBroker, brokerURL.Scheme)
+	}
+
+	if !validLogLevels[c.LogLevel] {
+		return fmt.Errorf("%s must be one of debug|info|warn|error, got %q", envLogLevel, c.LogLevel)
+	}
+
+	// mqtt.go's newMQTTConn only sets ConnectUsername/ConnectPassword on the
+	// autopaho client config when MQTTUsername is non-empty (see its "if
+	// cfg.MQTTUsername != """ guard), so a password set with no username is
+	// silently never sent to the broker. Left unchecked, that surfaces as a
+	// confusing broker-side auth failure — or, worse, a broker configured to
+	// allow anonymous connects would just let the agent connect
+	// unauthenticated, silently discarding a credential the operator thought
+	// they had configured. Catch it here, at config load, where the error
+	// can name the actual mistake.
+	if c.MQTTUsername == "" && c.MQTTPassword != "" {
+		return fmt.Errorf("%s is set but %s is empty: an MQTT password requires a username", envMQTTPassword, envMQTTUsername)
+	}
+
+	return nil
+}
+
+func getEnvDefault(lookup func(string) (string, bool), key, def string) string {
+	if v, ok := lookup(key); ok {
+		return v
+	}
+	return def
+}
+
+// redactedPassword is what LogValue prints in place of a non-empty
+// MQTTPassword. It is a fixed placeholder, not a hash or length hint, so it
+// leaks nothing about the real value.
+const redactedPassword = "REDACTED"
+
+// LogValue implements slog.LogValuer so that logging a Config (directly, or
+// nested in another value passed to a slog call) never emits
+// SHOWMESH_MQTT_PASSWORD in the clear. This is what actually enforces the
+// promise documented on LoadConfig; the doc comment alone enforces nothing.
+func (c Config) LogValue() slog.Value {
+	password := ""
+	if c.MQTTPassword != "" {
+		password = redactedPassword
+	}
+
+	return slog.GroupValue(
+		slog.String("node_id", c.NodeID),
+		slog.String("node_label", c.NodeLabel),
+		slog.String("mqtt_broker", c.MQTTBroker),
+		slog.String("mqtt_client_id", c.MQTTClientID),
+		slog.String("mqtt_username", c.MQTTUsername),
+		slog.String("mqtt_password", password),
+		slog.String("log_level", c.LogLevel),
+		slog.Int("capability_count", len(c.Capabilities)),
+	)
+}

@@ -64,6 +64,36 @@ jobs:
             exit 1
           fi
 
+  integration:
+    runs-on: ubuntu-latest
+    # SIGKILL-based liveness checks poll with generous, worst-case bounds
+    # (see test/integration/kill_test.go), so this job legitimately needs
+    # more headroom than the unit-test job; kept as its own job (rather than
+    # a step in `test` above) specifically so a broker problem here is
+    # distinguishable from a unit test failure at a glance, per the Step 2
+    # round 2 Task E spec.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ubuntu-latest ships Docker already, usable without sudo. `make
+      # test-integration` starts the pinned eclipse-mosquitto broker itself
+      # (scripts/test-integration.sh), from the exact shipped
+      # deploy/mosquitto/mosquitto.conf, rather than a GitHub Actions
+      # `services:` container: a bespoke services-container broker would
+      # need its own bind-address/anonymous-access config to avoid the
+      # image's own deny-by-default behavior (see the script's comments),
+      # duplicating what test-integration.sh already does against the real
+      # shipped config — and testing that config, not a stand-in for it, is
+      # the point of this job.
+      - name: Integration tests (real Mosquitto broker + real agent subprocess)
+        run: make test-integration
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10

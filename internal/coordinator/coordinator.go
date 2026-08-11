@@ -1,7 +1,7 @@
-// Package coordinator wires the coordinator's config, MQTT broker
-// connection, and HTTP server together and runs them until shutdown. Per
-// ADR-001 it is never a scheduler and per ADR-008 its loss (and the
-// broker's) must never affect a running show.
+// Package coordinator wires the coordinator's config, SQLite store,
+// inventory, MQTT broker connection, and HTTP server together and runs
+// them until shutdown. Per ADR-001 it is never a scheduler and per ADR-008
+// its loss (and the broker's) must never affect a running show.
 package coordinator
 
 import (
@@ -17,6 +17,9 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
 )
 
@@ -44,21 +47,38 @@ func Run() int {
 		"log_level", cfg.LogLevel,
 	)
 
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		// Step 0 has no persistence yet; a bad DATA_DIR is not fatal.
-		logger.Warn("could not create data dir; continuing without persistence", "data_dir", cfg.DataDir, "error", err)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	bm, err := broker.NewBrokerManager(ctx, cfg, logger)
+	// Unlike the broker below — which per ADR-012 must start and stay up
+	// with no broker reachable, forever, with no retry loop of its own to
+	// add here — the SQLite store is a local deployment dependency, not a
+	// network one. A database that fails to open or migrate (bad
+	// permissions, a corrupt file, a schema newer than this binary knows;
+	// see store.ErrSchemaTooNew) is a fault on this host right now that a
+	// retry cannot fix, so this is a hard, non-retried, fatal startup
+	// error, deliberately asymmetric with the broker's tolerance below. Do
+	// not "fix" this into a retry loop to make it match the broker.
+	st, err := store.Open(ctx, cfg.DataDir, logger)
 	if err != nil {
-		logger.Error("failed to start mqtt connection manager", "error", err)
+		logger.Error("failed to open coordinator store", "error", err)
 		return 1
 	}
 
-	srv := httpapi.NewServer(cfg.HTTPAddr, bm, logger)
+	inv := inventory.New(st, logger)
+
+	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
+	if err != nil {
+		logger.Error("failed to start mqtt connection manager", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
+	// The store and the broker each contribute independently to /readyz;
+	// readiness.Aggregate is not-ready as soon as either is, per ADR-011 —
+	// see its doc comment for why this stays a single readiness.Source
+	// rather than a change to httpapi.NewServer's signature.
+	srv := httpapi.NewServer(cfg.HTTPAddr, readiness.Aggregate{bm, st}, logger)
 
 	serveErrCh := make(chan error, 1)
 	go func() {
@@ -92,6 +112,10 @@ func Run() int {
 
 	if err := bm.Disconnect(shutdownCtx); err != nil {
 		logger.Warn("mqtt disconnect error", "error", err)
+	}
+
+	if err := st.Close(); err != nil {
+		logger.Warn("store close error", "error", err)
 	}
 
 	logger.Info("showmesh-coordinator exited cleanly")

@@ -1,5 +1,8 @@
 bin/
 dist/
+# Stray cross-compile output. `make build` writes to bin/, but an ad-hoc
+# `GOOS=windows go build ./...` drops binaries in the package directory.
+*.exe
 *.db
 *.db-wal
 *.db-shm

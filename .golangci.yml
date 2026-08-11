@@ -18,6 +18,12 @@ linters:
       rules:
         - name: exported
           disabled: true
+    misspell:
+      # "Mosquitto" (the MQTT broker this project uses, per ADR-008) is not
+      # a misspelling of "mosquito"; test/integration and its harness
+      # reference it by name repeatedly.
+      ignore-rules:
+        - mosquitto
   exclusions:
     generated: lax
 

@@ -23,6 +23,19 @@ build:
 test:
 	go test ./...
 
+# test-integration proves the Step 2 acceptance criteria that cannot be
+# proven against a fake: an agent appearing in coordinator inventory, an
+# unclean kill's Last Will, and a coordinator restoring state from retained
+# topics on restart (plus the retained-message freshness rule underneath
+# all three). Behind the `integration` build tag, so it is never part of
+# `test`/`check` and never needs a broker to run those. See
+# scripts/test-integration.sh (which this delegates to for starting and
+# tearing down a throwaway Mosquitto broker) and test/integration's package
+# doc comment.
+.PHONY: test-integration
+test-integration:
+	./scripts/test-integration.sh
+
 GOLANGCI_LINT_VERSION := v2.6.2
 
 .PHONY: lint

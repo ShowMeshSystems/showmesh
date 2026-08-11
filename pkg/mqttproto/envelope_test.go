@@ -3,8 +3,13 @@ package mqttproto
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 func fixedClock(t time.Time) func() time.Time {
@@ -296,6 +301,130 @@ func TestDecodeHealthPayloadValidation(t *testing.T) {
 	_, err = DecodeHealthPayload(decoded)
 	if !errors.Is(err, ErrPayloadMissingField) {
 		t.Fatalf("DecodeHealthPayload() error = %v, want errors.Is(err, ErrPayloadMissingField)", err)
+	}
+}
+
+// TestDecodeHealthPayloadRejectsSequenceAboveMaxInt64 is the regression test
+// for the forged-maximum-sequence attack: a health payload advertising a
+// sequence with the high bit set (uint64 values database/sql's driver
+// cannot bind as the store's signed 64-bit column) must be rejected at
+// Validate, never reach RecordHealth. math.MaxInt64 itself (the boundary
+// value the coordinator review's forged-sequence example used,
+// 9223372036854775807) does NOT have the high bit set and is a legal,
+// bindable int64, so it must still be accepted here — only a value strictly
+// above it must be rejected.
+func TestDecodeHealthPayloadRejectsSequenceAboveMaxInt64(t *testing.T) {
+	tests := []struct {
+		name      string
+		sequence  uint64
+		wantError bool
+	}{
+		{name: "ordinary sequence", sequence: 5, wantError: false},
+		{name: "exactly math.MaxInt64 is still legal", sequence: math.MaxInt64, wantError: false},
+		{name: "math.MaxInt64 + 1 has the high bit set", sequence: math.MaxInt64 + 1, wantError: true},
+		{name: "math.MaxUint64 has the high bit set", sequence: math.MaxUint64, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, err := NewHealthEnvelope(fixedClock(time.Now()), "media-03", HealthPayload{BootID: "boot-1", Sequence: tt.sequence})
+			if err != nil {
+				t.Fatalf("NewHealthEnvelope() error = %v", err)
+			}
+			data, err := json.Marshal(env)
+			if err != nil {
+				t.Fatalf("json.Marshal(env) error = %v", err)
+			}
+			decoded, err := DecodeEnvelope(data)
+			if err != nil {
+				t.Fatalf("DecodeEnvelope() error = %v", err)
+			}
+
+			_, err = DecodeHealthPayload(decoded)
+			if tt.wantError {
+				if !errors.Is(err, ErrPayloadSequenceTooLarge) {
+					t.Fatalf("DecodeHealthPayload() error = %v, want errors.Is(err, ErrPayloadSequenceTooLarge)", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeHealthPayload() error = %v, want nil for sequence %d", err, tt.sequence)
+			}
+		})
+	}
+}
+
+// TestDecodeHelloPayloadRejectsOversizedCapabilitySet proves the bound
+// exists and is enforced at Validate, not left to whatever validates a
+// decoded HelloPayload's capabilities later (which this package deliberately
+// does not do; see [HelloPayload.Capabilities]'s doc comment).
+func TestDecodeHelloPayloadRejectsOversizedCapabilitySet(t *testing.T) {
+	caps := make(capability.Set, maxCapabilityCount+1)
+	for i := range caps {
+		caps[i] = capability.Capability{ID: capability.ID(fmt.Sprintf("test.cap%d", i)), Version: 1}
+	}
+	p := HelloPayload{
+		Platform: "linux-amd64", AgentVersion: "0.1.0", BootID: "boot-1",
+		StartedAt: time.Now(), Capabilities: caps,
+	}
+	env, err := NewHelloEnvelope(fixedClock(time.Now()), "media-03", p)
+	if err != nil {
+		t.Fatalf("NewHelloEnvelope() error = %v", err)
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("json.Marshal(env) error = %v", err)
+	}
+	decoded, err := DecodeEnvelope(data)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+
+	_, err = DecodeHelloPayload(decoded)
+	if !errors.Is(err, ErrPayloadCapabilitySetTooLarge) {
+		t.Fatalf("DecodeHelloPayload() error = %v, want errors.Is(err, ErrPayloadCapabilitySetTooLarge)", err)
+	}
+}
+
+// TestDecodeHelloPayloadRejectsOverlongCapabilityID is
+// [TestDecodeHelloPayloadRejectsOversizedCapabilitySet]'s counterpart for a
+// single pathologically long capability ID rather than a large set.
+func TestDecodeHelloPayloadRejectsOverlongCapabilityID(t *testing.T) {
+	longID := "test." + strings.Repeat("a", maxCapabilityIDLength)
+	p := HelloPayload{
+		Platform: "linux-amd64", AgentVersion: "0.1.0", BootID: "boot-1",
+		StartedAt:    time.Now(),
+		Capabilities: capability.Set{{ID: capability.ID(longID), Version: 1}},
+	}
+	env, err := NewHelloEnvelope(fixedClock(time.Now()), "media-03", p)
+	if err != nil {
+		t.Fatalf("NewHelloEnvelope() error = %v", err)
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("json.Marshal(env) error = %v", err)
+	}
+	decoded, err := DecodeEnvelope(data)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+
+	_, err = DecodeHelloPayload(decoded)
+	if !errors.Is(err, ErrPayloadCapabilityIDTooLong) {
+		t.Fatalf("DecodeHelloPayload() error = %v, want errors.Is(err, ErrPayloadCapabilityIDTooLong)", err)
+	}
+}
+
+// TestDecodeEnvelopeRejectsOversizedPayload proves DecodeEnvelope rejects an
+// oversized message before attempting to unmarshal it (see
+// [maxEnvelopeSize]'s doc comment for why: a hostile or buggy publisher on a
+// retained topic, replayed to every new subscriber).
+func TestDecodeEnvelopeRejectsOversizedPayload(t *testing.T) {
+	huge := `{"schema":"showmesh.node.hello/v1","messageId":"m","nodeId":"media-03","sentAt":"2026-08-10T12:00:00Z","payload":{"padding":"` +
+		strings.Repeat("x", maxEnvelopeSize) + `"}}`
+
+	_, err := DecodeEnvelope([]byte(huge))
+	if !errors.Is(err, ErrEnvelopeTooLarge) {
+		t.Fatalf("DecodeEnvelope() error = %v, want errors.Is(err, ErrEnvelopeTooLarge)", err)
 	}
 }
 

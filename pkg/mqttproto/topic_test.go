@@ -277,3 +277,74 @@ func TestResultTopicRejectsBadCmdID(t *testing.T) {
 		})
 	}
 }
+
+// TestDeliveryPolicies pins the retain and QoS of every topic kind.
+//
+// These are not arbitrary constants, and the failure mode when one is wrong
+// does not look like a protocol bug. The LWT policy in particular was
+// briefly Retain: false, on the reasoning that a Will is delivered at most
+// once per disconnect and leaves nothing durable for a late joiner. That
+// reasoning is correct for a Will in the abstract and wrong here, because
+// ShowMesh uses the LWT topic as a node's presence state and the
+// coordinator derives liveness by reading it on subscribe. Non-retained, a
+// coordinator that starts after a node has already died sees nothing at
+// all, making a dead node indistinguishable from one that never existed,
+// and the symptom presents as a coordinator inventory bug rather than as a
+// delivery-policy mistake.
+//
+// So this test is a regression guard with its reasons attached, not a
+// restatement of the implementation: change a value here only alongside the
+// rationale on the policy itself.
+func TestDeliveryPolicies(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy DeliveryPolicy
+		want   DeliveryPolicy
+		why    string
+	}{
+		{
+			name:   "hello",
+			policy: HelloDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: true, QoS: 1},
+			why:    "ADR-008: retained QoS 1 for state; a late-joining coordinator must see an already-advertised node",
+		},
+		{
+			name:   "observed",
+			policy: ObservedDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: true, QoS: 1},
+			why:    "ADR-008: retained QoS 1 for state",
+		},
+		{
+			name:   "lwt",
+			policy: LWTDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: true, QoS: 1},
+			why:    "the LWT topic is presence state read on subscribe, not a one-shot notification",
+		},
+		{
+			name:   "cmd",
+			policy: CmdDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: false, QoS: 1},
+			why:    "ADR-008: QoS 1 for commands; a command is point-in-time and must never be replayed to a late joiner",
+		},
+		{
+			name:   "result",
+			policy: ResultDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: false, QoS: 1},
+			why:    "ADR-008: QoS 1 for results; point-in-time, not state",
+		},
+		{
+			name:   "event",
+			policy: EventDeliveryPolicy,
+			want:   DeliveryPolicy{Retain: false, QoS: 1},
+			why:    "a lifecycle or alert event is a notification, not state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.policy != tt.want {
+				t.Errorf("%s policy = %+v, want %+v (%s)", tt.name, tt.policy, tt.want, tt.why)
+			}
+		})
+	}
+}

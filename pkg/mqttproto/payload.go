@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,9 +63,40 @@ type HelloPayload struct {
 	// Capabilities is the node's advertised capability set. This package
 	// does not call [capability.Set.Validate] on decode; a caller wiring
 	// this up against real advertisements (Task C/D) decides whether and
-	// when to validate and what to do with an invalid set.
+	// when to validate and what to do with an invalid set. Validate does,
+	// however, bound the set's size and each ID's length; see
+	// [maxCapabilityCount].
 	Capabilities capability.Set `json:"capabilities"`
 }
+
+// maxCapabilityCount and maxCapabilityIDLength bound a hello payload's
+// capability set against a hostile or buggy publisher, independent of
+// [capability.Set.Validate]'s semantic checks (duplicate IDs, ID syntax),
+// which this package does not call on decode (see [HelloPayload.
+// Capabilities]'s doc comment) and which in any case has no size or length
+// bound of its own — [capability.ID]'s own syntax pattern does not cap
+// length. Hello is retained (see [HelloDeliveryPolicy]), so an oversized or
+// pathologically long-ID capability set is not a one-time cost: the broker
+// replays it to every new subscriber, and the coordinator re-parses and
+// re-allocates it on every restart and every reconnect.
+//
+// SHOWMESH HYPOTHESIS, NOT AN ADR-008 REQUIREMENT: like [maxSubpathLength]
+// in topic.go, ADR-008 says nothing about how many capabilities a node may
+// advertise or how long one ID may be. These are conservative, unmeasured
+// guesses at "far more than any real node needs, far less than abuse would
+// send"; widen them if a real deployment needs more.
+const (
+	maxCapabilityCount    = 256
+	maxCapabilityIDLength = 128
+)
+
+// ErrPayloadCapabilitySetTooLarge is wrapped by [HelloPayload.Validate] when
+// the capability set has more than [maxCapabilityCount] members.
+var ErrPayloadCapabilitySetTooLarge = errors.New("mqttproto: capability set exceeds the maximum allowed size")
+
+// ErrPayloadCapabilityIDTooLong is wrapped by [HelloPayload.Validate] when a
+// capability ID exceeds [maxCapabilityIDLength].
+var ErrPayloadCapabilityIDTooLong = errors.New("mqttproto: capability ID exceeds the maximum allowed length")
 
 // Validate reports whether p has every field a well-formed hello payload
 // requires: non-empty Platform, AgentVersion, and BootID, and a non-zero
@@ -72,7 +104,9 @@ type HelloPayload struct {
 // from a continuous session (see BootID's doc comment), so a zero-valued
 // HelloPayload — which is exactly what `json.Unmarshal` of a `null` or
 // missing payload silently produces — must never pass as a genuine
-// advertisement.
+// advertisement. Validate also bounds the capability set's cardinality and
+// each member's ID length (see [maxCapabilityCount]); it does not otherwise
+// validate Capabilities — see that field's doc comment.
 func (p HelloPayload) Validate() error {
 	switch {
 	case p.Platform == "":
@@ -83,6 +117,14 @@ func (p HelloPayload) Validate() error {
 		return fmt.Errorf("%w: bootId", ErrPayloadMissingField)
 	case p.StartedAt.IsZero():
 		return fmt.Errorf("%w: startedAt", ErrPayloadMissingField)
+	}
+	if len(p.Capabilities) > maxCapabilityCount {
+		return fmt.Errorf("%w: %d capabilities, max %d", ErrPayloadCapabilitySetTooLarge, len(p.Capabilities), maxCapabilityCount)
+	}
+	for _, c := range p.Capabilities {
+		if len(c.ID) > maxCapabilityIDLength {
+			return fmt.Errorf("%w: %d bytes, max %d", ErrPayloadCapabilityIDTooLong, len(c.ID), maxCapabilityIDLength)
+		}
 	}
 	return nil
 }
@@ -122,13 +164,33 @@ type HealthPayload struct {
 	UptimeMS int64 `json:"uptimeMs"`
 }
 
+// ErrPayloadSequenceTooLarge is wrapped by [HealthPayload.Validate] when
+// Sequence exceeds math.MaxInt64.
+//
+// Sequence is wire-typed uint64, but internal/coordinator/store's
+// node_health.sequence column is a signed 64-bit integer (SQLite has no
+// unsigned integer type), and database/sql's driver binding rejects a
+// uint64 value with the high bit set outright ("uint64 values with high bit
+// set are not supported") rather than silently truncating or wrapping it.
+// Rejecting the out-of-range value here, at payload validation, means that
+// wire-versus-column type mismatch can never reach SQL at all: the message
+// is skipped with a warning instead of RecordHealth returning a driver
+// error. See CLAUDE.md's build-phase guidance on why this package, not
+// internal/coordinator/store, is where a wire-format value's legal range is
+// enforced.
+var ErrPayloadSequenceTooLarge = errors.New("mqttproto: sequence exceeds the maximum value the store's signed 64-bit column can hold")
+
 // Validate reports whether p has every field a well-formed health payload
 // requires: a non-empty BootID. See [HelloPayload.Validate]'s doc comment
 // for why a zero-valued payload (what a `null` or missing payload silently
-// decodes into) must never pass as a genuine heartbeat.
+// decodes into) must never pass as a genuine heartbeat. Validate also
+// rejects a Sequence above math.MaxInt64; see [ErrPayloadSequenceTooLarge].
 func (p HealthPayload) Validate() error {
 	if p.BootID == "" {
 		return fmt.Errorf("%w: bootId", ErrPayloadMissingField)
+	}
+	if p.Sequence > math.MaxInt64 {
+		return fmt.Errorf("%w: %d", ErrPayloadSequenceTooLarge, p.Sequence)
 	}
 	return nil
 }

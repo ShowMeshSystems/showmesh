@@ -2,9 +2,20 @@ package broker
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/eclipse/paho.golang/paho"
 )
+
+// testLogger returns a *slog.Logger that discards everything, so tests
+// exercising the error-logging paths below don't spam test output.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // fakeClock lets tests drive BrokerManager's timestamps deterministically,
 // without real sleeps.
@@ -219,5 +230,146 @@ func TestBrokerManagerDisconnectBoundedByCtxOnHungProbe(t *testing.T) {
 
 	if elapsed > time.Second {
 		t.Errorf("Disconnect took %v to return with a hung probe goroutine, want it bounded by ctx's deadline", elapsed)
+	}
+}
+
+// fakeSubscriber records every Subscribe call it receives, standing in for
+// *autopaho.ConnectionManager so subscribeAll's re-establish behavior can
+// be tested without a real broker connection.
+type fakeSubscriber struct {
+	calls    int
+	lastOpts []paho.SubscribeOptions
+	err      error
+}
+
+func (f *fakeSubscriber) Subscribe(_ context.Context, s *paho.Subscribe) (*paho.Suback, error) {
+	f.calls++
+	f.lastOpts = s.Subscriptions
+	return nil, f.err
+}
+
+func TestSubscriptionsToOptionsLeavesRetainAsPublishedOff(t *testing.T) {
+	opts := subscriptionsToOptions([]Subscription{
+		{Filter: "showmesh/nodes/+/hello", QoS: 1},
+		{Filter: "showmesh/nodes/+/lwt", QoS: 1},
+	})
+	if len(opts) != 2 {
+		t.Fatalf("len(opts) = %d, want 2", len(opts))
+	}
+	for _, o := range opts {
+		if o.RetainAsPublished {
+			t.Errorf("RetainAsPublished = true for %q, want false: per the shared contract the coordinator must be able to tell a retained replay from a live publish", o.Topic)
+		}
+	}
+	if opts[0].Topic != "showmesh/nodes/+/hello" || opts[0].QoS != 1 {
+		t.Errorf("opts[0] = %+v, did not preserve Filter/QoS", opts[0])
+	}
+}
+
+func TestSubscribeAllSendsOneSubscribeCallPerInvocation(t *testing.T) {
+	sub := &fakeSubscriber{}
+	opts := subscriptionsToOptions([]Subscription{{Filter: "a/+/hello", QoS: 1}})
+
+	subscribeAll(context.Background(), sub, opts, testLogger())
+	if sub.calls != 1 {
+		t.Fatalf("calls = %d, want 1", sub.calls)
+	}
+	if len(sub.lastOpts) != 1 || sub.lastOpts[0].Topic != "a/+/hello" {
+		t.Errorf("lastOpts = %+v, want the single hello filter", sub.lastOpts)
+	}
+}
+
+// TestSubscribeAllReestablishesOnEachCall simulates OnConnectionUp firing
+// twice — once for the initial connection, once for a reconnect after a
+// broker outage — and checks that subscribeAll sends the complete
+// subscription set again both times rather than assuming anything about
+// prior state. This is the unit-testable half of "subscriptions must be
+// re-established after a reconnect": it proves subscribeAll itself is
+// reconnect-safe; it cannot prove autopaho actually calls OnConnectionUp on
+// every reconnect, since that requires a real broker connection (an
+// integration-test concern, out of scope for this task per its spec).
+func TestSubscribeAllReestablishesOnEachCall(t *testing.T) {
+	sub := &fakeSubscriber{}
+	opts := subscriptionsToOptions([]Subscription{{Filter: "a/+/hello", QoS: 1}})
+
+	subscribeAll(context.Background(), sub, opts, testLogger()) // initial connect
+	subscribeAll(context.Background(), sub, opts, testLogger()) // simulated reconnect
+
+	if sub.calls != 2 {
+		t.Errorf("calls = %d, want 2 (one per OnConnectionUp firing)", sub.calls)
+	}
+}
+
+func TestSubscribeAllNoopOnEmptySubscriptions(t *testing.T) {
+	sub := &fakeSubscriber{}
+	subscribeAll(context.Background(), sub, nil, testLogger())
+	if sub.calls != 0 {
+		t.Errorf("calls = %d, want 0 for an empty subscription list", sub.calls)
+	}
+}
+
+func TestSubscribeAllLogsAndDoesNotPanicOnSubscribeError(t *testing.T) {
+	sub := &fakeSubscriber{err: errors.New("boom")}
+	opts := subscriptionsToOptions([]Subscription{{Filter: "a/+/hello", QoS: 1}})
+
+	// Must not panic; the failure is logged (via testLogger, discarded) and
+	// swallowed so it cannot crash the connection callback.
+	subscribeAll(context.Background(), sub, opts, testLogger())
+
+	if sub.calls != 1 {
+		t.Errorf("calls = %d, want 1 (the attempt still happened)", sub.calls)
+	}
+}
+
+// TestPublishReceivedHandlerPassesRetainFlag is the unit test for the
+// single most important piece of wiring in this file: that the coordinator
+// actually reads paho's RETAIN flag off every inbound publish and carries
+// it through to [Message.Retained], rather than defaulting it away. Getting
+// this wrong means every retained delivery on reconnect looks exactly like
+// a live one, which is precisely the failure the shared contract exists to
+// prevent.
+func TestPublishReceivedHandlerPassesRetainFlag(t *testing.T) {
+	var got []Message
+	h := newPublishReceivedHandler(func(m Message) { got = append(got, m) })
+
+	cases := []struct {
+		name    string
+		publish *paho.Publish
+	}{
+		{"retained", &paho.Publish{Topic: "showmesh/nodes/a/hello", Payload: []byte("x"), Retain: true}},
+		{"live", &paho.Publish{Topic: "showmesh/nodes/a/hello", Payload: []byte("y"), Retain: false}},
+	}
+	for _, tc := range cases {
+		handled, err := h(paho.PublishReceived{Packet: tc.publish})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if !handled {
+			t.Errorf("%s: handled = false, want true", tc.name)
+		}
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	if !got[0].Retained {
+		t.Errorf("retained publish: Retained = false, want true")
+	}
+	if got[1].Retained {
+		t.Errorf("live publish: Retained = true, want false")
+	}
+	if got[0].Topic != "showmesh/nodes/a/hello" || string(got[0].Payload) != "x" {
+		t.Errorf("Topic/Payload not carried through: %+v", got[0])
+	}
+}
+
+func TestPublishReceivedHandlerToleratesNilHandler(t *testing.T) {
+	h := newPublishReceivedHandler(nil)
+	handled, err := h(paho.PublishReceived{Packet: &paho.Publish{Topic: "t", Retain: true}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Errorf("handled = false, want true even with a nil handler")
 	}
 }

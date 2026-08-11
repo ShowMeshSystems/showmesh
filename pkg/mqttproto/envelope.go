@@ -46,6 +46,29 @@ type Envelope struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// maxEnvelopeSize bounds the raw byte length [DecodeEnvelope] will attempt
+// to unmarshal.
+//
+// SHOWMESH HYPOTHESIS, NOT AN ADR-008 REQUIREMENT: ADR-008 fixes the
+// envelope shape but says nothing about a size limit, and Mosquitto's own
+// default message size limit is effectively unbounded (up to MQTT's 256 MB
+// maximum). Without a bound here, a hostile or simply buggy publisher could
+// push an arbitrarily large payload onto a retained topic (hello, health, or
+// lwt are all retained per [HelloDeliveryPolicy] and friends), and because a
+// retained message replays to every new subscriber, the coordinator would
+// re-allocate and re-parse it on every restart and every reconnect, not just
+// once. 256 KiB is a conservative, unmeasured guess at "far larger than any
+// real hello/health/lwt payload this schema family describes, far smaller
+// than abuse would send"; widen it if a real payload needs more. Like
+// [maxSubpathLength] and [nodeIDPattern] in topic.go, this is this package's
+// own conservative choice, not something ADR-008 specifies.
+const maxEnvelopeSize = 256 * 1024
+
+// ErrEnvelopeTooLarge is wrapped by [DecodeEnvelope] when data exceeds
+// [maxEnvelopeSize]. See that constant's doc comment for why this bound
+// exists and why it must be checked before any unmarshal is attempted.
+var ErrEnvelopeTooLarge = errors.New("mqttproto: envelope exceeds the maximum allowed size")
+
 // ErrEnvelopeInvalidJSON is wrapped by [DecodeEnvelope] when data is not
 // syntactically valid JSON, or does not unmarshal into the shape Envelope
 // expects (e.g. sentAt is not an RFC3339 timestamp).
@@ -80,7 +103,9 @@ func (e Envelope) Validate() error {
 }
 
 // DecodeEnvelope parses data as an [Envelope] and validates its required
-// fields (see [Envelope.Validate]).
+// fields (see [Envelope.Validate]). It rejects data outright, before
+// attempting to unmarshal any of it, if data exceeds [maxEnvelopeSize]; see
+// that constant's doc comment for why.
 //
 // Unknown JSON fields in data are always tolerated, never rejected:
 // DecodeEnvelope does not use a json.Decoder with DisallowUnknownFields,
@@ -93,6 +118,9 @@ func (e Envelope) Validate() error {
 // ([DecodeHelloPayload] and friends), which returns a typed
 // [UnsupportedSchemaError] a caller can log and skip.
 func DecodeEnvelope(data []byte) (Envelope, error) {
+	if len(data) > maxEnvelopeSize {
+		return Envelope{}, fmt.Errorf("%w: %d bytes, max %d", ErrEnvelopeTooLarge, len(data), maxEnvelopeSize)
+	}
 	var env Envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return Envelope{}, fmt.Errorf("%w: %w", ErrEnvelopeInvalidJSON, err)

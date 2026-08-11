@@ -51,15 +51,33 @@ var (
 // LWTDeliveryPolicy and EventDeliveryPolicy: SHOWMESH CHOICE, NOT AN
 // ADR-008 REQUIREMENT. ADR-008 fixes that a Last Will exists and that
 // events are coordinator-published, but its retain/QoS sentence does not
-// name either topic. LWT's retain/QoS are registered by the client at
-// CONNECT time, not chosen per publish; QoS 1 here matches every other
-// kind, and Retain is false because the broker delivers a registered Will
-// at most once per disconnect, with nothing durable for a late joiner to
-// replay. Events are likewise QoS 1 and not retained: a lifecycle or alert
-// event is a point-in-time notification, not state. Revisit both if
-// ADR-008 is amended to say otherwise.
+// name either topic.
+//
+// The LWT topic is retained because in ShowMesh it is a node's presence
+// state, not a one-shot notification. The coordinator derives liveness by
+// reading it on subscribe, so it has to survive for a late joiner: a
+// coordinator that starts after a node has already died must still learn
+// that the node is offline, and a coordinator that restarts while a node
+// is healthy must still learn that it is online. Non-retained, both cases
+// present as "no information", and the coordinator would report a dead
+// node and a never-seen node identically.
+//
+// The Will's retain flag is registered by the client at CONNECT time, so
+// it is the broker that applies it when publishing the Will on an
+// abnormal disconnect. An agent must use the same retain setting for the
+// explicit online/offline messages it publishes to this topic itself, so
+// the retained value is consistent no matter which path last wrote it.
+//
+// This was originally set to Retain: false on the reasoning that a Will is
+// delivered at most once per disconnect and leaves nothing durable to
+// replay. That is true of a Will in the abstract and wrong for this
+// design, where the topic is the liveness evidence rather than an alert.
+//
+// Events are QoS 1 and not retained: a lifecycle or alert event is a
+// point-in-time notification, not state. Revisit either if ADR-008 is
+// amended to say otherwise.
 var (
-	LWTDeliveryPolicy   = DeliveryPolicy{Retain: false, QoS: 1}
+	LWTDeliveryPolicy   = DeliveryPolicy{Retain: true, QoS: 1}
 	EventDeliveryPolicy = DeliveryPolicy{Retain: false, QoS: 1}
 )
 

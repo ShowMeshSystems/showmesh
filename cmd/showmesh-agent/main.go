@@ -1,14 +1,15 @@
-// Command showmesh-agent is the ShowMesh node agent. It is not yet
-// implemented; capability advertisement and health heartbeats land in
-// Step 2.
+// Command showmesh-agent is the ShowMesh node agent: it runs natively on
+// media hardware, advertises capabilities over MQTT, and reports health.
+// Per ARCHITECTURE 4.3 it should not require containers on machines that
+// need direct GPU, HDMI, audio, EDID, or NDI access — see ADR-012.
 package main
 
 import (
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 
+	"github.com/showmeshsystems/showmesh/internal/agent"
 	"github.com/showmeshsystems/showmesh/internal/version"
 )
 
@@ -21,8 +22,5 @@ func main() {
 		os.Exit(0)
 	}
 
-	slog.Info("showmesh-agent is not implemented yet; capability advertisement lands in Step 2",
-		"version", version.Version,
-	)
-	os.Exit(0)
+	os.Exit(agent.Run())
 }

@@ -1,6 +1,8 @@
 // Package broker owns the coordinator's connection to the MQTT broker: the
-// connection manager, the observed BrokerState, and the readiness rule
-// derived from it. See NewBrokerManager and Readiness.
+// connection manager, the observed BrokerState, the readiness rule derived
+// from it, and delivering inbound publishes (with their MQTT RETAIN flag
+// preserved, see Message) to whatever subscriptions the caller registers.
+// See NewBrokerManager and Readiness.
 package broker
 
 import (
@@ -48,6 +50,130 @@ const evidenceStalenessWindow = 15 * time.Second
 // actually detects loss — see evidenceStalenessWindow's doc comment.
 const keepAliveSeconds = uint16(evidenceStalenessWindow / time.Second)
 
+// Subscription is one MQTT topic filter the coordinator wants active for
+// as long as it is connected to the broker.
+type Subscription struct {
+	Filter string
+	QoS    byte
+}
+
+// Message is one inbound publish, normalized out of paho's wire type.
+//
+// Retained is the single most consequential field on this type. Per the
+// Step 2 round 2 shared design contract, it is what distinguishes a live
+// publish (MQTT RETAIN=0, proof the sender is doing something right now)
+// from a retained-store replay (RETAIN=1, which only proves the broker
+// once held this value — possibly hours or days ago). A caller that stamps
+// its own receipt time as an observation time for a message with
+// Retained==true reproduces exactly the failure ADR-011 exists to prevent:
+// a long-dead node's last heartbeat looking perfectly fresh forever. See
+// internal/coordinator/inventory, the one caller in this codebase that
+// reads this field.
+type Message struct {
+	Topic    string
+	Payload  []byte
+	Retained bool
+}
+
+// MessageHandler is called for every inbound publish matching one of the
+// coordinator's subscriptions. It should still not block for long: in
+// paho.golang v0.23 (see go.mod), OnPublishReceived callbacks do NOT run on
+// the connection's read loop. The reader goroutine (Client.incoming) only
+// decodes each packet and hands PUBLISH packets to a buffered channel
+// (Client.publishPackets, sized to the broker's ReceiveMaximum); a separate
+// worker goroutine (Client.routePublishPackets) drains that channel and
+// invokes the OnPublishReceived callbacks, one packet at a time, then sends
+// the packet's PUBACK. The MQTT keepalive ping handler runs on its own
+// goroutine too. So a slow handler here delays this client's own PUBACKs
+// (which can eventually make the QoS 1 sender re-deliver) and, once the
+// buffered channel fills, delays acking further inbound publishes — it
+// does not stall the read loop or the ping handler the way an earlier
+// version of this comment claimed, unverified, that it did. This has been
+// read from paho.golang's source (Client.incoming/routePublishPackets in
+// client.go), not measured under load; requestTimeout in
+// internal/coordinator/inventory exists so a hung store call cannot grow
+// that PUBACK backlog indefinitely, which remains the right precaution
+// regardless of exactly which paho internals a slow handler affects.
+type MessageHandler func(Message)
+
+// newPublishReceivedHandler adapts a [MessageHandler] to paho's
+// OnPublishReceived callback shape. It is a standalone function, rather
+// than an inline closure inside NewBrokerManager, specifically so its
+// RETAIN-flag plumbing can be unit tested without a real broker connection
+// (see broker_test.go) — the one piece of "does the coordinator read the
+// flag on every incoming message" that a unit test can actually prove.
+func newPublishReceivedHandler(handler MessageHandler) func(paho.PublishReceived) (bool, error) {
+	return func(pr paho.PublishReceived) (bool, error) {
+		if handler != nil {
+			handler(Message{
+				Topic:    pr.Packet.Topic,
+				Payload:  pr.Packet.Payload,
+				Retained: pr.Packet.Retain,
+			})
+		}
+		// Always report the message as handled: this is the only consumer
+		// in the process, so there is no second OnPublishReceived callback
+		// that needs a chance to also see it.
+		return true, nil
+	}
+}
+
+// subscriber is the subset of *autopaho.ConnectionManager's method set
+// subscribeAll needs, so tests can exercise the resubscribe logic with a
+// fake instead of a real broker connection.
+type subscriber interface {
+	Subscribe(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error)
+}
+
+// subscribeAll (re)establishes every one of the coordinator's
+// subscriptions in one MQTT SUBSCRIBE call. It is called from
+// OnConnectionUp, which autopaho invokes both on the initial connection and
+// on every reconnection after a broker outage (see
+// autopaho/examples/basics in the eclipse/paho.golang module, which this
+// follows) — that is the mechanism that makes a subscription survive a
+// broker restart, since nothing about a subscription is durable on the
+// broker side unless the session itself persists, and this codebase does
+// not currently rely on session persistence (CleanStartOnInitialConnection
+// is left at its default). subscribeAll always sends the complete set
+// again on every call rather than tracking what is "already subscribed",
+// which is what makes it correct to call repeatedly from OnConnectionUp
+// without assuming anything survived the outage.
+//
+// A subscribe failure here is logged loudly rather than silently retried:
+// per the Step 2 round 2 task spec, a subscription that silently fails to
+// re-establish after a broker restart is invisible until a node changes
+// state and nobody notices, which is exactly the failure mode ADR-011
+// exists to prevent one layer up.
+func subscribeAll(ctx context.Context, sub subscriber, opts []paho.SubscribeOptions, logger *slog.Logger) {
+	if len(opts) == 0 {
+		return
+	}
+	if _, err := sub.Subscribe(ctx, &paho.Subscribe{Subscriptions: opts}); err != nil {
+		logger.Error("mqtt subscribe failed after connect; inventory will not receive updates until the next reconnect",
+			"error", err)
+	}
+}
+
+// subscriptionsToOptions converts this package's own [Subscription] type to
+// paho's wire-level SubscribeOptions. RetainAsPublished is always left
+// false (the zero value) and never made configurable here: per the shared
+// contract, the coordinator must be able to tell a retained replay from a
+// live publish, and RetainAsPublished=true would make the broker echo
+// RETAIN=1 on every subsequent live publish on a topic that was ever
+// retained, destroying that distinction for the lifetime of the
+// subscription.
+func subscriptionsToOptions(subs []Subscription) []paho.SubscribeOptions {
+	opts := make([]paho.SubscribeOptions, len(subs))
+	for i, s := range subs {
+		opts[i] = paho.SubscribeOptions{
+			Topic:             s.Filter,
+			QoS:               s.QoS,
+			RetainAsPublished: false,
+		}
+	}
+	return opts
+}
+
 // BrokerState is evidence about the broker connection, not just a flag.
 // ADR-011 requires observations to carry freshness; a value with no
 // observation time cannot degrade to unknown. The canonical observation
@@ -93,10 +219,16 @@ type BrokerManager struct {
 // it does not return an error merely because the broker is currently
 // unreachable — connection failures are logged and retried.
 //
+// subs is subscribed (via [subscribeAll]) on every successful connection,
+// including every reconnection, and every inbound publish matching one of
+// them is delivered to handler (see [newPublishReceivedHandler]). subs and
+// handler may be nil/empty for a BrokerManager that only needs the
+// connection itself and no message traffic.
+//
 // The probe goroutine that periodically re-confirms BrokerState is tied to
 // ctx: it exits when ctx is done, so callers must cancel ctx (or call
 // Disconnect) on shutdown to avoid leaking it.
-func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logger) (*BrokerManager, error) {
+func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logger, subs []Subscription, handler MessageHandler) (*BrokerManager, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -113,6 +245,8 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 	initAt := bm.now()
 	bm.state = BrokerState{Connected: false, Since: initAt, ObservedAt: initAt}
 
+	subscribeOpts := subscriptionsToOptions(subs)
+
 	clientCfg := autopaho.ClientConfig{
 		ServerUrls: []*url.URL{serverURL},
 		// KeepAlive is deliberately tied to evidenceStalenessWindow (above):
@@ -127,9 +261,13 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 		KeepAlive:        keepAliveSeconds,
 		ConnectTimeout:   10 * time.Second,
 		ReconnectBackoff: autopaho.DefaultExponentialBackoff(),
-		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) {
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			bm.setConnected(true)
 			logger.Info("mqtt broker connection up", "broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID)
+			// Re-subscribing here, unconditionally, on every call (including
+			// every reconnect) is what makes a subscription survive a broker
+			// restart; see subscribeAll's doc comment.
+			subscribeAll(ctx, cm, subscribeOpts, logger)
 		},
 		OnConnectionDown: func() bool {
 			bm.setConnected(false)
@@ -141,7 +279,8 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 			logger.Warn("mqtt broker connect attempt failed; will retry", "broker", cfg.MQTTBroker, "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID: cfg.MQTTClientID,
+			ClientID:          cfg.MQTTClientID,
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){newPublishReceivedHandler(handler)},
 		},
 	}
 

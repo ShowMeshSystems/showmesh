@@ -1,0 +1,149 @@
+// Package agent wires the node agent's config, MQTT connection (hello,
+// Last Will, health heartbeat), and clean-shutdown ordering together and
+// runs them until shutdown. Per ARCHITECTURE 4.3 the agent advertises
+// capabilities and reports health; Step 2 Task D implements nothing beyond
+// that scope — no GStreamer, no media, no command handling, no local
+// fallback cache, no real capability. The agent exists to be seen, nothing
+// more.
+package agent
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/showmeshsystems/showmesh/internal/agent/config"
+	"github.com/showmeshsystems/showmesh/internal/version"
+)
+
+// shutdownTimeout bounds the clean-shutdown path (offline publish followed
+// by disconnect), matching internal/coordinator.Run's own shutdown bound:
+// a hung publish or disconnect must not block process exit indefinitely.
+const shutdownTimeout = 10 * time.Second
+
+// Run loads config, connects to the MQTT broker with a registered Last
+// Will, publishes hello and online=true on every connect (including
+// reconnects), runs the health heartbeat, and blocks until a shutdown
+// signal is received — at which point it publishes online=false and
+// disconnects, in that order (see shutdownCleanly). The MQTT connection's
+// own context is deliberately kept separate from the shutdown-signal
+// context so that ordering holds up in practice, not just on paper — see
+// the comment on connCtx below. Run returns a process exit code.
+func Run() int {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "showmesh-agent: config error: %v\n", err)
+		return 1
+	}
+
+	logger := newLogger(cfg.LogLevel)
+
+	bootID := uuid.NewString()
+	startedAt := time.Now().UTC()
+
+	logger.Info("starting showmesh-agent",
+		"version", version.Version,
+		"commit", version.Commit,
+		"build_date", version.BuildDate,
+		"node_id", cfg.NodeID,
+		"node_label", cfg.NodeLabel,
+		"mqtt_broker", cfg.MQTTBroker,
+		"mqtt_client_id", cfg.MQTTClientID,
+		"mqtt_username_set", cfg.MQTTUsername != "",
+		"log_level", cfg.LogLevel,
+		"boot_id", bootID,
+		"capability_count", len(cfg.Capabilities),
+	)
+
+	// connCtx bounds the MQTT connection manager's lifetime and is
+	// DELIBERATELY NOT sigCtx (below), even though sigCtx is what tells this
+	// function to start shutting down. autopaho's connection manager treats
+	// cancellation of the context passed to newMQTTConn (which it forwards
+	// into autopaho.NewConnection) as "tear down now": it immediately sends
+	// a normal MQTT DISCONNECT (reason code 0) and, per the MQTT spec, a
+	// normal DISCONNECT tells the broker to DISCARD the registered Will —
+	// see shutdown.go's shutdownCleanly for why that is exactly backwards
+	// here. If connCtx were sigCtx, then the instant SIGTERM arrived,
+	// autopaho would race ahead and disconnect on its own, discarding the
+	// Will, before shutdownCleanly below ever gets a chance to publish the
+	// retained "online: false" message that is supposed to stand in for it.
+	// That is precisely the bug this comment exists to prevent someone from
+	// reintroducing by "simplifying" this back to one context: connCtx must
+	// outlive the signal, and the ONLY thing allowed to end it is the
+	// explicit, ordered conn.Disconnect call inside shutdownCleanly, called
+	// after the offline publish has already gone out. See
+	// TestAgentCleanShutdownGoesOfflinePromptly in
+	// test/integration/lifecycle_test.go, which fails against this file
+	// when that ordering is violated.
+	connCtx, cancelConn := context.WithCancel(context.Background())
+	defer cancelConn() // backstop for early-return paths only; normal shutdown ends connCtx via conn.Disconnect inside shutdownCleanly, not via this cancel.
+
+	sigCtx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignal()
+
+	// heartbeatConnected is buffered so newMQTTConn's OnConnectionUp (which
+	// can fire before the heartbeat goroutine below has started selecting
+	// on it) never has its non-blocking send silently land on a channel
+	// nobody will ever read from; see runHeartbeat's and newMQTTConn's doc
+	// comments for why this exists at all.
+	heartbeatConnected := make(chan struct{}, 1)
+
+	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, logger)
+	if err != nil {
+		logger.Error("failed to start mqtt connection manager", "error", err)
+		return 1
+	}
+
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(HeartbeatInterval)
+		defer ticker.Stop()
+		runHeartbeat(sigCtx, conn, cfg.NodeID, bootID, startedAt, time.Now, ticker.C, heartbeatConnected, logger)
+	}()
+
+	<-sigCtx.Done()
+	logger.Info("shutdown signal received")
+
+	// Stop intercepting the shutdown signals now, not just via the
+	// deferred call: restoring default signal behavior here lets an
+	// operator send a second Ctrl-C to force-exit a shutdown that hangs
+	// below, matching internal/coordinator.Run. The deferred stopSignal()
+	// remains as a harmless, idempotent safety net.
+	stopSignal()
+
+	// The heartbeat loop also selects on sigCtx.Done() and exits on its own;
+	// wait for it so it cannot race the final offline publish below with a
+	// heartbeat publish still in flight.
+	<-heartbeatDone
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	shutdownCleanly(shutdownCtx, conn, cfg.NodeID, logger)
+
+	logger.Info("showmesh-agent exited cleanly")
+	return 0
+}
+
+func newLogger(level string) *slog.Logger {
+	var lvl slog.Level
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+	return slog.New(handler)
+}
