@@ -9,12 +9,33 @@ export interface LayoutProps {
   onSubmitToken: (token: string) => void
 }
 
-const NAV_ITEMS: Array<{ to: string; label: string; end: boolean }> = [
-  { to: '/', label: 'Dashboard', end: true },
-  { to: '/nodes', label: 'Nodes', end: false },
-  { to: '/fpp', label: 'FPP', end: false },
-  { to: '/capabilities', label: 'Capabilities', end: false },
-  { to: '/events', label: 'Events', end: false },
+/**
+ * Navigation is grouped by the OPERATOR-UI section 8 information
+ * architecture: Monitor, Control, Configure. Only Monitor exists today,
+ * and only Monitor is rendered.
+ *
+ * Control and Configure are deliberately NOT rendered as empty or
+ * disabled groups. This is the same rule the dashboard follows for
+ * subsystems the coordinator does not model: a visible-but-empty group
+ * asserts that the section exists and currently has nothing in it, which
+ * is a false statement about a system that has no write operations at
+ * all (ADR-021 rule 5 bars the first write endpoint). They appear when
+ * the behaviour behind them does.
+ */
+const NAV_GROUPS: Array<{
+  heading: string
+  items: Array<{ to: string; label: string; end: boolean }>
+}> = [
+  {
+    heading: 'Monitor',
+    items: [
+      { to: '/', label: 'Dashboard', end: true },
+      { to: '/nodes', label: 'Nodes', end: false },
+      { to: '/fpp', label: 'FPP', end: false },
+      { to: '/capabilities', label: 'Capabilities', end: false },
+      { to: '/events', label: 'Events', end: false },
+    ],
+  },
 ]
 
 export function Layout({ onSubmitToken }: LayoutProps) {
@@ -38,13 +59,22 @@ export function Layout({ onSubmitToken }: LayoutProps) {
   return (
     <div className="app-shell">
       <nav className="app-nav" aria-label="Primary">
-        {NAV_ITEMS.map((item) => (
-          <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
-            {/* react-router-dom's NavLink sets aria-current="page" on the active
-                link automatically; styles/global.css's [aria-current='page']
-                rule uses that rather than a className toggle. */}
-            {item.label}
-          </NavLink>
+        {NAV_GROUPS.map((group) => (
+          // The group wrapper is `display: contents` at phone width, so the
+          // links stay direct flex children of the bottom tab bar and that
+          // layout is unchanged by this grouping. It becomes a real column
+          // only at the sidebar breakpoint.
+          <div key={group.heading} className="app-nav__group">
+            <h2 className="app-nav__group-heading">{group.heading}</h2>
+            {group.items.map((item) => (
+              <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
+                {/* react-router-dom's NavLink sets aria-current="page" on the active
+                    link automatically; styles/global.css's [aria-current='page']
+                    rule uses that rather than a className toggle. */}
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>

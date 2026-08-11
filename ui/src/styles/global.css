@@ -72,6 +72,18 @@ input {
   z-index: 20;
 }
 
+/* Phone: the group wrapper vanishes from the box tree so its links remain
+   direct flex children of the bottom tab bar, and the heading is hidden.
+   The tab bar's layout is therefore exactly what it was before grouping
+   was introduced. */
+.app-nav__group {
+  display: contents;
+}
+
+.app-nav__group-heading {
+  display: none;
+}
+
 .app-nav__link {
   flex: 1;
   display: flex;
@@ -110,10 +122,47 @@ input {
     align-items: stretch;
   }
 
+  /* The sidebar is a navigation column, not a set of equally weighted
+     panels. `flex: 1` above is written for the phone tab bar, where five
+     links should share the width evenly; inherited into this column it
+     made each link stretch to a fifth of the viewport height, so the
+     links sat evenly spaced from top to bottom with no visible structure.
+     Operator-reported 2026-08-11. Links are now intrinsically sized and
+     the group stacks from the top. */
+  .app-nav__group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3) var(--space-2);
+  }
+
+  .app-nav__group-heading {
+    display: block;
+    margin: 0 0 var(--space-1);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
   .app-nav__link {
+    flex: 0 0 auto;
     flex-direction: row;
     justify-content: flex-start;
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    min-height: 0;
+  }
+
+  .app-nav__link:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .app-nav__link[aria-current='page'] {
+    background: var(--color-surface);
   }
 
   .app-main {

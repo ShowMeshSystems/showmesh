@@ -458,12 +458,22 @@ func (h *Hub) renderNewEvents(ctx context.Context, now time.Time) []pendingFrame
 func (h *Hub) broadcast(pf pendingFrame) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, sub := range h.subscribers {
+	for id, sub := range h.subscribers {
 		select {
 		case sub.frames <- pf:
 		default:
 			select {
 			case sub.reset <- "subscriber_too_slow":
+				// Logged, not silent: dropping a subscriber is a real
+				// operational event (a client that cannot keep up, or a
+				// peer that has stopped reading its socket), and the
+				// client learns of it only through the stream.reset frame
+				// it is about to be sent — which it may or may not still
+				// be able to read. Without this line the coordinator
+				// disconnects a client and keeps no record anywhere that
+				// it did.
+				h.logger.Warn("stream hub: subscriber buffer overflowed; sending stream.reset and disconnecting",
+					"subscriber", id, "buffer_size", h.bufSize, "reason", "subscriber_too_slow")
 			default:
 				// Already signaled for this subscriber; it just hasn't
 				// been torn down yet.

@@ -7,9 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -421,18 +419,18 @@ func TestEventsGaplessAndDuplicateFreeAcrossSnapshotBoundary(t *testing.T) {
 // drain goroutine outracing the test).
 //
 // This test makes the overflow deterministic BY CONSTRUCTION instead of by
-// racing a flood, per the task spec's own suggested fix: it starts the
-// coordinator with an artificially tiny per-subscriber buffer
-// (SHOWMESH_TEST_STREAM_SUBSCRIBER_BUFFER — see
-// internal/coordinator/api's envStreamSubscriberBufferOverride, added this
-// session specifically so this test could exist deterministically), opens
-// a real stream connection and deliberately does not read its body for a
-// window, then fires a burst of real node changes — comfortably more than
-// the tiny buffer holds — during that window.
+// racing a flood: it starts the coordinator with an artificially tiny
+// per-subscriber buffer (SHOWMESH_TEST_STREAM_SUBSCRIBER_BUFFER — see
+// internal/coordinator/api's envStreamSubscriberBufferOverride, added
+// specifically so this test could exist deterministically), opens a real
+// stream connection, deliberately does not read its body, and arranges for
+// a SINGLE render pass to carry hundreds of changed resources into that
+// buffer of 2. See the comments in the test body for how that single large
+// pass is produced.
 //
-// TWO EARLIER VERSIONS OF THIS TEST WERE WRONG, and both failures are worth
-// recording because they are exactly the shape of mistake this task's
-// standing rule warns about:
+// THREE EARLIER VERSIONS OF THIS TEST WERE WRONG, and all three failures
+// are worth recording because they are exactly the shape of mistake this
+// project's standing rule warns about:
 //
 //  1. A version driving a raw net.Conn and treating "the request line and
 //     headers were sent with Connection: keep-alive" as license to detect
@@ -447,6 +445,7 @@ func TestEventsGaplessAndDuplicateFreeAcrossSnapshotBoundary(t *testing.T) {
 //     against an http.Client capture of the identical scenario side by
 //     side — the http.Client one correctly saw stream.reset followed by
 //     EOF on resp.Body in under a second; the raw one never did.
+//
 //  2. An even earlier version used real showmesh-agent subprocesses to
 //     produce the burst. Real process spawns and MQTT handshakes are slow
 //     and spread out enough in wall-clock time that
@@ -457,17 +456,115 @@ func TestEventsGaplessAndDuplicateFreeAcrossSnapshotBoundary(t *testing.T) {
 //     timeout-vs-close distinction (finding 1, above) exposed that it
 //     never actually observed a close at all.
 //
-// publishHelloBurst (a direct, single-connection MQTT client) replaced the
-// agent-subprocess burst for exactly this reason: it can fire hundreds of
-// genuinely distinct node changes within single-digit milliseconds,
-// reliably landing several within one render pass.
+//  3. A version that opened the stream, fired a 200-message hello burst
+//     over MQTT while not reading the body, and expected the overflow to
+//     follow. It passed on macOS and failed 3 runs in 20 on Linux, which
+//     is what CI caught. NOT slowness — the passing runs finished in well
+//     under a tenth of the 20s bound — and NOT a coordinator defect:
+//     reproduced in a Linux container and instrumented, the failing runs
+//     showed the handler writing the whole burst successfully, every
+//     single write completing in under 20ms, and Hub.broadcast's overflow
+//     branch never executing even once.
+//
+//     What that version actually depended on was the number of frames ONE
+//     render pass produces, which is not something an MQTT burst
+//     controls: the coordinator ingests hello messages one at a time and
+//     internal/coordinator/inventory's onChange pokes the hub after each,
+//     so a pass carries however many happened to arrive while the
+//     previous pass was running. Instrumenting render() to count frames
+//     per pass measured that directly. On Linux, one failing run: 165
+//     passes of 1 frame, 16 of 2, exactly one of 3. On macOS, three
+//     passing runs: 109 of 1, 49 of 2, 29 of 3, 4 of 4. A buffer of 2
+//     that an idle handler is draining survives the Linux distribution
+//     and not the macOS one. That is the entire difference between the
+//     two platforms, and it is a property of scheduling, not of
+//     correctness.
+//
+//     The obvious explanation — that "the client is not reading" fills
+//     the socket and blocks the handler, and that Linux simply buffers
+//     more — was TESTED AND REFUTED rather than assumed. A handler
+//     writing to a client that reads nothing at all got 4.0 MB into the
+//     kernel on Linux and 1.5 MB on macOS before one write blocked (993
+//     KB and 457 KB respectively even with the client's SO_RCVBUF pinned
+//     at 1 KB, because the sender's own send buffer autotunes), against a
+//     burst whose entire wire volume is ~110–135 KB. Neither platform
+//     ever came close to blocking, which is exactly what the "no write
+//     took over 20ms" instrumentation showed. Not reading the body is
+//     worth far less as back-pressure than it looks.
+//
+//     So version 3 was environment-dependent in both directions: it
+//     passed whether or not the coordinator was correct, and failed
+//     whether or not the coordinator was correct. Enlarging the burst or
+//     widening the bound would only have moved the coincidence, which is
+//     why neither was done.
 func TestSlowSSEConsumerGetsResetAndDisconnected(t *testing.T) {
 	requireBroker(t)
+
+	// burst is a resource COUNT that must land in one render pass, not a
+	// byte volume racing a kernel buffer (failure 3 above). Any value
+	// comfortably above the subscriber buffer of 2 would do; a few hundred
+	// keeps the margin visible without making phase 1 slow.
+	const burst = 200
+
+	// PHASE 1 exists only to leave a populated database behind. Nothing
+	// about the stream is exercised here, and this coordinator gets the
+	// ordinary production subscriber buffer because no assertion in this
+	// phase depends on it. This one needs the real broker: the burst is
+	// how the database gets populated. It may well pick up other tests'
+	// retained node state from the shared broker too, which only ADDS
+	// resources to the batch phase 2 depends on.
+	dataDir := t.TempDir()
+	seed := startCoordinatorWithConfig(t, coordinatorConfig{
+		dataDir: dataDir, clientID: "coord-seed-" + uniqueSuffix(),
+	})
+	publishHelloBurst(t, burst)
+	waitForNodeCount(t, seed, burst)
+	seed.shutdown()
+
+	// PHASE 2 starts a SECOND coordinator over that same database. This is
+	// what makes the overflow structural rather than statistical: a hub is
+	// built fresh with an empty lastRendered map (see
+	// internal/coordinator/api/stream.go), so the FIRST render pass it ever
+	// runs finds every one of those nodes different from nothing and hands
+	// Hub.broadcast that entire batch in one tight loop. Hundreds of frames
+	// pushed into a channel of capacity 2, by a loop doing nothing but
+	// channel sends, against a handler that must JSON-encode, write and
+	// flush each frame it takes out — the producer outruns the consumer by
+	// orders of magnitude, and it does so for reasons internal to the
+	// process rather than because of anything a kernel chose to buffer.
+	//
+	// It is pointed at a port nothing listens on, so it has no broker at
+	// all (the same closedPort resilience_test.go uses for ADR-012's "must
+	// start and stay up with no broker reachable"). That is not
+	// incidental: on the shared test broker, OTHER tests' retained hello
+	// and last-will messages are delivered to any coordinator the instant
+	// it subscribes, each one poking the hub through
+	// internal/coordinator/inventory's onChange. A first render pass
+	// triggered that way — milliseconds into startup, long before this
+	// test can open a connection — would consume the one moment this test
+	// needs and populate lastRendered with nobody watching. Found exactly
+	// that way: an earlier draft of this phase passed 20 runs out of 20 on
+	// its own and failed in the full suite, where other tests' retained
+	// state exists.
+	//
+	// With no broker, nothing can poke this hub, so its first render is
+	// its own StreamTickInterval tick and the timing is a property of the
+	// coordinator rather than of whatever else is on the broker.
 	coord := startCoordinatorWithConfig(t, coordinatorConfig{
-		dataDir: t.TempDir(), clientID: "coord-" + uniqueSuffix(),
+		dataDir: dataDir, clientID: "coord-" + uniqueSuffix(),
+		brokerURL:              fmt.Sprintf("tcp://127.0.0.1:%d", closedPort(t)),
 		streamSubscriberBuffer: 2,
 	})
 
+	// Connect before that first tick. StreamTickInterval is 5s and not
+	// overridable; startCoordinatorWithConfig has already waited for
+	// /healthz to answer, so all that remains here is one HTTP request
+	// against an already-listening server. The margin is roughly two
+	// orders of magnitude, and is a SHOWMESH HYPOTHESIS in one direction
+	// only: it has not been measured on a maximally loaded CI runner. If
+	// it were ever missed, the timeout branch below reports "logged a
+	// subscriber-buffer overflow: false" rather than blaming the
+	// coordinator for something the harness failed to set up.
 	req, err := http.NewRequest(http.MethodGet, coord.url("/api/v1/stream"), nil)
 	if err != nil {
 		t.Fatalf("build stream request: %v", err)
@@ -482,38 +579,33 @@ func TestSlowSSEConsumerGetsResetAndDisconnected(t *testing.T) {
 		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
 	}
 
-	// Deliberately do not read resp.Body at all yet: this is the "slow
-	// consumer" the test needs. Fire a burst of real, distinct node
-	// changes while it is not being drained — internal/coordinator/inventory's
-	// onChange hook (this session's wiring) pokes the hub on every one, and
-	// several of them landing while a single render() pass is still
-	// catching up on the first is exactly the condition that overflows a
-	// per-subscriber buffer of 2.
-	const burst = 200
-	publishHelloBurst(t, burst)
+	// Deliberately do not read resp.Body: this is the "slow consumer" the
+	// test names. It is no longer what CREATES the overflow — failure 3
+	// above measured how little that is worth on its own — but it is the
+	// scenario, and a handler that is also blocked on a write can only
+	// drain more slowly still.
 
-	// NOW read: per finding 1 above, only a proper HTTP-body read can tell
-	// "the stream ended" (a completed chunked body, surfaced as io.EOF on
-	// resp.Body) apart from "the connection is idle but still open for
-	// keep-alive reuse". A read TIMEOUT and an actual EOF are not the same
-	// outcome, and conflating them would be exactly the "test that passes
-	// whether or not the bug is present" this project's standing rule
-	// warns against — see this function's own doc comment. Only io.EOF (or
-	// any other non-timeout error) counts as proof the coordinator ended
+	// NOW read: per failure 1 above, only a proper HTTP-body read can tell
+	// "the stream ended" (a completed chunked body) apart from "the
+	// connection is idle but still open for keep-alive reuse". A read
+	// TIMEOUT and an actual end of response are not the same outcome, and
+	// conflating them would be exactly the "test that passes whether or
+	// not the bug is present" this project's standing rule warns against.
+	// Only the body read RETURNING counts as proof the coordinator ended
 	// the stream; a timeout fails the test with an explicit message
 	// instead of silently passing.
 	//
 	// Step 3 review finding 1.2: an earlier version of this test read into
-	// a bare byte counter and asserted only that the read eventually ended
-	// (any io.EOF or other error), never looking at the bytes themselves.
-	// Confirmed by mutation: replacing the reset arm in
-	// internal/coordinator/api/stream.go with a bare `return` (so the
-	// connection is simply closed with no stream.reset frame at all) left
-	// this test green, because a bare close also produces io.EOF. Keep the
-	// full body instead of discarding it, and require it to actually
-	// contain the "event: stream.reset" frame naming
-	// "subscriber_too_slow" — the one thing that distinguishes "the
-	// coordinator told this client why" from "the connection merely died".
+	// a bare byte counter and asserted only that the read eventually
+	// ended, never looking at the bytes themselves. Confirmed by mutation:
+	// replacing the reset arm in internal/coordinator/api/stream.go with a
+	// bare `return` (so the connection is simply closed with no
+	// stream.reset frame at all) left that version green, because a bare
+	// close also ends the body. Keep the full body instead of discarding
+	// it, and require it to actually contain the "event: stream.reset"
+	// frame naming "subscriber_too_slow" — the one thing that
+	// distinguishes "the coordinator told this client why" from "the
+	// connection merely died".
 	type readResult struct {
 		body bytes.Buffer
 		err  error
@@ -527,11 +619,17 @@ func TestSlowSSEConsumerGetsResetAndDisconnected(t *testing.T) {
 
 	select {
 	case res := <-done:
-		if !errors.Is(res.err, io.EOF) {
-			t.Logf("stream ended with a non-EOF error (still counts as ended): %v", res.err)
+		// bytes.Buffer.ReadFrom reports a clean end of stream as a nil
+		// error, not io.EOF (it treats io.EOF as success and swallows it),
+		// so nil here IS the ordinary "the coordinator ended the response"
+		// outcome. Anything non-nil is a transport-level failure worth
+		// naming in the log, but either way the body assertions below —
+		// not the error value — are what decide this test.
+		if res.err != nil {
+			t.Logf("stream ended with a transport error (still counts as ended): %v", res.err)
 		}
 		body := res.body.String()
-		t.Logf("stream ended after %d total bytes read (following a burst of %d changes with a buffer of 2)", res.body.Len(), burst)
+		t.Logf("stream ended after %d total bytes read (a single render pass carrying at least %d changed nodes into a subscriber buffer of 2)", res.body.Len(), burst)
 		if !strings.Contains(body, "event: stream.reset") {
 			t.Fatalf("stream body never contained an \"event: stream.reset\" frame before the connection ended; body:\n%s", body)
 		}
@@ -539,7 +637,43 @@ func TestSlowSSEConsumerGetsResetAndDisconnected(t *testing.T) {
 			t.Fatalf("stream body contained a stream.reset frame but never named reason \"subscriber_too_slow\"; body:\n%s", body)
 		}
 	case <-time.After(20 * time.Second):
+		// Different faults produce this same timeout and they have
+		// different fixes, so report the one piece of evidence that
+		// narrows it rather than leaving the reader to guess.
+		// Hub.broadcast logs a line at the moment it finds a subscriber's
+		// frames buffer full AND queues the stream.reset, so from out here
+		// the two are not separable: absent, either the overflow condition
+		// was never created (a harness fault — failure 3 in this
+		// function's doc comment is exactly that) or the detection itself
+		// is broken; present, the hub detected the slow subscriber and
+		// then failed to deliver the reset or to close the connection,
+		// which is squarely a defect in internal/coordinator/api.
+		overflowed := strings.Contains(coord.logs.String(), "subscriber buffer overflowed")
 		t.Fatalf("stream was not closed by the coordinator within the 20s wait bound; "+
-			"a non-draining subscriber with a buffer of 2 receiving a burst of %d changes must be disconnected per contract section 6.4", burst)
+			"a non-draining subscriber with a buffer of 2 receiving a render pass of %d changes must be disconnected per contract section 6.4 "+
+			"(coordinator logged a subscriber-buffer overflow: %t — false narrows this to either an overflow that never happened or a "+
+			"detection that no longer works; true means detection worked and the reset or the close did not)", burst, overflowed)
 	}
+}
+
+// waitForNodeCount blocks until GET /api/v1/snapshot reports at least want
+// nodes, failing t with the count actually reached once the bound elapses.
+//
+// waitForNodeCountBound is a SHOWMESH HYPOTHESIS, not a measured value:
+// generous enough that ordinary broker and SQLite write latency for a few
+// hundred hello messages never trips it, finite so a coordinator that
+// silently stops ingesting fails the test instead of hanging it.
+func waitForNodeCount(t *testing.T, coord *testCoordinator, want int) {
+	t.Helper()
+	const waitForNodeCountBound = 60 * time.Second
+	deadline := time.Now().Add(waitForNodeCountBound)
+	got := 0
+	for time.Now().Before(deadline) {
+		got = len(coord.snapshot(t).Nodes)
+		if got >= want {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("coordinator inventory reached only %d of %d nodes within %s", got, want, waitForNodeCountBound)
 }
