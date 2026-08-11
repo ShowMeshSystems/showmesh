@@ -37,9 +37,12 @@ func (alwaysNotReadySource) Readiness() readiness.Report {
 }
 
 // Server is the coordinator's HTTP server. It exposes liveness, readiness,
-// and version endpoints; topic/state APIs land in later steps.
+// and version endpoints; the Step 3 versioned control API is mounted
+// alongside them via [Server.Mount] rather than built in here — see that
+// method's doc comment for why.
 type Server struct {
 	httpServer *http.Server
+	mux        *http.ServeMux
 	logger     *slog.Logger
 
 	// readiness reports the coordinator's readiness. It backs /readyz.
@@ -70,6 +73,15 @@ func NewServer(addr string, source readiness.Source, logger *slog.Logger) *Serve
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	// "/" is net/http.ServeMux's least-specific subtree pattern: it never
+	// shadows "GET /healthz"/"GET /readyz"/"GET /version" above (each is a
+	// more specific, method-scoped pattern) or whatever [Server.Mount]
+	// later registers under "/api/" (also more specific). It only ever
+	// matches a path this server has no other route for at all — see
+	// handleNotFound's own doc comment for why that case needs a handler
+	// instead of net/http's bare-text default.
+	mux.HandleFunc("/", s.handleNotFound)
+	s.mux = mux
 
 	s.httpServer = &http.Server{
 		Addr:              addr,
@@ -81,6 +93,30 @@ func NewServer(addr string, source readiness.Source, logger *slog.Logger) *Serve
 	}
 
 	return s
+}
+
+// Mount attaches handler under pattern (e.g. "/api/") on this server's
+// existing mux, alongside /healthz, /readyz, and /version.
+//
+// This exists so internal/coordinator/coordinator.go (Step 3's wiring) can
+// serve internal/coordinator/api's versioned control API from the same
+// listener without this package ever importing that one, or anything else
+// coordinator-specific: per this package's own doc comment, httpapi "knows
+// nothing about MQTT or any other specific dependency", and that property
+// is exactly as true of the Step 3 API as it was of the broker before it —
+// httpapi never learns what an observation, a node, or an FPP instance is.
+// The caller owns everything about handler's behavior; this method is
+// nothing more than http.ServeMux.Handle, done here because mux is a
+// private field.
+//
+// Mount must be called before [Server.ListenAndServe]; net/http.ServeMux
+// is not safe to register new patterns on concurrently with serving
+// requests through it, and this package makes no attempt to synchronize
+// the two — Server's own lifecycle (build with NewServer, Mount whatever
+// is needed, then ListenAndServe) already keeps them sequential for every
+// caller in this codebase.
+func (s *Server) Mount(pattern string, handler http.Handler) {
+	s.mux.Handle(pattern, handler)
 }
 
 // ListenAndServe starts serving HTTP requests. It blocks until the server
@@ -157,6 +193,52 @@ type versionResponse struct {
 	Commit    string `json:"commit"`
 	BuildDate string `json:"buildDate"`
 	GoVersion string `json:"goVersion"`
+}
+
+// notFoundAPIVersionHeaderValue mirrors internal/coordinator/api's
+// apiVersionHeaderName/supportedAPIVersions[0] (contract section 6.2:
+// "ShowMesh-API-Version: 1 on every /api/v1 response, including errors").
+// This package deliberately does not import that one — see this file's own
+// doc comment ("knows nothing about ... any other specific dependency") —
+// so the value is a literal here, the same trade-off
+// internal/coordinator/api/problem.go's ProblemTypeInternalError constant
+// already makes for the mirror in the other direction. Kept manually in
+// sync; there is exactly one other place this string appears at all
+// (middleware.go's apiVersionHeaderName), so a future version bump has one
+// sibling to update, not several scattered ones.
+const notFoundAPIVersionHeaderValue = "1"
+
+// handleNotFound answers any request this server has no route for at all —
+// not /healthz, /readyz, /version, or anything under /api/ — with the same
+// RFC 9457 problem+json shape and ShowMesh-API-Version header every /api/v1
+// response carries, instead of net/http's bare "404 page not found" plain
+// text.
+//
+// Step 3 review finding 4.9: before this handler existed, GET /nope (or any
+// other path outside /api/) fell through to net/http's own default 404,
+// which is plain text, carries no version header, and is not
+// application/problem+json — a client that typos its base URL (a real
+// integration mistake, not a hypothetical one) got a response shape it had
+// no contract reason to expect, rather than the same structured error every
+// other unmatched path in this API already returns (a request under
+// /api/v1 that matches no route gets exactly this shape from
+// internal/coordinator/api's own resourceNotFoundProblem — this handler
+// only closes the gap for everything net/http routes to before ever
+// reaching that package's mux).
+func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("ShowMesh-API-Version", notFoundAPIVersionHeaderValue)
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusNotFound)
+	body := map[string]any{
+		"type":       "https://showmesh.dev/problems/resource-not-found",
+		"title":      "Resource not found",
+		"status":     http.StatusNotFound,
+		"detail":     "no route matches " + r.Method + " " + r.URL.Path,
+		"serverTime": time.Now().Format(time.RFC3339Nano),
+	}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		s.logger.Warn("failed to encode not-found response", "error", err, "path", r.URL.Path)
+	}
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {

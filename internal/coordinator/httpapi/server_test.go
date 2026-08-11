@@ -202,6 +202,89 @@ func TestWriteNotReadyDetailsCannotOverrideStatusOrReason(t *testing.T) {
 	}
 }
 
+func TestMountServesAlongsideBuiltInRoutes(t *testing.T) {
+	srv := NewServer(":0", fakeReadinessSource{report: readiness.Report{Ready: true, ObservedAt: time.Now()}}, nil)
+
+	mounted := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	srv.Mount("/api/", mounted)
+
+	// The mounted handler answers under its own pattern...
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/whatever", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("/api/v1/whatever status = %d, want %d from the mounted handler", rec.Code, http.StatusTeapot)
+	}
+
+	// ...and /healthz, /readyz, /version are all still served by this
+	// package's own handlers, unaffected by the mount.
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec = httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("/healthz status = %d, want %d (Mount must not shadow it)", rec.Code, http.StatusOK)
+	}
+}
+
+// TestUnmatchedPathGetsProblemJSONNotFound is Step 3 review finding 4.9:
+// GET /nope (or any other path outside /healthz, /readyz, /version, and
+// /api/) must get the same RFC 9457 problem+json shape and
+// ShowMesh-API-Version header every /api/v1 response carries, never
+// net/http's bare "404 page not found" plain-text default. Checked both
+// with and without a mounted /api/ handler, since Mount runs after
+// NewServer in every real caller and must not remove this fallback route.
+func TestUnmatchedPathGetsProblemJSONNotFound(t *testing.T) {
+	srv := NewServer(":0", fakeReadinessSource{report: readiness.Report{Ready: true, ObservedAt: time.Now()}}, nil)
+	srv.Mount("/api/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /nope status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("GET /nope Content-Type = %q, want application/problem+json", ct)
+	}
+	if v := rec.Header().Get("ShowMesh-API-Version"); v != "1" {
+		t.Errorf("GET /nope ShowMesh-API-Version header = %q, want %q", v, "1")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("GET /nope body did not parse as JSON: %v (body=%q)", err, rec.Body.String())
+	}
+	if body["type"] != "https://showmesh.dev/problems/resource-not-found" {
+		t.Errorf(`GET /nope body["type"] = %v, want the resource-not-found problem type`, body["type"])
+	}
+	if _, ok := body["serverTime"]; !ok {
+		t.Errorf("GET /nope body missing serverTime: %v", body)
+	}
+
+	// Every route this server actually serves must still work with the
+	// fallback registered — the fallback must never shadow anything more
+	// specific.
+	for _, path := range []string{"/healthz", "/readyz", "/version"} {
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		rec = httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("GET %s status = 404, want the fallback not to have shadowed this route", path)
+		}
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/whatever", nil)
+	rec = httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("GET /api/v1/whatever status = %d, want %d from the mounted handler, not the fallback", rec.Code, http.StatusTeapot)
+	}
+}
+
 func TestWriteNotReadyDerivesObservedAgeSecsFromObservedAt(t *testing.T) {
 	// observedAgeSecs must come from the typed ObservedAt field, not from
 	// whatever a source happens to put in Details (see readiness.Report's

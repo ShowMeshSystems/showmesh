@@ -35,3 +35,14 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/showmeshsystems/showmesh
+
+# The defaults cap reporting at 3 issues sharing the same message and 50
+# per linter, so a run reporting a small number could be hiding an order
+# of magnitude more — discovered during Step 3's wiring pass, which found
+# `make lint` reporting "0 issues" was still genuinely zero (nothing
+# historical was wrong), but the count is not trustworthy the moment it is
+# non-zero, and this project uses it as a gate. Set both to 0 (unlimited)
+# so every issue is always reported.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

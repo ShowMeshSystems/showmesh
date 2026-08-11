@@ -372,6 +372,247 @@ func TestHandleMessageMalformedPayloadIsSkippedNotFatal(t *testing.T) {
 	}
 }
 
+// TestWithOnChangeFiresOnAcceptedWritesNotOnMalformedOrDuplicate proves the
+// Step 3 wiring hook: onChange fires for a real hello/LWT/health write, but
+// never for a message HandleMessage drops as malformed, and never for a
+// health delivery RecordHealth ignored as a duplicate/reorder — see
+// [Manager.onChange]'s doc comment for why the duplicate case is excluded.
+func TestWithOnChangeFiresOnAcceptedWritesNotOnMalformedOrDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), dir, testLogger())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var calls int
+	m := New(st, testLogger(), WithOnChange(func() { calls++ }))
+
+	// A malformed hello: no call.
+	m.HandleMessage(broker.Message{Topic: helloTopic(t, "node-a"), Payload: []byte("not json"), Retained: false})
+	if calls != 0 {
+		t.Fatalf("calls = %d after a malformed message, want 0", calls)
+	}
+
+	// A genuine, accepted hello: exactly one call.
+	env, err := mqttproto.NewHelloEnvelope(nil, "node-a", mqttproto.HelloPayload{
+		Platform: "p", AgentVersion: "v", BootID: "boot-1", StartedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("build hello envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: helloTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, env), Retained: false})
+	if calls != 1 {
+		t.Fatalf("calls = %d after an accepted hello, want 1", calls)
+	}
+
+	// A genuine, accepted health heartbeat: one more call.
+	healthEnv, err := mqttproto.NewHealthEnvelope(nil, "node-a", mqttproto.HealthPayload{
+		BootID: "boot-1", Sequence: 1, AgentState: "running",
+	})
+	if err != nil {
+		t.Fatalf("build health envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: healthTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, healthEnv), Retained: false})
+	if calls != 2 {
+		t.Fatalf("calls = %d after an accepted health heartbeat, want 2", calls)
+	}
+
+	// The exact same boot ID/sequence again: RecordHealth ignores it as a
+	// duplicate, so no additional call.
+	m.HandleMessage(broker.Message{Topic: healthTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, healthEnv), Retained: false})
+	if calls != 2 {
+		t.Errorf("calls = %d after a duplicate health heartbeat, want still 2 (no notify for an ignored duplicate)", calls)
+	}
+}
+
+// TestRecordLivenessTransitionAppendsEventOnlyOnRealChange proves Step 3's
+// actual event-history production path: the first observation of a node in
+// a process's lifetime records no event (nothing to compare against — see
+// Manager.lastLiveness's doc comment), a genuine online -> offline
+// transition appends exactly one control_plane event, and a message that
+// does not change liveness (a second live heartbeat while already online)
+// appends none.
+func TestRecordLivenessTransitionAppendsEventOnlyOnRealChange(t *testing.T) {
+	m := newTestManager(t, nil)
+	ctx := context.Background()
+
+	countEvents := func() int {
+		events, _, err := m.store.ListEvents(ctx, 0, 100)
+		if err != nil {
+			t.Fatalf("list events: %v", err)
+		}
+		return len(events)
+	}
+
+	env, err := mqttproto.NewHelloEnvelope(nil, "node-a", mqttproto.HelloPayload{
+		Platform: "p", AgentVersion: "v", BootID: "boot-1", StartedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("build hello envelope: %v", err)
+	}
+	// First-ever observation: no prior liveness to compare against, so no
+	// event yet, even though this hello alone may already imply some
+	// liveness verdict.
+	m.HandleMessage(broker.Message{Topic: helloTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, env), Retained: false})
+	if got := countEvents(); got != 0 {
+		t.Fatalf("events after first-ever observation = %d, want 0", got)
+	}
+
+	// A live LWT online:true completes a real transition to online (from
+	// whatever the hello-only state was) — exactly one event.
+	lwtEnv, err := mqttproto.NewLWTEnvelope(nil, "node-a", mqttproto.LWTPayload{Online: true})
+	if err != nil {
+		t.Fatalf("build lwt envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: lwtTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, lwtEnv), Retained: false})
+	healthEnv, err := mqttproto.NewHealthEnvelope(nil, "node-a", mqttproto.HealthPayload{BootID: "boot-1", Sequence: 1, AgentState: "running"})
+	if err != nil {
+		t.Fatalf("build health envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: healthTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, healthEnv), Retained: false})
+
+	view, ok := m.findNodeView(t, "node-a")
+	if !ok || view.Liveness != LivenessOnline {
+		t.Fatalf("node-a liveness = %+v, want online before continuing", view)
+	}
+	afterOnline := countEvents()
+	if afterOnline == 0 {
+		t.Fatalf("events after reaching online = 0, want at least one control_plane transition event")
+	}
+
+	// A second live heartbeat while still online: liveness does not change,
+	// so no additional event.
+	healthEnv2, err := mqttproto.NewHealthEnvelope(nil, "node-a", mqttproto.HealthPayload{BootID: "boot-1", Sequence: 2, AgentState: "running"})
+	if err != nil {
+		t.Fatalf("build second health envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: healthTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, healthEnv2), Retained: false})
+	if got := countEvents(); got != afterOnline {
+		t.Errorf("events after a same-liveness heartbeat = %d, want unchanged from %d", got, afterOnline)
+	}
+
+	// A live LWT online:false is a genuine transition to offline: one more
+	// event, and its Category/Severity/Summary match the shape
+	// internal/coordinator/api's own eventFixture anticipated.
+	lwtOfflineEnv, err := mqttproto.NewLWTEnvelope(nil, "node-a", mqttproto.LWTPayload{Online: false, Reason: "unexpected disconnect"})
+	if err != nil {
+		t.Fatalf("build offline lwt envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: lwtTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, lwtOfflineEnv), Retained: false})
+
+	events, _, err := m.store.ListEvents(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != afterOnline+1 {
+		t.Fatalf("events after going offline = %d, want %d", len(events), afterOnline+1)
+	}
+	last := events[len(events)-1]
+	if last.Category != "control_plane" {
+		t.Errorf("last event Category = %q, want \"control_plane\"", last.Category)
+	}
+	if last.Severity != "warning" {
+		t.Errorf("last event Severity = %q, want \"warning\" for a transition to offline", last.Severity)
+	}
+	if last.Summary != "node control-plane state changed to offline" {
+		t.Errorf("last event Summary = %q, want %q", last.Summary, "node control-plane state changed to offline")
+	}
+}
+
+// TestRecordLivenessObservationDetectsStalenessOnlyTransition is the
+// regression guard for Step 3 review finding 3.4: recordLivenessTransition
+// alone only ever fires from HandleMessage, so a node whose heartbeats
+// simply stop — no further message, no last will, ever — could transition
+// online -> offline by staleness alone with nothing recording it to event
+// history. This proves the exported entry point that closes that gap
+// (RecordLivenessObservation, which internal/coordinator/apiwiring.go's
+// livenessObservingNodeLister calls after every Snapshot) records exactly
+// the same kind of event with zero HandleMessage calls driving it, shares
+// the once-per-actual-transition dedup recordLivenessTransition already
+// relies on (Manager.lastLiveness), and does not double-record on a
+// repeated, unchanged call.
+func TestRecordLivenessObservationDetectsStalenessOnlyTransition(t *testing.T) {
+	m := newTestManager(t, nil)
+	ctx := context.Background()
+
+	countEvents := func() int {
+		events, _, err := m.store.ListEvents(ctx, 0, 100)
+		if err != nil {
+			t.Fatalf("list events: %v", err)
+		}
+		return len(events)
+	}
+
+	// Bring node-a online the ordinary, message-driven way first, matching
+	// TestRecordLivenessTransitionAppendsEventOnlyOnRealChange's own setup.
+	lwtEnv, err := mqttproto.NewLWTEnvelope(nil, "node-a", mqttproto.LWTPayload{Online: true})
+	if err != nil {
+		t.Fatalf("build lwt envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: lwtTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, lwtEnv), Retained: false})
+	healthEnv, err := mqttproto.NewHealthEnvelope(nil, "node-a", mqttproto.HealthPayload{BootID: "boot-1", Sequence: 1, AgentState: "running"})
+	if err != nil {
+		t.Fatalf("build health envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: healthTopic(t, "node-a"), Payload: mustEnvelopeBytes(t, healthEnv), Retained: false})
+
+	view, ok := m.findNodeView(t, "node-a")
+	if !ok || view.Liveness != LivenessOnline {
+		t.Fatalf("node-a liveness = %+v, want online before continuing", view)
+	}
+	afterOnline := countEvents()
+	if afterOnline == 0 {
+		t.Fatalf("events after reaching online = 0, want at least one")
+	}
+
+	// No further message ever arrives for node-a from here on. Simulate
+	// exactly what livenessObservingNodeLister does on every Snapshot call
+	// (including the hub's own render tick): re-derive liveness against a
+	// later "now" and feed the verdict straight to RecordLivenessObservation
+	// — never HandleMessage — as if staleness alone had tipped it offline.
+	m.RecordLivenessObservation(ctx, "node-a", LivenessOffline, "heartbeat staleness window exceeded")
+
+	if got := countEvents(); got != afterOnline+1 {
+		t.Fatalf("events after a staleness-only RecordLivenessObservation call = %d, want %d", got, afterOnline+1)
+	}
+	events, _, err := m.store.ListEvents(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	last := events[len(events)-1]
+	if last.Category != "control_plane" {
+		t.Errorf("last event Category = %q, want \"control_plane\"", last.Category)
+	}
+	if last.Summary != "node control-plane state changed to offline" {
+		t.Errorf("last event Summary = %q, want %q", last.Summary, "node control-plane state changed to offline")
+	}
+
+	// A repeated call reporting the SAME liveness must not append a second
+	// event — the same dedup recordLivenessTransition relies on, now shared
+	// by both callers through observeLiveness.
+	m.RecordLivenessObservation(ctx, "node-a", LivenessOffline, "heartbeat staleness window exceeded")
+	if got := countEvents(); got != afterOnline+1 {
+		t.Errorf("events after a repeated, unchanged RecordLivenessObservation call = %d, want unchanged at %d", got, afterOnline+1)
+	}
+}
+
+// findNodeView is a small helper: the single-node equivalent of Snapshot,
+// used only by this test file.
+func (m *Manager) findNodeView(t *testing.T, nodeID string) (NodeView, bool) {
+	t.Helper()
+	views, err := m.Snapshot(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, v := range views {
+		if v.NodeID == nodeID {
+			return v, true
+		}
+	}
+	return NodeView{}, false
+}
+
 func TestSubscriptionsCoverAllThreeFilters(t *testing.T) {
 	m := newTestManager(t, nil)
 	subs := m.Subscriptions()

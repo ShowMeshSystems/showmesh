@@ -30,13 +30,17 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-Steps 0 (Foundation), 1 (`pkg/multisync`), and 2 (control plane skeleton) are complete. Step 2's acceptance criteria pass against a real Mosquitto broker with the agent running as a real subprocess, in CI on every push. Nothing has been exercised against real show hardware.
+Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), and 3 (read-only FPP observability plus the versioned public API) are complete. Nothing has been exercised against real show hardware.
 
-An agent advertises itself over MQTT with a retained hello, a Last Will, and a health heartbeat; the coordinator records inventory and observed state in SQLite and derives liveness from that evidence plus the current time. There is still no read API, no UI, no commands, and no show logic: Step 3 is the read-only FPP observability slice and the versioned public API that ADR-014 requires.
+The coordinator now polls configured FPP instances read-only over REST, normalizes what it finds into the OBSERVABILITY §4.1 observation model with provenance and freshness, persists observations and an event history in SQLite, and serves all of it through a versioned public API at `/api/v1` with a Server-Sent Events change stream. `showmeshctl` is a second, deliberately independent client of that API: an enforced import-graph test forbids it from importing any coordinator package, so a JSON tag rename breaks it rather than silently renaming the field on both sides. `api/openapi.yaml` is the machine-readable contract and is conformance-tested against real handler responses in both directions.
 
-RES-002 moved to **L2 for protocol semantics** on 2026-08-10, via a containerized `fppd` bench (`bench/fpp-multisync/`), and stays at **L1 for anything hardware- or network-dependent**. The owner's reasoning: a container tests ShowMesh against the real protocol implementation, which is the part that can actually be wrong in our code, and proving the protocol talks before touching the physical network avoids troubleshooting a switch for a problem that was never in the switch. L2 here licenses further building, not a live show. Adoption still needs L3 and show readiness L4, both of which require the physical rig.
+There is still no UI, no commands, no write operations of any kind, and no show logic. Step 4 is the read-only Operator UI, and it is the first consumer that will exercise the API's version negotiation for real.
 
-The next action is Step 3. Design the API before any UI exists, per BUILD-PLAN's note on why that ordering is what keeps ADR-014 real.
+RES-002 stays **L2 for protocol semantics** and **L1 for anything hardware- or network-dependent**, unchanged by this step. Step 3 added REST-level evidence about FPP (recorded in RES-002's evidence section) but nothing about the MultiSync wire protocol, the hardware clock, or the reference switch. L2 licenses further building, not a live show.
+
+Three things a future session should know before touching this code. **`MultiSyncEnabled` defaults to off in FPP**, and the endpoint that looks like it reports that setting returns the setting's *schema*, which decodes to `false` without error: correct today by accident, wrong the moment MultiSync is enabled, and its test passes either way. The collector reads the running daemon's own `multisync` flag instead, and a test panics if anything ever calls the settings endpoint. **A retained MQTT delivery carries no valid observation time**, so `observedAt` is `null` with state `unknown_age` and must never be filled in from the collection time; that defect has now been introduced and caught three times in different disguises. And **`offline` means the control-plane connection is gone**, not that the node is dead, which is why the wire field is `node.controlPlane.state` and nothing else.
+
+The heartbeat interval, staleness window, poll cadences, backoff bounds, SSE keepalive interval, and event retention bounds are all unmeasured ShowMesh hypotheses, labelled as such in code. They belong to RES-009 and RES-013.
 
 `pkg/multisync` holds the MultiSync wire codec, a listener that receives multicast, broadcast, and unicast on UDP 32320, a timeline state machine implementing FPP remote semantics on an injectable clock, and an opt-in discover-ping responder. `cmd/showmesh-multisync-probe` is the bench instrument built to close RES-002's five open items; it has not been run against a real FPP player yet, so RES-002 remains at L1 and its status is still `planned`. Changing that status is the owner's call once real captures exist, per `docs/bench/RES-002-capture-procedure.md`.
 
@@ -55,6 +59,70 @@ The immediate next action is Step 2, the control plane skeleton. Its first task 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-11 (Step 3)
+
+**Goal:** the first slice of real observability, and the versioned public control API and change stream that ADR-014 requires, designed and shipped before any UI exists.
+
+**Completed:**
+
+- `pkg/observation`: the OBSERVABILITY §4.1 model. Provenance, freshness, a six-state evidence vocabulary (`current`, `stale`, `unknown_age`, `not_collected`, `collection_failed`, `unsupported`), and the five health states. Constructors make it impossible to build a value with a fabricated observation time, and `SignalID` syntax is validated rather than merely documented.
+- `internal/coordinator/collector` plus `collector/fpp`: a source-neutral collector shape and the FPP REST collector, with bounded timeouts, non-overlapping polls, and backoff with jitter.
+- `internal/coordinator/store`: observation persistence (latest-only) and an append-only event history with retention bounds by age and row count.
+- `internal/coordinator/api` and `api/openapi.yaml`: the `/api/v1` surface, the SSE change stream, version negotiation, RFC 9457 problem documents, optional bearer authentication, and CORS.
+- `cmd/showmeshctl`: the independent non-UI client.
+- The integration harness now execs the **real coordinator binary** and observes it through the new API, instead of wiring the components in-process.
+- [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md) and [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md).
+
+**Decisions made:**
+
+- **Server-Sent Events, not WebSocket** ([ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md)). The deciding argument was the acceptance criterion itself: with SSE, exercising the contract without a browser is `curl -N`, and a contract that needs a client library before anyone can inspect it drifts towards private. The stream is deliberately not resumable, which is enforced structurally rather than documented: no `id:` field so browsers never ask for resume, per-connection sequence numbers so no cursor can become global, and a `stream.start` frame demanding a snapshot on every connection.
+- **Optional shared-secret authentication, off by default** ([ADR-021](../decisions/ADR-021-read-api-authentication-posture.md)), with a startup warning when unset. The ADR records bluntly that one shared secret is not an identity and does not satisfy ARCHITECTURE §10.4, and it bars the first write endpoint until superseded. It is expected to be superseded, and it says so.
+- **The API warranted its own ADR** rather than sitting behind ADR-014. ADR-014 settled what the API is; the transport, the non-resumability rule, the evidence-absence vocabulary, and additive-only compatibility are durable constraints a future contributor could otherwise improve away one at a time.
+- **Wire types are a separate layer from domain types**, mapped between. Duplication on purpose: if domain structs carried the JSON tags, an ordinary refactor would silently change a public contract and the version in the path would be a lie.
+- **The published contract is permissive; strictness is a test-only overlay.** `additionalProperties: false` on 26 schemas made the conformance test catch drift in both directions, and simultaneously told every generated client to reject the additive changes v1 explicitly permits. Both properties were wanted, so they were separated.
+- **No desired state, assignments, or reconciliation status in v1.** OPERATOR-UI §5 lists them as the API's eventual minimum; the coordinator does not model them, and a `reconciliationStatus` that no code computes would be rendered by a UI and read by an operator as a verdict.
+- **`FPPInstance.health` stays `unknown` for a persistently unreachable configured instance** rather than `failed`. OBSERVABILITY §4.2 arguably supports `failed`, but Step 3 has no concept of an instance being required and no lifecycle context to judge against; inventing one to reach a more confident verdict is what ADR-011 forbids.
+- **Version negotiation runs before authentication**, so version skew stays diagnosable without credentials. Recorded as a choice rather than left to be rediscovered.
+
+**Questions raised with the owner:** whether FPP MQTT ingestion belonged in this step (answer: defer it, record the narrowing, since REST supplies the whole signal set and FPP MQTT depends on operator-side configuration that cannot be verified here), and what authentication posture ships (answer: the optional shared secret above).
+
+**What the FPP bench caught before a line of collector code was written:** `GET /api/settings/MultiSyncEnabled` returns the setting's *schema*, not its value. A Go struct with a `value` field decodes that body without error and yields `false`. Since `MultiSyncEnabled` defaults to off, the wrong implementation produces the right answer today and its test passes; it breaks the moment MultiSync is enabled. Worse, once the setting has been written even once the endpoint *does* gain a `value` key, as a string rather than a boolean, so two FPP hosts behave differently and are indistinguishable without knowing this. The usable signal is the running daemon's own `multisync` flag in `/api/fppd/status`, which flips only after an `fppd` restart because the setting carries `restart: 2`. Verified end to end against FPP 9.5.3. Also recorded: several numeric-looking status fields arrive as JSON strings, so a struct declaring an integer fails to unmarshal the whole document and the collector reports the FPP unreachable, a decoding bug wearing a network fault's clothes. All of this is in RES-002's evidence section.
+
+**Findings from review that mattered:**
+
+Three independent reviews ran: constraints and ADRs, test honesty, and the public contract. Two of the three verified by running the real binary or by breaking production code and confirming a test failed.
+
+- **Three tests passed with the behavior they named removed.** The worst asserted that the change-stream client never applies a delta before fetching an authoritative snapshot, and stayed green with the snapshot fetch deleted entirely, because it accepted "connected" or "snapshot" as the first line and the client prints "connected" first. It sat on this step's own acceptance criterion. A second claimed a slow consumer receives `stream.reset`, and only checked that the stream ended. A third claimed shutdown closes streams, and passed with the shutdown path deleted, because the test closed the client connections itself. This is the same shape as Step 2's fake-connection shutdown test, twice over, and it is why the reviewer was told to break the code rather than read it.
+- **A wedged subscriber could never be told it was wedged.** Clearing the connection write deadline was the correct fix for a 10 second `WriteTimeout` killing every stream, but clearing it with nothing in its place meant a client that stops reading blocks its own handler forever, so the buffer-overflow reset the hub queued was never written, the connection never closed, and the goroutine and its buffers were pinned until process exit. Precisely the silent drop ADR-020 exists to forbid, reachable by anyone on the show VLAN with authentication off by default.
+- **The published contract told clients to ignore unknown fields while declaring every schema closed.** A client generating types from the document breaks the first time a field is added additively, which ADR-014 makes a permanent condition rather than an edge case.
+- **`/api/v1/observations` could never return node evidence while documenting that it did**, because node evidence is synthesized on read and only collector output is persisted. Fixed by unioning at read time rather than by persisting node evidence, which would have created two sources of truth for the same facts.
+- **The snapshot read its event cursor after its resources**, so the "no gap" guarantee in its own doc comment was false: a transition landing between the two reads is invisible to a client that follows the documented snapshot-then-events sequence.
+- **Event retention did not do what its comment claimed.** Pruning fired on every hundredth append within one process lifetime, with an in-memory counter, so a coordinator that records a few transitions per week and restarts between shows never pruned at all and the documented 30 day age bound was fiction. Two comments asserted as fact things that were false.
+- **Staleness-driven offline transitions never reached the event history**, because transitions were only recorded when a message arrived. A node whose heartbeats simply stop is the transition an operator cares most about, and the durable history said it had been online since its last message.
+- **`collectedAt` was populated on evidence that was never collected**, which is the `observedAt` fabrication this project already guards against, one field over.
+- **Two doc comments asserted behavior nothing implemented**, and one asserted a guarantee about the OpenAPI document that did not exist. This project treats that as a defect rather than untidiness, and it has now been found in three consecutive steps.
+- The API's own `POST` on a real route answered "no route matches", which is false, and is exactly where a client discovers that a deliberately read-only API is read-only.
+
+**Deferred:**
+
+- FPP MQTT ingestion, with the reason recorded in BUILD-PLAN.
+- Metric history, retention tiers, and downsampling. Observations are latest-only; RES-013 owns the design and guessing here would pre-empt it.
+- Full de-typing of the integration suite, which still decodes some assertions through the server's own wire types. Raw-key assertions were added for the load-bearing cases.
+- Alerting, the preview wall, controlled devices, and every write operation.
+- Running the multisync probe against the real FPP player, and everything else RES-002 tier 2 needs.
+
+**A harness gap found while proving a fix, worth its own line:** `SHOWMESH_TEST_STALENESS_WINDOW` was never forwarded into the coordinator subprocess's environment, so every coordinator in the integration package had silently been running with the production 30 second window regardless of the override. Nothing failed because of it, which is the point: a test knob that is quietly ignored makes a suite slower and its timing assumptions wrong without ever reporting anything. Found only because a new test needed the window to actually be short.
+
+**Verification gates:** `gofmt` clean; `go vet ./...` clean; `make lint` at 0 issues; `go test -race -count=1 ./...` passing; `CGO_ENABLED=0 go build ./...` clean with zero CGo packages in the coordinator's dependency graph after adding a pure-Go JSON Schema validator; cross compiles clean for `linux/amd64`, `linux/arm64`, `darwin/arm64`, and `windows/amd64`; the coordinator image builds at 13.4 MB.
+
+`make test-integration` runs 28 tests against Mosquitto 2.0.22 with the agent **and now the coordinator** as real subprocesses, all passing on a cleared test cache. `make test-integration-fpp` passes against the containerized FPP 9.5.3, including a coordinator subprocess pointed at the live daemon that proves the whole chain from collector through store and mapping to JSON, and it skips cleanly rather than failing when no FPP is reachable.
+
+Verified by hand against the shipped image with the broker unreachable and an FPP endpoint refusing connections: `/healthz` 200, `/readyz` 503, `ShowMesh-API-Version: 1` on every response, an unreachable FPP rendering `state: "collection_failed"` with a reason and `observedAt: null` rather than a 500 or a fabricated value, an unsupported version request answering `application/problem+json` naming the supported versions, an unknown path answering the same way, and SIGTERM exiting 0.
+
+Not verified: anything on real show hardware, anything about the reference switch, and anything about live-show behavior. Nothing in this step raises any research record above its current level.
 
 ---
 

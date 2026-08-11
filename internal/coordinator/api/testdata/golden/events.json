@@ -1,0 +1,24 @@
+{
+  "serverTime": "2026-08-10T21:14:22.481-05:00",
+  "events": [
+    {
+      "seq": 37,
+      "recordedAt": "2026-08-10T21:14:22.481-05:00",
+      "occurredAt": null,
+      "source": "mqtt-inventory",
+      "resource": {
+        "kind": "node",
+        "id": "media-03"
+      },
+      "category": "control_plane",
+      "severity": "informational",
+      "summary": "node control-plane state changed to offline",
+      "details": {},
+      "correlationId": null
+    }
+  ],
+  "latestSeq": 37,
+  "gap": false,
+  "oldestRetainedSeq": 1
+}
+

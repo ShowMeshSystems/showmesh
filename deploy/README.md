@@ -12,6 +12,31 @@ docker compose up -d --build
 
 This builds the coordinator image from the repo root Dockerfile and starts it alongside the bundled Mosquitto broker. Check status with `docker compose ps` and `curl -fsS localhost:8080/healthz`.
 
+## The read-only control API
+
+The coordinator serves a versioned, public, read-only API at `/api/v1` on the same HTTP port as the health endpoints, with a Server-Sent Events change stream at `/api/v1/stream`. It is a documented contract designed to be used without any browser ([ADR-014](../docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-020](../docs/decisions/ADR-020-control-api-shape-and-change-stream.md)), so a CLI, a script, or an automation system is a first-class client:
+
+```sh
+curl -s  localhost:8080/api/v1/nodes | jq
+curl -s  localhost:8080/api/v1/fpp   | jq
+curl -N  localhost:8080/api/v1/stream        # watch changes as they happen
+```
+
+`showmeshctl`, built from this repository, is the same thing with readable output: `showmeshctl nodes`, `showmeshctl fpp`, `showmeshctl events`, `showmeshctl watch`. The machine-readable contract is `api/openapi.yaml`.
+
+Everything the API reports carries provenance and freshness, and absent evidence is stated rather than omitted ([ADR-011](../docs/decisions/ADR-011-context-aware-observability.md)). A field you cannot see a value for will tell you whether it was never collected, whether collection failed, whether the source does not support it, or whether the value has gone stale. Two of those states are worth knowing about specifically:
+
+- `unknown_age` means a value exists but its observation time genuinely is not known, which happens when the coordinator learns something from a retained MQTT message after a restart. It is never treated as fresh.
+- A node reported as `controlPlane.state: offline` has lost its **control-plane connection**. It does not mean the node is dead or the show has stopped: a running show survives coordinator loss and broker loss by design.
+
+### Security posture, stated plainly
+
+**By default the API is open to anyone who can reach this port**, and the coordinator logs a warning saying so at startup. Setting `SHOWMESH_API_TOKEN` in `.env` closes it behind a shared bearer token.
+
+[ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.** The bundled Mosquitto also allows anonymous access, and that is the larger exposure of the two, since publish rights there affect coordinator state while the API only discloses it.
+
+There are no write operations at all in this release. Nothing reachable through this API can change a device, a playlist, or a show.
+
 ## Using an external broker
 
 If you already run Mosquitto (or another MQTT broker) elsewhere on the show network, point the coordinator at it instead of the bundled one:

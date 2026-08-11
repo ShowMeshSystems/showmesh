@@ -1,0 +1,120 @@
+{
+  "serverTime": "2026-08-10T21:14:22.481-05:00",
+  "nodes": [
+    {
+      "nodeId": "media-03",
+      "label": "Garage media node",
+      "platform": "linux-amd64",
+      "agentVersion": "dev",
+      "bootId": "boot-abc123",
+      "startedAt": "2026-08-10T20:00:00-05:00",
+      "firstSeenAt": "2026-08-10T20:00:01-05:00",
+      "updatedAt": "2026-08-10T21:14:20-05:00",
+      "capabilities": [
+        {
+          "id": "matrix.render",
+          "version": 1,
+          "attributes": {
+            "max_width": 1920
+          }
+        }
+      ],
+      "controlPlane": {
+        "state": "online",
+        "reason": null
+      },
+      "evidence": {
+        "hello": {
+          "signal": "node.hello",
+          "value": true,
+          "unit": null,
+          "state": "current",
+          "reason": null,
+          "observedAt": "2026-08-10T20:00:05-05:00",
+          "collectedAt": "2026-08-10T20:00:05-05:00",
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        },
+        "lastWill": {
+          "signal": "node.control_plane.last_will",
+          "value": true,
+          "unit": null,
+          "state": "current",
+          "reason": null,
+          "observedAt": "2026-08-10T21:14:18-05:00",
+          "collectedAt": "2026-08-10T21:14:18-05:00",
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        },
+        "heartbeat": {
+          "signal": "node.heartbeat",
+          "value": "running",
+          "unit": null,
+          "state": "current",
+          "reason": null,
+          "observedAt": "2026-08-10T21:14:20-05:00",
+          "collectedAt": "2026-08-10T21:14:20-05:00",
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        }
+      }
+    },
+    {
+      "nodeId": "shed-01",
+      "label": null,
+      "platform": null,
+      "agentVersion": null,
+      "bootId": null,
+      "startedAt": null,
+      "firstSeenAt": "2026-08-10T18:00:00-05:00",
+      "updatedAt": "2026-08-10T18:00:00-05:00",
+      "capabilities": [],
+      "controlPlane": {
+        "state": "unknown",
+        "reason": "last-will reports online but no health heartbeat has been observed yet"
+      },
+      "evidence": {
+        "hello": {
+          "signal": "node.hello",
+          "value": null,
+          "unit": null,
+          "state": "not_collected",
+          "reason": "no hello has ever been observed for this node",
+          "observedAt": null,
+          "collectedAt": null,
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        },
+        "lastWill": {
+          "signal": "node.control_plane.last_will",
+          "value": true,
+          "unit": null,
+          "state": "unknown_age",
+          "reason": "observation time is unknown (e.g. a retained MQTT delivery replayed on reconnect)",
+          "observedAt": null,
+          "collectedAt": "2026-08-10T18:00:00-05:00",
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        },
+        "heartbeat": {
+          "signal": "node.heartbeat",
+          "value": null,
+          "unit": null,
+          "state": "not_collected",
+          "reason": "no health heartbeat has ever been observed for this node",
+          "observedAt": null,
+          "collectedAt": null,
+          "source": "mqtt-inventory",
+          "quality": "direct",
+          "validForSeconds": null
+        }
+      }
+    }
+  ]
+}
+

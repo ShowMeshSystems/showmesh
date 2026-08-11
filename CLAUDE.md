@@ -8,7 +8,9 @@ Implementation started 2026-08-10. The design package remains authoritative: doc
 
 **Read `docs/build/BUILD-LOG.md` first in any new session.** Its "Current state" block says what actually works right now and what the next action is. `docs/build/BUILD-PLAN.md` holds the ordered steps and their status.
 
-Module path is `github.com/showmeshsystems/showmesh`. Steps 0 (foundation), 1 (`pkg/multisync` plus the bench probe), and 2 (control plane skeleton: shared models, agent advertisement with Last Will and heartbeat, coordinator SQLite inventory and liveness) are complete. Step 3 is next.
+Module path is `github.com/showmeshsystems/showmesh`. Steps 0 (foundation), 1 (`pkg/multisync` plus the bench probe), 2 (control plane skeleton: shared models, agent advertisement with Last Will and heartbeat, coordinator SQLite inventory and liveness), and 3 (read-only FPP observability, the observation model, event history, the versioned public API and its SSE change stream, and `showmeshctl`) are complete. Step 4, the read-only Operator UI, is next.
+
+The API is a public contract, not a UI convenience (ADR-014). `api/openapi.yaml` is its machine-readable form and is conformance-tested against real responses. `cmd/showmeshctl` exists to keep that honest: it is forbidden by an enforced import-graph test from importing any coordinator package, so a JSON tag rename breaks it rather than silently renaming the field on both sides. If Step 4's UI becomes the only client that ever calls the API, the contract has stopped being public and nobody decided that.
 
 RES-002 is **L2 for protocol semantics** and **L1 for anything hardware- or network-dependent**, a deliberate split. A containerized `fppd` (`bench/fpp-multisync/`) proved the wire protocol; clock drift and switch IGMP behavior are unreachable by any container and still require the physical rig. **L2 here means safe to keep building against, not trustworthy in a live show**: adoption needs L3 and show readiness needs L4, and neither has happened.
 
@@ -22,10 +24,12 @@ The repository is pushed to a private remote and CI runs on a real GitHub runner
 - `docs/architecture/OBSERVABILITY.md` — observability/alerting spec: signal model, collectors, dashboard, preview wall, pixel-current diagnostics, readiness evidence, alert model, phases O1–O5. **Owns what the operator surface must display.**
 - `docs/architecture/OPERATOR-UI.md` — the browser client architecture: isolation, API contract, real-time updates, staleness, information architecture, controls, responsiveness. **Owns how the client is built, never what it displays** — that split exists to stop the two documents drifting.
 - `docs/architecture/AUDIO-ENGINE.md` — the audio subsystem: authority model, playback sessions, drift policy, clock domains, buses/routing, output adapters, mixing, failure behavior. Entirely unverified design intent; RES-007 is the work queue.
-- `docs/decisions/` — ADRs. ADR-001..019 are Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR.
+- `docs/decisions/` — ADRs. ADR-001..021 are Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR.
 - `docs/research/` — research records RES-001..014 with an evidence ladder (L0 assumption → L1 source-verified → L2 bench → L3 integrated → L4 resilient). Empty evidence sections are work queues, not conclusions.
 - `docs/reference-installation.md` — the concrete reference show topology that anchors test matrices.
 - `deploy/` — the Compose bundle (coordinator plus Mosquitto) and its operator documentation.
+- `api/openapi.yaml` — the machine-readable form of the public control API (ADR-014, ADR-020). Conformance-tested against real handler responses, so it cannot drift from the implementation in either direction. Step 4 generates or verifies its TypeScript types from it rather than hand-maintaining them twice (ADR-015).
+- `bench/fpp-multisync/` — bench scaffolding only, never the product. A real containerized `fppd` for RES-002 captures and for the FPP collector's integration tests. Its image is a full source build, so it stays out of default CI and off the fast path.
 
 ## Non-negotiable design constraints (from accepted ADRs)
 
@@ -49,6 +53,9 @@ The repository is pushed to a private remote and CI runs on a real GitHub runner
 18. **ShowMesh owns audience-facing audio; nodes play local media** (ADR-017). FPP stays the scheduler and sequence authority, but ShowMesh owns audio sessions, routing, mixing, and placement, and FPP's own audio output goes unused. Nodes play complete local files on their own audio clock — never a PCM/sample-position stream. Drift is measured and corrected discretely at track boundaries, never by continuous rate manipulation: audio deliberately does NOT follow the MultiSync slew/jump model, and that divergence must not be "fixed".
 19. **Program audio and LTC share one clock domain** (ADR-018). Minimum 3 output channels from one interface: 1–2 program, 3 LTC on a discrete output, never mixed into program. Never program on USB with LTC on Dante. This is a hardware purchasing constraint and a hard capability-placement constraint.
 20. **Audio device loss fails silent** (ADR-019). Stop the failed output, keep session state, mark critical, alert, continue other outputs. NEVER auto-fall back to FPP audio — uncontrolled routing/gain into an FM transmitter is worse than silence. Node failover only after verifying media, output capabilities, physical routing, and health; operator-initiated until the roadmap's deferred failover item lands. This is a deliberate, recorded exception to constraint 4.
+
+21. **The control API is versioned REST plus a Server-Sent Events change stream** (ADR-020). Major version in the path; SSE deliberately, because a contract you cannot inspect with `curl` drifts towards private. The stream is **not resumable**: no `id:` field, per-connection sequence numbers, and an authoritative snapshot re-fetch after any interruption, because a gap in the stream is indistinguishable from a quiet system. Absent evidence is stated with a state and a reason, never omitted, since a missing field renders as blank and blank reads as fine. Payloads carry absolute timestamps and a `serverTime`, never a precomputed age. Within a major version the contract is additive-only and clients must ignore unknown fields.
+22. **The read API ships optional shared-secret authentication and no authorization** (ADR-021). Off by default with a startup warning. One shared secret is not an identity: no roles, no audit attribution, so it does **not** satisfy §10.4, and it bars the first write endpoint until a superseding ADR lands. The show VLAN is still the actual security boundary, and the anonymous broker remains the larger exposure.
 
 ## Working conventions
 
@@ -90,20 +97,23 @@ Stack is decided (ADR-006..010, ADR-012, ADR-014..019): Go, GStreamer, MQTT/Mosq
 
 Repo layout (now in place, do not reorganize without reason):
 
-- `cmd/showmesh-coordinator/`, `cmd/showmesh-agent/` — binaries.
-- `internal/` — coordinator and agent internals.
-- `pkg/multisync/` — FPP MultiSync wire protocol (see RES-002 evidence for exact packet layout; port 32320, 'FPPD' header, little-endian sync fields).
+- `cmd/showmesh-coordinator/`, `cmd/showmesh-agent/`, `cmd/showmeshctl/` — binaries. `showmeshctl` is the API's independent client and must never import a coordinator package; an import-graph test enforces it.
+- `internal/` — coordinator and agent internals. `internal/coordinator/api/` holds the versioned wire types, handlers, and SSE hub; `internal/coordinator/collector/` holds the source-neutral collector shape and the FPP REST collector.
+- `pkg/multisync/` — FPP MultiSync wire protocol (see RES-002 evidence for exact packet layout; port 32320, 'FPPD' header, little-endian sync fields). Imported only by the bench probe; the coordinator never opens a MultiSync socket (ADR-013).
 - `pkg/capability/`, `pkg/command/`, `pkg/mqttproto/` — shared models matching ARCHITECTURE §6–8 and ADR-008 topic conventions.
+- `pkg/observation/` — the OBSERVABILITY §4.1 observation model: provenance, freshness, the six-state evidence vocabulary, and the health states. `ObservedAt` is a pointer and `nil` means the time is genuinely unknown. Never default it to the collection time; that is the ADR-011 defect this project has now caught three times in different disguises.
 
 Build order (walking skeleton first). `docs/build/BUILD-PLAN.md` is the authoritative, status-tracked version of this list:
 
 1. Foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary. **Done 2026-08-10.**
 2. `pkg/multisync` listener parsing START/STOP/SYNC/OPEN + ping/discover, with unit tests against hand-built packets from the RES-002 byte layout. Bench-verify against the real FPP player (RES-002 open items).
 3. Agent: capability advertisement over MQTT (retained hello, LWT), health heartbeat; coordinator inventory + desired/observed state in SQLite.
-4. Read-only FPP observability: collector, observation model with provenance and freshness, event history, plus the versioned public read API and change stream that ADR-014 requires. Design the API before the UI exists, not alongside it.
+4. Read-only FPP observability: collector, observation model with provenance and freshness, event history, plus the versioned public read API and change stream that ADR-014 requires. **Done 2026-08-11.** The API was designed and shipped before any UI existed, which is what keeps ADR-014 real.
 5. Read-only Operator UI: TypeScript SPA in its own container, dashboard, node and capability views, desired vs. observed, disconnect/staleness handling, responsive down to a phone.
 6. Agent: GStreamer pipeline supervision for a test pattern → NDI sink into Resolume (RES-004/006 bench).
 
 Standing rules while building: unit tests never raise a research record above L1, only a bench capture against real hardware does. Never write a doc comment, log line, or document that claims verification that has not happened.
+
+Two more earned in Step 3, both from review findings rather than from theory. **Absent evidence is stated, never omitted**: a field the system cannot report carries a state and a reason, because a missing field renders as blank and blank reads as fine. And **a test's name is a claim**: before trusting one, break the behavior it names and confirm it fails. Step 3's review broke production code to check, and found three tests that passed with the behavior they asserted removed, one of them sitting on an acceptance criterion.
 
 Follow FPP remote sync semantics **for the lighting timeline**: free-run through sync silence, slew ≤4 frames, jump when >0.5 s behind, STOP then ~5-frame blank delay. Audio deliberately does not use this model — see constraint 18.

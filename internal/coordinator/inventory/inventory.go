@@ -15,14 +15,18 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // requestTimeout bounds every store call HandleMessage makes. HandleMessage
@@ -47,15 +51,191 @@ type Manager struct {
 	// than a direct time.Now call, so tests can drive it deterministically,
 	// matching internal/coordinator/broker's BrokerManager.now.
 	now func() time.Time
+
+	// onChange is called after every inventory write HandleMessage
+	// successfully commits to the store — never for a message dropped as
+	// malformed, or ignored as a duplicate/reorder (see [Store.RecordHealth]'s
+	// accepted return value). nil (the default; every Step 2 caller of New)
+	// means no notification at all, exactly today's behavior.
+	//
+	// This is the Step 3 wiring task's hook (contract section 5: "wire the
+	// poke from ... the MQTT inventory path") for telling
+	// internal/coordinator/api.Hub.Notify a node changed promptly, instead
+	// of waiting up to the hub's own render tick (a SHOWMESH HYPOTHESIS
+	// default of 5s — see that package's Options.StreamTickInterval). See
+	// [WithOnChange].
+	onChange func()
+
+	// livenessMu and lastLiveness back [Manager.observeLiveness] (called
+	// from both recordLivenessTransition, the message-arrival path, and
+	// the exported [Manager.RecordLivenessObservation], the staleness-on-
+	// read path apiwiring.go's livenessObservingNodeLister drives): an
+	// in-process, in-memory-only record of the last Liveness this Manager
+	// instance itself observed for each node, so a genuine transition
+	// (online -> offline, etc.) can be recorded as an event exactly once,
+	// regardless of which of those two paths happens to notice it first —
+	// see observeLiveness's own doc comment for why this is Step 3's actual
+	// production path for OBSERVABILITY section 4.3's event history. Reset to
+	// empty on every process restart, deliberately: comparing a
+	// freshly-started process's first observation of a node against
+	// "nothing yet" would manufacture a spurious transition event out of
+	// that node's mere existence, not a real change, so the very first
+	// observation after a restart is recorded silently and only the NEXT
+	// change (if any) produces an event. This means a transition that
+	// happens to straddle a coordinator restart is not recorded — an
+	// acceptable, bookkeeping-only gap (RES-013 owns real event/metric
+	// retention design), not a correctness problem: observed state itself
+	// (GET /api/v1/nodes) is unaffected and always current.
+	livenessMu   sync.Mutex
+	lastLiveness map[string]Liveness
+}
+
+// Option configures optional Manager behavior at [New]. The zero value
+// (no options) is Step 2's behavior unchanged.
+type Option func(*Manager)
+
+// WithOnChange registers fn to be called after every inventory write
+// HandleMessage successfully commits — see [Manager.onChange]'s doc
+// comment for exactly when. fn must be safe to call from whatever
+// goroutine HandleMessage runs on (see HandleMessage's own doc comment:
+// paho's publish-routing worker, not its read loop) and must not block:
+// internal/coordinator/api.Hub.Notify already satisfies both, being
+// non-blocking by construction.
+func WithOnChange(fn func()) Option {
+	return func(m *Manager) { m.onChange = fn }
 }
 
 // New builds a Manager backed by st. logger may be nil, in which case
 // slog.Default() is used.
-func New(st *store.Store, logger *slog.Logger) *Manager {
+func New(st *store.Store, logger *slog.Logger, opts ...Option) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{store: st, logger: logger, now: time.Now}
+	m := &Manager{store: st, logger: logger, now: time.Now, lastLiveness: make(map[string]Liveness)}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// notify calls m.onChange if one was registered via [WithOnChange]. Safe to
+// call unconditionally; every handleHello/handleLWT/handleHealth call site
+// does, right after a write it knows actually changed something.
+func (m *Manager) notify() {
+	if m.onChange != nil {
+		m.onChange()
+	}
+}
+
+// recordLivenessTransition re-reads nodeID's stored evidence, derives its
+// current Liveness (the same computation Snapshot uses), and hands it to
+// [Manager.observeLiveness].
+//
+// Called from handleHello/handleLWT/handleHealth after a write m.notify()
+// already considered real (see each call site) — never for a message
+// dropped as malformed or ignored as a duplicate/reorder, for the same
+// reason [Manager.onChange] excludes those. This is a message-arrival-only
+// path: see [Manager.RecordLivenessObservation]'s doc comment for the
+// staleness-only gap that leaves, and how it is closed elsewhere.
+func (m *Manager) recordLivenessTransition(ctx context.Context, nodeID string) {
+	rec, err := m.store.GetNode(ctx, nodeID)
+	if err != nil {
+		m.logger.Warn("failed to read node for liveness-transition bookkeeping", "node_id", nodeID, "error", err)
+		return
+	}
+	now := m.now()
+	liveness, reason := deriveLiveness(rec, now)
+	m.observeLiveness(ctx, nodeID, liveness, reason)
+}
+
+// RecordLivenessObservation feeds an already-computed Liveness verdict —
+// typically one a caller just got back from [Manager.Snapshot] — into the
+// same once-per-actual-transition event bookkeeping
+// [recordLivenessTransition] uses, without a second read of the node's
+// stored evidence.
+//
+// This exists to close a gap [recordLivenessTransition] alone leaves (Step
+// 3 review finding 3.4): that method runs only from HandleMessage's three
+// call sites, so it fires only when a hello, last-will, or heartbeat
+// message actually arrives. A node whose heartbeats simply stop — no
+// further message ever arrives, and no last will either — transitions
+// online -> offline by staleness alone, recomputed fresh every time
+// anything calls Snapshot against a later now; nothing on the
+// message-arrival path ever re-evaluates it, so the transition never
+// reaches event history even though GET /api/v1/nodes and the SSE stream
+// both correctly report the new state the moment enough time has passed.
+//
+// internal/coordinator/apiwiring.go's livenessObservingNodeLister is the
+// production caller: it wraps this package's NodeLister so every Snapshot
+// call — including the hub's own fixed render tick (contract section 6.5),
+// not only a direct API request — also calls this method for every
+// returned node, which is the point a staleness-driven transition is
+// actually detected, not merely the point a message happens to arrive.
+// Declared here, in this package, rather than left for a caller to
+// reimplement, because the once-per-actual-transition bookkeeping
+// ([Manager.lastLiveness]) is this package's own private state.
+func (m *Manager) RecordLivenessObservation(ctx context.Context, nodeID string, liveness Liveness, reason string) {
+	m.observeLiveness(ctx, nodeID, liveness, reason)
+}
+
+// observeLiveness is the shared bookkeeping [recordLivenessTransition] and
+// [Manager.RecordLivenessObservation] both reduce to: compare liveness
+// against the last Liveness this Manager instance itself observed for
+// nodeID and, if it differs, append a "control_plane" category event
+// recording the change, then poke onChange again so a subscriber sees the
+// event promptly rather than waiting for the hub's own tick.
+//
+// This is Step 3's actual production path for event history: before
+// recordLivenessTransition existed, nothing outside a test ever called
+// [store.Store.AppendEvent] — the events table and GET /api/v1/events were
+// fully built and wired end-to-end with nothing feeding them. The shape
+// here (category "control_plane", summary "node control-plane state
+// changed to <state>") deliberately matches internal/coordinator/api's own
+// eventFixture test fixture, which anticipated exactly this producer
+// without this package having built it yet.
+func (m *Manager) observeLiveness(ctx context.Context, nodeID string, liveness Liveness, reason string) {
+	m.livenessMu.Lock()
+	prev, known := m.lastLiveness[nodeID]
+	m.lastLiveness[nodeID] = liveness
+	m.livenessMu.Unlock()
+
+	if !known || prev == liveness {
+		// Either the very first observation of this node in this process's
+		// lifetime (nothing to compare against — see the field doc comment
+		// on lastLiveness for why that must not itself produce an event),
+		// or a genuine no-op (liveness did not actually change).
+		return
+	}
+
+	severity := "informational"
+	if liveness == LivenessOffline {
+		severity = "warning"
+	}
+	details, err := json.Marshal(map[string]string{
+		"from":   string(prev),
+		"to":     string(liveness),
+		"reason": reason,
+	})
+	if err != nil {
+		// Unreachable: every value marshaled above is a plain string.
+		// Recorded rather than dropped, so a future bug here is visible in
+		// logs instead of silently losing the event.
+		m.logger.Error("failed to encode liveness-transition event details", "node_id", nodeID, "error", err)
+		details = nil
+	}
+
+	if _, err := m.store.AppendEvent(ctx, store.EventRecord{
+		Source:   "mqtt-inventory",
+		Resource: observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID},
+		Category: "control_plane",
+		Severity: severity,
+		Summary:  fmt.Sprintf("node control-plane state changed to %s", liveness),
+		Details:  json.RawMessage(details),
+	}); err != nil {
+		m.logger.Error("failed to append control-plane liveness-transition event", "node_id", nodeID, "error", err)
+		return
+	}
+	m.notify()
 }
 
 // Subscriptions returns the broker.Subscription set inventory needs to
@@ -192,7 +372,10 @@ func (m *Manager) handleHello(ctx context.Context, nodeID string, msg broker.Mes
 	}
 	if err := m.store.UpsertHello(ctx, nodeID, rec); err != nil {
 		m.logger.Error("failed to store hello", "node_id", nodeID, "error", err)
+		return
 	}
+	m.notify()
+	m.recordLivenessTransition(ctx, nodeID)
 }
 
 func (m *Manager) handleLWT(ctx context.Context, nodeID string, msg broker.Message) {
@@ -232,7 +415,10 @@ func (m *Manager) handleLWT(ctx context.Context, nodeID string, msg broker.Messa
 	}
 	if err := m.store.RecordLWT(ctx, nodeID, rec); err != nil {
 		m.logger.Error("failed to store lwt", "node_id", nodeID, "error", err)
+		return
 	}
+	m.notify()
+	m.recordLivenessTransition(ctx, nodeID)
 }
 
 func (m *Manager) handleHealth(ctx context.Context, nodeID string, msg broker.Message) {
@@ -261,10 +447,26 @@ func (m *Manager) handleHealth(ctx context.Context, nodeID string, msg broker.Me
 	if !accepted {
 		// Per the shared contract, a duplicate or reordered delivery within
 		// the same boot session is expected under QoS 1 redelivery, so this
-		// is Debug, not Warn: it is not an anomaly.
+		// is Debug, not Warn: it is not an anomaly. Logged (Step 3 review
+		// finding 3.9: this line existed once and was lost) because it is
+		// the only trace that QoS-1 redelivery is actually occurring against
+		// this node — nothing else here distinguishes "the agent published
+		// twice" from "the agent has been silent". No notify() here: a
+		// duplicate/reorder that RecordHealth ignored did not necessarily
+		// change anything an API consumer would render differently — see
+		// [Manager.onChange]'s doc comment ("never ... ignored as a
+		// duplicate/reorder"). A live duplicate's observed_at refresh
+		// (RecordHealth's own doc comment) is a real change most of the
+		// time in wall-clock terms, but the hub's own tick already re-renders
+		// on a fixed interval regardless (contract section 6.5), so missing
+		// a prompt poke for this one case costs at most one tick's latency,
+		// not correctness.
 		m.logger.Debug("ignoring duplicate or reordered health heartbeat",
 			"node_id", nodeID, "boot_id", health.BootID, "sequence", health.Sequence)
+		return
 	}
+	m.notify()
+	m.recordLivenessTransition(ctx, nodeID)
 }
 
 func (m *Manager) logMalformed(kind, nodeID string, err error) {

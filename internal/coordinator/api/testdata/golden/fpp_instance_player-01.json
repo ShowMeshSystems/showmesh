@@ -1,0 +1,49 @@
+{
+  "serverTime": "2026-08-10T21:14:22.481-05:00",
+  "instance": {
+    "instanceId": "player-01",
+    "endpoint": "http://10.0.1.20",
+    "health": "unknown",
+    "observations": [
+      {
+        "signal": "fpp.multisync.enabled",
+        "value": false,
+        "unit": null,
+        "state": "current",
+        "reason": null,
+        "observedAt": "2026-08-10T21:14:10-05:00",
+        "collectedAt": "2026-08-10T21:14:22.6-05:00",
+        "source": "fpp-rest",
+        "quality": "direct",
+        "validForSeconds": 15
+      },
+      {
+        "signal": "fpp.status",
+        "value": null,
+        "unit": null,
+        "state": "not_collected",
+        "reason": "collector has not completed its first poll for this signal",
+        "observedAt": null,
+        "collectedAt": null,
+        "source": "fpp-rest",
+        "quality": "direct",
+        "validForSeconds": null
+      },
+      {
+        "signal": "fpp.uptime.seconds",
+        "value": 120,
+        "unit": null,
+        "state": "stale",
+        "reason": "value is 14m22s old, past its 30s validity window",
+        "observedAt": "2026-08-10T21:00:00-05:00",
+        "collectedAt": "2026-08-10T21:14:22.6-05:00",
+        "source": "fpp-rest",
+        "quality": "direct",
+        "validForSeconds": 30
+      }
+    ],
+    "lastPollAt": "2026-08-10T21:14:20-05:00",
+    "lastPollError": null
+  }
+}
+

@@ -31,6 +31,11 @@ Each scenario must state the injected condition, detection signal and deadline, 
 | Stale configuration or partial deployment | Mixed revisions are detected and contained |
 | Disk exhaustion | Existing show assets remain protected where possible |
 | Full power restoration | Services start in safe order without unintended playback |
+| Change stream interrupted mid-show | Client re-fetches an authoritative snapshot; it never resumes from its local model |
+| Subscriber stops reading the change stream | Producer is never blocked, buffers stay bounded, the client is told it lost events rather than dropping them silently |
+| Coordinator restarted under a connected client | Evidence is not restamped; formerly fresh observations read stale, never current |
+| Operator device clock skewed from the coordinator | Freshness is computed against server time, so skew is visible rather than silently misreported |
+| Collected telemetry source disabled at the source | Reported as a positively observed configuration fact, never as a collection failure or a network fault |
 
 ## Acceptance criteria
 

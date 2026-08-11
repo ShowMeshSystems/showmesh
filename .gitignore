@@ -3,6 +3,15 @@ dist/
 # Stray cross-compile output. `make build` writes to bin/, but an ad-hoc
 # `GOOS=windows go build ./...` drops binaries in the package directory.
 *.exe
+# Same failure mode, no extension: an ad-hoc `go build -o showmeshctl
+# ./cmd/showmeshctl` (or the coordinator/agent/probe equivalents) run from
+# the repo root, rather than through `make build` into bin/, leaves a
+# stray executable at the repo root with no extension for *.exe to catch.
+# Found as an untracked stray binary during Step 3's wiring pass.
+/showmeshctl
+/showmesh-coordinator
+/showmesh-agent
+/showmesh-multisync-probe
 *.db
 *.db-wal
 *.db-shm

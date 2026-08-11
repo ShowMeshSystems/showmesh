@@ -31,6 +31,7 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
+	{version: 3, sql: schemaV3},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -115,6 +116,96 @@ INSERT INTO node_lwt_v2 (node_id, online, reason, observed_at, provenance, retai
 DROP TABLE node_lwt;
 
 ALTER TABLE node_lwt_v2 RENAME TO node_lwt;
+`
+
+// schemaV3 adds the Step 3 observability tables this package's
+// UpsertObservation/ListObservations (observations.go) and
+// AppendEvent/ListEvents/LatestEventSeq (events.go) operate on.
+//
+// Neither table stores a derived verdict — no state/health/is_stale
+// column. schemaV1's doc comment already states this package's central
+// rule (evidence is stored, a verdict is computed on read against the
+// caller's clock); observations and events are bound by exactly the same
+// rule, just for pkg/observation's evidence model instead of node liveness.
+// observation.Observation.StateAt is what does that computation once a row
+// comes back out.
+//
+// observations is an upsert target, never a history — one row per
+// (resource_kind, resource_id, signal), which is its primary key — per the
+// Step 3 contract's "Observations are stored latest-only in Step 3; RES-013
+// owns time-series retention." value_kind/value_text is a discriminated
+// encoding of observation.Observation.Value (bool | string | int64 |
+// float64), not a single JSON or NUMERIC column: SQLite's NUMERIC affinity
+// (and a naive round-trip through JSON) would silently convert an int64
+// above 2^53 to a float64 and lose precision, and would not distinguish an
+// integral-valued float64 from an int64 on the way back out, since both
+// would decode to the same JSON number. Reading value_kind first and
+// parsing value_text accordingly (encodeObservationValue/
+// decodeObservationValue in observations.go) makes the round trip exact
+// instead of approximate. observed_at is nullable for the identical reason
+// node_health.observed_at is (see schemaV2 and HelloRecord.ObservedAt's doc
+// comment in model.go): a NOT NULL DEFAULT here would silently manufacture
+// a false freshness claim, which is the one thing ADR-011 exists to
+// prevent.
+//
+// events is append-only history, ordered by seq. seq is INTEGER PRIMARY
+// KEY AUTOINCREMENT specifically, not a bare INTEGER PRIMARY KEY: SQLite
+// treats a bare INTEGER PRIMARY KEY as an alias for rowid and is free to
+// reuse a rowid once the row with the highest value has been deleted,
+// while AUTOINCREMENT keeps its own monotonic high-water mark in the
+// sqlite_sequence table that survives every row being deleted. That
+// distinction is the entire reason AUTOINCREMENT is spelled out here: a
+// reused seq would let a client's `since` cursor silently replay events it
+// has already seen, which is indistinguishable, from the wire, from a
+// duplicate delivery of a change the client would then act on twice.
+// LatestEventSeq reads sqlite_sequence directly rather than MAX(seq), so it
+// keeps reporting the true high-water mark even if every row were ever
+// deleted, by pruning or any other means — see LatestEventSeq's own doc
+// comment in events.go for why this package does not rely on its own
+// pruning behavior to guarantee that case is ever actually reached.
+//
+// idx_events_recorded_at exists for the pruner's age-based deletion
+// (`DELETE FROM events WHERE recorded_at < ?` in events.go): seq order and
+// recorded_at order coincide for any coordinator whose clock does not jump
+// backwards, but nothing here relies on that coincidence to avoid a full
+// table scan on every prune. ListEvents itself needs no index beyond the
+// seq primary key: it only ever filters on `seq > ?` ordered by seq, which
+// the primary key already serves.
+const schemaV3 = `
+CREATE TABLE observations (
+	resource_kind TEXT NOT NULL,
+	resource_id   TEXT NOT NULL,
+	signal        TEXT NOT NULL,
+	value_kind    TEXT NOT NULL DEFAULT '',
+	value_text    TEXT NOT NULL DEFAULT '',
+	unit          TEXT NOT NULL DEFAULT '',
+	observed_at   TEXT,
+	collected_at  TEXT NOT NULL,
+	source        TEXT NOT NULL DEFAULT '',
+	quality       TEXT NOT NULL DEFAULT '',
+	valid_for_ns  INTEGER NOT NULL DEFAULT 0,
+	absence       TEXT NOT NULL DEFAULT '',
+	reason        TEXT NOT NULL DEFAULT '',
+	first_seen_at TEXT NOT NULL,
+	updated_at    TEXT NOT NULL,
+	PRIMARY KEY (resource_kind, resource_id, signal)
+);
+
+CREATE TABLE events (
+	seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+	recorded_at    TEXT NOT NULL,
+	occurred_at    TEXT,
+	source         TEXT NOT NULL,
+	resource_kind  TEXT NOT NULL,
+	resource_id    TEXT NOT NULL,
+	category       TEXT NOT NULL,
+	severity       TEXT NOT NULL,
+	summary        TEXT NOT NULL,
+	details        TEXT NOT NULL DEFAULT '{}',
+	correlation_id TEXT
+);
+
+CREATE INDEX idx_events_recorded_at ON events(recorded_at);
 `
 
 // migrate applies every pending migration inside one transaction and

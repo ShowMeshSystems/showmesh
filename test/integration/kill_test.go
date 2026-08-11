@@ -3,7 +3,7 @@
 package integration
 
 import (
-	"strings"
+	"net/http"
 	"testing"
 )
 
@@ -31,13 +31,28 @@ func TestAgentUncleanKillGoesOffline(t *testing.T) {
 
 	view := waitOffline(t, coord, nodeID)
 
-	if view.LWT == nil {
-		t.Fatalf("LWT = nil, want the broker-fired last-will record")
+	// Contract section 3.2: this test's own name and BUILD-PLAN's criterion
+	// both say "offline", and the field the wire contract pins for exactly
+	// this fact is node.controlPlane.state — never node.state/node.online —
+	// asserted here on the literal field path, not merely inferred from
+	// waitOffline having returned.
+	if view.ControlPlane.State != "offline" {
+		t.Fatalf("controlPlane.state = %q, want \"offline\"", view.ControlPlane.State)
 	}
-	if view.LWT.Online {
-		t.Errorf("LWT.Online = true, want false")
+	// Step 3 review finding 4.4: also assert this directly against the raw
+	// wire bytes, not only through v1.Node's decoded struct above — see
+	// assertRawControlPlaneState's doc comment in restart_test.go.
+	if status, body := coord.getRaw(t, "/api/v1/nodes/"+nodeID); status != http.StatusOK {
+		t.Fatalf("GET /api/v1/nodes/%s: status %d, body: %s", nodeID, status, body)
+	} else {
+		assertRawControlPlaneState(t, body, "offline")
 	}
-	if !strings.Contains(view.LWT.Reason, "unexpected disconnect") {
-		t.Errorf("LWT.Reason = %q, want it to name an unexpected disconnect (the registered Will's own reason text, see internal/agent/advertise.go's willDisconnectReason)", view.LWT.Reason)
+	online, ok := view.Evidence.LastWill.Value.(bool)
+	if !ok || online {
+		t.Errorf("lastWill evidence value = %v (ok=%v), want false (the broker-fired last-will record)", view.Evidence.LastWill.Value, ok)
 	}
+	// See lifecycle_test.go's TestAgentCleanShutdownGoesOfflinePromptly for
+	// why the raw disconnect-reason text ("unexpected disconnect...") is
+	// not asserted here: it has no path to the wire API today. This test
+	// checks the boolean and the state field the contract actually pins.
 }

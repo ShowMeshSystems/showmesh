@@ -24,14 +24,18 @@ type fakeClock struct {
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
-func openTestStore(t *testing.T, clock *fakeClock) *Store {
+// openTestStore opens a throwaway Store for a test. opts is passed straight
+// through to open, so a test that needs a non-default event-retention
+// bound (see retention.go) can pass e.g. WithMaxEventRows(2) without this
+// helper needing its own retention-specific variant.
+func openTestStore(t *testing.T, clock *fakeClock, opts ...Option) *Store {
 	t.Helper()
 	dir := t.TempDir()
 	now := time.Now
 	if clock != nil {
 		now = clock.now
 	}
-	st, err := open(context.Background(), dir, nil, now)
+	st, err := open(context.Background(), dir, nil, now, opts...)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

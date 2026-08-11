@@ -23,6 +23,14 @@ The Operator UI is one client of the ShowMesh control plane, not its owner.
 
 The detailed client contract is [OPERATOR-UI.md](../architecture/OPERATOR-UI.md).
 
+This ADR deliberately says what the API *is* and not what it looks like, because
+there was nothing to shape that against when it was written. The shape was
+decided when the first read-only surface was built, ahead of any UI, in
+[ADR-020](ADR-020-control-api-shape-and-change-stream.md) (versioned REST plus a
+Server-Sent Events change stream) and
+[ADR-021](ADR-021-read-api-authentication-posture.md) (the authentication
+posture the read API ships with, and the bar it places on write endpoints).
+
 ## Consequences
 
 - The read-only status API in build Step 3 becomes a deliberate public contract with versioning and a documented shape, not a debug endpoint. This is additional work in Step 3 and is the point of the decision.

@@ -1,8 +1,9 @@
 // Package store is the coordinator's embedded SQLite persistence layer
-// (ADR-009): node identity and capability advertisements, and the raw
-// liveness evidence (last-will state, health heartbeats, boot ID and
-// sequence) that internal/coordinator/inventory turns into a liveness
-// verdict on read.
+// (ADR-009): node identity and capability advertisements, the raw liveness
+// evidence (last-will state, health heartbeats, boot ID and sequence) that
+// internal/coordinator/inventory turns into a liveness verdict on read, and
+// — added for Step 3 — pkg/observation evidence (latest value per
+// resource+signal) and an append-only event history.
 //
 // This package stores evidence, never a derived verdict. Per ADR-011, a
 // stored "online"/"offline" column would go stale the instant the clock
@@ -12,7 +13,12 @@
 // internal/coordinator/inventory). A nil pointer field on [NodeRecord] or a
 // nil ObservedAt on [HelloRecord]/[HealthRecord] means "no evidence" or
 // "evidence with unknown age" — never "evidence of a zero/empty value".
-// See each type's doc comment in model.go.
+// See each type's doc comment in model.go. observations.go and events.go
+// carry the identical rule forward for pkg/observation.Observation: no
+// state/health column, ObservedAt round-trips exactly as given (see
+// observations.go's restart test), and value_kind/value_text exists so
+// that bool/string/int64/float64 round-trip exactly rather than through a
+// lossy JSON/NUMERIC column.
 //
 // The driver is modernc.org/sqlite, a pure-Go implementation, deliberately
 // never mattn/go-sqlite3: ADR-012 requires the coordinator to build
@@ -28,6 +34,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" database/sql driver
@@ -64,10 +71,52 @@ type Store struct {
 	now func() time.Time
 
 	logger *slog.Logger
+
+	// maxEventAge and maxEventRows are the two event-retention bounds
+	// [pruneEvents] enforces; see retention.go, where both are labeled as
+	// the ShowMesh hypotheses the Step 3 task spec requires them to be.
+	maxEventAge  time.Duration
+	maxEventRows int64
+
+	// eventAppendCount and lastPruneAtNanos are [Store.AppendEvent]'s two,
+	// independent triggers for the amortized-on-insert pruning pass (see
+	// retention.go): in-process counters/clocks, not stored ones, so both
+	// reset to zero on every restart. That reset is deliberate for what
+	// eventAppendCount alone decides — a restart making the NEXT insert
+	// look like "the 1st" rather than "the 4,801st" only changes how soon
+	// the row-count bound (maxEventRows) gets re-checked, never whether it
+	// is correctly enforced once checked. It is NOT, on its own, "exactly
+	// as correct as a counter that persisted": a coordinator restarted
+	// between shows, appending only a handful of events a week, could take
+	// years of wall-clock time to accumulate pruneEveryNEvents more
+	// inserts, during which its documented age bound (DefaultMaxEventAge)
+	// was silent fiction — a real defect a previous version of this
+	// comment asserted away (Step 3 review finding 3.5). lastPruneAtNanos
+	// is what actually keeps the age bound honest under a low insert rate:
+	// see retention.go's pruneCheckInterval doc comment for how the two
+	// triggers combine, and why lastPruneAtNanos resetting to zero on
+	// restart is exactly the behavior that makes this correct (it forces
+	// an immediate prune check on the very next AppendEvent call, rather
+	// than something that has to be worked around).
+	//
+	// Both atomic.Int64 rather than plain fields: AppendEvent can be called
+	// concurrently by more than one goroutine, and both are read/written
+	// outside of any lock the database's own single-connection pool
+	// provides. lastPruneAtNanos stores a UnixNano time.Time, not a
+	// time.Time directly, because atomic.Value's happens-before guarantee
+	// is unnecessary ceremony for a single int64 and because time.Time is
+	// not itself safe for atomic.Value's consistent-concrete-type
+	// requirement across a zero value and a set one.
+	eventAppendCount atomic.Int64
+	lastPruneAtNanos atomic.Int64
 }
 
 // Open opens (creating if necessary) the SQLite database under dataDir,
 // sets WAL mode, foreign keys, and a busy timeout, and applies migrations.
+// opts configures optional behavior — currently only the event-retention
+// bounds in retention.go — and may be omitted; every Option has a default
+// that keeps existing callers (e.g. internal/coordinator/coordinator.go's
+// Step 2 call site) working unchanged.
 //
 // Unlike internal/coordinator/broker's NewBrokerManager, which per ADR-012
 // must never fail merely because the broker is unreachable and instead
@@ -80,18 +129,22 @@ type Store struct {
 // startup failure. Do not add a retry loop here to make this "consistent"
 // with the broker's tolerance — the two are asymmetric on purpose; see the
 // Step 2 round 2 store task spec.
-func Open(ctx context.Context, dataDir string, logger *slog.Logger) (*Store, error) {
-	return open(ctx, dataDir, logger, time.Now)
+func Open(ctx context.Context, dataDir string, logger *slog.Logger, opts ...Option) (*Store, error) {
+	return open(ctx, dataDir, logger, time.Now, opts...)
 }
 
 // open is Open with the clock made explicit, so tests can drive Store's
 // own bookkeeping timestamps deterministically without real sleeps.
-func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() time.Time) (*Store, error) {
+func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() time.Time, opts ...Option) (*Store, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if now == nil {
 		now = time.Now
+	}
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -138,7 +191,13 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() t
 		return nil, err
 	}
 
-	return &Store{db: db, now: now, logger: logger}, nil
+	return &Store{
+		db:           db,
+		now:          now,
+		logger:       logger,
+		maxEventAge:  cfg.maxEventAge,
+		maxEventRows: cfg.maxEventRows,
+	}, nil
 }
 
 // Close closes the underlying database handle.

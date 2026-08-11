@@ -4,11 +4,11 @@ package integration
 
 import (
 	"bytes"
-	"context"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -20,10 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 )
 
 // Environment variables this package reads. All are optional; every
@@ -33,11 +30,10 @@ import (
 // that way.
 const (
 	// envBrokerURL is the MQTT broker URL both the agent subprocess and the
-	// in-process coordinator connect to. Default matches
-	// defaultBrokerURL below, a non-production port chosen so this suite
-	// does not collide with a developer's already-running reference
-	// deployment (deploy/docker-compose.yml's bundled broker listens on
-	// 1883).
+	// coordinator subprocess connect to. Default matches defaultBrokerURL
+	// below, a non-production port chosen so this suite does not collide
+	// with a developer's already-running reference deployment
+	// (deploy/docker-compose.yml's bundled broker listens on 1883).
 	envBrokerURL = "SHOWMESH_TEST_MQTT_BROKER"
 
 	// envMosquittoContainer, when set, names a running Docker container
@@ -54,30 +50,43 @@ const (
 	// the production-code half of this knob.
 	envHeartbeatOverride = "SHOWMESH_TEST_HEARTBEAT_INTERVAL"
 
-	// envStalenessOverride is NOT read directly by this package — it must
-	// already be set in the process environment before `go test` starts,
-	// because internal/coordinator/inventory reads it exactly once, at
-	// package initialization (see that package's
-	// envStalenessWindowOverride). It is read here only so tests can size
-	// their own wait bounds against whatever value is actually in effect;
-	// see testStalenessWindow below.
+	// envStalenessOverride must already be set in the process environment
+	// before `go test` starts (exactly like envHeartbeatOverride's own
+	// constraint, and the package doc comment's "make... `go test
+	// -tags=integration ./test/integration/...` also work unmodified
+	// against a broker started that way"): it is read here so tests can
+	// size their own wait bounds against whatever value is actually in
+	// effect (see testStalenessWindow below), AND forwarded verbatim into
+	// every showmesh-coordinator subprocess's environment by
+	// startCoordinatorWithConfig — internal/coordinator/inventory reads it
+	// exactly once, at that subprocess's own package initialization (see
+	// that package's envStalenessWindowOverride), and a subprocess with an
+	// explicit, non-inherited environment never sees this test binary's
+	// own environment variable unless something forwards it. This
+	// forwarding was itself missing until Step 3 review finding 4.12's own
+	// tests exposed it — every coordinator subprocess before that ran with
+	// the real 30s production StalenessWindow regardless of this
+	// override, silently, because nothing before depended on the
+	// coordinator's own staleness computation happening quickly.
 	envStalenessOverride = "SHOWMESH_TEST_STALENESS_WINDOW"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
 
 var (
-	// brokerURL, brokerReachable, mosquittoContainer, and agentBinPath are
-	// resolved once in TestMain and read (never written) by every test
-	// below.
+	// brokerURL, brokerReachable, mosquittoContainer, agentBinPath, and
+	// coordinatorBinPath are resolved once in TestMain and read (never
+	// written) by every test below.
 	brokerURL          string
 	brokerReachable    bool
 	mosquittoContainer string
 	agentBinPath       string
+	coordinatorBinPath string
+	showmeshctlBinPath string
 
 	// testHeartbeatInterval and testStalenessWindow mirror, in this test
 	// binary, the same environment variables the agent subprocess and the
-	// in-process coordinator package resolve for themselves — see
+	// coordinator subprocess resolve for themselves — see
 	// envHeartbeatOverride and envStalenessOverride above. They exist only
 	// so tests can size wait bounds proportionally to whatever cadence is
 	// actually in effect, without hardcoding the production 10s/30s values
@@ -100,10 +109,20 @@ func parseDurationEnv(key string, def time.Duration) time.Duration {
 
 // TestMain resolves the broker address once, probes it (skipping every
 // test with a clear message rather than failing if nothing answers — see
-// probeBroker), and builds the showmesh-agent binary once for every test in
-// this package to exec. Per the Task E spec, criterion 2 (an unclean kill)
-// can only be honestly proven against a real subprocess, so every test
-// here execs the same binary rather than each building its own copy.
+// probeBroker), and builds both the showmesh-agent and showmesh-coordinator
+// binaries once for every test in this package to exec.
+//
+// Building the real showmesh-coordinator binary here — rather than wiring
+// internal/coordinator/{store,inventory,broker} together in-process, which
+// is what this package did before Step 3 landed a read API to observe the
+// coordinator through — is the single highest-value change Step 3's wiring
+// task made to this suite. In-process wiring tests the components; it does
+// not test coordinator.Run, and Step 2's worst defect (a shutdown-ordering
+// bug the unit suite asserted correctly against a fake while the real
+// wiring did the opposite) survived specifically because nothing exercised
+// the real process. A "coordinator restart" in this package is now a real
+// process restart against the same SQLite file and the same broker — see
+// startCoordinator and testCoordinator.shutdown.
 func TestMain(m *testing.M) {
 	brokerURL = os.Getenv(envBrokerURL)
 	if brokerURL == "" {
@@ -116,7 +135,7 @@ func TestMain(m *testing.M) {
 
 	brokerReachable = probeBroker(brokerURL, 2*time.Second)
 
-	var cleanupBin func()
+	var cleanupFuncs []func()
 	code := func() int {
 		if !brokerReachable {
 			fmt.Fprintf(os.Stderr,
@@ -127,19 +146,35 @@ func TestMain(m *testing.M) {
 			return m.Run() // every test skips itself via requireBroker
 		}
 
-		bin, cleanup, err := buildAgentBinary()
+		agentBin, agentCleanup, err := buildBinary("showmesh-agent", "./cmd/showmesh-agent")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-agent binary: %v\n", err)
 			return 1
 		}
-		agentBinPath = bin
-		cleanupBin = cleanup
+		agentBinPath = agentBin
+		cleanupFuncs = append(cleanupFuncs, agentCleanup)
+
+		coordBin, coordCleanup, err := buildBinary("showmesh-coordinator", "./cmd/showmesh-coordinator")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-coordinator binary: %v\n", err)
+			return 1
+		}
+		coordinatorBinPath = coordBin
+		cleanupFuncs = append(cleanupFuncs, coordCleanup)
+
+		showmeshctlBin, ctlCleanup, err := buildBinary("showmeshctl", "./cmd/showmeshctl")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "integration: failed to build the showmeshctl binary: %v\n", err)
+			return 1
+		}
+		showmeshctlBinPath = showmeshctlBin
+		cleanupFuncs = append(cleanupFuncs, ctlCleanup)
 
 		return m.Run()
 	}()
 
-	if cleanupBin != nil {
-		cleanupBin()
+	for _, cleanup := range cleanupFuncs {
+		cleanup()
 	}
 	os.Exit(code)
 }
@@ -195,29 +230,32 @@ func moduleRoot() (string, error) {
 	}
 }
 
-// buildAgentBinary builds cmd/showmesh-agent once into a fresh temp
-// directory and returns its path and a cleanup func that removes it.
-func buildAgentBinary() (path string, cleanup func(), err error) {
+// buildBinary builds pkgPath (e.g. "./cmd/showmesh-agent") once into a
+// fresh temp directory and returns its path and a cleanup func that
+// removes it. Shared by every binary this package execs (the agent, the
+// coordinator, and showmeshctl — acceptance criterion (a) requires the
+// latter run as a real subprocess too).
+func buildBinary(name, pkgPath string) (path string, cleanup func(), err error) {
 	root, err := moduleRoot()
 	if err != nil {
 		return "", nil, err
 	}
 
-	dir, err := os.MkdirTemp("", "showmesh-agent-bin-*")
+	dir, err := os.MkdirTemp("", "showmesh-"+name+"-bin-*")
 	if err != nil {
 		return "", nil, err
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 
-	bin := filepath.Join(dir, "showmesh-agent")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/showmesh-agent")
+	bin := filepath.Join(dir, name)
+	cmd := exec.Command("go", "build", "-o", bin, pkgPath)
 	cmd.Dir = root
 	cmd.Env = os.Environ() // the build itself needs a normal Go toolchain environment
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("go build ./cmd/showmesh-agent: %w\n%s", err, out)
+		return "", nil, fmt.Errorf("go build -o %s %s: %w\n%s", bin, pkgPath, err, out)
 	}
 	return bin, cleanup, nil
 }
@@ -359,75 +397,262 @@ func (a *testAgent) waitForExit(t *testing.T, timeout time.Duration) {
 	}
 }
 
+// sigstop suspends the agent process with SIGSTOP, WITHOUT closing its TCP
+// connection to the broker — no FIN, no RST, and (unlike sigkill) no
+// registered Last Will fires, because from the broker's point of view the
+// session is still fully alive; the process is simply not scheduled to run
+// any code, including its own heartbeat publish loop or any MQTT
+// keepalive PINGREQ. This is "a node whose heartbeats simply stop, no
+// further message ever arrives, and no last will either" (see
+// internal/coordinator/inventory's RecordLivenessObservation doc comment)
+// made real rather than simulated: staleness-driven liveness has to
+// notice this on its own, with no message of any kind to react to. Used
+// by TestStalenessDrivenTransitionRecordedByHubTickAloneNoAPICallEver.
+func (a *testAgent) sigstop(t *testing.T) {
+	t.Helper()
+	if err := a.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatalf("SIGSTOP agent %s: %v", a.nodeID, err)
+	}
+}
+
+// sigcont resumes an agent previously suspended with sigstop. Callers that
+// called sigstop must call this before the test returns (a defer right
+// after sigstop is the usual shape) — see stopIfRunning's own doc comment
+// for why leaving a process stopped is not safe to rely on cleanup alone
+// to fix on every platform.
+func (a *testAgent) sigcont(t *testing.T) {
+	t.Helper()
+	if err := a.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatalf("SIGCONT agent %s: %v", a.nodeID, err)
+	}
+}
+
 // stopIfRunning kills the agent if it is still alive and always joins the
 // Wait goroutine, so cleanup never leaks either a process or a goroutine
-// regardless of how a test ended.
+// regardless of how a test ended. It sends SIGCONT before SIGKILL
+// unconditionally — harmless if the process was never stopped, but a
+// defense-in-depth against a test that called sigstop and, on a failing
+// assertion partway through, never reached its own sigcont: SIGKILL is
+// unblockable and does terminate an already-stopped process on every
+// platform this project targets, but resuming it first is the
+// belt-and-suspenders choice, since a leaked stopped process is a much
+// worse failure to debug than a redundant signal.
 func (a *testAgent) stopIfRunning() {
 	select {
 	case <-a.waitDone:
 		return
 	default:
 	}
+	_ = a.cmd.Process.Signal(syscall.SIGCONT)
 	_ = a.cmd.Process.Kill()
 	<-a.waitDone
 }
 
-// testCoordinator wires the coordinator's store, inventory, and broker
-// packages together in-process — see the package doc comment for why this
-// is not the shipped showmesh-coordinator binary.
+// findFreePort asks the OS for a currently-unused TCP port on 127.0.0.1 by
+// binding to port 0 and immediately releasing it. There is an inherent,
+// unavoidable TOCTOU race between this and the coordinator subprocess
+// actually binding the same port a moment later; in practice nothing else
+// on a CI runner or a developer laptop is racing to grab ephemeral ports at
+// the exact moment a `go test` process is starting a child, and
+// startCoordinator fails loudly (dumping the subprocess's own stderr) if
+// the bind ever does lose that race, rather than hanging.
+func findFreePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// coordinatorConfig is what startCoordinatorWithConfig needs to launch one
+// showmesh-coordinator subprocess. Every field has a sensible default so
+// the common case (startCoordinator) only needs a data directory and an
+// MQTT client ID, matching this package's pre-Step-3 call sites.
+type coordinatorConfig struct {
+	dataDir      string
+	clientID     string
+	brokerURL    string // defaults to the package-level brokerURL
+	apiToken     string // defaults to "" (auth disabled)
+	fppEndpoints string // SHOWMESH_FPP_ENDPOINTS raw value; defaults to unset
+
+	// httpAddr, when non-empty, is used verbatim instead of allocating a
+	// fresh port via findFreePort — used by
+	// TestWatchResnapshotsAfterCoordinatorRestart to rebuild a coordinator
+	// on the exact same address a client is already pointed at, the same
+	// way restart_test.go's coordinator-restart tests reuse the same data
+	// directory and MQTT client ID.
+	httpAddr string
+
+	// streamSubscriberBuffer, when > 0, is forwarded as
+	// SHOWMESH_TEST_STREAM_SUBSCRIBER_BUFFER — internal/coordinator/api's
+	// test-support-only override for its SSE per-subscriber buffer size
+	// (see that package's envStreamSubscriberBufferOverride). Used by
+	// TestSlowSSEConsumerGetsResetAndDisconnected to force contract section
+	// 6.4's overflow-then-disconnect behavior deterministically with a
+	// small burst of real changes, rather than an implausibly large flood.
+	streamSubscriberBuffer int
+}
+
+// testCoordinator wraps one real showmesh-coordinator subprocess — a
+// genuine OS process, its own SQLite file, its own MQTT connection, and its
+// own HTTP listener — observed exclusively through /api/v1 and the
+// container-healthcheck probes, exactly as an external client (an
+// operator's browser, showmeshctl, a monitoring probe) would. See the
+// package doc comment for why this replaced the in-process wiring Step 2
+// used.
 type testCoordinator struct {
-	logger *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
-	st     *store.Store
-	inv    *inventory.Manager
-	bm     *broker.BrokerManager
+	t        *testing.T
+	cmd      *exec.Cmd
+	httpAddr string // host:port this coordinator's HTTP server listens on
+	token    string
+	logs     *syncBuffer
+	client   *http.Client
+
+	waitDone chan struct{}
+	waitErr  error
 
 	mu   sync.Mutex
 	done bool
 }
 
-// startCoordinator opens (creating if necessary) a SQLite store at dataDir
-// and connects to the test broker with clientID. Passing the same dataDir
-// and clientID to a second call after shutdown() is exactly
-// TestCoordinatorRestartRestoresInventoryFromRetainedTopics's "teardown and
-// rebuild against the same database and broker".
+// startCoordinator is startCoordinatorWithConfig with every field left at
+// its default: no auth, no FPP endpoints configured, connecting to this
+// package's resolved test broker. Matches every pre-Step-3 call site in
+// this package.
 func startCoordinator(t *testing.T, dataDir, clientID string) *testCoordinator {
+	t.Helper()
+	return startCoordinatorWithConfig(t, coordinatorConfig{dataDir: dataDir, clientID: clientID})
+}
+
+// startCoordinatorWithConfig execs coordinatorBinPath as a subprocess with
+// a minimal, explicit environment (not inherited from the test process),
+// waits for its HTTP listener to actually answer /healthz (bounded; the
+// coordinator's own startup — opening SQLite, beginning to connect to MQTT
+// — is not instantaneous), and returns a handle for observing and
+// eventually stopping it.
+//
+// Passing the same dataDir and clientID to a second call after shutdown()
+// is exactly TestCoordinatorRestartRestoresInventoryFromRetainedTopics's
+// "teardown and rebuild against the same database and broker" — now a real
+// process exiting and a new one starting, not a Go-level struct being torn
+// down and reconstructed.
+func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordinator {
 	t.Helper()
 	requireBroker(t)
 
-	logger := testLogger()
-	ctx, cancel := context.WithCancel(context.Background())
-
-	st, err := store.Open(ctx, dataDir, logger)
-	if err != nil {
-		cancel()
-		t.Fatalf("open store at %s: %v", dataDir, err)
+	broker := cfg.brokerURL
+	if broker == "" {
+		broker = brokerURL
+	}
+	httpAddr := cfg.httpAddr
+	if httpAddr == "" {
+		httpAddr = fmt.Sprintf("127.0.0.1:%d", findFreePort(t))
 	}
 
-	inv := inventory.New(st, logger)
-
-	cfg := config.Config{
-		MQTTBroker:   brokerURL,
-		MQTTClientID: clientID,
+	env := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"SHOWMESH_HTTP_ADDR=" + httpAddr,
+		"SHOWMESH_MQTT_BROKER=" + broker,
+		"SHOWMESH_MQTT_CLIENT_ID=" + cfg.clientID,
+		"SHOWMESH_DATA_DIR=" + cfg.dataDir,
+		"SHOWMESH_LOG_LEVEL=debug",
 	}
-	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
-	if err != nil {
-		_ = st.Close()
-		cancel()
-		t.Fatalf("start broker manager for %s: %v", clientID, err)
+	// Step 3 review finding 4.12's own tests exposed this gap while being
+	// built: envStalenessOverride's doc comment above says it "must
+	// already be set in the process environment before go test starts,
+	// because internal/coordinator/inventory reads it exactly once, at
+	// package initialization" — true for that package's own init, but
+	// that package now runs inside a SEPARATE showmesh-coordinator
+	// SUBPROCESS with its own explicit, non-inherited environment (this
+	// list), not inside this test binary's process. Every coordinator
+	// subprocess this harness ever started was silently running with the
+	// real 30s production StalenessWindow regardless of
+	// SHOWMESH_TEST_STALENESS_WINDOW, because nothing forwarded it here —
+	// invisible to every prior test in this package, since none of them
+	// depended on the COORDINATOR's own staleness computation happening
+	// quickly (waitOffline's bound already pads generously enough to cover
+	// the full 30s default either way). Forwarded here the same way
+	// startAgent already forwards envHeartbeatOverride to the agent
+	// subprocess, so a test that actually needs a fast staleness window on
+	// the coordinator side does not have to wait out the real 30 seconds.
+	if raw := os.Getenv(envStalenessOverride); raw != "" {
+		env = append(env, envStalenessOverride+"="+raw)
+	}
+	if cfg.apiToken != "" {
+		env = append(env, "SHOWMESH_API_TOKEN="+cfg.apiToken)
+	}
+	if cfg.fppEndpoints != "" {
+		env = append(env, "SHOWMESH_FPP_ENDPOINTS="+cfg.fppEndpoints)
+	}
+	if cfg.streamSubscriberBuffer > 0 {
+		env = append(env, fmt.Sprintf("SHOWMESH_TEST_STREAM_SUBSCRIBER_BUFFER=%d", cfg.streamSubscriberBuffer))
 	}
 
-	tc := &testCoordinator{logger: logger, ctx: ctx, cancel: cancel, st: st, inv: inv, bm: bm}
-	t.Cleanup(tc.shutdown)
+	cmd := exec.Command(coordinatorBinPath)
+	cmd.Env = env
+
+	logs := &syncBuffer{}
+	cmd.Stdout = logs
+	cmd.Stderr = logs
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start coordinator subprocess (client id %s): %v", cfg.clientID, err)
+	}
+
+	tc := &testCoordinator{
+		t: t, cmd: cmd, httpAddr: httpAddr, token: cfg.apiToken,
+		logs: logs, client: &http.Client{Timeout: 5 * time.Second},
+		waitDone: make(chan struct{}),
+	}
+	go func() {
+		tc.waitErr = cmd.Wait()
+		close(tc.waitDone)
+	}()
+
+	t.Cleanup(func() {
+		tc.shutdown()
+		if t.Failed() {
+			t.Logf("coordinator (client id %s, pid %d) combined output:\n%s", cfg.clientID, cmd.Process.Pid, logs.String())
+		}
+	})
+
+	tc.waitForHealthz(t, 15*time.Second)
 	return tc
 }
 
-// shutdown disconnects from the broker and closes the store, mirroring
-// internal/coordinator.Run's own shutdown ordering. Safe to call more than
-// once (idempotent), so both an explicit mid-test shutdown() call (for the
-// restart tests) and the t.Cleanup registered by startCoordinator can both
-// call it without double-closing anything.
+// waitForHealthz blocks until this coordinator's /healthz answers 200, or
+// fails t (dumping the subprocess's own output — the fastest way to see
+// why a bind or startup failed) once timeout elapses.
+func (tc *testCoordinator) waitForHealthz(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := tc.client.Get("http://" + tc.httpAddr + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		select {
+		case <-tc.waitDone:
+			t.Fatalf("coordinator subprocess exited before /healthz ever answered (err=%v); output:\n%s", tc.waitErr, tc.logs.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	t.Fatalf("coordinator /healthz did not answer within %s; output:\n%s", timeout, tc.logs.String())
+}
+
+// shutdown sends SIGTERM and waits for the coordinator subprocess to exit
+// cleanly (mirroring internal/coordinator.Run's own graceful-shutdown
+// path), falling back to SIGKILL if it does not exit within a generous
+// bound — a hung shutdown is a test failure to report, not a hang to leave
+// the test suite stuck on. Safe to call more than once (idempotent), so
+// both an explicit mid-test shutdown() call (the restart tests) and the
+// t.Cleanup registered by startCoordinatorWithConfig can both call it
+// without double-signaling an already-exited process.
 func (tc *testCoordinator) shutdown() {
 	tc.mu.Lock()
 	if tc.done {
@@ -437,45 +662,131 @@ func (tc *testCoordinator) shutdown() {
 	tc.done = true
 	tc.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	tc.cancel() // stops BrokerManager's probe goroutine; see its Disconnect doc comment
-	_ = tc.bm.Disconnect(ctx)
-	_ = tc.st.Close()
+	select {
+	case <-tc.waitDone:
+		return // already exited on its own
+	default:
+	}
+
+	_ = tc.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-tc.waitDone:
+	case <-time.After(10 * time.Second):
+		tc.t.Errorf("coordinator subprocess did not exit within 10s of SIGTERM; sending SIGKILL (this is a shutdown-ordering defect, not expected harness behavior)")
+		_ = tc.cmd.Process.Kill()
+		<-tc.waitDone
+	}
 }
 
-// snapshot returns every node inventory currently knows about, evaluated at
-// the current wall-clock time — the same call shape
-// internal/coordinator/inventory.Manager.Snapshot exposes to real callers.
-func (tc *testCoordinator) snapshot(t *testing.T) []inventory.NodeView {
+// --- Observing the coordinator through /api/v1, the way any real client would ---
+
+// url joins this coordinator's base HTTP address with path.
+func (tc *testCoordinator) url(path string) string {
+	return "http://" + tc.httpAddr + path
+}
+
+// getRaw issues an authenticated GET (when a token is configured) against
+// path and returns the status code and raw response body. Every other
+// helper in this file is built on this one, so a test that needs to assert
+// against literal JSON bytes (contract section 1's standing rule) —
+// assertRawHeartbeatIsUnknownAge is the concrete case — can call this
+// directly instead of decoding into any struct at all.
+func (tc *testCoordinator) getRaw(t *testing.T, path string) (status int, body []byte) {
 	t.Helper()
-	views, err := tc.inv.Snapshot(context.Background(), time.Now())
+	headers := map[string]string{}
+	if tc.token != "" {
+		headers["Authorization"] = "Bearer " + tc.token
+	}
+	return tc.getRawWithHeaders(t, path, headers)
+}
+
+// getRawWithHeaders is getRaw with full control over request headers —
+// used by tests that need to omit, override, or add headers getRaw always
+// sets (a wrong/missing bearer token, an explicit ShowMesh-API-Version).
+func (tc *testCoordinator) getRawWithHeaders(t *testing.T, path string, headers map[string]string) (status int, body []byte) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, tc.url(path), nil)
 	if err != nil {
-		t.Fatalf("snapshot: %v", err)
+		t.Fatalf("build request for %s: %v", path, err)
 	}
-	return views
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := tc.client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("GET %s: read body: %v", path, err)
+	}
+	return resp.StatusCode, b
 }
 
-// findNode returns nodeID's current view, if inventory has ever seen it.
-func (tc *testCoordinator) findNode(t *testing.T, nodeID string) (inventory.NodeView, bool) {
+// ready reports whether /readyz currently answers 200. Used in place of
+// the pre-Step-3 harness's direct access to a live *broker.BrokerManager
+// (coord.bm.State().Connected): that handle no longer exists once the
+// coordinator is a subprocess, and /readyz is the coordinator's own,
+// intentional way of saying the same thing to any external observer — its
+// Ready verdict is exactly readiness.Aggregate{brokerManager,
+// store}.Readiness() (internal/coordinator/coordinator.go), so this is not
+// a weaker substitute, it is the same fact observed the way ADR-014 says
+// every fact about this process must be observable.
+func (tc *testCoordinator) ready(t *testing.T) bool {
 	t.Helper()
-	for _, v := range tc.snapshot(t) {
-		if v.NodeID == nodeID {
-			return v, true
-		}
-	}
-	return inventory.NodeView{}, false
+	status, _ := tc.getRaw(t, "/readyz")
+	return status == http.StatusOK
 }
 
-// testLogger discards everything by default (matching the internal
-// packages' own testLogger convention); under `go test -v`, it writes to
-// stderr instead, which is often the fastest way to see what actually
-// happened when one of these tests fails against a real broker.
-func testLogger() *slog.Logger {
-	if testing.Verbose() {
-		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// findNode fetches GET /api/v1/nodes/{nodeId} and decodes it into
+// [v1.Node]. ok is false on a 404 (node not yet in inventory); any other
+// non-2xx status fails t outright, since every test in this package that
+// calls this expects the coordinator to be answering normally.
+func (tc *testCoordinator) findNode(t *testing.T, nodeID string) (v1.Node, bool) {
+	t.Helper()
+	status, body := tc.getRaw(t, "/api/v1/nodes/"+url.PathEscape(nodeID))
+	if status == http.StatusNotFound {
+		return v1.Node{}, false
 	}
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/v1/nodes/%s: status %d, body: %s", nodeID, status, body)
+	}
+	var resp v1.NodeResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("GET /api/v1/nodes/%s: decode response: %v; body: %s", nodeID, err, body)
+	}
+	return resp.Node, true
+}
+
+// snapshot fetches GET /api/v1/snapshot and decodes it into [v1.Snapshot].
+func (tc *testCoordinator) snapshot(t *testing.T) v1.Snapshot {
+	t.Helper()
+	status, body := tc.getRaw(t, "/api/v1/snapshot")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/v1/snapshot: status %d, body: %s", status, body)
+	}
+	var snap v1.Snapshot
+	if err := json.Unmarshal(body, &snap); err != nil {
+		t.Fatalf("GET /api/v1/snapshot: decode response: %v; body: %s", err, body)
+	}
+	return snap
+}
+
+// parseObservedAt parses a [v1.Evidence.ObservedAt] pointer (RFC 3339, or
+// nil for unknown age) into a *time.Time, failing t on a value that fails
+// to parse — every test that calls this already knows, from context,
+// whether nil is an expected outcome.
+func parseObservedAt(t *testing.T, s *string) *time.Time {
+	t.Helper()
+	if s == nil {
+		return nil
+	}
+	tm, err := time.Parse(time.RFC3339, *s)
+	if err != nil {
+		t.Fatalf("parse observedAt %q: %v", *s, err)
+	}
+	return &tm
 }
 
 // waitFor polls cond every interval until it returns true or timeout

@@ -120,7 +120,7 @@ The fourth criterion is new. It is not a nicety: it is the only one that exercis
 
 ## Step 3: Read-only FPP observability
 
-Status: not started
+Status: complete (2026-08-11)
 
 **Goal:** the first slice of real observability value, and the start of ARCHITECTURE Phase 0 / OBSERVABILITY Phase O1.
 
@@ -137,9 +137,32 @@ Status: not started
 - The API is exercised end to end by a non-UI client, to prove it is usable without a browser rather than only believed to be.
 - An interrupted change stream is followed by an authoritative snapshot re-fetch, not a resumed local model.
 
-**Bound by:** ADR-003, ADR-011, ADR-014, RES-012, RES-013.
+**Bound by:** ADR-003, ADR-011, ADR-012, ADR-013, ADR-014, [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md), [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md), RES-012, RES-013. ADR-020 and ADR-021 were written out of this step.
 
 **Why the contract work lands here and not in Step 4:** if the API is designed alongside the UI that consumes it, behavior settles in whichever layer is easier to change and the API quietly stops being independently usable. Step 3 finishing before UI work starts is what keeps ADR-014 real.
+
+**Verified 2026-08-11:** `make check` with lint at 0 issues, race tests, a CGo-free build with zero CGo packages in the coordinator's dependency graph, cross compiles for all four supported targets, and the coordinator image building. `make test-integration` runs 28 tests against Mosquitto 2.0.22 with the agent **and the coordinator** as real subprocesses. `make test-integration-fpp` passes against a containerized FPP 9.5.3 and skips cleanly when none is reachable. Both acceptance criteria are proven: `showmeshctl` is exercised as a real subprocess against a real coordinator, and three separate interruption shapes (connection drop, coordinator restart, buffer-overflow reset) each prove an authoritative snapshot re-fetch. Verified by hand against the shipped image: absence states render honestly with an unreachable FPP, version negotiation answers `application/problem+json`, and SIGTERM exits 0 with the broker unreachable. Not verified: anything on real show hardware.
+
+**Why the harness now execs the real coordinator binary.** Step 2's suite wired the coordinator's components in process, justified at the time by there being no read API to observe the process through. This step landed one, and the justification expired. That change is what caught two defects here that component wiring could not see: a 10 second HTTP write timeout that killed every change stream a few seconds after it connected, and a hub that re-broadcast every node on every tick because a collection timestamp was restamped on each render. Both are invisible to a test that never runs `Run`.
+
+**On the acceptance criterion that the API be exercised by a non-UI client.** `showmeshctl` satisfies it, and the part that gives it teeth is an enforced import-graph test forbidding it from importing any coordinator package. Writing its decoders independently is what surfaced two contract defects during the build: single-resource endpoints returning bare objects with no `serverTime`, and an events response carrying fields the pinned wire shape did not mention. A client sharing the server's types would have agreed with the server about both.
+
+**Known follow-up:** the integration suite still decodes some assertions through the server's own wire types, which is the pattern the step's own contract forbids. Raw-key assertions were added for the load-bearing cases (control-plane state, the evidence envelope's state and `observedAt`, and the events response's `gap`), and full de-typing is deferred.
+
+### Decisions this step was required to make
+
+All three were deferred to here by name, and all three are now recorded rather than left to emerge from implementation.
+
+- **Change-stream transport: Server-Sent Events**, not WebSocket ([ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md)). The deciding argument is the acceptance criterion below: with SSE, exercising the contract without a browser is `curl -N`, and a contract that needs a client library before anyone can look at it drifts towards private. The stream is also deliberately non-resumable: no `id:` field, per-connection sequence numbers, an authoritative snapshot after every interruption.
+- **Authentication: an optional shared secret, off by default** ([ADR-021](../decisions/ADR-021-read-api-authentication-posture.md)), with a startup warning when unset. That ADR records plainly that one shared secret is not an identity and does not satisfy ARCHITECTURE §10.4, and it bars the first write endpoint until a superseding ADR decides a real mechanism.
+- **The API warranted its own ADR**, rather than sitting behind ADR-014 as an implementation detail. ADR-014 settled what the API *is*; the transport choice, the non-resumability rule, the evidence-absence vocabulary, and the additive-only compatibility rule are durable constraints a future contributor could otherwise "improve" one at a time.
+
+### Four narrowings, recorded rather than silently dropped
+
+- **FPP MQTT ingestion is deferred.** This step's deliverable named REST and MQTT. REST supplies the whole signal set; FPP's own MQTT publishes largely the same status, and only when an operator has configured FPP to point at ShowMesh's broker, which cannot be verified here and which the containerized bench does not exercise. The collector is built behind a source interface so a second source slots in without reshaping the model. Owner's decision.
+- **No MultiSync listener in the coordinator.** The collector reads FPP's REST report of its own MultiSync state instead of opening a socket. Coordinator-side multicast observation needs host networking, which ADR-012 recorded as deferred, and running a second listener near a player is what [ADR-013](../decisions/ADR-013-no-fpp-control-port-sharing.md) exists to prevent.
+- **Observations are stored latest-only.** Event history is this step's deliverable; metric history, retention tiers, and downsampling belong to [RES-013](../research/RES-013-telemetry-storage-and-alerting.md), and guessing at them here would pre-empt that record. Event history does get bounded retention, because an unbounded table on an appliance disk is a fault, and those bounds are labelled as hypotheses.
+- **No desired state, assignments, or reconciliation status in the API.** OPERATOR-UI §5 lists them as part of the API's eventual minimum; the coordinator does not model them, and shipping placeholder fields would let a client render a verdict no code computes. They arrive additively with the behavior behind them.
 
 ## Step 4: Read-only Operator UI
 

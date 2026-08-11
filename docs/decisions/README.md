@@ -25,6 +25,8 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-017](ADR-017-showmesh-owns-audience-audio.md) | ShowMesh owns audience audio; nodes play local media | Accepted |
 | [ADR-018](ADR-018-program-and-ltc-share-a-clock-domain.md) | Program audio and LTC share one clock domain | Accepted |
 | [ADR-019](ADR-019-audio-device-loss-fails-silent.md) | Audio device loss fails silent, no automatic FPP fallback | Accepted |
+| [ADR-020](ADR-020-control-api-shape-and-change-stream.md) | Control API is versioned REST with a Server-Sent Events change stream | Accepted |
+| [ADR-021](ADR-021-read-api-authentication-posture.md) | Read API ships optional shared-secret auth and no authorization | Accepted (expected to be superseded before any write endpoint) |
 
 ## Record template
 

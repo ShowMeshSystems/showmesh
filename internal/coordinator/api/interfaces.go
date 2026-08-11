@@ -1,0 +1,183 @@
+package api
+
+import (
+	"context"
+	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
+)
+
+// NodeLister lists the coordinator's current node inventory. It exists so
+// this package does not import internal/coordinator/inventory's Manager
+// concrete type directly into its handler wiring; in practice the real
+// argument to [New] is *inventory.Manager, whose existing Snapshot method
+// already satisfies this interface with no adapter needed —
+// internal/coordinator/inventory is Step 2 work, already built and stable,
+// not one of the packages Step 3 builds in parallel underneath this task.
+type NodeLister interface {
+	Snapshot(ctx context.Context, now time.Time) ([]inventory.NodeView, error)
+}
+
+// FPPInstanceView is what this package needs from one configured FPP
+// instance's collector state: its identity, whatever observations the
+// collector (Task C, built in parallel) has produced, and its last poll
+// bookkeeping. This is declared here rather than imported from
+// internal/coordinator/collector, which does not exist yet as this task is
+// written; a later wiring task adapts the collector's real type into this
+// shape, or into something structurally identical.
+//
+// Endpoint may carry userinfo (a config value such as
+// "http://user:pass@10.0.1.20"); this package strips it before it ever
+// reaches the wire (see mapping.go), so FPPLister is not required to have
+// done that itself.
+type FPPInstanceView struct {
+	InstanceID string
+	Endpoint   string
+
+	// Observations is whatever the collector currently holds for this
+	// instance, including absence observations (not_collected,
+	// collection_failed, unsupported) for a signal it tracks but has no
+	// current value for — an empty slice here means "the collector tracks
+	// no signals for this instance", which should not normally happen, not
+	// "nothing has been collected yet" (that case is one or more
+	// [observation.Observation] values whose Absence is
+	// [observation.StateNotCollected]).
+	Observations []observation.Observation
+
+	LastPollAt    *time.Time
+	LastPollError *string
+}
+
+// FPPLister lists the coordinator's configured FPP instances and their
+// current collector state.
+type FPPLister interface {
+	ListInstances(ctx context.Context) ([]FPPInstanceView, error)
+}
+
+// ObservationFilter narrows GET /api/v1/observations per contract section
+// 6.1 ("filters resourceKind, resourceId, signal"). A nil field means no
+// filter on that dimension.
+type ObservationFilter struct {
+	ResourceKind *observation.ResourceKind
+	ResourceID   *string
+	Signal       *observation.SignalID
+}
+
+// ObservationLister lists observations for GET /api/v1/observations,
+// already narrowed by filter. Callers of [New] may implement filtering
+// however their store indexes data; this package does not assume a
+// particular query shape, only that the returned slice already satisfies
+// filter.
+type ObservationLister interface {
+	ListObservations(ctx context.Context, filter ObservationFilter) ([]observation.Observation, error)
+}
+
+// EventRecord is what this package needs from one stored event. It is
+// declared here, not imported from internal/coordinator/store (Task B,
+// built in parallel), for the same reason [FPPInstanceView] is: a later
+// wiring task adapts the store's real event type into this shape.
+//
+// OccurredAt is nil when the change this event records was first learned
+// from evidence of unknown age — the event log's version of the same rule
+// [observation.Observation.ObservedAt] follows, and just as load-bearing:
+// never fill it from RecordedAt.
+type EventRecord struct {
+	Seq        uint64
+	RecordedAt time.Time
+	OccurredAt *time.Time
+	Source     string
+	Resource   observation.ResourceRef
+	Category   string
+
+	// Severity is "informational", "warning", or "critical" per
+	// OBSERVABILITY section 11.2. This package does not itself enforce
+	// that vocabulary on a value it did not produce; the mapping layer
+	// passes it through.
+	Severity      string
+	Summary       string
+	Details       map[string]any
+	CorrelationID *string
+}
+
+// EventReader reads the coordinator's event history for GET /api/v1/events
+// and for the event.recorded stream. Seq is a store-assigned, strictly
+// increasing sequence number — the "since" cursor contract section 6.1
+// names — and is unrelated to the SSE stream's own per-connection seq
+// (contract section 6.4): this Seq is a durable, comparable cursor into
+// history; the stream's seq exists specifically so it cannot become one.
+//
+// The store prunes event history by age and row count, so a caller's since
+// cursor can legitimately name a point before everything the store still
+// retains. That is not an error condition — see [Hub.renderNewEvents] and
+// the events handler in handlers.go for how gap and OldestEventSeq are
+// used to report it honestly instead of silently returning a short page
+// that looks complete (an orchestrator contract addition closing exactly
+// this hole; the events response's "gap"/"oldestRetainedSeq" fields exist
+// because of it).
+type EventReader interface {
+	// ListEvents returns events with Seq strictly greater than since, in
+	// ascending Seq order, capped at limit, and reports whether pruning has
+	// removed one or more events between since and the oldest row the
+	// store currently retains — mirroring
+	// internal/coordinator/store.Store.ListEvents's real signature (Task
+	// B), declared here so this package does not have to import that
+	// package before it exists.
+	ListEvents(ctx context.Context, since uint64, limit int) (events []EventRecord, gap bool, err error)
+
+	// LatestEventSeq returns the highest Seq ever recorded, or 0 if no
+	// event has ever been recorded.
+	LatestEventSeq(ctx context.Context) (uint64, error)
+
+	// OldestEventSeq returns the lowest Seq currently retained and true, or
+	// ok=false if no event is currently retained (either none has ever
+	// been recorded, or history has been pruned back to nothing). The
+	// events handler reports this as "oldestRetainedSeq" on every response,
+	// not only when gap is true.
+	OldestEventSeq(ctx context.Context) (seq uint64, ok bool, err error)
+}
+
+// CollectorRunState is the closed, small vocabulary [CollectorState.State]
+// and [v1.CollectorStatus.State] use, deliberately distinct from
+// pkg/observation.State — see [v1.CollectorStatus]'s doc comment for why
+// the two must not be conflated. Not every value a collector could
+// plausibly report exists here yet: only the two this codebase's one
+// collector (the FPP REST collector) actually produces. Add a value only
+// when a real producer needs it, matching this codebase's standing rule
+// against emitting a state nothing can currently justify.
+type CollectorRunState string
+
+const (
+	// CollectorNotConfigured: this collector has nothing to poll (e.g. no
+	// SHOWMESH_FPP_ENDPOINTS entries) and will not run until configuration
+	// changes and the coordinator restarts.
+	CollectorNotConfigured CollectorRunState = "not_configured"
+
+	// CollectorRunning: the collector's poll loop is registered and
+	// executing on its own cadence. This says nothing about whether its
+	// most recent poll succeeded against any individual resource — see
+	// [v1.CollectorStatus]'s doc comment for why "running" and "every
+	// signal collection_failed" are not a contradiction.
+	CollectorRunning CollectorRunState = "running"
+)
+
+// CollectorState is one collector's own run state, reported in the
+// "collectors" member of GET /api/v1/snapshot. State is one of
+// [CollectorRunState]'s values; kept as a plain string here (rather than
+// CollectorRunState itself) for the same reason [EventRecord.Severity] is
+// a plain string despite OBSERVABILITY section 11.2 naming a closed set —
+// this package renders whatever its CollectorStatusLister reports, and
+// CollectorRunState documents the vocabulary a well-behaved implementation
+// commits to rather than a type this package enforces against a producer
+// it does not control the construction of.
+type CollectorState struct {
+	ID     string
+	State  string
+	Reason *string
+}
+
+// CollectorStatusLister lists the coordinator's collectors' own run state
+// (not the resources they observe) for GET /api/v1/snapshot.
+type CollectorStatusLister interface {
+	CollectorStatuses(ctx context.Context) ([]CollectorState, error)
+}

@@ -3,6 +3,7 @@ BIN_DIR     := ./bin
 COORDINATOR := $(BIN_DIR)/showmesh-coordinator
 AGENT       := $(BIN_DIR)/showmesh-agent
 MULTISYNC_PROBE := $(BIN_DIR)/showmesh-multisync-probe
+SHOWMESHCTL := $(BIN_DIR)/showmeshctl
 
 VERSION     ?= dev
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -18,6 +19,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(COORDINATOR) ./cmd/showmesh-coordinator
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(AGENT) ./cmd/showmesh-agent
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(MULTISYNC_PROBE) ./cmd/showmesh-multisync-probe
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(SHOWMESHCTL) ./cmd/showmeshctl
 
 .PHONY: test
 test:
@@ -35,6 +37,22 @@ test:
 .PHONY: test-integration
 test-integration:
 	./scripts/test-integration.sh
+
+# test-integration-fpp proves the FPP REST collector's claims that can only
+# be proven against a real fppd: a live poll matching the daemon's actual
+# reported state, and — the collector's most important behavior — that
+# losing the FPP produces collection_failed evidence, never a stale
+# `current` reading and never a fabricated `false` for
+# fpp.multisync.enabled. Behind the `integration` build tag, so it is never
+# part of `test`/`check`, and deliberately not part of CI: the bench FPP is
+# a multi-gigabyte source build on first run. See
+# scripts/test-integration-fpp.sh (which starts bench/fpp-multisync's
+# fpp-master if it is not already running, and unlike test-integration.sh's
+# throwaway Mosquitto, leaves it running afterward — see that script for
+# why) and internal/coordinator/collector/fpp's integration_test.go.
+.PHONY: test-integration-fpp
+test-integration-fpp:
+	./scripts/test-integration-fpp.sh
 
 GOLANGCI_LINT_VERSION := v2.6.2
 

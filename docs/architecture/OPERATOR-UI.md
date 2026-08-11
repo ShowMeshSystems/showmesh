@@ -68,13 +68,17 @@ The API must provide, at minimum:
 - once write operations exist — the first release is read-only — command submission carrying the fields required by ARCHITECTURE §8.1, including an idempotency key, so a retried submission after a lost response cannot execute twice;
 - explicit statements of unavailable evidence rather than omission, so the client can distinguish "not supported" from "not collected" from "collection failed".
 
+This list is the API's eventual minimum, not v1's contents. The first version ships inventory, capabilities, observed state and freshness, and deliberately ships **no** assignments, desired state, or reconciliation status, because the coordinator does not model them yet. They arrive additively with the behaviour behind them. A `reconciliationStatus` that no code computes would be worse than its absence: a client would render it and an operator would read it as a verdict. See [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md).
+
 ### 5.1 Versioning and compatibility
 
 The API is versioned. The UI declares the API version it requires and must detect an incompatible coordinator, presenting a clear, actionable error rather than degrading unpredictably or rendering partial state that looks authoritative. Because the UI and coordinator are separately deployable, a version skew window exists by construction and must be handled as a normal condition, not an exceptional one.
 
 ## 6. Real-time updates
 
-The UI must receive state changes in near real time and must not depend solely on aggressive polling. The transport is not yet chosen; WebSocket and Server-Sent Events are both candidates, and the choice belongs with the API work in the build plan.
+The UI must receive state changes in near real time and must not depend solely on aggressive polling. The transport was chosen with the API work, as this section originally deferred: it is **Server-Sent Events**, at `/api/v1/stream`, per [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md).
+
+Two consequences land on the client rather than the server. The stream carries **no `id:` field** and ignores `Last-Event-ID`, deliberately, so that resume-from-cursor cannot be built; and a browser's `EventSource` cannot set request headers, which both API version negotiation and [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md)'s optional bearer token require. The UI therefore reads the stream with `fetch` and a streaming reader, not with `EventSource`.
 
 Relevant change classes include node online and offline, capability changes, desired-state changes, observed-state changes, health changes, sequence and playback changes, synchronization changes, and alerts. Capability reassignment and controlled-device state changes join the list as those capabilities land; neither exists yet.
 
@@ -161,6 +165,8 @@ Commands require authenticated identities and authorization by target and action
 
 The initial deployment may use a simple authentication model appropriate to an isolated show VLAN, but the mechanism is an explicit decision to be recorded when the control API gains write operations — not a default that arrives by omission. A UI that can stop a show with no authentication is a defensible choice on a private VLAN and an indefensible accident otherwise.
 
+The read-only API's posture is now recorded in [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md): an optional shared secret, disabled by default, with a startup warning when it is unset. That ADR states plainly that one shared secret is not an identity and does not satisfy ARCHITECTURE §10.4, and it bars the first write endpoint until a superseding ADR decides a real mechanism. So the decision this section demands has been made for the read surface and is still outstanding for the write surface.
+
 Future role-based access may include viewer, operator, and administrator. The API and UI architecture must not block that, which in practice means authorization decisions are expressed server-side and returned to the client rather than inferred by it.
 
 ## 15. High-availability compatibility
@@ -204,7 +210,8 @@ These are recorded rather than resolved. Several arise from applying the brainst
 - **Failover and reassignment.** ARCHITECTURE §12 defers automatic failover during a live set until evidence supports it, and places reassignable capability workloads in Phase 3. The UI cannot show or initiate something the system does not do, so first-release scope is displaying current capability assignment and nothing more. Both automatic-failover display and operator-initiated reassignment follow their features, not the other way around.
 - **Audio authority.** The authority model this alert presumed now exists: [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) makes ShowMesh authoritative for sessions, routing, and placement while the active node owns its own playback clock. What is still missing is what would make the alert actionable — the drift threshold at which authority should be considered lost, and the detection latency that threshold implies. Both are open bench items in [RES-007](../research/RES-007-audio-node-architecture.md), so the alert stays unspecified for a reason that has changed.
 - **Control-provider metadata.** The shape of provider descriptors and whether they can drive usable generated forms is [RES-014](../research/RES-014-control-provider-model.md), currently unresearched.
-- **Real-time transport.** WebSocket versus Server-Sent Events, to be decided with the API work.
-- **Initial authentication mechanism.** Undecided; see §14.
+- ~~**Real-time transport.**~~ Decided with the API work: Server-Sent Events, [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md). See §6.
+- ~~**Initial authentication mechanism.**~~ Decided for the read surface: optional shared secret, off by default, [ADR-021](../decisions/ADR-021-read-api-authentication-posture.md). Still open for the write surface, which ADR-021 blocks until a superseding ADR lands. See §14.
+- **Where the browser holds a bearer token.** Raised by ADR-021 and unanswered; it is the reason the token defaults to off rather than on. It needs a session model, which the first UI release does not have.
 - **Preview wall in the UI.** Delivery mechanism is blocked on [RES-010](../research/RES-010-projection-preview-monitoring.md); the preview wall is not part of the first UI release.
 - **Origin, proxying, and TLS termination** between the UI container and the coordinator; see §4.

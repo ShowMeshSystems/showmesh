@@ -1,0 +1,1071 @@
+openapi: 3.1.0
+info:
+  title: ShowMesh Control API
+  version: "1"
+  summary: >-
+    The coordinator's public, versioned control API and Server-Sent
+    Events change stream (ADR-014).
+  description: >-
+    This is the versioned public contract ADR-014 requires: it is designed
+    to be used without any Operator UI, by a CLI (`showmeshctl`), an
+    automation system, or an alternate client. Everything here is served
+    under `/api/v1`; the container healthcheck endpoints `/healthz`,
+    `/readyz`, and `/version` are infrastructure probes outside this
+    versioned contract and are not documented here.
+
+
+    **Versioning is additive-only within v1.** Fields may be added to any
+    response; they are never removed, renamed, or retyped. A client MUST
+    ignore fields it does not recognize. A breaking change is a `/api/v2`
+    contract, not an edit to this one.
+
+
+    **`serverTime` appears on every response, including every error.** A
+    client computes evidence ages against `serverTime` rather than its own
+    clock, so clock skew between the client and the coordinator is visible
+    instead of silently wrong. Payloads never carry a precomputed age or
+    "secondsAgo" field for exactly this reason: an age field would change on
+    every poll even when nothing else did, which would make change
+    detection on the SSE stream fire continuously for no real change.
+
+
+    **`offline` means the control-plane (MQTT) connection is gone, not that
+    the node is dead.** A running show survives coordinator loss and
+    broker loss (ADR-008); a node can be reported `node.controlPlane.state
+    == "offline"` while the show it is running continues perfectly. This is
+    why the field is nested under `controlPlane` and is never named `state`,
+    `online`, or `status` at the top level of a node.
+
+
+    **`observedAt: null` is meaningful and must never be treated as
+    "now".** It means the observation's time is genuinely unknown — most
+    commonly a retained MQTT delivery replayed to the coordinator on
+    reconnect, which carries no information about how old the evidence
+    actually is. Filling in the current time in its place would silently
+    manufacture false freshness. See the `Evidence` schema below and
+    `state: "unknown_age"`.
+
+
+    **Desired state, capability assignments, and reconciliation status are
+    not modelled by this API yet.** They are a real part of the eventual
+    architecture (see ARCHITECTURE section 7.2 and OPERATOR-UI section 10),
+    but nothing in the coordinator computes them today, and Step 3
+    deliberately ships no placeholder field for them: a field like
+    `reconciliationStatus: "unknown"` that no code actually computes would
+    be read by an operator as a real verdict. These arrive additively, in
+    the version of this API that introduces the behavior behind them.
+
+
+    **A `gap: true` on `GET /api/v1/events` means history was permanently
+    lost to retention, not that nothing happened.** The store prunes event
+    history by age and row count, so a client's `since` cursor can name a
+    point before anything the store still retains. That is reported as a
+    successful response describing an incomplete answer (never a 4xx: a
+    client retrying will never get the missing events back, because they no
+    longer exist anywhere in this system).
+
+
+    **Authentication is a coordinator-side, per-deployment choice, not a
+    fixed property of this contract.** When the coordinator was started
+    with `SHOWMESH_API_TOKEN` set, every operation below requires
+    `Authorization: Bearer <token>`; when it was not, every operation is
+    open. This document declares `bearerAuth` as an available scheme
+    rather than a mandatory one for exactly that reason (ADR-021) — a
+    generated client should send the header when it has a token
+    configured, and omit it otherwise, rather than treating its absence
+    as a client bug.
+
+
+    **Every route documented below is `GET`-only.** Any other method on
+    any of these paths returns `405 Method Not Allowed` with an `Allow`
+    header naming the methods that path actually serves; see
+    `components.responses.MethodNotAllowed`. This document omits `post`,
+    `put`, `patch`, and `delete` operations for that reason — their
+    absence here is what the 405 means, not an oversight.
+servers:
+  - url: /api/v1
+    description: The coordinator's own control API root.
+security:
+  - bearerAuth: []
+  - {}
+paths:
+  /:
+    get:
+      operationId: getServiceDescriptor
+      summary: Service descriptor
+      description: >-
+        The API's own self-description: served version, every version this
+        coordinator supports, and coordinator build metadata.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceDescriptor"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /snapshot:
+    get:
+      operationId: getSnapshot
+      summary: Authoritative snapshot
+      description: >-
+        The authoritative state the SSE stream's deltas are relative to.
+        Contains every resource the stream can notify about — nodes, FPP
+        instances, and collector run state — plus `latestEventSeq`, so a
+        client can fetch this snapshot once and then request exactly the
+        event history after it via `GET /events?since=`, with no gap and no
+        duplicate. Events themselves are not included here; they are a log,
+        fetched separately.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes:
+    get:
+      operationId: listNodes
+      summary: Node inventory
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodesResponse"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}:
+    get:
+      operationId: getNode
+      summary: One node
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /fpp:
+    get:
+      operationId: listFPPInstances
+      summary: Configured FPP instances
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPResponse"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /fpp/{instanceId}:
+    get:
+      operationId: getFPPInstance
+      summary: One FPP instance
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Same ID syntax as a node ID (contract section 7).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPInstanceResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /observations:
+    get:
+      operationId: listObservations
+      summary: Flat observation list
+      description: >-
+        Every observation this coordinator currently holds, across every
+        resource, optionally filtered. A filter that matches nothing
+        returns `200` with an empty `observations` array — "no observations
+        match this filter" is not "this endpoint does not exist", so this
+        is never a `404`.
+      parameters:
+        - name: resourceKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [node, fpp, coordinator]
+          description: Restrict to observations about resources of this kind.
+        - name: resourceId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Restrict to observations about this specific resource ID.
+        - name: signal
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Restrict to observations of this exact signal ID.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservationsResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /events:
+    get:
+      operationId: listEvents
+      summary: Event history
+      description: >-
+        Event history in ascending `seq` order. See this document's
+        top-level description for what `gap: true` means; it is a
+        successful response describing an incomplete answer, never an
+        error.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: >-
+            Exclusive lower bound: return events with seq strictly greater
+            than this value. 0 (the default) means "from the beginning of
+            retained history".
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+            maximum: 500
+          description: >-
+            Maximum number of events to return. Defaults to 100; values
+            above 500 are silently clamped to 500. Both numbers are this
+            coordinator's own pagination choice, not a measured or
+            contractually significant value (see RES-013), and may change.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /stream:
+    get:
+      operationId: streamChanges
+      summary: Server-Sent Events change stream
+      description: >-
+        `text/event-stream`, not JSON-over-HTTP-response, so this operation
+        has no normal `200 application/json` content — the event payload
+        shapes are documented as schemas under `components.schemas` for a
+        client to validate the JSON inside each SSE `data:` line against,
+        even though the transport itself is not modeled as a normal
+        response body here. Every SSE `event:` name this coordinator emits,
+        and the schema of the JSON on its `data:` line, is:
+
+          | SSE `event:` name | `data:` schema |
+          |---|---|
+          | `stream.start` | `StreamStart` |
+          | `node.changed` | `NodeChangedEvent` |
+          | `fpp.changed` | `FPPChangedEvent` |
+          | `event.recorded` | `EventRecordedEvent` |
+          | `stream.reset` | `StreamReset` |
+
+        `data:` is always exactly one line of compact (no embedded
+        newlines) JSON — never pretty-printed, never split across
+        multiple `data:` lines. No other SSE field (`event:`, `data:`) is
+        ever emitted for these five types, and no other event type is
+        defined; a client encountering an `event:` name not in this table
+        should ignore that frame rather than fail, in the same
+        unknown-field-tolerant spirit as contract section 6.2's
+        additive-only rule for JSON fields.
+
+
+        On a fixed interval (a ShowMesh-chosen hypothesis, not a measured
+        or contractually significant value) this coordinator also writes
+        an SSE **comment** line, `: keepalive`, with no `event:` or `data:`
+        field at all — this is what lets an idle connection be
+        distinguished from a dead one through an intermediary that would
+        otherwise time it out. A client (or its SSE parsing library) MUST
+        skip a line beginning with `:` rather than attempt to parse it as
+        an event; this is standard `text/event-stream` syntax, not a
+        ShowMesh extension, but is called out explicitly here because a
+        naive hand-rolled parser that only expects `event:`/`data:` lines
+        will otherwise choke on it.
+
+
+        The first event on every connection is `stream.start`, carrying
+        `snapshotRequired: true`; a client MUST fetch `GET /snapshot` before
+        applying anything else from this stream. No SSE `id:` field is ever
+        emitted, and any `Last-Event-ID` request header is ignored: a gap in
+        this stream is indistinguishable from a quiet system, so resuming
+        from a cursor is deliberately impossible (OPERATOR-UI section 6).
+        `seq` on every event after `stream.start` is per-connection only
+        and must never be treated as a durable cursor — unlike `Event.seq`,
+        which is.
+
+
+        **The stream carries no deletions in v1.** Nothing on this
+        connection tells a client that a node or FPP instance has been
+        removed from this coordinator's configuration or inventory; a
+        client applying deltas on top of a snapshot has no signal that a
+        resource present in that snapshot is now gone. This is a real gap,
+        stated here so a client does not assume otherwise, not a promise
+        that it will never happen.
+
+
+        **A stream closes with a clean end-of-response and no terminating
+        frame of any kind**, including when the coordinator is the one
+        shutting down — there is no `stream.end` event and none is
+        planned, deliberately: correctness here depends only on a client
+        re-fetching `GET /snapshot` on *any* interruption (this operation's
+        own reconnection rule, above), which already covers an orderly
+        shutdown exactly the same way it covers a network fault or a
+        crash. A client cannot distinguish "the coordinator shut down
+        cleanly" from "a proxy in between timed the connection out" from
+        the stream alone, and is not meant to try; it should simply
+        reconnect and re-snapshot either way.
+      responses:
+        "200":
+          description: >-
+            An open `text/event-stream` connection. See the description
+            above for the event types and their JSON payload schemas.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  responses:
+    UnsupportedAPIVersion:
+      description: >-
+        The request named an API version (in the `ShowMesh-API-Version`
+        header, or in the path as `/api/vN/...`) that this coordinator does
+        not serve.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ResourceNotFound:
+      description: No resource with the given identifier exists.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InvalidParameter:
+      description: A path or query parameter failed validation.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: >-
+        SHOWMESH_API_TOKEN is configured and the request's Authorization
+        header was missing or did not match.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    MethodNotAllowed:
+      description: >-
+        The path names a real route, but this request's method is not one
+        that route serves. This document defines only `get` operations
+        because every route in this API is read-only (contract section
+        2's "read-only means read-only"); a `POST`, `PUT`, `PATCH`, or
+        `DELETE` to any path documented above returns this response
+        rather than a `404`, and the `Allow` header names exactly the
+        methods that path does serve.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+        Allow:
+          $ref: "#/components/headers/Allow"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: >-
+        The coordinator failed to answer this request for a reason that
+        has nothing to do with whether the requested resource exists or
+        the request was well formed — an internal dependency (e.g. the
+        store) failed. `detail` never carries the underlying error; it is
+        logged coordinator-side only.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  headers:
+    ShowMesh-API-Version:
+      description: >-
+        The API major version this response was served by. Present on
+        every `/api/v1` response, success or error, with no exception
+        (contract section 6.2). A client MAY also send this as a request
+        header naming the version it expects; a coordinator that does not
+        serve that version answers with the `UnsupportedAPIVersion`
+        problem instead of a partial or best-guess render (contract
+        section 6.6).
+      schema:
+        type: string
+        enum: ["1"]
+    Allow:
+      description: >-
+        Present only on a `405` response. The exact, comma-separated set
+        of HTTP methods the requested path serves (e.g. `"GET, HEAD"`),
+        computed from the routes actually registered — never a static or
+        hand-maintained list.
+      schema:
+        type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        `Authorization: Bearer <token>`, checked in constant time against
+        `SHOWMESH_API_TOKEN` (contract section 6.8, ADR-021). This is one
+        shared secret with no identity, no roles, and no audit
+        attribution — see ADR-021's "what this is not" — and it is
+        **optional**: a coordinator started with no token set accepts
+        every request unauthenticated, which is why this API's global
+        `security` requirement below is not exclusive. `/healthz`,
+        `/readyz`, and `/version` are outside this contract entirely and
+        are never authenticated, at any configuration.
+  schemas:
+    Evidence:
+      type: object
+      description: >-
+        The evidence envelope every observation-bearing field on this API
+        uses (contract section 6.3). `state` is one of the six values
+        below; `value` is null only for the three genuine absence states —
+        `not_collected`, `collection_failed`, `unsupported` — where nothing
+        was ever obtained. It is non-null for `current`, `stale`, AND
+        `unknown_age`: `unknown_age` means a value exists but the time it
+        was observed does not, which is a distinct condition from having no
+        value at all, and a client that treats `unknown_age` as absent is
+        making exactly the reading error that state was invented to
+        prevent (a retained MQTT delivery, most commonly — see below).
+        `reason` is non-null whenever `state` is not `current`.
+        `observedAt` is null whenever the observation time is unknown —
+        most importantly for a retained MQTT delivery (`state:
+        "unknown_age"`) — and MUST NEVER be treated as equivalent to "now".
+      required:
+        [signal, value, unit, state, reason, observedAt, collectedAt,
+         source, quality, validForSeconds]
+      properties:
+        signal:
+          type: string
+          description: >-
+            Namespaced, dot-separated signal identifier, e.g.
+            "fpp.multisync.enabled", "node.heartbeat".
+        value:
+          type: [boolean, string, integer, number, "null"]
+        unit:
+          type: [string, "null"]
+        state:
+          type: string
+          enum:
+            [current, stale, unknown_age, not_collected, collection_failed,
+             unsupported]
+        reason:
+          type: [string, "null"]
+        observedAt:
+          type: [string, "null"]
+          format: date-time
+        collectedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Null only for state "not_collected" — no attempt was ever
+            made, so there is no collection bookkeeping to report, not
+            even a fallback timestamp. Non-null for every other state,
+            including every absence state that DID involve an attempt
+            ("collection_failed", "unsupported"). This is bookkeeping
+            (when the coordinator recorded this evidence), never itself
+            evidence of the subject's state — see observedAt above for
+            that.
+        source:
+          type: string
+        quality:
+          type: string
+          enum: [direct, derived, inferred, operator]
+        validForSeconds:
+          type: [integer, "null"]
+          description: >-
+            Null means the value does not expire on its own. Never a Go
+            duration string.
+    ResourceRef:
+      type: object
+      required: [kind, id]
+      properties:
+        kind:
+          type: string
+          enum: [node, fpp, coordinator]
+        id:
+          type: string
+    Capability:
+      type: object
+      required: [id, version]
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        attributes:
+          type: object
+          additionalProperties: true
+    ControlPlane:
+      type: object
+      description: >-
+        A node's control-plane liveness verdict. "offline" means the MQTT
+        control-plane connection is gone, not that the node — or a show it
+        may still be running — is dead (contract section 3.2).
+      required: [state, reason]
+      properties:
+        state:
+          type: string
+          enum: [online, offline, unknown]
+        reason:
+          type: [string, "null"]
+          description: Non-null whenever state is not "online".
+    NodeEvidence:
+      type: object
+      required: [hello, lastWill, heartbeat]
+      properties:
+        hello:
+          $ref: "#/components/schemas/Evidence"
+        lastWill:
+          $ref: "#/components/schemas/Evidence"
+        heartbeat:
+          $ref: "#/components/schemas/Evidence"
+    Node:
+      type: object
+      description: >-
+        One node's current representation: an element of GET /nodes, of
+        the snapshot's nodes list, and the payload of a node.changed
+        stream event — all three render identically.
+      required:
+        [nodeId, label, platform, agentVersion, bootId, startedAt,
+         firstSeenAt, updatedAt, capabilities, controlPlane, evidence]
+      properties:
+        nodeId:
+          type: string
+        label:
+          type: [string, "null"]
+        platform:
+          type: [string, "null"]
+        agentVersion:
+          type: [string, "null"]
+        bootId:
+          type: [string, "null"]
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+        firstSeenAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        controlPlane:
+          $ref: "#/components/schemas/ControlPlane"
+        evidence:
+          $ref: "#/components/schemas/NodeEvidence"
+    FPPInstance:
+      type: object
+      description: >-
+        One configured FPP instance's current representation. `endpoint`
+        never includes userinfo (credentials are stripped before this is
+        ever rendered).
+      required:
+        [instanceId, endpoint, health, observations, lastPollAt,
+         lastPollError]
+      properties:
+        instanceId:
+          type: string
+        endpoint:
+          type: string
+        health:
+          type: string
+          enum: [healthy, degraded, failed, unknown, suppressed]
+        observations:
+          type: array
+          description: Ordered by signal, ascending, and this ordering is guaranteed.
+          items:
+            $ref: "#/components/schemas/Evidence"
+        lastPollAt:
+          type: [string, "null"]
+          format: date-time
+        lastPollError:
+          type: [string, "null"]
+    Event:
+      type: object
+      description: >-
+        One recorded event: an element of GET /events, and the payload of
+        an event.recorded stream event. `occurredAt` is null when the
+        change was first learned from evidence of unknown age.
+      required:
+        [seq, recordedAt, occurredAt, source, resource, category, severity,
+         summary, details, correlationId]
+      properties:
+        seq:
+          type: integer
+          description: >-
+            A durable, strictly increasing cursor into event history. Never
+            to be confused with an SSE stream frame's per-connection seq.
+        recordedAt:
+          type: string
+          format: date-time
+        occurredAt:
+          type: [string, "null"]
+          format: date-time
+        source:
+          type: string
+        resource:
+          $ref: "#/components/schemas/ResourceRef"
+        category:
+          type: string
+        severity:
+          type: string
+          enum: [informational, warning, critical]
+        summary:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        correlationId:
+          type: [string, "null"]
+    ObservationEntry:
+      type: object
+      description: >-
+        One element of GET /observations: the section 6.3 Evidence envelope
+        plus its own resource, since a flat list spanning every resource
+        cannot rely on an enclosing object to imply the subject the way
+        Node.evidence.* or FPPInstance.observations can.
+      required:
+        [resource, signal, value, unit, state, reason, observedAt,
+         collectedAt, source, quality, validForSeconds]
+      properties:
+        resource:
+          $ref: "#/components/schemas/ResourceRef"
+        signal:
+          type: string
+        value:
+          type: [boolean, string, integer, number, "null"]
+        unit:
+          type: [string, "null"]
+        state:
+          type: string
+          enum:
+            [current, stale, unknown_age, not_collected, collection_failed,
+             unsupported]
+        reason:
+          type: [string, "null"]
+        observedAt:
+          type: [string, "null"]
+          format: date-time
+        collectedAt:
+          type: [string, "null"]
+          format: date-time
+          description: See Evidence.collectedAt; null only for state "not_collected".
+        source:
+          type: string
+        quality:
+          type: string
+          enum: [direct, derived, inferred, operator]
+        validForSeconds:
+          type: [integer, "null"]
+    CollectorStatus:
+      type: object
+      required: [id, state, reason]
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+        reason:
+          type: [string, "null"]
+    CoordinatorInfo:
+      type: object
+      required: [version, commit, buildDate, goVersion]
+      properties:
+        version:
+          type: string
+        commit:
+          type: string
+        buildDate:
+          type: string
+        goVersion:
+          type: string
+    ServiceDescriptor:
+      type: object
+      required: [serverTime, apiVersion, supportedVersions, coordinator]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        apiVersion:
+          type: integer
+        supportedVersions:
+          type: array
+          items:
+            type: integer
+        coordinator:
+          $ref: "#/components/schemas/CoordinatorInfo"
+    NodesResponse:
+      type: object
+      required: [serverTime, nodes]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodes:
+          type: array
+          description: >-
+            Ordered by nodeId, ascending, and this ordering is
+            guaranteed — a client that renders or diffs this array
+            positionally may rely on it.
+          items:
+            $ref: "#/components/schemas/Node"
+    NodeResponse:
+      type: object
+      description: >-
+        The body of GET /nodes/{nodeId}: a single node wrapped in
+        serverTime exactly like the collection endpoint, never a bare Node
+        object — every response on this API carries serverTime with no
+        exception (section 6.2).
+      required: [serverTime, node]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        node:
+          $ref: "#/components/schemas/Node"
+    FPPResponse:
+      type: object
+      required: [serverTime, instances]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instances:
+          type: array
+          description: >-
+            Ordered exactly as this coordinator's own FPP endpoint
+            configuration lists them, stable for the life of the process.
+            This ordering is guaranteed, but it is configuration order,
+            not an alphabetical or otherwise derived order.
+          items:
+            $ref: "#/components/schemas/FPPInstance"
+    FPPInstanceResponse:
+      type: object
+      description: See NodeResponse; the same rule applies identically here.
+      required: [serverTime, instance]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instance:
+          $ref: "#/components/schemas/FPPInstance"
+    ObservationsResponse:
+      type: object
+      required: [serverTime, observations]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        observations:
+          type: array
+          description: >-
+            Ordered by resourceKind, then resourceId, then signal,
+            ascending, and this ordering is guaranteed.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+    EventsResponse:
+      type: object
+      description: >-
+        See this document's top-level description for gap and
+        oldestRetainedSeq: gap is always present and boolean;
+        oldestRetainedSeq is the lowest seq still retained, or null when
+        the store retains no events at all.
+      required: [serverTime, events, latestSeq, gap, oldestRetainedSeq]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        latestSeq:
+          type: integer
+        gap:
+          type: boolean
+        oldestRetainedSeq:
+          type: [integer, "null"]
+    Snapshot:
+      type: object
+      required:
+        [serverTime, latestEventSeq, nodes, fpp, collectors]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        latestEventSeq:
+          type: integer
+        nodes:
+          type: array
+          description: Ordered by nodeId, ascending. Same guarantee as NodesResponse.nodes.
+          items:
+            $ref: "#/components/schemas/Node"
+        fpp:
+          type: object
+          required: [instances]
+          properties:
+            instances:
+              type: array
+              description: >-
+                Ordered exactly as configured, stable for the life of the
+                process. Same guarantee as FPPResponse.instances.
+              items:
+                $ref: "#/components/schemas/FPPInstance"
+        collectors:
+          type: array
+          description: >-
+            Ordered exactly as this coordinator's own FPP endpoint
+            configuration lists them (one collector per configured
+            instance), stable for the life of the process. This ordering
+            is guaranteed.
+          items:
+            $ref: "#/components/schemas/CollectorStatus"
+    Problem:
+      type: object
+      description: >-
+        RFC 9457 application/problem+json. serverTime is an extension
+        member present on every problem this API produces, with no
+        exception (section 6.2 and 6.6). supportedVersions is present only
+        on an "unsupported-api-version" problem. type is a stable,
+        documented identifier a client dispatches on — the six values in
+        its enum below are every class this coordinator currently
+        produces, and this list is the single source of truth for that
+        set. It is deliberately not a fetchable URI: nothing in this API
+        or its tests dereferences it over the network.
+      required: [type, title, status, detail, serverTime]
+      properties:
+        type:
+          type: string
+          format: uri
+          enum:
+            - https://showmesh.dev/problems/unsupported-api-version
+            - https://showmesh.dev/problems/resource-not-found
+            - https://showmesh.dev/problems/invalid-parameter
+            - https://showmesh.dev/problems/unauthorized
+            - https://showmesh.dev/problems/method-not-allowed
+            - https://showmesh.dev/problems/internal-error
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        serverTime:
+          type: string
+          format: date-time
+        supportedVersions:
+          type: array
+          items:
+            type: integer
+    StreamStart:
+      type: object
+      description: The payload of the first event on every SSE connection.
+      required: [streamId, apiVersion, serverTime, snapshotRequired]
+      properties:
+        streamId:
+          type: string
+        apiVersion:
+          type: integer
+        serverTime:
+          type: string
+          format: date-time
+        snapshotRequired:
+          type: boolean
+          const: true
+    StreamReset:
+      type: object
+      description: >-
+        The payload of a stream.reset event: either an overflowed
+        subscriber buffer (reason "subscriber_too_slow", after which the
+        connection is closed) or any other condition making the client's
+        local model unsafe to keep applying deltas to.
+      required: [seq, serverTime, reason, snapshotRequired]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        snapshotRequired:
+          type: boolean
+          const: true
+    NodeChangedEvent:
+      type: object
+      required: [seq, serverTime, node]
+      properties:
+        seq:
+          type: integer
+        serverTime:
+          type: string
+          format: date-time
+        node:
+          $ref: "#/components/schemas/Node"
+    FPPChangedEvent:
+      type: object
+      required: [seq, serverTime, instance]
+      properties:
+        seq:
+          type: integer
+        serverTime:
+          type: string
+          format: date-time
+        instance:
+          $ref: "#/components/schemas/FPPInstance"
+    EventRecordedEvent:
+      type: object
+      required: [seq, serverTime, event]
+      properties:
+        seq:
+          type: integer
+        serverTime:
+          type: string
+          format: date-time
+        event:
+          $ref: "#/components/schemas/Event"

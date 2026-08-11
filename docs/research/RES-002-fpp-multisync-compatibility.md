@@ -103,6 +103,47 @@ What that promotion rests on, stated so a later reader can judge it rather than 
 
 Items 4 and 5 stay where they were. No container promoted them and none will.
 
+### How ShowMesh detects that MultiSync is off (2026-08-10, tier 1)
+
+The note above says ShowMesh must be able to report "MultiSync is disabled"
+rather than reporting an absence of packets as a network fault. Building the
+Step 3 collector required knowing *how*, and the obvious answer is wrong in a
+way that hides itself. Captured against the same containerized FPP 9.5.3.
+
+- `GET /api/settings/MultiSyncEnabled` returns the setting's **schema**, not its
+  value: `name`, `description`, `tip`, `type`, `restart`, and so on. On a daemon
+  where the setting has never been explicitly written, which is every fresh
+  install, there is no `value` key at all. A decoder expecting one gets a zero
+  value and no error, so it reports "disabled" correctly, by accident, for as
+  long as MultiSync stays off. Once the setting has been written once, the
+  endpoint *does* gain a `value` key, carrying the JSON **string** `"0"` or
+  `"1"` rather than a boolean. Two boxes therefore behave differently and are
+  indistinguishable without knowing this. `GET /api/setting/...` (singular) is
+  404, and `GET /api/settings` returns the group catalogue, also not values.
+- The usable signal is the top-level `multisync` boolean in
+  `/api/fppd/status` and `/api/system/status`. Verified transition: `false` on a
+  fresh container; still `false` immediately after `PUT
+  /api/settings/MultiSyncEnabled` succeeds; `true` after an `fppd` restart. The
+  setting's own schema explains why, with `"restart": 2`.
+- So the status field reports **what the running daemon is actually doing**, and
+  the stored setting legitimately disagrees with it until `fppd` restarts.
+  Observing the daemon's behaviour is the correct choice for a collector, and it
+  means ShowMesh can distinguish "configured but not yet in effect" from "in
+  effect" if that ever matters.
+
+Also recorded because it costs an hour to rediscover: several
+`/api/fppd/status` fields that look numeric arrive as JSON **strings**
+(`seconds_played`, `seconds_remaining`, `repeat_mode`,
+`current_playlist.count`, `current_playlist.index`), while `mode`, `status`,
+`volume` and `uptimeSeconds` are genuine numbers. A struct declaring an integer
+for one of the former fails to unmarshal the whole document, which surfaces as
+the FPP appearing unreachable: a decoding bug wearing a network fault's
+clothes.
+
+This is REST behaviour rather than MultiSync wire behaviour, so it does not
+change this record's L2/L1 split. It is recorded here because it is what makes
+the `MultiSyncEnabled` finding above actionable rather than merely known.
+
 ## Decision, fallback, and revalidation
 
 Direction (pending L2/L3 confirmation): implement a native MultiSync listener speaking the documented wire protocol, answering discover pings with a reserved/appropriate device type, following FPP's own remote semantics (free-run on silence, slew/jump on resume, STOP+~5-frame blank). Supplement with REST/MQTT for supervision. Fallback options remain a small FPP-side bridge, running FPP on the node, or pre-rendered media with a separate verified clock. Revalidate on supported FPP major releases (next: FPP 10.0 GA).
