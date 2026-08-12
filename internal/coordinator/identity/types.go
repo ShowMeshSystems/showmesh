@@ -156,6 +156,28 @@ type CredentialForm string
 const (
 	FormSession CredentialForm = "session"
 	FormToken   CredentialForm = "token"
+
+	// FormPassword marks an audit entry written by a request whose entire
+	// job is to CREATE a session or claim bootstrap from a name/password
+	// pair — POST /api/v1/session and POST /api/v1/bootstrap — rather than
+	// one that already presented a pre-existing FormSession/FormToken
+	// credential. Moved here from internal/coordinator/api's own
+	// package-local const (review finding: this package owns
+	// CredentialForm's vocabulary, and a caller growing it outside this
+	// package is exactly the drift the CSRF deny-list fix in auth.go's
+	// writeGuard depends on this type staying closed against — see that
+	// function's doc comment).
+	FormPassword CredentialForm = "password"
+
+	// FormCLI marks an audit entry written by one of
+	// cmd/showmesh-coordinator's host-level subcommands (bootstrap,
+	// create-admin, reset-password, issue-token, revoke-token,
+	// invalidate-all-sessions, ...) rather than by an HTTP request this
+	// package's own Service methods authenticated. Moved here for the
+	// identical reason FormPassword was: a second package inventing its
+	// own CredentialForm value is this type's vocabulary growing outside
+	// the package that owns it.
+	FormCLI CredentialForm = "cli"
 )
 
 // Authenticated is what a successful [Service.AuthenticateToken] or
@@ -212,7 +234,7 @@ var (
 	// contract's sentinel set: ADR-024 decision 9 requires the code to
 	// "carry an expiry" and describes a state where no principal exists
 	// yet but the bootstrap file/row is momentarily absent (e.g. between
-	// process start and the first HasAnyPrincipal-triggered generation).
+	// process start and the first EnsureBootstrap-triggered generation).
 	// Both collapse to generic messaging at the API layer exactly like
 	// ErrInvalidCredential does elsewhere, but are distinct sentinels here
 	// so a caller CAN tell them apart if it needs to (e.g. for a more

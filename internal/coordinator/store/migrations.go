@@ -331,6 +331,18 @@ ALTER TABLE observations_v4 RENAME TO observations;
 // as touching every existing session row, which is what makes revoke-all
 // O(1) instead of O(sessions).
 //
+// principal_tokens.generation mirrors principal_sessions.generation exactly,
+// stamped at issue time the same way ([Store.CreateToken]) and checked the
+// same way ([identity.Service.AuthenticateToken]) — a review finding on this
+// step's own implementation caught that a bearer token carried no
+// generation at all, so a SetRole/SetDisabled/RevokeAllSessions generation
+// bump closed a cookie-backed stream within one revalidation tick and did
+// nothing to a token-backed one (decision 12's stale-scope bound did not
+// hold for tokens, which includes the UI's own break-glass path). A token
+// is exactly as sensitive as a session — it authenticates the identical set
+// of actions — so it gets the identical treatment rather than a
+// token-specific exception.
+//
 // principal_tokens.hint and principal_sessions.id are both deliberately
 // NOT secrets, unlike digest: hint is a short, non-secret slice of the
 // token's random component (enough for an operator to tell two tokens with
@@ -371,6 +383,7 @@ CREATE TABLE principal_tokens (
 	digest       TEXT NOT NULL UNIQUE,
 	hint         TEXT NOT NULL DEFAULT '',
 	label        TEXT NOT NULL DEFAULT '',
+	generation   INTEGER NOT NULL DEFAULT 0,
 	created_at   TEXT NOT NULL,
 	expires_at   TEXT,
 	revoked_at   TEXT,

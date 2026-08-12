@@ -110,32 +110,38 @@ func TestAuditSucceedsForAdminAndListsAWrite(t *testing.T) {
 // standing design only ever notifies about nodes, FPP instances, and
 // events (see [Hub.render]) — this test exists so a future change adding
 // an "audit.recorded" stream frame is caught rather than silently
-// accepted as a nice addition. It writes an audit entry directly (the
-// same call any handler in this package makes) and confirms the hub's
-// own render pass, poked immediately after, produces nothing derived
-// from it.
+// accepted as a nice addition.
+//
+// A review finding (mutation-confirmed) caught that the previous version
+// of this test asserted on h.lastEventSeq — the EVENT HISTORY cursor,
+// which [identity.Service.WriteAudit] was never going to advance
+// regardless of whether an "audit.recorded" stream frame existed, because
+// that cursor only moves when [Hub.renderNewEvents] reads a NEW event
+// record, a completely different code path audit writes never touch. The
+// test could not have failed even with the regression it claimed to
+// guard against. This version subscribes a real (in-process) subscriber
+// the same way [Hub.ServeHTTP] does and inspects its actual frame
+// channel — the thing an "audit.recorded" frame would have to be queued
+// into to ever reach a client — after an audit write and a render pass.
 func TestAuditNeverAppearsOnTheChangeStream(t *testing.T) {
 	svc := newTestIdentityService(t, fixedClock(testNow))
+	api := newStreamTestAPI(authTestDeps(svc))
+
+	_, sub := api.Hub.subscribe(false, nil)
+	defer api.Hub.unsubscribe(0)
+
 	if err := svc.WriteAudit(context.Background(), identity.AuditEntry{
 		Timestamp: testNow, Action: "test.action", Kind: identity.AuditAdmin,
 	}); err != nil {
 		t.Fatalf("write audit: %v", err)
 	}
 
-	api := newStreamTestAPI(authTestDeps(svc))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go api.Hub.Run(ctx)
+	api.Hub.render(context.Background())
 
-	// render() only ever consults deps.Nodes/FPP/Events (see stream.go);
-	// asserting that it produces zero pending frames when nothing else
-	// changed is the structural proof that an audit write has no path
-	// into the hub at all, short of reading stream.go's own source.
-	api.Hub.render(ctx)
-	api.Hub.mu.Lock()
-	lastEventSeq := api.Hub.lastEventSeq
-	api.Hub.mu.Unlock()
-	if lastEventSeq != 0 {
-		t.Fatalf("hub's lastEventSeq advanced to %d after only an audit write; audit must never reach event history or the stream", lastEventSeq)
+	select {
+	case pf := <-sub.frames:
+		t.Fatalf("a frame was queued for this subscriber after only an audit write: %+v — audit must never reach the change stream", pf)
+	default:
+		// Nothing queued — the expected, correct outcome.
 	}
 }

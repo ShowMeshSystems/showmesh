@@ -113,21 +113,6 @@ func openIdentityService(ctx context.Context, deps *cliDeps) (*store.Store, iden
 	return st, svc, nil
 }
 
-// formCLI marks an audit entry written by one of these subcommands rather
-// than by a request the HTTP API authenticated — a deliberate extension
-// of identity.CredentialForm's value set, exactly like
-// internal/coordinator/api's own formPassword: CredentialForm is a plain
-// string underneath, so this compiles, stores, and decodes exactly like
-// FormSession/FormToken even though it is not one of identity's own named
-// constants. ADR-024 decision 11 requires "every principal, token, and
-// session mutation" be audited; these subcommands mutate identity state
-// exactly as much as the API's own principal-management surface would,
-// and skipping the audit trail here just because the API layer is not
-// involved would leave a real blind spot in "who changed what" for the
-// one class of change that is, by construction, the hardest to attribute
-// to anything other than "whoever had a shell on this host".
-const formCLI identity.CredentialForm = "cli"
-
 // auditCLIAction writes a best-effort AuditAdmin entry for a subcommand's
 // mutation. Best-effort — a failure is logged, not fatal — for the same
 // reason handleCreateSession's failed audit path is NOT best-effort but
@@ -145,7 +130,7 @@ const formCLI identity.CredentialForm = "cli"
 func auditCLIAction(ctx context.Context, deps *cliDeps, svc identity.Service, action string, p identity.Principal) {
 	err := svc.WriteAudit(ctx, identity.AuditEntry{
 		Timestamp: deps.now(), PrincipalID: p.ID, PrincipalName: p.Name,
-		Form: formCLI, Action: action, Target: p.ID,
+		Form: identity.FormCLI, Action: action, Target: p.ID,
 		Kind: identity.AuditAdmin,
 	})
 	if err != nil {
@@ -588,6 +573,165 @@ func runCreateAdminSubcommandWithDeps(deps *cliDeps, args []string) int {
 	auditCLIAction(ctx, deps, svc, "principal.create", principal)
 
 	fmt.Fprintf(deps.stdout, "Created administrator %q (id %s).\n", principal.Name, principal.ID)
+	return 0
+}
+
+// runCreatePrincipalSubcommand implements
+// `showmesh-coordinator create-principal`: this record's fix for a defect
+// found while folding in Step 6's review. runCreateAdminSubcommand's only
+// caller ever created a principal was hardcoded to
+// identity.KindHuman/identity.RoleAdmin — deliberately, since it is
+// decision 9's lockout-recovery floor, not a general provisioning tool —
+// which left NO way to create any other principal shape at all. ADR-024
+// decision 7's own scenario, "the operator rotates the scheduler machine
+// token in November", presupposes a scheduler principal exists to hold
+// that token; nothing in this binary could create one. This subcommand is
+// the general case create-admin deliberately is not: an arbitrary
+// -role/-kind pair, matching decision 1's "kind does not restrict
+// credential form, and role is independent of kind" exactly — a human may
+// get any role, a machine may get any role, including admin.
+//
+// Kept a subcommand, not an HTTP endpoint: ADR-024 decision 0 does not
+// specify principal management over the API at all (see this package's
+// existing issue-token/list-tokens/revoke-token, all subcommands for the
+// identical reason), and a general principal-creation endpoint is exactly
+// the kind of write surface a future record should decide deliberately —
+// not one this task should back into as a side effect of closing a
+// review finding.
+func runCreatePrincipalSubcommand(args []string) int {
+	return runCreatePrincipalSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runCreatePrincipalSubcommandWithDeps(deps *cliDeps, args []string) int {
+	fs := flag.NewFlagSet("create-principal", flag.ExitOnError)
+	name := fs.String("name", "", "display name for the new principal (required)")
+	roleFlag := fs.String("role", "", "role: viewer, operator, admin, or scheduler (required)")
+	kindFlag := fs.String("kind", "", "kind: human or machine (required)")
+	_ = fs.Parse(args)
+
+	trimmedName := strings.TrimSpace(*name)
+	if trimmedName == "" {
+		fmt.Fprintln(deps.stderr, "create-principal: -name is required")
+		return 2
+	}
+
+	role, err := identity.ParseRole(strings.TrimSpace(*roleFlag))
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "create-principal: -role: %v\n", err)
+		return 2
+	}
+
+	var kind identity.Kind
+	switch strings.TrimSpace(*kindFlag) {
+	case string(identity.KindHuman):
+		kind = identity.KindHuman
+	case string(identity.KindMachine):
+		kind = identity.KindMachine
+	default:
+		fmt.Fprintf(deps.stderr, "create-principal: -kind must be %q or %q\n", identity.KindHuman, identity.KindMachine)
+		return 2
+	}
+
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+
+	// A password is prompted for, exactly like create-admin/bootstrap/
+	// reset-password, but — unlike create-admin — an EMPTY one is
+	// accepted: identity.Service.CreatePrincipal already tolerates it
+	// (skipping HashPassword entirely, see that method's doc comment),
+	// which is the right default for the scenario this subcommand exists
+	// for — a machine principal (FPP's scheduler, showmeshctl run
+	// unattended) that will only ever authenticate with a token minted by
+	// issue-token, never a password at all.
+	password, err := readPassword(
+		fmt.Sprintf("Password for new %s principal %q (leave empty for a machine principal that will only ever use a token): ", kind, trimmedName),
+		deps.stdin, deps.stderr)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		return 1
+	}
+
+	principal, err := svc.CreatePrincipal(ctx, trimmedName, kind, role, password)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		return 1
+	}
+	auditCLIAction(ctx, deps, svc, "principal.create", principal)
+
+	fmt.Fprintf(deps.stdout, "Created principal %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role)
+	return 0
+}
+
+// runInvalidateAllSessionsSubcommand implements
+// `showmesh-coordinator invalidate-all-sessions`: ADR-024 decision 5's
+// third named generation-bump trigger, alongside a password change and an
+// administrative revoke-all — "a database restore increments it" — which
+// shipped as decided behavior with no code implementing it. A review
+// finding reproduced the gap directly: create a session, back up the data
+// directory, reset-password (which bumps generation and correctly kills
+// that session), restore the backup, and the session authenticates again,
+// because restoring rolls the ENTIRE database back to the backup's point
+// in time — including principals.generation itself. Nothing left behind
+// BY a restore can distinguish a session that was legitimately revoked
+// after the backup point from one the restore just resurrected, so
+// detecting this automatically is not attempted here (that would be the
+// "fragile mechanism" this task's spec warned against inventing) —
+// instead, exactly like bootstrap and lockout recovery, this is a
+// deliberate, host-level, operator-run action: run this once, immediately
+// after restoring a backup and before trusting the restored coordinator
+// with any traffic, and every principal's every existing session and
+// open change stream is invalidated, unconditionally, forcing a fresh
+// login. It is NOT reachable over the API, matching decision 9's posture
+// for the rest of this file exactly.
+func runInvalidateAllSessionsSubcommand(args []string) int {
+	return runInvalidateAllSessionsSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runInvalidateAllSessionsSubcommandWithDeps(deps *cliDeps, args []string) int {
+	fs := flag.NewFlagSet("invalidate-all-sessions", flag.ExitOnError)
+	confirm := fs.Bool("yes", false, "required: confirms this operator intends to sign out every principal on this coordinator")
+	_ = fs.Parse(args)
+
+	if !*confirm {
+		fmt.Fprintln(deps.stderr, "invalidate-all-sessions: refusing to run without -yes — this signs out EVERY principal's EVERY session and open stream on this coordinator, unconditionally")
+		return 2
+	}
+
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+
+	principals, err := svc.ListPrincipals(ctx)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		return 1
+	}
+
+	if err := svc.InvalidateAllSessions(ctx); err != nil {
+		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		return 1
+	}
+
+	// One best-effort AuditAdmin entry per principal, exactly like every
+	// other mutation this file performs — see auditCLIAction's doc
+	// comment for why this is best-effort rather than gating: an operator
+	// who can run this already holds filesystem access to the data
+	// volume, decision 9's own standard for "equivalent to owning the
+	// deployment".
+	for _, p := range principals {
+		auditCLIAction(ctx, deps, svc, "session.invalidate_all", p)
+	}
+
+	fmt.Fprintf(deps.stdout, "Invalidated every session and open stream for %d principal(s).\n", len(principals))
 	return 0
 }
 

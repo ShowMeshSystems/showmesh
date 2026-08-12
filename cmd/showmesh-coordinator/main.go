@@ -33,6 +33,10 @@ func main() {
 			os.Exit(runBootstrapSubcommand(os.Args[2:]))
 		case "create-admin":
 			os.Exit(runCreateAdminSubcommand(os.Args[2:]))
+		case "create-principal":
+			os.Exit(runCreatePrincipalSubcommand(os.Args[2:]))
+		case "invalidate-all-sessions":
+			os.Exit(runInvalidateAllSessionsSubcommand(os.Args[2:]))
 		case "reset-password":
 			os.Exit(runResetPasswordSubcommand(os.Args[2:]))
 		case "list-principals":

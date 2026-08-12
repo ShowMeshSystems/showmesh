@@ -287,36 +287,67 @@ type TokenRecord struct {
 	Digest      string
 	Hint        string
 	Label       string
-	CreatedAt   time.Time
-	ExpiresAt   *time.Time
-	RevokedAt   *time.Time
-	LastUsedAt  *time.Time
+
+	// Generation mirrors [SessionRecord.Generation] exactly: the
+	// principal's generation counter at the moment this token was issued,
+	// read from principals.generation inside the same transaction as the
+	// insert (see [Store.CreateToken]), never caller-supplied on input.
+	// [identity.Service.AuthenticateToken] rejects a token whose stored
+	// Generation is less than the principal's current one, the same check
+	// AuthenticateSession already made for sessions — see migrations.go's
+	// schemaV5 doc comment for why a token needed this at all.
+	Generation uint64
+
+	CreatedAt  time.Time
+	ExpiresAt  *time.Time
+	RevokedAt  *time.Time
+	LastUsedAt *time.Time
 }
 
 // CreateToken inserts a new token row. rec.ID, PrincipalID, Digest, Hint,
 // and Label must already be set; CreatedAt is stamped from this Store's
 // clock and ignored on input. ExpiresAt is stored exactly as given — nil
 // means "no expiry", the ADR-024 decision 1 default for machine tokens —
-// and RevokedAt/LastUsedAt start nil.
+// and RevokedAt/LastUsedAt start nil. Generation is NOT taken from rec —
+// exactly like [Store.CreateSession], it is read from
+// principals.generation for PrincipalID inside the same transaction as the
+// insert, so the stored value is always the principal's true current
+// generation at creation time regardless of what a caller guessed it to be.
 func (s *Store) CreateToken(ctx context.Context, rec TokenRecord) (TokenRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TokenRecord{}, fmt.Errorf("store: begin create token for principal %q: %w", rec.PrincipalID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var generation uint64
+	if err := tx.QueryRowContext(ctx, `SELECT generation FROM principals WHERE id = ?`, rec.PrincipalID).Scan(&generation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TokenRecord{}, fmt.Errorf("store: create token for principal %q: %w", rec.PrincipalID, ErrPrincipalNotFound)
+		}
+		return TokenRecord{}, fmt.Errorf("store: read generation for %q: %w", rec.PrincipalID, err)
+	}
+	rec.Generation = generation
 	rec.CreatedAt = s.now()
 	rec.RevokedAt = nil
 	rec.LastUsedAt = nil
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO principal_tokens (id, principal_id, digest, hint, label, created_at, expires_at, revoked_at, last_used_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO principal_tokens (id, principal_id, digest, hint, label, generation, created_at, expires_at, revoked_at, last_used_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		rec.ID, rec.PrincipalID, rec.Digest, rec.Hint, rec.Label,
+		rec.ID, rec.PrincipalID, rec.Digest, rec.Hint, rec.Label, rec.Generation,
 		timeToDB(rec.CreatedAt), timePtrToDB(rec.ExpiresAt), nil, nil,
-	)
-	if err != nil {
+	); err != nil {
 		return TokenRecord{}, fmt.Errorf("store: create token for principal %q: %w", rec.PrincipalID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return TokenRecord{}, fmt.Errorf("store: commit create token for principal %q: %w", rec.PrincipalID, err)
 	}
 	return rec, nil
 }
 
-const tokenColumns = `id, principal_id, digest, hint, label, created_at, expires_at, revoked_at, last_used_at`
+const tokenColumns = `id, principal_id, digest, hint, label, generation, created_at, expires_at, revoked_at, last_used_at`
 
 func scanToken(row interface{ Scan(dest ...any) error }) (TokenRecord, error) {
 	var (
@@ -327,7 +358,7 @@ func scanToken(row interface{ Scan(dest ...any) error }) (TokenRecord, error) {
 		lastUsedAt sql.NullString
 	)
 	if err := row.Scan(
-		&rec.ID, &rec.PrincipalID, &rec.Digest, &rec.Hint, &rec.Label,
+		&rec.ID, &rec.PrincipalID, &rec.Digest, &rec.Hint, &rec.Label, &rec.Generation,
 		&createdAt, &expiresAt, &revokedAt, &lastUsedAt,
 	); err != nil {
 		return TokenRecord{}, err

@@ -69,7 +69,9 @@ Everything the API reports carries provenance and freshness, and absent evidence
 
 ### Security posture, stated plainly
 
-**By default the API is open to anyone who can reach this port**, and the coordinator logs a warning saying so at startup. Setting `SHOWMESH_API_TOKEN` in `.env` closes it behind a shared bearer token.
+**By default the read API is open to anyone who can reach this port**, and the coordinator logs a warning saying so at startup. Setting `SHOWMESH_API_CLOSE_READS=true` in `.env` closes it, requiring an authenticated principal. Writes always require one and cannot be opened.
+
+**Upgrading: remove `SHOWMESH_API_TOKEN` from your environment before you start this release.** [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) retired it, and a coordinator that still sees it set **refuses to start**, naming the migration in the error. That is deliberate and it is the most operator-visible hazard in this upgrade: ignoring the variable would silently reopen a read API you had deliberately closed, on nothing more than a container tag change. Set `SHOWMESH_API_CLOSE_READS=true` instead, then create your first administrator from the one-time bootstrap code the coordinator writes to its data volume (`POST /api/v1/bootstrap`, or `showmesh-coordinator bootstrap` against the volume). Machine credentials for `showmeshctl` and automation come from `showmesh-coordinator issue-token`.
 
 [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.**
 
@@ -87,7 +89,7 @@ http://localhost:8081
 
 (the published host port; override with `SHOWMESH_UI_PORT` in `.env`.)
 
-**The browser talks only to this container**, never to the coordinator's own port directly. The UI container forwards every `/api/*` request through unchanged and forwards responses back unchanged; it performs no aggregation, retry, rewriting, or caching of API responses ([ADR-022](../docs/decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). If `SHOWMESH_API_TOKEN` is set on the coordinator, the browser itself receives the resulting `401` on first use, prompts the operator for the secret, and keeps it in that browser tab's `sessionStorage` — **the UI container is deliberately never given a copy of the token** and cannot be configured with one. There is no login, identity, or logout beyond closing the tab; that is what ADR-021 and ADR-022 decided for this release, not an oversight.
+**The browser talks only to this container**, never to the coordinator's own port directly. The UI container forwards every `/api/*` request through unchanged and forwards responses back unchanged; it performs no aggregation, retry, rewriting, or caching of API responses ([ADR-022](../docs/decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). The browser signs in against the coordinator and holds an `HttpOnly` session cookie the coordinator mints, which this proxy forwards along with `Set-Cookie` unchanged. **The UI container is deliberately never given a credential of its own** and cannot be configured with one, because a proxy that held one would make reaching the UI equivalent to reaching the API ([ADR-022](../docs/decisions/ADR-022-operator-ui-serves-the-api-same-origin.md) decision 2). A pasted machine token remains available as a break-glass path when the session path is broken. Do not add `proxy_cookie_path` or `proxy_cookie_domain` to `nginx.conf`: either one breaks sign-in in a way that presents as a session that does not stick.
 
 **ShowMesh terminates no TLS**, in this container or the coordinator's. A deployment that needs TLS puts a reverse proxy of its own in front of the `ui` service; nothing here does it.
 
@@ -127,6 +129,14 @@ Restore by extracting the same tarball back into the same real volume name befor
 docker run --rm -v deploy_showmesh-data:/data -v "$(pwd)":/backup alpine \
   sh -c "cd /data && tar xzf /backup/showmesh-data-YYYYMMDD.tar.gz"
 ```
+
+**After any restore, invalidate every session:**
+
+```sh
+docker compose exec coordinator showmesh-coordinator invalidate-all-sessions -yes
+```
+
+This is not optional and it is not automatic. Session validity is bounded by a per-principal generation counter that lives **inside** the database, so restoring a backup rolls the counter back along with everything else and every session revoked after that backup point comes back to life. Verified during Step 6: a session killed by a password change authenticated again as `admin` after the data directory was restored from an earlier copy. Auto-detecting a restore from inside the restored database is structurally impossible for the same reason, which is why this is an operator step ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 5).
 
 Prefer the coordinator's own YAML export (ADR-009) for reviewable, secret-free configuration backups; the volume copy above is the full-fidelity disaster-recovery path.
 

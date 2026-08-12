@@ -306,6 +306,7 @@ export class ApiStore {
         controller.signal,
       )
       this.applySessionResponse(resp)
+      this.clearShadowingToken()
       this.wakeReadLoop()
     } finally {
       this.endSideCall(controller)
@@ -352,10 +353,35 @@ export class ApiStore {
         controller.signal,
       )
       this.applySessionResponse(resp)
+      this.clearShadowingToken()
       this.wakeReadLoop()
     } finally {
       this.endSideCall(controller)
     }
+  }
+
+  /**
+   * ADR-024 decision 6 / client.ts's `request()`: "an Authorization
+   * header, if present at all, is the only credential path considered
+   * for this request" — a stored break-glass token always wins over the
+   * cookie the browser would otherwise attach, on EVERY request,
+   * including the ones this store makes right after a successful
+   * cookie-authenticated login. Left alone, a token that was revoked (or
+   * simply wrong) permanently shadows a session this operator just
+   * proved is valid: every subsequent request keeps presenting the dead
+   * token, the coordinator keeps answering as if uncredentialed, and
+   * `GET /session` keeps reporting `authenticated: false` forever — the
+   * persistent sign-in banner (SessionPanel.tsx) would show "signed out"
+   * even immediately after a login this method just confirmed succeeded.
+   * A successful login or bootstrap claim is exactly the signal that the
+   * cookie path works again, so this clears whatever token was stored
+   * rather than leaving it to keep winning silently. (The operator also
+   * has a direct way to do this without signing in first — see
+   * SessionPanel.tsx's "Clear stored token" affordance, which calls
+   * `clearToken()` below.)
+   */
+  private clearShadowingToken(): void {
+    clearStoredToken()
   }
 
   /**

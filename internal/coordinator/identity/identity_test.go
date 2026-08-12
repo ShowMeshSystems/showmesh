@@ -328,10 +328,44 @@ func TestDeleteBootstrapFileIsNotAnErrorWhenAlreadyGone(t *testing.T) {
 
 // --- Service: bootstrap lifecycle ---
 
-func TestHasAnyPrincipalGeneratesBootstrapFileAndRow(t *testing.T) {
+// TestHasAnyPrincipalNeverGeneratesBootstrapFile closes a review finding:
+// HasAnyPrincipal used to generate/maintain the bootstrap code and file as
+// a documented side effect, which meant an unauthenticated caller of the
+// API's GET /api/v1/session (that endpoint's only job is to call this
+// method) silently reissued an expired code on the very next
+// unauthenticated poll — the code's own expiry bounded nothing in
+// practice, "a window that stays open with rotating contents" rather than
+// a bounded, host-triggered one. HasAnyPrincipal is now a pure query;
+// [EnsureBootstrap] is the only method that may create the file — proven
+// by the two tests immediately below this one.
+func TestHasAnyPrincipalNeverGeneratesBootstrapFile(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, dataDir := newTestService(t, clock)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		has, err := svc.HasAnyPrincipal(ctx)
+		if err != nil {
+			t.Fatalf("has any principal (call %d): %v", i, err)
+		}
+		if has {
+			t.Fatalf("HasAnyPrincipal = true on a fresh service, want false")
+		}
+	}
+
+	if _, err := os.Stat(bootstrapFilePath(dataDir)); !os.IsNotExist(err) {
+		t.Errorf("bootstrap file exists after repeated HasAnyPrincipal calls with EnsureBootstrap never called: err = %v", err)
+	}
+}
+
+func TestEnsureBootstrapGeneratesBootstrapFileAndRow(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	svc, st, dataDir := newTestService(t, clock)
 	ctx := context.Background()
+
+	if err := svc.EnsureBootstrap(ctx); err != nil {
+		t.Fatalf("ensure bootstrap: %v", err)
+	}
 
 	has, err := svc.HasAnyPrincipal(ctx)
 	if err != nil {
@@ -343,7 +377,7 @@ func TestHasAnyPrincipalGeneratesBootstrapFileAndRow(t *testing.T) {
 
 	rec, err := st.GetBootstrap(ctx)
 	if err != nil {
-		t.Fatalf("get bootstrap after HasAnyPrincipal: %v", err)
+		t.Fatalf("get bootstrap after EnsureBootstrap: %v", err)
 	}
 	if rec.ClaimedAt != nil {
 		t.Errorf("bootstrap already claimed on a fresh service")
@@ -358,12 +392,12 @@ func TestHasAnyPrincipalGeneratesBootstrapFileAndRow(t *testing.T) {
 	}
 }
 
-func TestHasAnyPrincipalDoesNotRegenerateAValidUnclaimedCode(t *testing.T) {
+func TestEnsureBootstrapDoesNotRegenerateAValidUnclaimedCode(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	svc, st, _ := newTestService(t, clock)
 	ctx := context.Background()
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	first, err := st.GetBootstrap(ctx)
@@ -371,7 +405,7 @@ func TestHasAnyPrincipalDoesNotRegenerateAValidUnclaimedCode(t *testing.T) {
 		t.Fatalf("get bootstrap: %v", err)
 	}
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	second, err := st.GetBootstrap(ctx)
@@ -380,16 +414,16 @@ func TestHasAnyPrincipalDoesNotRegenerateAValidUnclaimedCode(t *testing.T) {
 	}
 
 	if first.CodeDigest != second.CodeDigest {
-		t.Errorf("bootstrap code digest changed across two HasAnyPrincipal calls with nothing claimed or expired: %q -> %q", first.CodeDigest, second.CodeDigest)
+		t.Errorf("bootstrap code digest changed across two EnsureBootstrap calls with nothing claimed or expired: %q -> %q", first.CodeDigest, second.CodeDigest)
 	}
 }
 
-func TestHasAnyPrincipalRegeneratesAnExpiredCode(t *testing.T) {
+func TestEnsureBootstrapRegeneratesAnExpiredCode(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	svc, st, _ := newTestService(t, clock, WithBootstrapCodeTTL(time.Hour))
 	ctx := context.Background()
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	first, err := st.GetBootstrap(ctx)
@@ -399,7 +433,7 @@ func TestHasAnyPrincipalRegeneratesAnExpiredCode(t *testing.T) {
 
 	clock.advance(2 * time.Hour) // past the 1-hour TTL
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	second, err := st.GetBootstrap(ctx)
@@ -409,6 +443,29 @@ func TestHasAnyPrincipalRegeneratesAnExpiredCode(t *testing.T) {
 
 	if first.CodeDigest == second.CodeDigest {
 		t.Errorf("bootstrap code digest unchanged after its TTL elapsed, want a freshly generated one")
+	}
+}
+
+// TestEnsureBootstrapIsNoOpOnceAPrincipalExists proves the OTHER half of
+// the HasAnyPrincipal/EnsureBootstrap split: EnsureBootstrap must not
+// (re)create a bootstrap file once a principal exists — the coordinator's
+// own periodic watchUnclaimedBootstrap loop calls it unconditionally on
+// every tick regardless of claim state, so this is a real, not merely
+// theoretical, calling pattern.
+func TestEnsureBootstrapIsNoOpOnceAPrincipalExists(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, dataDir := newTestService(t, clock)
+	ctx := context.Background()
+
+	if _, err := svc.CreatePrincipal(ctx, "operator", KindHuman, RoleViewer, "some-password"); err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+	if err := svc.EnsureBootstrap(ctx); err != nil {
+		t.Fatalf("ensure bootstrap: %v", err)
+	}
+
+	if _, err := os.Stat(bootstrapFilePath(dataDir)); !os.IsNotExist(err) {
+		t.Errorf("bootstrap file exists after EnsureBootstrap with a principal already present: err = %v", err)
 	}
 }
 
@@ -434,7 +491,7 @@ func TestClaimBootstrapCreatesAdminAndInvalidatesCode(t *testing.T) {
 	svc, st, dataDir := newTestService(t, clock)
 	ctx := context.Background()
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 	code := readBootstrapCode(t, dataDir)
@@ -475,7 +532,7 @@ func TestClaimBootstrapWrongCodeFails(t *testing.T) {
 	svc, _, _ := newTestService(t, clock)
 	ctx := context.Background()
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 
@@ -490,7 +547,7 @@ func TestClaimBootstrapExpiredFails(t *testing.T) {
 	svc, _, dataDir := newTestService(t, clock, WithBootstrapCodeTTL(time.Hour))
 	ctx := context.Background()
 
-	if _, err := svc.HasAnyPrincipal(ctx); err != nil {
+	if err := svc.EnsureBootstrap(ctx); err != nil {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 	code := readBootstrapCode(t, dataDir)
@@ -537,6 +594,37 @@ func TestAuthenticatePasswordWrongPasswordIsInvalidCredential(t *testing.T) {
 	_, err := svc.AuthenticatePassword(ctx, "operator", "wrong-password")
 	if !errors.Is(err, ErrInvalidCredential) {
 		t.Errorf("error = %v, want ErrInvalidCredential", err)
+	}
+}
+
+// TestEmptyPasswordPrincipalIsNeverAuthenticatableByPassword closes a
+// review finding: this file (and cmd/showmesh-coordinator's own
+// subcommands_test.go) creates a large number of "empty password"
+// principals purely to skip argon2id's real cost for tests that only need
+// SOME principal to exist (see this file's own newTestService callers
+// passing "" as password, and subcommands_test.go's setupPrincipal doc
+// comment naming the same convention explicitly) — but neither suite ever
+// asserted that an empty-password principal is actually unauthenticatable
+// BY password, which is the one property every one of those speed
+// shortcuts is silently trusting. [Service.CreatePrincipal] stores an
+// empty PasswordHash for password == "" (see that method), and
+// [VerifyPassword] treats an empty string as a malformed PHC hash — this
+// test pins that chain end to end: neither an empty password nor any
+// other guess ever authenticates a principal created this way.
+func TestEmptyPasswordPrincipalIsNeverAuthenticatableByPassword(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, _ := newTestService(t, clock)
+	ctx := context.Background()
+
+	if _, err := svc.CreatePrincipal(ctx, "speed-only", KindMachine, RoleScheduler, ""); err != nil {
+		t.Fatalf("create principal with empty password: %v", err)
+	}
+
+	if _, err := svc.AuthenticatePassword(ctx, "speed-only", ""); !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("AuthenticatePassword with an empty password against an empty-password principal: error = %v, want ErrInvalidCredential", err)
+	}
+	if _, err := svc.AuthenticatePassword(ctx, "speed-only", "anything-at-all"); !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("AuthenticatePassword with a guessed password against an empty-password principal: error = %v, want ErrInvalidCredential", err)
 	}
 }
 
@@ -715,6 +803,129 @@ func TestAuthenticateTokenDisabledPrincipalIsInvalidCredential(t *testing.T) {
 	}
 	if errors.Is(err, ErrDisabled) {
 		t.Errorf("error also matches ErrDisabled, want it collapsed into ErrInvalidCredential for a token")
+	}
+}
+
+// TestAuthenticateTokenStaleGenerationIsInvalidCredential closes review
+// finding 4: AuthenticateToken used to check revocation, expiry, and
+// disabled, but never generation, and tokens carried no generation at
+// all — so a SetRole/SetDisabled(true)/RevokeAllSessions generation bump
+// closed a cookie-backed SSE stream within one revalidation tick and did
+// NOTHING to a token-backed one. ADR-024 decision 12's stale-scope bound
+// ("a role change... increments the generation counter... which closes
+// open streams and forces a re-fetch") therefore did not hold for token
+// clients at all — which includes the UI's own bearer-paste break-glass
+// path (decision 5). migrations.go's schemaV5 doc comment records the
+// fix this test pins: principal_tokens.generation, stamped at issue time
+// exactly like principal_sessions.generation, checked here exactly like
+// checkSession already checks it for a session.
+func TestAuthenticateTokenStaleGenerationIsInvalidCredential(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, _ := newTestService(t, clock)
+	ctx := context.Background()
+	p, err := svc.CreatePrincipal(ctx, "scheduler-bot", KindMachine, RoleScheduler, "")
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+	tok, err := svc.IssueToken(ctx, p.ID, "showmeshctl", nil)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	// Sanity: the token authenticates before any generation bump — so the
+	// rejection asserted below is attributable to the bump, not to some
+	// other, unrelated setup mistake.
+	if _, err := svc.AuthenticateToken(ctx, tok.Value); err != nil {
+		t.Fatalf("token does not authenticate before any generation bump: %v", err)
+	}
+
+	// Any of SetRole/SetDisabled(true)/RevokeAllSessions bumps generation
+	// identically (see store.Store.bumpPrincipalGenerationTx); SetRole is
+	// used here because it is also decision 12's own named example.
+	if _, err := svc.SetRole(ctx, p.ID, RoleViewer); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+
+	if _, err := svc.AuthenticateToken(ctx, tok.Value); !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("AuthenticateToken after a generation bump on the owning principal: error = %v, want ErrInvalidCredential", err)
+	}
+}
+
+// TestRevalidateTokenAndRevalidateSessionNeverTouchLastUsedAt closes
+// review finding 11's third smaller item at this package's own boundary
+// (internal/coordinator/api/stream_auth_test.go's
+// TestStreamRevalidationDoesNotSlideSessionLastUsedAt proves the same
+// property end to end through the API layer): [Service.RevalidateSession]
+// and [Service.RevalidateToken] must perform every check
+// AuthenticateSession/AuthenticateToken do, EXCEPT the final
+// TouchSession/TouchToken write — a periodic SSE revalidation tick is not
+// an operator using the credential, and touching LastUsedAt there would
+// make ADR-024 decision 5's 90-day idle window unenforceable for exactly
+// the abandoned-tab case it exists to catch.
+func TestRevalidateTokenAndRevalidateSessionNeverTouchLastUsedAt(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, st, _ := newTestService(t, clock)
+	ctx := context.Background()
+
+	p, err := svc.CreatePrincipal(ctx, "scheduler-bot", KindMachine, RoleScheduler, "")
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+	tok, err := svc.IssueToken(ctx, p.ID, "showmeshctl", nil)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if _, err := svc.RevalidateToken(ctx, tok.Value); err != nil {
+		t.Fatalf("RevalidateToken: %v", err)
+	}
+	tokRec, err := st.GetTokenByDigest(ctx, HashToken(tok.Value))
+	if err != nil {
+		t.Fatalf("get token: %v", err)
+	}
+	if tokRec.LastUsedAt != nil {
+		t.Errorf("token LastUsedAt = %v after RevalidateToken, want nil (never touched by revalidation)", tokRec.LastUsedAt)
+	}
+
+	sess, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := svc.RevalidateSession(ctx, secret, clock.now()); err != nil {
+		t.Fatalf("RevalidateSession: %v", err)
+	}
+	sessRec, err := st.GetSessionByDigest(ctx, hashSessionSecret(secret))
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if !sessRec.LastUsedAt.Equal(sess.CreatedAt) {
+		t.Errorf("session LastUsedAt = %v after RevalidateSession, want unchanged from CreatedAt %v (never touched by revalidation)", sessRec.LastUsedAt, sess.CreatedAt)
+	}
+}
+
+// TestRevalidateTokenStillRejectsGenerationStale proves
+// RevalidateToken is not merely a no-touch pass-through that skips every
+// check along with the touch: it must still enforce the identical
+// generation comparison AuthenticateToken does, so a revoked/demoted
+// principal's token-backed SSE stream is actually closed by
+// [Hub.revalidateSubscribers], not kept alive by a revalidation path that
+// silently stopped checking anything.
+func TestRevalidateTokenStillRejectsGenerationStale(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, _ := newTestService(t, clock)
+	ctx := context.Background()
+	p, err := svc.CreatePrincipal(ctx, "scheduler-bot", KindMachine, RoleScheduler, "")
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+	tok, err := svc.IssueToken(ctx, p.ID, "showmeshctl", nil)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if _, err := svc.SetRole(ctx, p.ID, RoleViewer); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	if _, err := svc.RevalidateToken(ctx, tok.Value); !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("RevalidateToken after a generation bump: error = %v, want ErrInvalidCredential", err)
 	}
 }
 

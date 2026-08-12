@@ -185,6 +185,41 @@ func TestCloseReadsEnforcedOnStreamEndpoint(t *testing.T) {
 	}
 }
 
+// TestCloseReadsRejectsTokenMissingAReadAllScope closes review finding
+// 12's "read-API scope authorization has no test at all": nothing in this
+// package's suite ever exercised [handlers.readGuardAll]'s per-scope
+// denial loop, because every BUILT-IN role that holds any read scope
+// holds all four together (see identity.Role.Scopes) — so a mutation
+// reducing that loop to `if false {}` (never denying anything) would have
+// passed every existing test in this package unmodified. RoleScheduler
+// holds NONE of the four ([identity.ScopeShowMacroRun] only), which is
+// enough to prove the loop actually runs: a scheduler token must be
+// rejected 403 from a readGuardAll route (GET /api/v1/snapshot) with
+// reads closed, naming the FIRST scope readAllScopes checks
+// (identity.ScopeNodeRead) — under the "if false" mutation this request
+// would incorrectly succeed with 200.
+func TestCloseReadsRejectsTokenMissingAReadAllScope(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "scheduler-1", identity.RoleScheduler)
+	token := mustIssueToken(t, svc, p.ID)
+
+	api := New(authTestDeps(svc), Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	if m["type"] != ProblemTypeForbidden {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeForbidden)
+	}
+	detail, _ := m["detail"].(string)
+	if !strings.Contains(detail, string(identity.ScopeNodeRead)) {
+		t.Errorf("detail = %q, want it to name %q (the first scope readAllScopes checks)", detail, identity.ScopeNodeRead)
+	}
+}
+
 // TestGetSessionAlwaysOpenEvenWithClosedReads proves ADR-024 decision 5's
 // "being signed out is a persistent, readable state": GET /api/v1/session
 // answers 200 (never 401) with no credential, regardless of
@@ -301,6 +336,29 @@ func TestCORSAdvertisesWriteMethods(t *testing.T) {
 		if !strings.Contains(allow, method) {
 			t.Errorf("Access-Control-Allow-Methods = %q, want it to contain %q", allow, method)
 		}
+	}
+}
+
+// TestCORSPreflightAllowsContentType closes review finding 11's second
+// smaller item: the preflight response used to advertise POST and DELETE
+// in Access-Control-Allow-Methods (TestCORSAdvertisesWriteMethods above)
+// but never named Content-Type in Access-Control-Allow-Headers, even
+// though every write this package's own bearer-token exemption advertises
+// as cross-origin-reachable (POST/DELETE /api/v1/session) sends
+// "Content-Type: application/json" — a header outside CORS's "simple
+// request" set. A browser refuses to send that header on the actual
+// request unless the preflight named it, so the cross-origin bearer write
+// this package's own docs describe as legitimate silently failed at the
+// browser's preflight step, before ever reaching this coordinator.
+func TestCORSPreflightAllowsContentType(t *testing.T) {
+	api := testAPI(t, Options{AllowedOrigins: []string{"https://ui.example.com"}})
+	resp, _ := doRequest(t, api.Handler, "OPTIONS", "/api/v1/session", map[string]string{
+		"Origin":                        "https://ui.example.com",
+		"Access-Control-Request-Method": "POST",
+	})
+	allow := resp.Header.Get("Access-Control-Allow-Headers")
+	if !strings.Contains(allow, "Content-Type") {
+		t.Errorf("Access-Control-Allow-Headers = %q, want it to contain %q", allow, "Content-Type")
 	}
 }
 

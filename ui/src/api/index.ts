@@ -32,6 +32,14 @@ export {
   claimBootstrap,
 } from './useModel'
 
+// A pure, side-effect-free read of whether a break-glass token is
+// currently stored (token.ts) — exported so SessionPanel.tsx can decide
+// whether to offer clearing one directly, without reaching past this
+// barrel into an internal module. Not a store action (no ApiStore
+// singleton involved) and not itself part of ADR-022 decision 4's
+// storage contract, which stays owned by token.ts.
+export { getStoredToken } from './token'
+
 // Exported for seam C's error-boundary / advanced testing needs and for
 // this seam's own tests; the real application only ever needs the
 // singleton wired up in useModel.ts.

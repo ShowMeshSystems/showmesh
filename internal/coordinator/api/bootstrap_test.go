@@ -59,14 +59,19 @@ func readBootstrapCode(t *testing.T, dataDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// mustEnsureBootstrap calls HasAnyPrincipal once, discarding the boolean,
-// purely for its documented side effect of generating a bootstrap
-// code/file when none exists yet — identical to every ClaimBootstrap test
-// in internal/coordinator/identity's own suite calling HasAnyPrincipal
-// before reading the code off disk.
+// mustEnsureBootstrap calls [identity.Service.EnsureBootstrap] directly —
+// the code-generation half ADR-024 decision 9 requires, deliberately
+// SEPARATE from HasAnyPrincipal's own pure query (a review finding: the
+// old version of this helper called HasAnyPrincipal for its
+// then-undocumented side effect of also generating the code, which was
+// itself the defect — an unauthenticated GET /api/v1/session poll
+// triggered the identical side effect in production, silently reissuing
+// an expired code forever). Matches
+// internal/coordinator/identity's own ClaimBootstrap tests, which call
+// EnsureBootstrap the same way before reading the code off disk.
 func mustEnsureBootstrap(t *testing.T, svc identity.Service) {
 	t.Helper()
-	if _, err := svc.HasAnyPrincipal(context.Background()); err != nil {
+	if err := svc.EnsureBootstrap(context.Background()); err != nil {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 }
@@ -135,6 +140,20 @@ func TestClaimBootstrapSuccessCreatesAdminAndSetsCookie(t *testing.T) {
 // identity.Service read rather than a value that only ever reads false
 // (which every OTHER test in this package's suite, all of which create a
 // principal before touching GET /session, would never catch).
+//
+// mustEnsureBootstrap is called explicitly here, between the two
+// GET /api/v1/session calls, standing in for the coordinator's own
+// startup/periodic path (internal/coordinator/coordinator.go's
+// watchUnclaimedBootstrap) that provisions the bootstrap file in
+// production — GET /api/v1/session itself no longer does, by design (a
+// review finding: it used to, via HasAnyPrincipal's old side effect,
+// which meant an expired code was silently reissued on the very next
+// unauthenticated poll and the code's own expiry bounded nothing; see
+// [svc.EnsureBootstrap]'s doc comment). bootstrapRequired reading true
+// above does not depend on a code existing at all — it is a pure "zero
+// principals" query — so this call is placed after that assertion,
+// exactly where the coordinator's own timer would have already run by
+// the time a real browser ever saw this state.
 func TestGetSessionBootstrapRequiredTrueThenFalse(t *testing.T) {
 	svc, dataDir := newTestIdentityServiceWithDataDir(t, fixedClock(testNow))
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -148,6 +167,7 @@ func TestGetSessionBootstrapRequiredTrueThenFalse(t *testing.T) {
 		t.Fatalf("bootstrapRequired = %v, want true with zero principals; body: %s", m["bootstrapRequired"], body)
 	}
 
+	mustEnsureBootstrap(t, svc)
 	code := readBootstrapCode(t, dataDir)
 	claimBody := `{"code":` + strconv.Quote(code) + `,"name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
 	claimReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", claimBody, nil)
@@ -163,6 +183,35 @@ func TestGetSessionBootstrapRequiredTrueThenFalse(t *testing.T) {
 	m2 := decodeMap(t, body2)
 	if m2["bootstrapRequired"] != false {
 		t.Errorf("bootstrapRequired = %v, want false once a principal exists; body: %s", m2["bootstrapRequired"], body2)
+	}
+}
+
+// TestGetSessionNeverGeneratesOrRotatesTheBootstrapFile closes review
+// finding 9 directly: GET /api/v1/session must never create or rotate the
+// bootstrap file/code as a side effect, no matter how many times it is
+// polled, unauthenticated, by anyone. Before the fix, HasAnyPrincipal's
+// own side effect meant this endpoint silently regenerated an expired
+// code on the very next poll — this test drives many unauthenticated GET
+// requests and confirms the bootstrap file never appears at all (nothing
+// in this test ever calls EnsureBootstrap, the only method that may
+// create it).
+func TestGetSessionNeverGeneratesOrRotatesTheBootstrapFile(t *testing.T) {
+	svc, dataDir := newTestIdentityServiceWithDataDir(t, fixedClock(testNow))
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	for i := 0; i < 5; i++ {
+		resp, body := doRequest(t, api.Handler, "GET", "/api/v1/session", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		m := decodeMap(t, body)
+		if m["bootstrapRequired"] != true {
+			t.Fatalf("bootstrapRequired = %v, want true (still zero principals); body: %s", m["bootstrapRequired"], body)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dataDir, identity.BootstrapFileName)); !os.IsNotExist(err) {
+		t.Errorf("bootstrap file exists after repeated unauthenticated GET /api/v1/session polls with EnsureBootstrap never called: err = %v — a read must never generate or rotate the bootstrap code", err)
 	}
 }
 

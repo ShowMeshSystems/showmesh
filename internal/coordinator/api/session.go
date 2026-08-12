@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // maxSessionRequestBodyBytes bounds POST /api/v1/session's request body,
@@ -117,6 +120,24 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	source := loginSource(r)
 
+	// The per-source delay runs BEFORE this source ever contends for a
+	// concurrency slot — never after acquiring one. A review finding
+	// (reproduced against the real binary) caught the opposite ordering:
+	// acquiring the slot first and delaying while holding it meant a
+	// source with a long failure history occupied a scarce slot for
+	// delay-plus-verify time instead of just verify time, so a handful of
+	// concurrent requests from an already-slowed source could fill every
+	// slot with sleeping (not yet verifying) holders and starve a
+	// DIFFERENT source's correct-password login into the queue timeout —
+	// a 429 for doing nothing wrong, the exact operator lockout decision
+	// 8 exists to prevent. Delaying first, outside the semaphore, bounds
+	// what a slot is ever held for to argon2id verification alone,
+	// regardless of any source's failure history. See loginlimiter.go's
+	// own doc comment for the property this restores. It is never applied
+	// per-principal: a correct password from a slowed source still
+	// succeeds, only later.
+	h.loginLimiter.delay(r.Context(), source)
+
 	if !h.loginLimiter.acquire(r.Context()) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
@@ -124,12 +145,6 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.loginLimiter.release()
-
-	// The per-source delay is applied BEFORE verification, so each
-	// additional failure from this source slows every subsequent attempt
-	// from it — see loginlimiter.go. It is never applied per-principal:
-	// a correct password from a slowed source still succeeds, only later.
-	h.loginLimiter.delay(r.Context(), source)
 
 	principal, err := h.deps.Identity.AuthenticatePassword(r.Context(), name, req.Password)
 	switch {
@@ -167,7 +182,7 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// owning store/identity's transaction boundary.
 	if !h.writeAuditOrFail(r.Context(), w, now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: principal.ID, PrincipalName: principal.Name,
-		Form: formPassword, ClientAddr: h.clientAddr(r),
+		Form: identity.FormPassword, ClientAddr: h.clientAddr(r),
 		Action: "session.create", Target: sess.ID,
 		Params: map[string]any{"deviceLabel": deviceLabel},
 		Kind:   identity.AuditAdmin,
@@ -247,25 +262,63 @@ func (h *handlers) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		clearOwnCookie = ac.result.Form == identity.FormSession && targetID == ac.result.CredentialID
 	}
 
-	// ADR-024 decision 11's default rule again: the audit entry is
-	// written BEFORE the revoke itself, mirroring decision 11's own
-	// "for a command dispatched to an agent the dispatch entry is written
-	// before dispatch. If that write fails, the command is refused" —
-	// session revocation is the closest analogue this step has to that
-	// shape (a coordinator-local effect this package cannot wrap in the
-	// same store transaction as the audit write; see auth.go's
-	// writeAuditOrFail doc comment).
+	// ADR-024 decision 11's dispatch/outcome split, applied here after a
+	// review finding: this handler used to write a SINGLE AuditAdmin
+	// entry BEFORE calling RevokeSession, asserting a completed
+	// revocation regardless of what RevokeSession went on to return — a
+	// failed revoke left a permanent audit record claiming a revocation
+	// that never happened, with nothing correcting it. The fix follows
+	// decision 11's own words for a dispatched command, the closest
+	// analogue a coordinator-local effect has to a command sent to an
+	// agent: "the dispatch entry is written before dispatch. If that
+	// write fails, the command is refused" — commandID correlates this
+	// Dispatch entry with the Outcome entry written below, exactly
+	// [identity.AuditEntry.CommandID]'s documented purpose.
+	commandID := uuid.NewString()
 	if !h.writeAuditOrFail(r.Context(), w, now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: "session.revoke", Target: targetID,
-		Kind: identity.AuditAdmin,
+		Kind: identity.AuditDispatch, CommandID: commandID,
 	}) {
 		return
 	}
 
-	if err := h.deps.Identity.RevokeSession(r.Context(), targetID); err != nil {
-		h.writeInternalError(w, now, "revoke session", err)
+	revokeErr := h.deps.Identity.RevokeSession(r.Context(), targetID)
+
+	// The Outcome entry is written best-effort, never gating the
+	// response: unlike the Dispatch write above (which the "does not
+	// proceed" rule protects BEFORE the effect happens), RevokeSession has
+	// already run by this point — refusing to answer because the SECOND
+	// audit write failed would not undo an already-applied revoke, it
+	// would only hide it from the caller.
+	outcomeNow := h.now()
+	outcome := identity.AuditEntry{
+		Timestamp: outcomeNow, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+		Action: "session.revoke", Target: targetID,
+		Kind: identity.AuditOutcome, CommandID: commandID,
+		// OutcomeState is ADR-020's evidence-state vocabulary
+		// (observation.State). This coordinator-local effect resolves
+		// synchronously within this same request, so the outcome is
+		// always definitely known by the time this entry is written —
+		// "current", never the "outcome never arrived" case decision 11
+		// reserves this field for (a coordinator restarting between an
+		// agent dispatch and its confirmation, which cannot happen here).
+		OutcomeState: string(observation.StateCurrent),
+	}
+	if revokeErr != nil {
+		outcome.Outcome = "failed"
+		outcome.OutcomeReason = "store error revoking session"
+	} else {
+		outcome.Outcome = "succeeded"
+	}
+	if err := h.deps.Identity.WriteAudit(r.Context(), outcome); err != nil && h.logger != nil {
+		h.logger.Warn("api: failed to write session.revoke outcome audit entry", "error", err, "command_id", commandID)
+	}
+
+	if revokeErr != nil {
+		h.writeInternalError(w, now, "revoke session", revokeErr)
 		return
 	}
 

@@ -34,11 +34,20 @@
 // half adds: a retained heartbeat renders on the wire as observedAt: null
 // and state: "unknown_age", asserted on raw JSON bytes, never on a
 // re-decoded struct (assertRawHeartbeatIsUnknownAge, in restart_test.go);
-// SHOWMESH_API_TOKEN is enforced end to end including on the stream
-// (api_test.go); version negotiation, event-history gaplessness, and a
-// slow SSE consumer actually getting disconnected (api_test.go); and the
-// whole stack surviving an unreachable broker or an unreachable configured
-// FPP endpoint without ever 500ing (resilience_test.go).
+// SHOWMESH_API_CLOSE_READS with a real per-principal bearer token (minted
+// via the ADR-024 decision 9 host-level create-admin/issue-token
+// subcommands) is enforced end to end including on the stream
+// (TestAPICloseReadsEnforcedWhenSet, TestAPIStreamOpensSuccessfullyWithCloseReadsEnabled
+// in api_test.go — this package's ADR-024 replacement for the retired
+// ADR-021 shared SHOWMESH_API_TOKEN secret, which a coordinator carrying
+// ADR-024 now refuses to start with set at all); version negotiation,
+// event-history gaplessness, and a slow SSE consumer actually getting
+// disconnected (api_test.go); ADR-024 decision 10's broker ACL boundary,
+// including the fpp role's write access being confined to enumerated
+// status topics rather than the whole falcon/player/# subtree
+// (broker_auth_test.go); and the whole stack surviving an unreachable
+// broker or an unreachable configured FPP endpoint without ever 500ing
+// (resilience_test.go).
 //
 // # Why this cannot be a unit test
 //

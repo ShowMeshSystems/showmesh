@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { claimBootstrap, login, logout, submitToken } from '../api'
+import { claimBootstrap, clearToken, getStoredToken, login, logout, submitToken } from '../api'
 import { describeApiError, describeSignInState } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { SignInForm } from './SignInForm'
@@ -46,6 +46,18 @@ function BootstrapBanner() {
 function SignedOutBanner() {
   const [showSignIn, setShowSignIn] = useState(false)
   const [showBreakGlass, setShowBreakGlass] = useState(false)
+  // Finding: a stored break-glass token is checked on every request
+  // (client.ts) ahead of any cookie, with no fallthrough — a token left
+  // over from a previous, now-invalid credential permanently shadows a
+  // perfectly good session cookie, and this banner showing "signed out"
+  // is exactly what that looks like from here. store.ts's login()/
+  // claimBootstrap() now clear it on a SUCCESSFUL sign-in, but an
+  // operator stuck behind a dead stored token needs a way to clear it
+  // directly, without first needing the sign-in this same token is
+  // blocking. Only offered when a token is actually stored — an always-
+  // present button would assert a fact ("there is something to clear")
+  // that usually is not true.
+  const storedTokenPresent = getStoredToken() !== null
 
   return (
     <div className="session-panel" role="status">
@@ -75,6 +87,11 @@ function SignedOutBanner() {
       >
         {showBreakGlass ? 'Hide' : 'Use a token instead'}
       </button>
+      {storedTokenPresent && (
+        <button type="button" onClick={() => clearToken()}>
+          Clear stored token
+        </button>
+      )}
       {showSignIn && <SignInForm onSubmit={login} onSuccess={() => setShowSignIn(false)} />}
       {showBreakGlass && (
         <TokenPrompt

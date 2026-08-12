@@ -6,28 +6,30 @@ import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import type { Model, SessionResponse } from '../app/types'
 import { CSRFRejectedError } from '../api/errors'
+import { setStoredToken } from '../api/token'
 
 // SessionPanel is this application's one integration point for the
-// session actions (login/logout/claimBootstrap/submitToken), the same
-// role App.tsx plays for `useModel`/`submitToken` — see that file's own
-// comment. Mocked here (not faking network behavior, which store.test.ts
-// and client.test.ts own — this isolates SessionPanel's OWN branching
-// logic: which of the four states renders which sub-component, and that
-// each button calls the right action).
-const { login, logout, claimBootstrap, submitToken } = vi.hoisted(() => ({
+// session actions (login/logout/claimBootstrap/submitToken/clearToken),
+// the same role App.tsx plays for `useModel`/`submitToken` — see that
+// file's own comment. Mocked here (not faking network behavior, which
+// store.test.ts and client.test.ts own — this isolates SessionPanel's OWN
+// branching logic: which of the four states renders which sub-component,
+// and that each button calls the right action). `getStoredToken` is
+// deliberately NOT mocked (passes through real, via importOriginal): the
+// "Clear stored token" button's visibility is driven by real
+// `sessionStorage`, exactly as it is in production, so tests exercise it
+// with `setStoredToken`/`sessionStorage.clear()` rather than a fake
+// return value that could drift from what token.ts actually does.
+const { login, logout, claimBootstrap, submitToken, clearToken } = vi.hoisted(() => ({
   login: vi.fn(),
   logout: vi.fn(),
   claimBootstrap: vi.fn(),
   submitToken: vi.fn(),
+  clearToken: vi.fn(),
 }))
-// Overrides only the four action functions; every other export (the
-// error classes app/session.ts's describeApiError dispatches on, in
-// particular) passes through real, via importOriginal — otherwise
-// SessionPanel's own `describeApiError(err)` call would be dispatching
-// against `undefined` classes rather than testing anything real.
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, login, logout, claimBootstrap, submitToken }
+  return { ...actual, login, logout, claimBootstrap, submitToken, clearToken }
 })
 
 afterEach(() => {
@@ -36,6 +38,8 @@ afterEach(() => {
   logout.mockReset()
   claimBootstrap.mockReset()
   submitToken.mockReset()
+  clearToken.mockReset()
+  sessionStorage.clear()
 })
 
 const NOW = '2026-08-12T00:00:00.000Z'
@@ -119,6 +123,31 @@ describe('SessionPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Connect' }))
 
     expect(submitToken).toHaveBeenCalledWith('machine-token-value')
+  })
+
+  // Finding: a stored break-glass token can shadow a valid session cookie
+  // forever (client.ts always prefers a present Authorization header,
+  // with no cookie fallthrough), and this signed-out banner is exactly
+  // what that looks like from here. The operator needs a way to clear it
+  // directly, without a working sign-in to trigger store.ts's own
+  // clear-on-success path — this pair of tests covers both halves: the
+  // button must be absent when there is nothing to clear (it must not
+  // assert a fact that is not true), and present and wired to
+  // `clearToken()` when there is.
+  it('offers no "Clear stored token" button when no token is stored', () => {
+    renderPanel(makeModel({ session: signedOut() }))
+    expect(screen.queryByRole('button', { name: 'Clear stored token' })).not.toBeInTheDocument()
+  })
+
+  it('offers "Clear stored token" when one is stored, and calls clearToken() when pressed', async () => {
+    const user = userEvent.setup()
+    setStoredToken('a-stale-token')
+    renderPanel(makeModel({ session: signedOut() }))
+
+    const button = screen.getByRole('button', { name: 'Clear stored token' })
+    await user.click(button)
+
+    expect(clearToken).toHaveBeenCalledTimes(1)
   })
 
   it('renders signed-in state with the principal name and role, and a working sign-out button', async () => {

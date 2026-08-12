@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -281,6 +283,100 @@ func TestGetSessionCookieSlidesLastUsedAt(t *testing.T) {
 	}
 }
 
+// TestLoginCookieSecureAttributeReflectsOption and
+// TestLoginCookieSameSiteIsLax close review finding 12's "SHOWMESH_API_SECURE_COOKIE
+// and SameSite can be silently unwired": nothing in this package's suite
+// ever inspected the emitted cookie's Secure or SameSite attributes at
+// all — TestLoginSuccessSetsCookieAndReturnsPrincipal above checks
+// HttpOnly and a non-empty Value, but a regression dropping
+// [Options.SecureCookie]'s effect on the Set-Cookie header, or silently
+// changing SameSite away from Lax, would have passed every existing test
+// in this package unmodified.
+func TestLoginCookieSecureAttributeReflectsOption(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		t.Run("secure="+strconv.FormatBool(secure), func(t *testing.T) {
+			svc := newTestIdentityService(t, fixedClock(testNow))
+			mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+			api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger(), SecureCookie: secure})
+
+			body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
+			req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+			resp, respBody := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
+			}
+
+			var found bool
+			for _, c := range resp.Cookies() {
+				if c.Name == sessionCookieName {
+					found = true
+					if c.Secure != secure {
+						t.Errorf("cookie Secure = %v, want %v (Options.SecureCookie = %v)", c.Secure, secure, secure)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("no %s cookie set", sessionCookieName)
+			}
+		})
+	}
+}
+
+func TestLoginCookieSameSiteIsLax(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+
+	var found bool
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName {
+			found = true
+			if c.SameSite != http.SameSiteLaxMode {
+				t.Errorf("cookie SameSite = %v, want SameSiteLaxMode (ADR-024 decision 6: SameSite=Lax deliberately permits the cookie on cross-site top-level GET navigation)", c.SameSite)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no %s cookie set", sessionCookieName)
+	}
+}
+
+// TestSessionSecretNeverAppearsInLogs closes review finding 12's "the
+// minted session secret can be logged": nothing in this package's suite
+// ever drove a real login with a log capture set to Debug — the level
+// withRequestLogging itself writes at — and asserted the raw cookie value
+// (the literal bearer secret a stolen log line would hand an attacker,
+// exactly the class of leak ADR-024 decision 3/OBSERVABILITY §13 forbid)
+// never appears in it.
+func TestSessionSecretNeverAppearsInLogs(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: logger})
+
+	cookie := loginAndGetCookie(t, api.Handler, p.Name, testPassword)
+
+	// A read carrying the cookie also exercises withIdentity's credential
+	// resolution and AuthenticateSession's own touch path, not merely the
+	// login handler itself.
+	doRequest(t, api.Handler, "GET", "/api/v1/session", map[string]string{
+		"Cookie": sessionCookieName + "=" + cookie,
+	})
+
+	if strings.Contains(logBuf.String(), cookie) {
+		t.Fatalf("log output contains the raw session secret:\n%s", logBuf.String())
+	}
+}
+
 // --- DELETE /api/v1/session ---
 
 // TestDeleteSessionRequiresSecFetchSiteForCookie is ADR-024 decision 6's
@@ -402,6 +498,87 @@ func TestDeleteSessionRejectsSessionIdNotOwnedByPrincipal(t *testing.T) {
 	// attempt must not have revoked it anyway.
 	if _, err := svc.AuthenticateSession(context.Background(), p2Cookie, testNow); err != nil {
 		t.Fatalf("p2's session no longer authenticates after p1's rejected cross-principal revoke attempt: %v", err)
+	}
+}
+
+// failingRevokeService wraps a real identity.Service and forces
+// RevokeSession to fail, with every other method (including WriteAudit and
+// ListAudit) passed straight through to the embedded real service via Go's
+// interface embedding — this is what lets the test below inspect real,
+// persisted audit rows rather than a hand-rolled fake's bookkeeping.
+type failingRevokeService struct {
+	identity.Service
+	err error
+}
+
+func (f *failingRevokeService) RevokeSession(context.Context, string) error {
+	return f.err
+}
+
+// TestDeleteSessionFailedRevokeWritesDispatchAndFailedOutcomeNeverSuccess
+// closes review finding 6: DELETE /api/v1/session used to write a single
+// audit entry BEFORE calling RevokeSession, asserting a completed
+// revocation unconditionally — a failed revoke left a permanent record
+// claiming a revocation that never happened, and no outcome entry existed
+// to say otherwise. This proves the dispatch/outcome split holds when the
+// revoke genuinely fails: a Dispatch entry and a SEPARATE, correlated
+// Outcome entry with Outcome "failed" — never a record claiming success —
+// and the session itself must still authenticate afterward, since nothing
+// in the real store actually revoked it.
+func TestDeleteSessionFailedRevokeWritesDispatchAndFailedOutcomeNeverSuccess(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	failing := &failingRevokeService{Service: svc, err: errors.New("simulated store failure")}
+	api := New(authTestDeps(failing), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	cookie := loginAndGetCookie(t, api.Handler, p.Name, testPassword)
+
+	resp, body := doRequest(t, api.Handler, "DELETE", "/api/v1/session", map[string]string{
+		"Cookie":         sessionCookieName + "=" + cookie,
+		"Sec-Fetch-Site": "same-origin",
+	})
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, body)
+	}
+
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	var dispatch, outcome *identity.AuditEntry
+	for i := range entries {
+		e := entries[i]
+		if e.Action != "session.revoke" {
+			continue
+		}
+		switch e.Kind {
+		case identity.AuditDispatch:
+			dispatch = &e
+		case identity.AuditOutcome:
+			outcome = &e
+		case identity.AuditAdmin:
+			t.Errorf("a session.revoke entry of Kind AuditAdmin exists (the old, unqualified shape) — decision 11 requires Dispatch/Outcome, never a single entry asserting completion: %+v", e)
+		}
+	}
+	if dispatch == nil {
+		t.Fatalf("no session.revoke Dispatch entry found among %d entries", len(entries))
+	}
+	if outcome == nil {
+		t.Fatalf("no session.revoke Outcome entry found among %d entries", len(entries))
+	}
+	if outcome.CommandID == "" || outcome.CommandID != dispatch.CommandID {
+		t.Errorf("outcome.CommandID = %q, dispatch.CommandID = %q, want them equal and non-empty (decision 11: dispatch and outcome correlated by command id)", outcome.CommandID, dispatch.CommandID)
+	}
+	if outcome.Outcome != "failed" {
+		t.Errorf("outcome.Outcome = %q, want %q — a failed revoke must never be recorded as a success", outcome.Outcome, "failed")
+	}
+
+	// The real store's RevokeSession never actually ran (only the
+	// wrapper's stub did) — a real client re-presenting the cookie must
+	// still authenticate, proving the failure was genuine and nothing
+	// silently revoked the session anyway.
+	if _, err := svc.AuthenticateSession(context.Background(), cookie, testNow); err != nil {
+		t.Errorf("session no longer authenticates after a FAILED revoke: %v — a failed revoke must not have silently succeeded", err)
 	}
 }
 

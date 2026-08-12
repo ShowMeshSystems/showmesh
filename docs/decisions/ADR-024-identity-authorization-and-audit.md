@@ -279,11 +279,26 @@ authentication path, so the session expires from apparent disuse and they
 discover it the first night they need to act. Sliding on cookie presence rather
 than on authentication closes both.
 
-**Sessions carry a per-principal generation counter.** A password change, an
-administrative revocation of all sessions, or a database restore increments it,
-and every session below the current generation is invalid. Without this, a
-restore from backup resurrects sessions that were revoked after the backup
-point, and a password change leaves stolen sessions alive.
+**Sessions carry a per-principal generation counter.** A password change, a role
+change, or an administrative revocation of all sessions increments it, and every
+session below the current generation is invalid. Without this, a password change
+would leave stolen sessions alive.
+
+**A database restore is an operator step, not an automatic one, and this
+paragraph was corrected after the implementation proved the original claim
+false.** The first version of this decision said a restore also increments the
+counter. It cannot: the counter lives in the database, so restoring a
+pre-revocation backup rolls the counter back along with everything else.
+Reproduced end to end during Step 6, where a session revoked by a password
+change authenticated again as `admin` after the data directory was restored from
+a copy taken before the revocation.
+
+Auto-detecting a restore from inside the restored database is structurally
+impossible for the same reason, and this record does not pretend otherwise. The
+mechanism is instead an explicit host-level subcommand,
+`showmesh-coordinator invalidate-all-sessions`, which bumps every principal's
+generation, and the restore runbook in `deploy/` must call it. That makes the
+guarantee real and operator-visible rather than asserted and absent.
 
 **Sessions are device-scoped and individually revocable**, each carrying an
 operator-supplied device label and listed in the UI. The label is a **mnemonic,
@@ -696,6 +711,38 @@ The coordinator enforces regardless of what the client renders. A client that
 ignores the scope list receives `403` with an RFC 9457 problem document naming
 the missing scope, distinct from the `401` that means no valid credential was
 presented.
+
+## What implementation proved this record got wrong
+
+Step 6 implemented this record and three reviews attacked the result. Four
+things below are recorded here rather than quietly fixed, because a decision
+record that is silently wrong is worse than one that is visibly incomplete.
+
+- **The restore claim in decision 5 was false**, corrected in place above.
+- **`POST /api/v1/session` has no cross-site protection, and this record never
+  addressed it.** `SameSite=Lax` governs whether a cookie is *sent*, not whether
+  one is *set*, so a cross-site form post to the login endpoint with an
+  attacker's credentials makes the victim's browser hold, and the audit log
+  attribute, the attacker's principal. Decision 5's persistent "signed in as"
+  banner makes the substitution visible rather than silent, which is a mitigation
+  by accident rather than by design. The record covering the first write endpoint
+  must decide this deliberately.
+- **Decision 7 exists nowhere in the code.** No macro format, no FPP plugin, and
+  no node policy classifies a `401` or `403` as "the coordinator is unavailable
+  to this caller". That is defensible, because Step 6 ships no macro and no
+  plugin, so there is nothing to trigger. It is recorded as an explicit
+  obligation on the step that adds the first consumer of `show:macro:run`,
+  because a correction this record was reshaped around should not survive only
+  as prose in an ADR nobody rereads.
+- **Decision 11's same-transaction audit rule is not achieved**, and the layering
+  is why: the API package cannot reach the transaction boundary, which identity
+  and store own. Session and bootstrap writes audit around the commit rather than
+  inside it, so an audit failure on a bootstrap claim leaves the first
+  administrator existing with no record of its creation. The blackout, stop, and
+  power-off exemption is implementable whenever it is needed, since the audit
+  write is a handler-level call rather than a store constraint, but nothing calls
+  it yet. Closing the atomicity gap requires `identity.Service` to grow an atomic
+  variant, and it must close before the first fail-closed write endpoint.
 
 ## Consequences
 

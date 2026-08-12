@@ -117,11 +117,14 @@ func setupPrincipal(t *testing.T, deps *cliDeps, name string, kind identity.Kind
 	return p
 }
 
-// setupBootstrap triggers bootstrap-file generation the same way a fresh
-// coordinator does on first run — [identity.Service.HasAnyPrincipal]'s
-// documented side effect when it reports false — and returns the raw code
-// an operator would read off the data volume. Opens and closes its own
-// store connection, like setupPrincipal.
+// setupBootstrap triggers bootstrap-file generation via
+// [identity.Service.EnsureBootstrap] — the code-generation half ADR-024
+// decision 9 requires, deliberately separate from HasAnyPrincipal's own
+// pure query (a review finding: this helper used to call HasAnyPrincipal
+// for its then-undocumented generation side effect, which was itself the
+// production defect — see EnsureBootstrap's own doc comment) — and
+// returns the raw code an operator would read off the data volume. Opens
+// and closes its own store connection, like setupPrincipal.
 func setupBootstrap(t *testing.T, deps *cliDeps) (code string) {
 	t.Helper()
 	ctx := context.Background()
@@ -137,6 +140,9 @@ func setupBootstrap(t *testing.T, deps *cliDeps) (code string) {
 	}
 	if has {
 		t.Fatalf("setupBootstrap: a principal already exists")
+	}
+	if err := svc.EnsureBootstrap(ctx); err != nil {
+		t.Fatalf("setupBootstrap: EnsureBootstrap: %v", err)
 	}
 	return readBootstrapCode(t, deps.dataDir)
 }
@@ -611,8 +617,22 @@ func TestEveryMutationWritesACLIAuditEntry(t *testing.T) {
 
 // assertAudited fails the test unless deps' audit log contains exactly the
 // kind of entry auditCLIAction writes for action against principal: Form
-// formCLI, Kind AuditAdmin, correct PrincipalID/PrincipalName attribution,
-// and Target set to the principal's own id.
+// "cli", Kind AuditAdmin, correct PrincipalID/PrincipalName attribution,
+// and Target set to the principal's own id. Matches on BOTH action and
+// PrincipalID — not action alone — so a caller asserting about several
+// principals sharing the same action (invalidate-all-sessions writes one
+// entry per principal) checks the entry that actually belongs to the
+// principal it named, not merely the first entry for that action found in
+// the log.
+//
+// The Form check is pinned against the literal string "cli", not against
+// identity.FormCLI — a review finding (mutation-confirmed) caught that
+// comparing e.Form to the same named constant auditCLIAction itself writes
+// is a tautology: it can never fail no matter what value FormCLI is
+// defined as, because both sides of the comparison move together. Pinning
+// the literal is what actually asserts "a CLI-attributed audit entry's
+// Form on the wire is the string \"cli\"", which is the wire-visible
+// property this test's name claims.
 func assertAudited(t *testing.T, deps *cliDeps, action string, principal identity.Principal) {
 	t.Helper()
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
@@ -621,17 +641,14 @@ func assertAudited(t *testing.T, deps *cliDeps, action string, principal identit
 			t.Fatalf("ListAudit: %v", err)
 		}
 		for _, e := range entries {
-			if e.Action != action {
+			if e.Action != action || e.PrincipalID != principal.ID {
 				continue
 			}
-			if e.Form != formCLI {
-				t.Errorf("audit entry for %q: Form = %q, want %q", action, e.Form, formCLI)
+			if string(e.Form) != "cli" {
+				t.Errorf("audit entry for %q: Form = %q, want %q", action, e.Form, "cli")
 			}
 			if e.Kind != identity.AuditAdmin {
 				t.Errorf("audit entry for %q: Kind = %q, want AuditAdmin", action, e.Kind)
-			}
-			if e.PrincipalID != principal.ID {
-				t.Errorf("audit entry for %q: PrincipalID = %q, want %q", action, e.PrincipalID, principal.ID)
 			}
 			if e.PrincipalName != principal.Name {
 				t.Errorf("audit entry for %q: PrincipalName = %q, want %q", action, e.PrincipalName, principal.Name)
@@ -723,6 +740,301 @@ func TestBootstrapAlreadyClaimedFailsWithExitCodeOne(t *testing.T) {
 	if !strings.Contains(stderr.String(), "already used") {
 		t.Errorf("stderr = %q, want it to mention the code was already used", stderr.String())
 	}
+}
+
+// --- create-principal: closes review finding 10 (no way to create a
+// non-admin principal, so ADR-024 decision 7's own scenario — provisioning
+// FPP's scheduler machine principal — could not be exercised at all) ---
+
+func TestCreatePrincipalCreatesGivenRoleAndKind(t *testing.T) {
+	deps, stdout, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(withStdin(deps, ""), []string{"-name=fpp-scheduler", "-role=scheduler", "-kind=machine"})
+	if exit != 0 {
+		t.Fatalf("create-principal exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "fpp-scheduler") {
+		t.Errorf("create-principal output = %q, want it to name the principal", stdout.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		ps, err := svc.ListPrincipals(ctx)
+		if err != nil || len(ps) != 1 {
+			t.Fatalf("ListPrincipals: %v, %d", err, len(ps))
+		}
+		if ps[0].Role != identity.RoleScheduler {
+			t.Errorf("Role = %q, want %q", ps[0].Role, identity.RoleScheduler)
+		}
+		if ps[0].Kind != identity.KindMachine {
+			t.Errorf("Kind = %q, want %q", ps[0].Kind, identity.KindMachine)
+		}
+	})
+}
+
+func TestCreatePrincipalRejectsUnknownRole(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(withStdin(deps, ""), []string{"-name=x", "-role=superuser", "-kind=machine"})
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2", exit)
+	}
+	if !strings.Contains(stderr.String(), "-role") {
+		t.Errorf("stderr = %q, want it to name the -role flag", stderr.String())
+	}
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		ps, err := svc.ListPrincipals(ctx)
+		if err != nil {
+			t.Fatalf("ListPrincipals: %v", err)
+		}
+		if len(ps) != 0 {
+			t.Errorf("a principal was created despite an unknown role: %+v", ps)
+		}
+	})
+}
+
+func TestCreatePrincipalRejectsUnknownKind(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(withStdin(deps, ""), []string{"-name=x", "-role=viewer", "-kind=robot"})
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2", exit)
+	}
+	if !strings.Contains(stderr.String(), "-kind") {
+		t.Errorf("stderr = %q, want it to name the -kind flag", stderr.String())
+	}
+}
+
+// TestCreatePrincipalAllowsEmptyPasswordAndItIsUnauthenticatable proves
+// both halves of this subcommand's own doc comment: an empty password is
+// accepted (the machine-principal-with-a-token-only scenario this
+// subcommand exists for), and — unlike create-admin, which refuses an
+// empty password outright — the resulting principal genuinely cannot
+// authenticate by password at all, matching
+// internal/coordinator/identity's own
+// TestEmptyPasswordPrincipalIsNeverAuthenticatableByPassword.
+func TestCreatePrincipalAllowsEmptyPasswordAndItIsUnauthenticatable(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(withStdin(deps, ""), []string{"-name=scheduler-bot", "-role=scheduler", "-kind=machine"})
+	if exit != 0 {
+		t.Fatalf("create-principal exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticatePassword(ctx, "scheduler-bot", ""); !errors.Is(err, identity.ErrInvalidCredential) {
+			t.Errorf("AuthenticatePassword with an empty password = %v, want ErrInvalidCredential", err)
+		}
+	})
+}
+
+func TestCreatePrincipalRequiresName(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(deps, []string{"-role=viewer", "-kind=machine"})
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2", exit)
+	}
+	if !strings.Contains(stderr.String(), "-name") {
+		t.Errorf("stderr = %q, want it to name the -name flag", stderr.String())
+	}
+}
+
+// --- invalidate-all-sessions: closes review finding 5 (a database
+// restore resurrects revoked sessions; decision 5 states restore
+// invalidation as decided behavior with nothing implementing it) ---
+
+func TestInvalidateAllSessionsRequiresYesFlag(t *testing.T) {
+	deps, _, stderr, _, clock := newTestDeps(t)
+	principal := setupPrincipal(t, deps, "alice", identity.KindHuman, identity.RoleAdmin, "pw")
+
+	var sessionSecret string
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		_, secret, err := svc.CreateSession(ctx, principal.ID, "phone", clock.now())
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		sessionSecret = secret
+	})
+
+	exit := runInvalidateAllSessionsSubcommandWithDeps(deps, nil)
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2 (refused without -yes)", exit)
+	}
+	if !strings.Contains(stderr.String(), "-yes") {
+		t.Errorf("stderr = %q, want it to name the -yes flag", stderr.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, sessionSecret, clock.now()); err != nil {
+			t.Errorf("session no longer authenticates after a REFUSED invalidate-all-sessions: %v", err)
+		}
+	})
+}
+
+// TestInvalidateAllSessionsInvalidatesEverySessionAcrossAllPrincipals is
+// this subcommand's own core property, reproducing review finding 5's
+// exact scenario: create a session, "back up" (nothing to do here — the
+// property under test is what the RESTORE PROCEDURE is documented to run
+// immediately afterward), then run invalidate-all-sessions -yes and
+// confirm every principal's session — across MULTIPLE principals, not
+// just one — is genuinely invalid afterward.
+func TestInvalidateAllSessionsInvalidatesEverySessionAcrossAllPrincipals(t *testing.T) {
+	deps, stdout, stderr, _, clock := newTestDeps(t)
+	alice := setupPrincipal(t, deps, "alice", identity.KindHuman, identity.RoleAdmin, "pw-a")
+	bob := setupPrincipal(t, deps, "bob", identity.KindHuman, identity.RoleOperator, "pw-b")
+
+	var aliceSecret, bobSecret string
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		_, s1, err := svc.CreateSession(ctx, alice.ID, "alice-phone", clock.now())
+		if err != nil {
+			t.Fatalf("CreateSession alice: %v", err)
+		}
+		aliceSecret = s1
+		_, s2, err := svc.CreateSession(ctx, bob.ID, "bob-phone", clock.now())
+		if err != nil {
+			t.Fatalf("CreateSession bob: %v", err)
+		}
+		bobSecret = s2
+	})
+
+	// Sanity: both sessions genuinely authenticate before the restore
+	// scenario — otherwise the assertions below would pass for the wrong
+	// reason.
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, aliceSecret, clock.now()); err != nil {
+			t.Fatalf("alice's session does not authenticate before invalidate-all-sessions: %v", err)
+		}
+		if _, err := svc.AuthenticateSession(ctx, bobSecret, clock.now()); err != nil {
+			t.Fatalf("bob's session does not authenticate before invalidate-all-sessions: %v", err)
+		}
+	})
+
+	exit := runInvalidateAllSessionsSubcommandWithDeps(deps, []string{"-yes"})
+	if exit != 0 {
+		t.Fatalf("invalidate-all-sessions exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "2") {
+		t.Errorf("output = %q, want it to report 2 principals invalidated", stdout.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, aliceSecret, clock.now()); !errors.Is(err, identity.ErrInvalidCredential) {
+			t.Errorf("alice's session still authenticates after invalidate-all-sessions: err = %v, want ErrInvalidCredential", err)
+		}
+		if _, err := svc.AuthenticateSession(ctx, bobSecret, clock.now()); !errors.Is(err, identity.ErrInvalidCredential) {
+			t.Errorf("bob's session still authenticates after invalidate-all-sessions: err = %v, want ErrInvalidCredential", err)
+		}
+	})
+
+	assertAudited(t, deps, "session.invalidate_all", alice)
+	assertAudited(t, deps, "session.invalidate_all", bob)
+}
+
+// TestInvalidateAllSessionsClosesARealBackupRestoreResurrection is review
+// finding 5's literal reproduction, end to end against a real data
+// directory on disk: create a session, back up the data directory (a real
+// recursive file copy — this is what "the operator backs up the data
+// volume" means in practice), reset-password (which correctly kills the
+// session by bumping its principal's generation), restore the backup
+// (overwriting the post-reset data directory with the pre-reset copy —
+// principals.generation included), and confirm the session RESURRECTS —
+// proving the vulnerability is real, not hypothetical, before proving
+// invalidate-all-sessions, run once against the restored directory as the
+// documented restore procedure requires, closes it.
+func TestInvalidateAllSessionsClosesARealBackupRestoreResurrection(t *testing.T) {
+	deps, _, stderr, _, clock := newTestDeps(t)
+	principal := setupPrincipal(t, deps, "alice", identity.KindHuman, identity.RoleAdmin, "original-password")
+
+	var sessionSecret string
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		_, secret, err := svc.CreateSession(ctx, principal.ID, "phone", clock.now())
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		sessionSecret = secret
+		if _, err := svc.AuthenticateSession(ctx, sessionSecret, clock.now()); err != nil {
+			t.Fatalf("session does not authenticate before backup: %v", err)
+		}
+	})
+
+	// "Back up the data volume": a real recursive copy of deps.dataDir —
+	// the same directory store.Open puts showmesh.db in and identity's
+	// bootstrap.go puts BootstrapFileName in — to a separate directory
+	// this test controls independently.
+	backupDir := t.TempDir()
+	if err := copyDirRecursive(t, deps.dataDir, backupDir); err != nil {
+		t.Fatalf("back up data directory: %v", err)
+	}
+
+	// A real reset-password: correctly bumps the principal's generation
+	// and kills the session — proven directly, so the resurrection below
+	// is attributed to the restore, not to reset-password having silently
+	// failed to work.
+	resetExit := runResetPasswordSubcommandWithDeps(withStdin(deps, "a-new-password"), []string{"-id=" + principal.ID})
+	if resetExit != 0 {
+		t.Fatalf("reset-password exit = %d, want 0; stderr=%q", resetExit, stderr.String())
+	}
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, sessionSecret, clock.now()); !errors.Is(err, identity.ErrInvalidCredential) {
+			t.Fatalf("session still authenticates immediately after reset-password: err = %v, want ErrInvalidCredential", err)
+		}
+	})
+
+	// "Restore the backup": overwrite the post-reset data directory with
+	// the pre-reset copy.
+	if err := os.RemoveAll(deps.dataDir); err != nil {
+		t.Fatalf("remove post-reset data directory: %v", err)
+	}
+	if err := copyDirRecursive(t, backupDir, deps.dataDir); err != nil {
+		t.Fatalf("restore backup: %v", err)
+	}
+
+	// The vulnerability, reproduced: the restored session resurrects.
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, sessionSecret, clock.now()); err != nil {
+			t.Fatalf("restored session does not authenticate — this test's own reproduction of the restore-resurrection defect did not occur, so the fix below proves nothing: %v", err)
+		}
+	})
+
+	// The fix: run the documented restore procedure's own step against
+	// the now-restored data directory.
+	invalidateExit := runInvalidateAllSessionsSubcommandWithDeps(deps, []string{"-yes"})
+	if invalidateExit != 0 {
+		t.Fatalf("invalidate-all-sessions exit = %d, want 0; stderr=%q", invalidateExit, stderr.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		if _, err := svc.AuthenticateSession(ctx, sessionSecret, clock.now()); !errors.Is(err, identity.ErrInvalidCredential) {
+			t.Errorf("resurrected session still authenticates after invalidate-all-sessions: err = %v, want ErrInvalidCredential", err)
+		}
+	})
+}
+
+// copyDirRecursive copies every regular file under src to the identical
+// relative path under dst, creating directories as needed — a minimal
+// stand-in for an operator's real backup/restore tooling (tar, rsync, a
+// volume snapshot), sufficient for this test's purpose: reproducing what
+// "restore the data directory" does to every file store.Open and
+// identity's bootstrap.go put there, not exercising any particular real
+// backup tool.
+func copyDirRecursive(t *testing.T, src, dst string) error {
+	t.Helper()
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, 0o600)
+	})
 }
 
 // --- direct unit coverage for pure/near-pure helpers (cheap: no KDF) ---

@@ -82,6 +82,29 @@ type Service interface {
 	AuthenticateToken(ctx context.Context, token string) (Authenticated, error)
 	AuthenticateSession(ctx context.Context, sessionSecret string, now time.Time) (Authenticated, error)
 
+	// RevalidateSession and RevalidateToken perform the identical checks
+	// AuthenticateSession/AuthenticateToken do (digest lookup, disabled,
+	// generation, and — for a session — the sliding-idle-window
+	// comparison against now), but never write a "this credential was
+	// just used" touch (store.Store.TouchSession/TouchToken). They exist
+	// for exactly one caller: [Hub.revalidateSubscribers]
+	// (internal/coordinator/api/stream.go), which re-presents an open SSE
+	// connection's original credential on a fixed tick purely to confirm
+	// it STILL authenticates (ADR-024 decision 5: "the coordinator
+	// therefore revalidates the credential of an open stream
+	// periodically"). That periodic re-check is not itself a "use" of the
+	// credential by any operator action — a browser tab left open in the
+	// background is not an operator doing anything — so touching
+	// LastUsedAt on every tick would make decision 5's 90-day idle window
+	// unenforceable for exactly the case it exists to catch (a forgotten,
+	// abandoned tab), and would cost one UPDATE per tick per open
+	// connection for no attribution benefit. AuthenticateSession/
+	// AuthenticateToken remain the only two methods that slide anything —
+	// every OTHER caller (an ordinary HTTP request) is a genuine use and
+	// must keep going through them.
+	RevalidateSession(ctx context.Context, sessionSecret string, now time.Time) (Authenticated, error)
+	RevalidateToken(ctx context.Context, token string) (Authenticated, error)
+
 	// CreateSession's second return value is the raw session secret to
 	// set as the cookie — see this type's doc comment for why that is
 	// not Session.ID.
@@ -89,14 +112,32 @@ type Service interface {
 	RevokeSession(ctx context.Context, sessionID string) error
 	ListSessions(ctx context.Context, principalID string) ([]Session, error)
 
-	// HasAnyPrincipal reports first-run state (ADR-024 decision 9). As a
-	// side effect, when it reports false it also ensures a bootstrap code
-	// and file exist and are current — see [service.ensureBootstrap]'s
-	// doc comment for why that side effect lives here rather than behind
-	// a separate method the seam contract did not provide, and for why it
-	// is safe to call this repeatedly (e.g. from a readiness check polled
-	// on every request).
+	// HasAnyPrincipal reports first-run state (ADR-024 decision 9) as a
+	// PURE query: it never generates or rotates a bootstrap code as a
+	// side effect. It used to (see [EnsureBootstrap]'s doc comment for
+	// why that was a defect, not a convenience): every unauthenticated
+	// caller of GET /api/v1/session reached this method on every poll,
+	// which meant an expired bootstrap code was silently reissued on the
+	// very next anonymous request — decision 9's expiry bounding nothing
+	// in practice, "a window that stays open with rotating contents"
+	// rather than the bounded, host-triggered window the decision
+	// describes.
 	HasAnyPrincipal(ctx context.Context) (bool, error)
+
+	// EnsureBootstrap guarantees a valid, unclaimed, unexpired bootstrap
+	// code and file exist WHEN no principal currently exists, generating
+	// a fresh pair only when the stored one is missing, claimed, or
+	// expired — the code-generation half [HasAnyPrincipal] used to fold
+	// into itself. This is deliberately NOT called from any request
+	// handler: its only callers are the coordinator's own startup path
+	// and its periodic unclaimed-bootstrap warning loop
+	// (internal/coordinator/coordinator.go's watchUnclaimedBootstrap),
+	// neither of which is reachable or acceleratable by an unauthenticated
+	// network caller. Safe to call repeatedly and cheaply idempotent in
+	// the common case (an existing valid row short-circuits after one
+	// SELECT, with no file write).
+	EnsureBootstrap(ctx context.Context) error
+
 	ClaimBootstrap(ctx context.Context, code, name, password string, now time.Time) (Principal, error)
 
 	// --- extensions beyond the seam contract; see type doc comment ---
@@ -117,6 +158,21 @@ type Service interface {
 	SetRole(ctx context.Context, principalID string, role Role) (Principal, error)
 
 	RevokeAllSessions(ctx context.Context, principalID string) error
+
+	// InvalidateAllSessions bumps EVERY principal's generation counter in
+	// one call — ADR-024 decision 5's third named trigger alongside a
+	// password change and an administrative revoke-all: "a database
+	// restore increments it". A restore rolls the whole database back to
+	// an earlier point, including every principal's own generation
+	// counter, so nothing left behind BY the restore can distinguish a
+	// session that was legitimately revoked after the backup point from
+	// one the restore just resurrected — the restore procedure itself
+	// must call this, once, before the restored data is trusted. Exposed
+	// only via the `invalidate-all-sessions` coordinator subcommand
+	// (ADR-024 decision 9's host-level posture: filesystem access to the
+	// data volume, never the network), never over the API.
+	InvalidateAllSessions(ctx context.Context) error
+
 	ListPrincipals(ctx context.Context) ([]Principal, error)
 	GetPrincipal(ctx context.Context, principalID string) (Principal, error)
 
@@ -335,14 +391,32 @@ func (s *svc) AuthenticatePassword(ctx context.Context, name, password string) (
 }
 
 // AuthenticateToken looks up token by its SHA-256 digest. Returns
-// [ErrInvalidCredential] for an unknown, revoked, expired, OR disabled
-// case alike — the seam contract states this explicitly for AuthenticateToken,
-// unlike AuthenticateSession/AuthenticatePassword, which distinguish
-// [ErrDisabled]: a bearer token is presented non-interactively (a script,
-// a plugin), where a differentiated "your account is disabled" message
-// has no operator on the other end to read it, so collapsing the case
-// costs nothing and keeps the token-probing surface uniform.
+// [ErrInvalidCredential] for an unknown, revoked, expired, generation-stale,
+// OR disabled case alike — the seam contract states this explicitly for
+// AuthenticateToken, unlike AuthenticateSession/AuthenticatePassword, which
+// distinguish [ErrDisabled]: a bearer token is presented non-interactively
+// (a script, a plugin), where a differentiated "your account is disabled"
+// message has no operator on the other end to read it, so collapsing the
+// case costs nothing and keeps the token-probing surface uniform. Touches
+// [store.Store.TouchToken] on success; see [Service.RevalidateToken] for
+// the identical check with no touch.
 func (s *svc) AuthenticateToken(ctx context.Context, token string) (Authenticated, error) {
+	return s.checkToken(ctx, token, true)
+}
+
+// RevalidateToken implements [Service.RevalidateToken] — see that method's
+// doc comment on the interface for why a caller would ever want the checks
+// without the touch.
+func (s *svc) RevalidateToken(ctx context.Context, token string) (Authenticated, error) {
+	return s.checkToken(ctx, token, false)
+}
+
+// checkToken is AuthenticateToken/RevalidateToken's shared implementation,
+// duplicated nowhere else — see [svc.checkSession]'s doc comment for why
+// that matters, applied here identically. touch controls only the final
+// [store.Store.TouchToken] write; every verification step above it runs
+// unconditionally either way.
+func (s *svc) checkToken(ctx context.Context, token string, touch bool) (Authenticated, error) {
 	digest := HashToken(token)
 	rec, err := s.st.GetTokenByDigest(ctx, digest)
 	if errors.Is(err, store.ErrTokenNotFound) {
@@ -370,9 +444,22 @@ func (s *svc) AuthenticateToken(ctx context.Context, token string) (Authenticate
 	if principal.Disabled {
 		return Authenticated{}, ErrInvalidCredential
 	}
+	// ADR-024 decision 12's stale-scope bound, extended to tokens: a
+	// SetRole/SetDisabled(true)/RevokeAllSessions/InvalidateAllSessions
+	// bump on the owning principal must invalidate a token exactly the
+	// way it already invalidates a session (checkSession's identical
+	// comparison below) — see migrations.go's schemaV5 doc comment on
+	// principal_tokens.generation for the review finding this closes: an
+	// AuthenticateToken with no generation check meant a token-backed SSE
+	// connection never observed a role change or revocation at all.
+	if rec.Generation < principal.Generation {
+		return Authenticated{}, ErrInvalidCredential
+	}
 
-	if err := s.st.TouchToken(ctx, rec.ID, now); err != nil {
-		return Authenticated{}, fmt.Errorf("identity: authenticate token: %w", err)
+	if touch {
+		if err := s.st.TouchToken(ctx, rec.ID, now); err != nil {
+			return Authenticated{}, fmt.Errorf("identity: authenticate token: %w", err)
+		}
 	}
 	return Authenticated{Principal: principalFromRecord(principal), Form: FormToken, CredentialID: rec.ID}, nil
 }
@@ -390,8 +477,29 @@ func (s *svc) AuthenticateToken(ctx context.Context, token string) (Authenticate
 // Sliding happens on ANY cookie-bearing request including a read
 // (decision 5), so the API layer is expected to call this on every
 // request that carries the session cookie, not only ones that reach an
-// authenticated endpoint.
+// authenticated endpoint. See [Service.RevalidateSession] for the
+// identical check with no touch.
 func (s *svc) AuthenticateSession(ctx context.Context, sessionSecret string, now time.Time) (Authenticated, error) {
+	return s.checkSession(ctx, sessionSecret, now, true)
+}
+
+// RevalidateSession implements [Service.RevalidateSession] — see that
+// method's doc comment on the interface for why a caller would ever want
+// the checks without the touch.
+func (s *svc) RevalidateSession(ctx context.Context, sessionSecret string, now time.Time) (Authenticated, error) {
+	return s.checkSession(ctx, sessionSecret, now, false)
+}
+
+// checkSession is AuthenticateSession/RevalidateSession's shared
+// implementation. This package's own CLAUDE.md lesson (Step 5: "duplication
+// found the bug in the code that replaced it") is the reason this is one
+// function with a touch flag rather than two independent copies of the
+// same six checks: two implementations that both claim to enforce
+// decision 5's rules are exactly the shape that silently stops agreeing
+// the moment one of them changes. touch controls only the final
+// [store.Store.TouchSession] write; every verification step above it runs
+// unconditionally either way.
+func (s *svc) checkSession(ctx context.Context, sessionSecret string, now time.Time, touch bool) (Authenticated, error) {
 	digest := hashSessionSecret(sessionSecret)
 	rec, err := s.st.GetSessionByDigest(ctx, digest)
 	if errors.Is(err, store.ErrSessionNotFound) {
@@ -418,8 +526,10 @@ func (s *svc) AuthenticateSession(ctx context.Context, sessionSecret string, now
 		return Authenticated{}, ErrInvalidCredential
 	}
 
-	if err := s.st.TouchSession(ctx, rec.ID, now); err != nil {
-		return Authenticated{}, fmt.Errorf("identity: authenticate session: %w", err)
+	if touch {
+		if err := s.st.TouchSession(ctx, rec.ID, now); err != nil {
+			return Authenticated{}, fmt.Errorf("identity: authenticate session: %w", err)
+		}
 	}
 	return Authenticated{Principal: principalFromRecord(principal), Form: FormSession, CredentialID: rec.ID}, nil
 }
@@ -472,45 +582,69 @@ func (s *svc) RevokeAllSessions(ctx context.Context, principalID string) error {
 	return nil
 }
 
+// InvalidateAllSessions implements [Service.InvalidateAllSessions] — see
+// that method's doc comment on the interface for the database-restore
+// scenario it exists to close. Best-effort per principal is deliberately
+// NOT this method's shape: it stops and returns the first error
+// encountered, because a caller running this once, host-side, immediately
+// after restoring a backup (and before trusting it with any traffic) needs
+// to know definitively whether every principal was actually invalidated,
+// not "most of them, probably".
+func (s *svc) InvalidateAllSessions(ctx context.Context) error {
+	principals, err := s.st.ListPrincipals(ctx)
+	if err != nil {
+		return fmt.Errorf("identity: invalidate all sessions: list principals: %w", err)
+	}
+	for _, p := range principals {
+		if _, err := s.st.BumpPrincipalGeneration(ctx, p.ID); err != nil {
+			return fmt.Errorf("identity: invalidate all sessions: bump generation for %q: %w", p.ID, err)
+		}
+	}
+	return nil
+}
+
 // --- bootstrap ---
 
-// HasAnyPrincipal reports whether at least one principal exists. See
-// [Service]'s doc comment for its bootstrap-ensuring side effect.
+// HasAnyPrincipal implements [Service.HasAnyPrincipal]: a pure query, no
+// side effect. See [svc.EnsureBootstrap] for the code-generation half this
+// method used to fold into itself, and that interface method's doc comment
+// for why splitting them apart is the fix rather than a refactor of
+// convenience.
 func (s *svc) HasAnyPrincipal(ctx context.Context) (bool, error) {
 	has, err := s.st.HasAnyPrincipal(ctx)
 	if err != nil {
 		return false, fmt.Errorf("identity: has any principal: %w", err)
 	}
+	return has, nil
+}
+
+// EnsureBootstrap implements [Service.EnsureBootstrap]. It is a no-op the
+// instant a principal already exists — the common case for the rest of
+// this coordinator's lifetime — and otherwise delegates to
+// [svc.ensureBootstrap], the actual generate-if-needed logic this method
+// used to run as GET /api/v1/session's own side effect before that was
+// found to make the bootstrap code's expiry meaningless (see this method's
+// interface doc comment).
+func (s *svc) EnsureBootstrap(ctx context.Context) error {
+	has, err := s.st.HasAnyPrincipal(ctx)
+	if err != nil {
+		return fmt.Errorf("identity: ensure bootstrap: %w", err)
+	}
 	if has {
-		return true, nil
+		return nil
 	}
-	if err := s.ensureBootstrap(ctx); err != nil {
-		// Deliberately not returned as this method's own error: a caller
-		// (the coordinator's readiness/banner logic, per ADR-024 decision
-		// 9's "loud and persistent") needs the true first-run answer even
-		// when provisioning the bootstrap artifacts failed — e.g. a
-		// read-only data volume — and burying "there are zero principals"
-		// behind an unrelated file-write error would be exactly the kind
-		// of blank-reads-as-fine failure this codebase keeps naming (see
-		// CLAUDE.md's ADR-011 lessons). The failure is still surfaced,
-		// loudly, via the logger, every time this is called while it
-		// keeps failing — which satisfies decision 9's "repeated warning
-		// log" more directly than a single returned error would, since a
-		// caller polling this on a readiness interval gets one log line
-		// per poll for free.
-		s.logger.Warn("identity: failed to ensure a bootstrap code is available",
-			"error", err)
-	}
-	return false, nil
+	return s.ensureBootstrap(ctx)
 }
 
 // ensureBootstrap guarantees a valid, unclaimed, unexpired bootstrap code
 // and file exist, generating a fresh pair only when the stored one is
 // missing, claimed, or expired. It is safe to call repeatedly and cheaply
 // idempotent in the common case (an existing valid row short-circuits
-// after one SELECT, with no file write) — [Service.HasAnyPrincipal] calls
-// it on every invocation while no principal exists, which a caller may
-// reasonably do on every readiness check.
+// after one SELECT, with no file write) — [svc.EnsureBootstrap] calls it
+// on every invocation while no principal exists, which its own callers
+// (coordinator startup and its periodic unclaimed-bootstrap warning loop —
+// see that interface method's doc comment) do on a fixed, internal timer,
+// never per unauthenticated request.
 //
 // Deliberately does NOT verify the file on disk still exists when the DB
 // row looks valid: doing so would need a stat on every call, and the only

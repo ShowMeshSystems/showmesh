@@ -397,13 +397,28 @@ func watchUnclaimedBootstrap(ctx context.Context, identitySvc identity.Service, 
 
 // logBootstrapStateIfUnclaimed logs ADR-024 decision 9's unclaimed-
 // bootstrap warning if and only if identitySvc currently reports zero
-// principals. Never the code itself, and never anything read from the
-// bootstrap file — see identity.Service.HasAnyPrincipal's own doc
-// comment for why this call alone is sufficient (it is what generates
-// and maintains the bootstrap file/row as a side effect) and OBSERVABILITY
-// section 13's "never log a secret" rule, which this function's silence
-// about the code's actual value is what satisfies.
+// principals, and — before checking — ensures a valid bootstrap code and
+// file exist via identity.Service.EnsureBootstrap. This is deliberately
+// the ONLY place in this codebase that calls EnsureBootstrap on a
+// recurring basis: watchUnclaimedBootstrap's caller runs it once
+// immediately at startup and then every bootstrapWarningInterval,
+// entirely on this coordinator's own internal timer, never in response to
+// any request a network caller can trigger or accelerate. A review
+// finding caught that GET /api/v1/session used to trigger the identical
+// generation side effect through HasAnyPrincipal, which meant an
+// unauthenticated caller polling that endpoint silently reissued an
+// expired bootstrap code on the very next request, making the code's own
+// expiry (ADR-024 decision 9: "carries an expiry") bound nothing in
+// practice — see identity.Service.HasAnyPrincipal's and
+// identity.Service.EnsureBootstrap's own doc comments for the full split.
+// Never the code itself, and never anything read from the bootstrap
+// file — OBSERVABILITY section 13's "never log a secret" rule, which this
+// function's silence about the code's actual value is what satisfies.
 func logBootstrapStateIfUnclaimed(ctx context.Context, identitySvc identity.Service, logger *slog.Logger) {
+	if err := identitySvc.EnsureBootstrap(ctx); err != nil {
+		logger.Warn("failed to ensure a bootstrap code is available", "error", err)
+	}
+
 	has, err := identitySvc.HasAnyPrincipal(ctx)
 	if err != nil {
 		logger.Warn("failed to check whether this coordinator has any administrator principal yet", "error", err)

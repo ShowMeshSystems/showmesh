@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { ApiStore } from './store'
-import { getStoredToken } from './token'
+import { getStoredToken, setStoredToken } from './token'
 import { FakeClock } from './test-support/fake-clock'
 import {
   openSSE,
@@ -1650,6 +1650,30 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
       throw new Error(`fixture missing ${droppedSignal}`)
     }
 
+    // The `fpp.changed` frame used to be written on a fixed 20ms
+    // `setTimeout`, racing this test's own "live, then assert the
+    // pre-frame baseline" sequence, which waits on however many HTTP
+    // round trips reloadSnapshot needs (snapshot, events, and — since
+    // ADR-024 — session). Under load those round trips can take LONGER
+    // than 20ms, and by the time `waitFor(live)` below notices, the
+    // frame's bytes are already sitting in the client's socket buffer:
+    // nothing stops `runConnectionAttempt`'s read loop from draining
+    // them and applying the frame in the same tick, before this test's
+    // own poll even gets a turn — flipping `health` to 'degraded' before
+    // the "positive: the pre-frame baseline still has it" assertion
+    // below runs, which is exactly the flake this comment is warning
+    // about (this project's Step 4 lesson: do not race a clock).
+    //
+    // Fixed structurally rather than retuned: the frame is not written
+    // to the stream socket AT ALL until this test explicitly releases
+    // it, below, immediately after making and checking that baseline
+    // assertion. There is no wall-clock quantity left to guess, on
+    // either macOS or Linux CI.
+    let releaseFrame: (() => void) | undefined
+    const frameReleased = new Promise<void>((resolve) => {
+      releaseFrame = resolve
+    })
+
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         openSSE(res)
@@ -1659,12 +1683,12 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
           serverTime: new Date().toISOString(),
           snapshotRequired: true,
         })
-        setTimeout(() => {
+        void frameReleased.then(() => {
           writeSSEFrame(res, 'fpp.changed', {
             serverTime: new Date().toISOString(),
             instance: after,
           })
-        }, 20)
+        })
         return
       }
       if (req.url === '/snapshot') {
@@ -1683,8 +1707,11 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
     await waitFor(() => store.getSnapshot().connection.kind === 'live')
     // Positive: the pre-frame baseline really did carry the signal that's
     // about to disappear -- otherwise its later absence would prove nothing.
+    // Nothing on the wire can have applied the frame yet: it has not been
+    // released.
     expect(findSignal(findInstance(store, before.instanceId)?.observations ?? [], droppedSignal)).toBeDefined()
 
+    releaseFrame?.()
     await waitFor(() => findInstance(store, before.instanceId)?.health === 'degraded', {
       message: 'the fpp.changed frame was never applied',
     })
@@ -1931,6 +1958,93 @@ describe('ApiStore: ADR-024 sessions', () => {
     })
     expect(store.getSnapshot().session?.authenticated).toBe(false)
     expect(sessionAttempts).toBeGreaterThanOrEqual(1)
+  })
+
+  it('sessionFetchFailed becomes true from a REAL failing GET /session and clears from a REAL succeeding one (ADR-024 decision 12)', async () => {
+    // The trap this test is named for: a fixture that just SETS
+    // `sessionFetchFailed` (as app/session.test.ts and
+    // ScopedButton.test.tsx legitimately do, to test what the flag DOES
+    // once it's true) proves nothing about whether the STORE itself ever
+    // produces or clears it. Deleting the `this.setModel({ ...,
+    // sessionFetchFailed: true })` assignment in store.ts, or pinning it
+    // permanently true, both pass every other test in this suite — this
+    // one drives two real GET /session round trips against a real
+    // node:http server, one failing and one succeeding, and watches the
+    // flag move both ways.
+    //
+    // connect() fires TWO /session fetches during one connect-to-live
+    // sequence: an immediate, independent one (this store's connect(),
+    // fired synchronously with no preceding request) and a second one
+    // from reloadSnapshot, which cannot happen until AFTER the stream
+    // handshake plus /snapshot plus /events have all round-tripped. That
+    // ordering is structural (the second attempt requires strictly more
+    // preceding network round trips than the first, which requires none),
+    // and this test's first draft relied on exactly that to decide which
+    // attempt gets the failing response — confirmed, by instrumentation,
+    // to hold reliably across many runs.
+    //
+    // That draft was still flaky, though, for a DIFFERENT reason worth
+    // recording: on a fast loopback connection, both requests can
+    // complete within a couple of milliseconds of each other, so
+    // `sessionFetchFailed` is true for LESS TIME than waitFor's own 10ms
+    // poll interval — a poll can step from "not yet set" straight to
+    // "already cleared" and never sample the true value in between, even
+    // though the flag genuinely did become true. Confirmed by
+    // instrumenting store.ts directly: the failing fetch set the flag,
+    // and the succeeding one cleared it, 2ms later — not slow, not
+    // reordered, just too brief for a poll to catch reliably. So per this
+    // project's Step 4 lesson (do not race a clock; construct the
+    // ordering structurally), the SECOND /session response is held open
+    // on the server until this test has explicitly observed and asserted
+    // the failure, exactly as finding 6's fpp.changed fix does.
+    let sessionAttempts = 0
+    let releaseSecondSession: (() => void) | undefined
+    const secondSessionReleased = new Promise<void>((resolve) => {
+      releaseSecondSession = resolve
+    })
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'GET') {
+        sessionAttempts += 1
+        if (sessionAttempts === 1) {
+          // A genuine failure on the wire — not a fixture setting a flag.
+          res.writeHead(500).end()
+          return
+        }
+        void secondSessionReleased.then(() => respondJson(res, 200, makeSessionResponse()))
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().sessionFetchFailed === true, {
+      message: 'sessionFetchFailed was never set by a real failing GET /session',
+    })
+    // Negative, paired with the positive above: `session` itself is
+    // untouched by the failure (fetchSession's own doc comment — "a
+    // momentary blip must not flash 'signed out' over a session that is
+    // actually fine"), so this is testing the FAILURE flag specifically,
+    // not a side effect of the session field also changing.
+    expect(store.getSnapshot().session).toBeNull()
+
+    releaseSecondSession?.()
+    await waitFor(() => store.getSnapshot().sessionFetchFailed === false, {
+      message: 'sessionFetchFailed was never cleared by a real succeeding GET /session',
+    })
+    expect(store.getSnapshot().session).not.toBeNull()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
   })
 
   it('re-fetches /session on every stream reconnect, bounding the staleness window ADR-024 decision 12 describes', async () => {
@@ -2193,6 +2307,73 @@ describe('ApiStore: ADR-024 sessions', () => {
     expect(store.getSnapshot().session?.authenticated).toBe(true)
     expect(store.getSnapshot().session?.bootstrapRequired).toBe(false)
     expect(store.getSnapshot().session?.principal?.role).toBe('admin')
+  })
+
+  it('login() clears a stored break-glass token on success, so a stale token cannot permanently shadow the cookie it just proved valid', async () => {
+    // Finding: client.ts's Authorization header always wins over the
+    // cookie (ADR-024 decision 6, "an Authorization header, if present at
+    // all, is the only credential path considered") -- with no
+    // fallthrough to the cookie when it is invalid. Left in storage, a
+    // token from a PREVIOUS (now revoked, or simply wrong) credential
+    // would keep shadowing every request this store makes after login(),
+    // including its own next GET /session, so the coordinator would keep
+    // answering "unauthenticated" and the persistent sign-in banner would
+    // never reflect a login this test just watched succeed.
+    setStoredToken('stale-shadowing-token')
+    expect(getStoredToken()).toBe('stale-shadowing-token') // sanity: the setup actually took
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'GET') return respondJson(res, 200, makeSessionResponse())
+      if (req.url === '/session' && req.method === 'POST') {
+        return respondJson(res, 200, makeAuthenticatedSession({
+          principal: { id: 'p1', name: 'alice', kind: 'human', role: 'operator' },
+        }))
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await store.login('alice', 'secret123', 'porch tablet')
+
+    expect(getStoredToken()).toBeNull()
+  })
+
+  it('claimBootstrap() clears a stored break-glass token on success, for the same reason login() does', async () => {
+    setStoredToken('stale-shadowing-token')
+
+    const s = await server((req, res) => {
+      if (req.url === '/bootstrap' && req.method === 'POST') {
+        return respondJson(res, 200, makeAuthenticatedSession({ bootstrapRequired: false, principal: { id: 'p1', name: 'root', kind: 'human', role: 'admin' } }))
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    // Deliberately NOT calling store.connect(): claimBootstrap() makes its
+    // own independent POST /bootstrap request, so no /stream connection
+    // is needed to exercise it — and skipping one sidesteps a real
+    // confound this test's first draft had. With a token already stored,
+    // an UNRELATED 401 from /stream (used there to simulate reads-closed)
+    // would ALSO clear the token via runLoop's own "a rejected token must
+    // be cleared" path (spec section 5.6) — which made that draft pass
+    // even with claimBootstrap()'s own clearShadowingToken() call
+    // deleted. Confirmed by breaking claimBootstrap()'s call and watching
+    // this version fail while that draft did not.
+    await store.claimBootstrap('the-code', 'root', 'secret123', 'porch tablet')
+
+    expect(getStoredToken()).toBeNull()
   })
 
   it('a 401 that puts the read loop into "unauthorized" also refreshes the persistent session banner, not just the connection state', async () => {

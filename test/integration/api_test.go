@@ -176,19 +176,35 @@ func TestSSEStreamNeverEmitsIDLineAndIgnoresLastEventID(t *testing.T) {
 	}
 }
 
-// TestAPITokenEnforcedWhenSet is contract section 6.8 and Task F spec item
-// 6, end to end: with SHOWMESH_API_TOKEN set, every /api/v1/* request
-// (including the SSE stream) is 401 without the header and 200 with it,
-// while /healthz and /readyz stay open.
-func TestAPITokenEnforcedWhenSet(t *testing.T) {
+// TestAPICloseReadsEnforcedWhenSet is contract section 6.8 and Task F spec
+// item 6's ADR-024 descendant: with SHOWMESH_API_CLOSE_READS=true and a
+// real, per-principal bearer token (minted via the create-admin/
+// issue-token host-level subcommands — ADR-024 decision 9's path,
+// exercised here against the real coordinator binary, never a shared
+// secret), every /api/v1/* request (including the SSE stream) is 401
+// without a credential and 200 with the correct one, while /healthz and
+// /readyz stay open.
+//
+// This replaces the retired TestAPITokenEnforcedWhenSet, which exercised
+// SHOWMESH_API_TOKEN by passing coordinatorConfig.apiToken — a field that
+// set that exact environment variable. ADR-024 decision 2 retires
+// SHOWMESH_API_TOKEN outright: a coordinator carrying this record refuses
+// to start at all when it is still set (config.checkAPITokenRetired), so
+// the old test's own setup made every coordinator subprocess it started
+// fail before ever reaching the behavior under test — this suite's CI-red
+// state at HEAD.
+func TestAPICloseReadsEnforcedWhenSet(t *testing.T) {
 	requireBroker(t)
-	token := "s3cr3t-" + uniqueSuffix()
+	dataDir := t.TempDir()
+	name, password := "admin-"+uniqueSuffix(), "a-strong-password-1"
+	token := createAdminAndIssueToken(t, dataDir, name, password)
+
 	coord := startCoordinatorWithConfig(t, coordinatorConfig{
-		dataDir: t.TempDir(), clientID: "coord-" + uniqueSuffix(), apiToken: token,
+		dataDir: dataDir, clientID: "coord-" + uniqueSuffix(), closeReads: true, bearerToken: token,
 	})
 
 	if status, _ := coord.getRawWithHeaders(t, "/healthz", nil); status != http.StatusOK {
-		t.Errorf("/healthz status = %d, want 200 (probes stay open even with auth enabled)", status)
+		t.Errorf("/healthz status = %d, want 200 (probes stay open even with reads closed)", status)
 	}
 	if status, _ := coord.getRawWithHeaders(t, "/readyz", nil); status != http.StatusOK && status != http.StatusServiceUnavailable {
 		t.Errorf("/readyz status = %d, want 200 or 503, but never 401", status)
@@ -213,29 +229,34 @@ func TestAPITokenEnforcedWhenSet(t *testing.T) {
 	// it holds regardless of value, so req.Header.Set("Authorization", "")
 	// does put a literal "Authorization:" line on the wire with an empty
 	// value, not an absent one. What this actually exercises is a present
-	// but empty/malformed bearer credential, which the server's constant-time
-	// comparison correctly rejects the same way it rejects a genuinely
-	// absent header or a wrong token (both covered elsewhere in this test)
-	// — 401 either way, just for a different reason than "no header at all".
+	// but empty/malformed bearer credential, which the server correctly
+	// rejects the same way it rejects a genuinely absent header or a wrong
+	// token (both covered elsewhere in this test) — 401 either way, just
+	// for a different reason than "no header at all".
 	if streamStatus != http.StatusUnauthorized {
-		t.Errorf("GET /api/v1/stream with no token: status = %d, want 401", streamStatus)
+		t.Errorf("GET /api/v1/stream with no valid token: status = %d, want 401", streamStatus)
 	}
 }
 
-// TestAPIStreamOpensSuccessfullyWithAuthEnabled is Step 3 review finding
-// 4.5's first missing-coverage item: every other test in this package that
-// combines auth with /api/v1/stream only ever proves the 401 case
-// (TestAPITokenEnforcedWhenSet above). Nothing proved the stream actually
-// opens and delivers real frames when a token IS presented correctly —
-// the endpoint contract section 6.8 itself calls out as "most likely to be
-// special-cased later" because a browser EventSource cannot set an
-// Authorization header at all (the reason this contract reads the stream
-// with fetch rather than EventSource in the first place).
-func TestAPIStreamOpensSuccessfullyWithAuthEnabled(t *testing.T) {
+// TestAPIStreamOpensSuccessfullyWithCloseReadsEnabled is Step 3 review
+// finding 4.5's first missing-coverage item, carried forward under
+// ADR-024: every other test in this package that combines auth with
+// /api/v1/stream only ever proves the 401 case
+// (TestAPICloseReadsEnforcedWhenSet above). Nothing proved the stream
+// actually opens and delivers real frames when a real credential IS
+// presented correctly — the endpoint contract section 6.8 itself calls
+// out as "most likely to be special-cased later" because a browser
+// EventSource cannot set an Authorization header at all (the reason this
+// contract reads the stream with fetch rather than EventSource in the
+// first place).
+func TestAPIStreamOpensSuccessfullyWithCloseReadsEnabled(t *testing.T) {
 	requireBroker(t)
-	token := "s3cr3t-" + uniqueSuffix()
+	dataDir := t.TempDir()
+	name, password := "admin-"+uniqueSuffix(), "a-strong-password-1"
+	token := createAdminAndIssueToken(t, dataDir, name, password)
+
 	coord := startCoordinatorWithConfig(t, coordinatorConfig{
-		dataDir: t.TempDir(), clientID: "coord-" + uniqueSuffix(), apiToken: token,
+		dataDir: dataDir, clientID: "coord-" + uniqueSuffix(), closeReads: true, bearerToken: token,
 	})
 
 	status, raw := readStreamFor(t, coord, nil, 2*time.Second) // readStreamFor's nil extraHeaders still gets coord.token attached, since coord.token != ""
@@ -300,9 +321,10 @@ func TestAPIFPPWireCarriesCollectionFailedAndLastPollError(t *testing.T) {
 }
 
 // TestAPINoTokenConfiguredServesUnauthenticated proves the documented
-// default posture (contract section 6.8): with SHOWMESH_API_TOKEN unset,
-// /api/v1/* answers with no Authorization header at all, and this
-// coordinator logged the required startup warning about it.
+// default posture (contract section 6.8, ADR-024 decision 2): with
+// SHOWMESH_API_CLOSE_READS unset (reads open by default), /api/v1/*
+// answers with no Authorization header at all, and this coordinator
+// logged the required startup warning about it.
 func TestAPINoTokenConfiguredServesUnauthenticated(t *testing.T) {
 	requireBroker(t)
 	coord := startCoordinator(t, t.TempDir(), "coord-"+uniqueSuffix())

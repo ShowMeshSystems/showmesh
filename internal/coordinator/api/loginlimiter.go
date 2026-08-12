@@ -28,6 +28,24 @@ import (
 //     8's whole design is shaped around ("neither mechanism can ever put a
 //     principal into a state where the correct password is refused").
 //
+// The delay MUST run before [loginLimiter.acquire], never after — every
+// caller in this package (session.go, bootstrap.go) is required to call
+// [loginLimiter.delay] first and only then [loginLimiter.acquire]. This is
+// load-bearing, not stylistic, and was itself the subject of a review
+// finding, reproduced against the real binary: acquiring the slot first
+// and delaying while holding it means a slot is occupied for
+// delay-plus-verify time instead of just verify time, so a handful of
+// concurrent requests from one already-slowed source can fill every slot
+// with sleeping holders and starve a DIFFERENT source's correct-password
+// login into the queue timeout — a 429 for a source that did nothing
+// wrong, which is exactly the operator lockout this decision exists to
+// rule out. Delaying outside the semaphore bounds what a slot is ever held
+// for to argon2id verification alone, regardless of any source's history,
+// which is what actually makes "a correct password from a source with a
+// long failure history still succeeds, just slower" true rather than
+// aspirational — see TestCorrectPasswordFromThrottledSourceStillSucceedsWhileAnotherSourceQueues
+// in auth_test.go for the regression guard.
+//
 // Both bounds are SHOWMESH HYPOTHESES: sized to keep a Pi-class
 // coordinator responsive to everything else while making sustained
 // guessing arbitrarily expensive, not derived from any measurement.

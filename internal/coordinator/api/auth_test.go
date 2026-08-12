@@ -119,6 +119,59 @@ func fastLoginOptions(o *Options) {
 	o.LoginMaxDelay = 5 * time.Millisecond
 }
 
+// TestWriteGuardCSRFKeyedOnAuthenticatedFormNotHeaderPresence closes
+// review finding 12's "the CSRF keying property is untested in isolation":
+// every existing CSRF test in this package (session_test.go,
+// middleware_test.go) drives the property through a full HTTP stack with
+// a real identity.Service, which proves the two forms that actually reach
+// [handlers.writeGuard] today (FormSession, FormToken) behave correctly,
+// but says nothing in isolation about the actual comparison writeGuard
+// makes. This drives writeGuard directly with a synthetic authContext,
+// isolating the exact property ADR-024 decision 6 and this task's item 8
+// require: the check is `Form != FormToken` (a deny-list — CSRF required
+// unless PROVEN to be a bearer token), never `Form == FormSession` (an
+// allow-list — CSRF skipped unless proven to be a cookie). The two only
+// disagree for a THIRD credential form, which is why this test includes
+// one: a value that is neither FormSession nor FormToken must still
+// require the Sec-Fetch-Site header, which only the deny-list form
+// guarantees.
+func TestWriteGuardCSRFKeyedOnAuthenticatedFormNotHeaderPresence(t *testing.T) {
+	h := &handlers{clock: fixedClock(testNow), logger: testLogger()}
+	inner := h.writeGuard(nil, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	tests := []struct {
+		name         string
+		form         identity.CredentialForm
+		secFetchSite string
+		wantStatus   int
+	}{
+		{"session form, no Sec-Fetch-Site header", identity.FormSession, "", http.StatusForbidden},
+		{"session form, cross-site", identity.FormSession, "cross-site", http.StatusForbidden},
+		{"session form, same-origin", identity.FormSession, "same-origin", http.StatusNoContent},
+		{"token form, no Sec-Fetch-Site header (bearer exemption)", identity.FormToken, "", http.StatusNoContent},
+		{"an unrecognized third form, no Sec-Fetch-Site header", identity.CredentialForm("something-else"), "", http.StatusForbidden},
+		{"an unrecognized third form, same-origin", identity.CredentialForm("something-else"), "same-origin", http.StatusNoContent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
+			if tt.secFetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tt.secFetchSite)
+			}
+			ac := authContext{ok: true, result: identity.Authenticated{
+				Principal: identity.Principal{Role: identity.RoleOperator}, Form: tt.form,
+			}}
+			req = req.WithContext(withAuthContext(req.Context(), ac))
+
+			rec := httptest.NewRecorder()
+			inner(rec, req)
+			if rec.Result().StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Result().StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
 // authTestDeps returns a [Dependencies] with every non-Identity field set
 // to an empty fake, matching testAPI/buildTestAPI's own convention
 // elsewhere in this package, plus svc wired as Identity.

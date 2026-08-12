@@ -49,6 +49,18 @@ func (noIdentityService) AuthenticateSession(context.Context, string, time.Time)
 	return identity.Authenticated{}, identity.ErrInvalidCredential
 }
 
+// RevalidateSession and RevalidateToken match AuthenticateSession/
+// AuthenticateToken's own "every credential fails" posture under this
+// no-op default — see [Hub.revalidateSubscribers]'s only caller of either,
+// which already treats any error identically to a revoked credential.
+func (noIdentityService) RevalidateSession(context.Context, string, time.Time) (identity.Authenticated, error) {
+	return identity.Authenticated{}, identity.ErrInvalidCredential
+}
+
+func (noIdentityService) RevalidateToken(context.Context, string) (identity.Authenticated, error) {
+	return identity.Authenticated{}, identity.ErrInvalidCredential
+}
+
 func (noIdentityService) CreateSession(context.Context, string, string, time.Time) (identity.Session, string, error) {
 	return identity.Session{}, "", errIdentityNotConfigured
 }
@@ -62,6 +74,12 @@ func (noIdentityService) ListSessions(context.Context, string) ([]identity.Sessi
 }
 
 func (noIdentityService) HasAnyPrincipal(context.Context) (bool, error) { return false, nil }
+
+// EnsureBootstrap no-ops successfully: this package's own callers never
+// invoke it (it is coordinator-startup-only — see
+// internal/coordinator/coordinator.go), and a coordinator with no identity
+// dependency wired in has nothing to bootstrap.
+func (noIdentityService) EnsureBootstrap(context.Context) error { return nil }
 
 func (noIdentityService) ClaimBootstrap(context.Context, string, string, string, time.Time) (identity.Principal, error) {
 	return identity.Principal{}, errIdentityNotConfigured
@@ -84,6 +102,10 @@ func (noIdentityService) SetRole(context.Context, string, identity.Role) (identi
 }
 
 func (noIdentityService) RevokeAllSessions(context.Context, string) error {
+	return errIdentityNotConfigured
+}
+
+func (noIdentityService) InvalidateAllSessions(context.Context) error {
 	return errIdentityNotConfigured
 }
 
@@ -127,19 +149,6 @@ const sessionCookieName = "showmesh_session"
 // consequences section pins this), so a coordinator-set Path survives to
 // the browser unchanged.
 const sessionCookiePath = "/api"
-
-// formPassword marks an audit entry's Form when a request authenticated a
-// login attempt with a name/password pair, not a pre-existing credential.
-// [identity.CredentialForm]'s own two named constants, FormSession and
-// FormToken, both describe a credential that already existed before this
-// request (see that type's doc comment); neither applies to the one
-// request whose entire job is to create a session in the first place.
-// identity.CredentialForm is a plain string underneath, so this value
-// compiles, stores, and decodes exactly like FormSession/FormToken even
-// though it is not one of identity's own named consts — a deliberate,
-// flagged extension of a value set this task does not own the type of;
-// see this package's report.
-const formPassword identity.CredentialForm = "password"
 
 // authCtxKeyType is unexported so no other package can construct a
 // colliding context key.
@@ -238,12 +247,39 @@ func resolveCredential(ctx context.Context, svc identity.Service, r *http.Reques
 //     true even when [Options.CloseReads] is false and the route being
 //     hit has no scope gate at all — a per-route guard could not do this,
 //     because most routes never run one.
-func withIdentity(identitySvc identity.Service, logger *slog.Logger, clock func() time.Time) func(http.Handler) http.Handler {
+//
+// limiter throttles the credential-in-url audit write per source — a
+// review finding caught that this path, unlike POST /api/v1/session and
+// POST /api/v1/bootstrap, was reachable by ANY request to ANY route with
+// no authentication and no bound at all, so a source repeating it could
+// grow the append-only audit table without limit at full request rate
+// (decision 11 already names disk exhaustion as a case this coordinator
+// must survive; an unthrottled unauthenticated INSERT source is a
+// self-inflicted way to reach it). Reusing the SAME per-source delay
+// bookkeeping [handlers.loginLimiter] already uses for login failures —
+// [loginLimiter.delay]/[loginLimiter.recordFailure], never
+// [loginLimiter.acquire] — bounds the SUSTAINED rate from one source
+// without inventing a second, independent mechanism and without coupling
+// this path to the login concurrency bound itself: acquiring a
+// concurrency slot here would let a credential-in-url flood queue out and
+// 429 a genuinely different source's correct-password login, reproducing
+// the exact cross-source starvation shape finding 2 exists to prevent,
+// just one endpoint over. This is a real but partial mitigation, honestly
+// short of a hard cap: many concurrent requests from one source can still
+// each observe a low delay before any of their own recordFailure calls
+// have landed, so a sufficiently parallel burst is throttled less than a
+// sequential one — see this task's report.
+func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *slog.Logger, clock func() time.Time) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			now := clock()
 
 			if strings.Contains(r.URL.RawQuery, identity.TokenPrefix) {
+				source := loginSource(r)
+				if limiter != nil {
+					limiter.delay(r.Context(), source)
+				}
+
 				// Never the query string itself, in the problem detail or
 				// anywhere else — see withRequestLogging's identical
 				// posture in middleware.go for RawQuery. Best-effort: an
@@ -254,6 +290,9 @@ func withIdentity(identitySvc identity.Service, logger *slog.Logger, clock func(
 					Kind: identity.AuditAuthFail,
 				}); err != nil && logger != nil {
 					logger.Warn("api: failed to audit a credential-in-url rejection", "error", err)
+				}
+				if limiter != nil {
+					limiter.recordFailure(source)
 				}
 				writeProblem(w, logger, now, credentialInURLProblem(
 					"a credential must never be presented as a query parameter; use Authorization: Bearer or the session cookie"))
@@ -350,6 +389,19 @@ func (h *handlers) requireScope(scope identity.Scope, next http.HandlerFunc) htt
 // already turned a malformed Authorization header into ac.ok=false before
 // this guard ever runs — there is no header-presence signal left here to
 // misuse even by accident.
+//
+// The check is a DENY-LIST — "require the header unless the credential is
+// a bearer token" — never an allow-list keyed on FormSession specifically.
+// A review finding caught the earlier `== identity.FormSession` form: only
+// two CredentialForm values ever reach this point today (resolveCredential
+// only ever constructs FormSession or FormToken), so the two read
+// identically FOR NOW, but identity.CredentialForm is a plain string and
+// this package's own report already flagged formPassword/formCLI as
+// values the type grows beyond its two authenticating constants — an
+// allow-list silently exempts every one of those from CSRF the day one of
+// them becomes reachable through this guard, where a deny-list still
+// requires the header for anything that is not proven, by name, to be
+// exempt.
 func (h *handlers) writeGuard(scope *identity.Scope, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		now := h.now()
@@ -362,7 +414,7 @@ func (h *handlers) writeGuard(scope *identity.Scope, next http.HandlerFunc) http
 			writeProblem(w, h.logger, now, forbiddenProblem(*scope))
 			return
 		}
-		if ac.result.Form == identity.FormSession && r.Header.Get("Sec-Fetch-Site") != "same-origin" {
+		if ac.result.Form != identity.FormToken && r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 			writeProblem(w, h.logger, now, csrfProblem())
 			return
 		}
@@ -409,7 +461,7 @@ func (h *handlers) writeAuditOrFail(ctx context.Context, w http.ResponseWriter, 
 // principal was ever authenticated to attribute it to).
 func (h *handlers) auditAuthFailure(r *http.Request, now time.Time, attemptedName, reason string) {
 	err := h.deps.Identity.WriteAudit(r.Context(), identity.AuditEntry{
-		Timestamp: now, Form: formPassword, ClientAddr: h.clientAddr(r),
+		Timestamp: now, Form: identity.FormPassword, ClientAddr: h.clientAddr(r),
 		Action: "session.create", Target: attemptedName,
 		Params: map[string]any{"reason": reason},
 		Kind:   identity.AuditAuthFail,

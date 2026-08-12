@@ -301,15 +301,25 @@ func TestOpenAPIBootstrapResponseMatchesRealResponse(t *testing.T) {
 }
 
 // TestOpenAPIProblemSchemaMatchesEveryClass validates a real problem
-// response from each of the classes this API produces against the shared
-// Problem schema — four from Step 3, method-not-allowed (finding 2.8),
-// and three of ADR-024's additions reachable through an ordinary request
-// (unauthorized is reused, not duplicated: decision 4's 401 and ADR-021's
-// are the identical wire class). ADR-024's forbidden class is covered by
-// its own end-to-end test in session_test.go
-// (TestWriteEndpointForbiddenNamesMissingScope), which needs a real
-// identity.Service-backed principal and is exercised against this same
-// schema there rather than being duplicated here.
+// response from EVERY class this API produces against the shared Problem
+// schema — four from Step 3, method-not-allowed (finding 2.8), and all
+// four of ADR-024's additions (unauthorized is reused, not duplicated:
+// decision 4's 401 and ADR-021's are the identical wire class).
+//
+// forbidden and csrf-rejected are exercised here directly, against a real
+// identity.Service-backed principal, rather than cited as "covered
+// elsewhere": a review finding caught that this comment used to point at
+// a test named TestWriteEndpointForbiddenNamesMissingScope in
+// session_test.go, which did not exist anywhere in this package — a
+// citation for coverage this file never actually had. forbidden's real
+// end-to-end 403 behavior (a viewer denied audit:read, naming the missing
+// scope) is still its own, more detailed test in audit_test.go
+// (TestAuditForbiddenForViewerNamesMissingScope); csrf-rejected's is
+// session_test.go's TestDeleteSessionRequiresSecFetchSiteForCookie. What
+// THIS test adds on top of both is the one thing neither of them checks:
+// that the actual response body validates against api/openapi.yaml's
+// shared Problem schema, the same way every other class in this table
+// does.
 func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	api := buildTestAPI(t)
@@ -317,6 +327,12 @@ func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 	}, Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
+
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	viewer := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
+	viewerToken := mustIssueToken(t, svc, viewer.ID)
+	scopedAPI := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scopedCookie := loginAndGetCookie(t, scopedAPI.Handler, viewer.Name, testPassword)
 
 	tests := []struct {
 		name    string
@@ -331,6 +347,12 @@ func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 		{"unauthorized", closedReadsAPI.Handler, "GET", "/api/v1/nodes", nil},
 		{"method-not-allowed", api.Handler, "POST", "/api/v1/nodes", nil},
 		{"credential-in-url", api.Handler, "GET", "/api/v1/nodes?tok=" + identity.TokenPrefix + "leaked", nil},
+		// forbidden: a real, authenticated viewer (holds every read scope
+		// but not audit:read) denied GET /api/v1/audit.
+		{"forbidden", scopedAPI.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + viewerToken}},
+		// csrf-rejected: a real, cookie-authenticated DELETE with no
+		// Sec-Fetch-Site header.
+		{"csrf-rejected", scopedAPI.Handler, "DELETE", "/api/v1/session", map[string]string{"Cookie": sessionCookieName + "=" + scopedCookie}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

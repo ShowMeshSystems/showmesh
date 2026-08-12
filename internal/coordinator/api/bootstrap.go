@@ -64,10 +64,14 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 
 	source := loginSource(r)
 
-	// Identical shape to handleCreateSession's own login-cost bound —
-	// same loginLimiter instance, same acquire/delay/release sequence —
-	// per this step's spec requirement that bootstrap "be bounded by the
-	// same login limiter as POST /session, for the same reason".
+	// Identical shape to handleCreateSession's own login-cost bound — same
+	// loginLimiter instance, same delay-then-acquire-then-release sequence
+	// (see that handler's doc comment for why the delay runs BEFORE
+	// acquiring a slot, never while holding one) — per this step's spec
+	// requirement that bootstrap "be bounded by the same login limiter as
+	// POST /session, for the same reason".
+	h.loginLimiter.delay(r.Context(), source)
+
 	if !h.loginLimiter.acquire(r.Context()) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
@@ -75,7 +79,6 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer h.loginLimiter.release()
-	h.loginLimiter.delay(r.Context(), source)
 
 	principal, err := h.deps.Identity.ClaimBootstrap(r.Context(), code, name, req.Password, now)
 	switch {
@@ -114,7 +117,7 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 	// back a working credential.
 	if !h.writeAuditOrFail(r.Context(), w, now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: principal.ID, PrincipalName: principal.Name,
-		Form: formPassword, ClientAddr: h.clientAddr(r),
+		Form: identity.FormPassword, ClientAddr: h.clientAddr(r),
 		Action: "bootstrap.claim", Target: principal.ID,
 		Params: map[string]any{"deviceLabel": deviceLabel},
 		Kind:   identity.AuditAdmin,

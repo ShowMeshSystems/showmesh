@@ -151,7 +151,21 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 			if r.Method == http.MethodOptions {
 				if origin != "" && allowed[origin] {
 					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-					w.Header().Set("Access-Control-Allow-Headers", "Authorization, "+apiVersionHeaderName)
+					// Content-Type is required here, not merely tidy: a
+					// review finding caught that omitting it meant a
+					// browser's own preflight check rejects the very
+					// cross-origin bearer-token write this function's own
+					// doc comment says CORS should allow, because
+					// POST /api/v1/session and DELETE /api/v1/session both
+					// send "Content-Type: application/json" — a header
+					// outside the CORS "simple request" set, which a
+					// browser will only let the ACTUAL request send if the
+					// preflight's Access-Control-Allow-Headers named it.
+					// Without this, every cross-origin write this package
+					// advertises as reachable (writeGuard's bearer
+					// exemption) silently failed at the browser's own
+					// preflight step before ever reaching this coordinator.
+					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+apiVersionHeaderName)
 					w.Header().Set("Access-Control-Max-Age", "600")
 				}
 				w.WriteHeader(http.StatusNoContent)

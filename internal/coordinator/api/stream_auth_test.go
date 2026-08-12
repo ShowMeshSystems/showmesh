@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,5 +132,70 @@ func TestStreamRevalidationLeavesUnauthenticatedConnectionAlone(t *testing.T) {
 	api.Hub.Notify()
 	if event, data := readEventWithTimeout(t, r, 5*time.Second); event != "node.changed" {
 		t.Fatalf("event after revalidateSubscribers with no credential = %q, want node.changed (connection should be unaffected); data: %s", event, data)
+	}
+}
+
+// TestStreamRevalidationDoesNotSlideSessionLastUsedAt closes review finding
+// 11's third smaller item: [Hub.revalidateSubscribers] used to call
+// AuthenticateSession, which slides LastUsedAt on every tick
+// (defaultStreamTickInterval, 5s in production) purely because a
+// connection stayed open — not because an operator did anything. That made
+// ADR-024 decision 5's 90-day idle window unenforceable for exactly the
+// case it names ("a forgotten tab... slides its session forever"), and
+// cost one UPDATE per tick per open connection.
+//
+// This test proves the fix (RevalidateSession, not AuthenticateSession —
+// see stream.go's revalidateSubscribers) directly: revalidate a real,
+// subscribed connection's credential once, well within its idle window,
+// then confirm the session genuinely idle-expires when the clock later
+// crosses SessionMaxIdle measured from the ORIGINAL login — which is only
+// true if the revalidation tick above did not touch LastUsedAt.
+func TestStreamRevalidationDoesNotSlideSessionLastUsedAt(t *testing.T) {
+	clockTime := testNow
+	clock := func() time.Time { return clockTime }
+	svc := newTestIdentityService(t, clock)
+	p := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+
+	api := New(authTestDeps(svc), Options{Clock: clock, Logger: testLogger()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	cookie := loginAndGetCookie(t, api.Handler, p.Name, testPassword)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/stream", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Cookie", sessionCookieName+"="+cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, data := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start; data: %s", event, data)
+	}
+
+	// Deep within the idle window, revalidate this subscriber's credential
+	// directly — matching TestStreamRevalidationLeavesUnauthenticatedConnectionAlone's
+	// own posture of calling it synchronously rather than waiting out a
+	// real ticker, so this stays a deterministic call, not a race.
+	clockTime = clockTime.Add(identity.SessionMaxIdle - time.Hour)
+	api.Hub.revalidateSubscribers(context.Background(), clockTime)
+
+	// Now cross SessionMaxIdle measured from the ORIGINAL login. If the
+	// revalidation tick above had slid LastUsedAt (the bug), the session
+	// would still authenticate here; it must not.
+	clockTime = clockTime.Add(2 * time.Hour)
+	if _, err := svc.AuthenticateSession(context.Background(), cookie, clockTime); !errors.Is(err, identity.ErrInvalidCredential) {
+		t.Fatalf("session still authenticates after crossing SessionMaxIdle from its original login: err = %v, want ErrInvalidCredential — "+
+			"a stream revalidation tick must never slide LastUsedAt the way a genuine request does", err)
 	}
 }

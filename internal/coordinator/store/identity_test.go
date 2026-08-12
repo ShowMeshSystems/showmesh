@@ -358,6 +358,37 @@ func TestCreateAndGetTokenByDigest(t *testing.T) {
 	}
 }
 
+// TestCreateTokenCapturesPrincipalGenerationAtCreationTime mirrors
+// TestCreateSessionCapturesPrincipalGenerationAtCreationTime exactly,
+// against CreateToken instead of CreateSession — see migrations.go's
+// schemaV5 doc comment for why a token needs the identical treatment a
+// session already got.
+func TestCreateTokenCapturesPrincipalGenerationAtCreationTime(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	pid := mustPrincipal(t, st)
+
+	if _, err := st.BumpPrincipalGeneration(ctx, pid); err != nil {
+		t.Fatalf("bump generation: %v", err)
+	}
+
+	created, err := st.CreateToken(ctx, TokenRecord{ID: "t-1", PrincipalID: pid, Digest: "digest-abc"})
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if created.Generation != 1 {
+		t.Errorf("Generation = %d, want 1 (the principal's current generation at creation)", created.Generation)
+	}
+
+	got, err := st.GetTokenByDigest(ctx, "digest-abc")
+	if err != nil {
+		t.Fatalf("get token by digest: %v", err)
+	}
+	if got.Generation != 1 {
+		t.Errorf("stored Generation = %d, want 1", got.Generation)
+	}
+}
+
 func TestGetTokenByDigestNotFound(t *testing.T) {
 	st := openTestStore(t, nil)
 	_, err := st.GetTokenByDigest(context.Background(), "no-such-digest")

@@ -374,6 +374,37 @@ func TestFPPPublisherRoleHasNoShowmeshAccess(t *testing.T) {
 	}
 }
 
+// TestFPPPublisherRoleCannotWriteCommandTopicButCanSubscribeToIt closes
+// review finding 7: deploy/mosquitto/acl.conf's fpp role used to grant
+// "topic readwrite falcon/player/#", which — because MQTT wildcards do not
+// distinguish "status" from "command" — also granted WRITE on
+// falcon/player/<host>/command/run, the exact topic CLAUDE.md names by
+// name as "a topic FPP acts on" (Step 5's own "GET-only is not read-only"
+// lesson's MQTT analogue). ADR-024 decision 10 confines this role to
+// FPP's own status topics: write is now enumerated per suffix
+// (TestFPPPublisherRoleHasNoShowmeshAccess above already proves one of
+// those suffixes, "status", is still writable), and the command subtree
+// stays READ-only — FPP itself subscribes to its own command topic to
+// receive commands sent to it, so removing read there too would silently
+// break FPP's own remote-command feature on any operator who followed
+// ADR-008's one-broker recommendation, which is not what this fix is for.
+func TestFPPPublisherRoleCannotWriteCommandTopicButCanSubscribeToIt(t *testing.T) {
+	requireBroker(t)
+	if mosquittoContainer == "" {
+		t.Skipf("%s is not set; this test needs the real shipped ACL from `make test-integration`", envMosquittoContainer)
+	}
+
+	username, password := provisionBrokerCredential(t, "fpp")
+	cli := rawConnect(t, username, password)
+
+	if rc := rawPublishReasonCode(t, cli, "falcon/player/FPP-Test/command/run"); rc < 0x80 {
+		t.Errorf("fpp role PUBLISH to its own command/run topic: reason code %d, want >= 0x80 (rejected) — this is the exact topic FPP acts on; the fpp role must never be able to write it", rc)
+	}
+	if rc := rawSubscribeReasonCode(t, cli, "falcon/player/FPP-Test/command/run"); rc >= 0x80 {
+		t.Errorf("fpp role SUBSCRIBE to its own command/run topic: reason code %d, want < 0x80 (accepted) — FPP itself receives commands via this subtree, which must stay readable", rc)
+	}
+}
+
 func TestHealthcheckPrincipalIsReadOnlySYS(t *testing.T) {
 	requireBroker(t)
 	if mosquittoContainer == "" {

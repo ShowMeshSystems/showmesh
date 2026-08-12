@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -544,15 +545,83 @@ func findFreePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
+// createAdminAndIssueToken provisions a real administrator principal and
+// mints a real bearer token for it against dataDir, using the coordinator
+// binary's own host-level subcommands (ADR-024 decision 9's path:
+// `create-admin` then `issue-token`, both run BEFORE any coordinator
+// subprocess is started against this same dataDir, so there is no
+// concurrent-SQLite-access question to reason about). This is this
+// package's ADR-024 replacement for the retired SHOWMESH_API_TOKEN shared
+// secret: TestAPITokenEnforcedWhenSet and TestAPIStreamOpensSuccessfullyWithAuthEnabled
+// used to set coordinatorConfig.apiToken, which set SHOWMESH_API_TOKEN —
+// a coordinator carrying ADR-024 now refuses to start at all with that
+// variable set (config.checkAPITokenRetired), which is why this suite was
+// red at HEAD. Every caller that needs a real, scoped credential against
+// a closed-reads coordinator calls this once, before starting it, and
+// passes the returned token as coordinatorConfig.bearerToken.
+func createAdminAndIssueToken(t *testing.T, dataDir, name, password string) (token string) {
+	t.Helper()
+
+	runCoordinatorSubcommand(t, dataDir, []string{"create-admin", "-name=" + name}, password+"\n")
+	out := runCoordinatorSubcommand(t, dataDir, []string{"issue-token", "-principal=" + name, "-label=integration-test"}, "")
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("issue-token produced no output")
+	}
+	token = lines[len(lines)-1]
+	if !strings.HasPrefix(token, "smsh_") {
+		t.Fatalf("last line of issue-token output = %q, want it to look like a token (prefix \"smsh_\"); full output:\n%s", token, out)
+	}
+	return token
+}
+
+// runCoordinatorSubcommand execs coordinatorBinPath as a subprocess with
+// the given args and SHOWMESH_DATA_DIR=dataDir (matching
+// cmd/showmesh-coordinator's own subcommand dispatch, which reads that
+// variable directly rather than going through the full config.LoadConfig
+// path — see that package's subcommands.go doc comment), feeding stdin
+// and returning stdout. Fails t on a non-zero exit, dumping stderr.
+func runCoordinatorSubcommand(t *testing.T, dataDir string, args []string, stdin string) string {
+	t.Helper()
+	cmd := exec.Command(coordinatorBinPath, args...)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "SHOWMESH_DATA_DIR=" + dataDir}
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run %s %v: %v; stderr:\n%s", coordinatorBinPath, args, err, stderr.String())
+	}
+	return stdout.String()
+}
+
 // coordinatorConfig is what startCoordinatorWithConfig needs to launch one
 // showmesh-coordinator subprocess. Every field has a sensible default so
 // the common case (startCoordinator) only needs a data directory and an
 // MQTT client ID, matching this package's pre-Step-3 call sites.
 type coordinatorConfig struct {
-	dataDir      string
-	clientID     string
-	brokerURL    string // defaults to the package-level brokerURL
-	apiToken     string // defaults to "" (auth disabled)
+	dataDir   string
+	clientID  string
+	brokerURL string // defaults to the package-level brokerURL
+
+	// closeReads forwards SHOWMESH_API_CLOSE_READS=true — ADR-024
+	// decision 2's read-closure switch. Pair with bearerToken (a real
+	// token minted via [createAdminAndIssueToken] BEFORE this coordinator
+	// starts) to exercise a closed-reads coordinator; see that function's
+	// doc comment for why this replaced the retired apiToken field.
+	closeReads bool
+
+	// bearerToken, when non-empty, is attached by [testCoordinator.getRaw]/
+	// [readStreamFor] as "Authorization: Bearer <value>" — never written
+	// to this subprocess's environment (a real per-principal token is
+	// presented per-request, exactly like a real client would, never
+	// configured into the coordinator itself the way the retired shared
+	// secret was).
+	bearerToken string
+
 	fppEndpoints string // SHOWMESH_FPP_ENDPOINTS raw value; defaults to unset
 
 	// httpAddr, when non-empty, is used verbatim instead of allocating a
@@ -597,9 +666,17 @@ type testCoordinator struct {
 	t        *testing.T
 	cmd      *exec.Cmd
 	httpAddr string // host:port this coordinator's HTTP server listens on
-	token    string
-	logs     *syncBuffer
-	client   *http.Client
+
+	// token is [coordinatorConfig.bearerToken] carried onto this handle —
+	// a real per-principal bearer token minted via
+	// [createAdminAndIssueToken] before this coordinator started, ADR-024's
+	// replacement for ADR-021's single shared SHOWMESH_API_TOKEN secret
+	// this field used to hold directly. Attached by getRaw/readStreamFor
+	// exactly the way any real client would present it, per-request.
+	token string
+
+	logs   *syncBuffer
+	client *http.Client
 
 	waitDone chan struct{}
 	waitErr  error
@@ -687,8 +764,8 @@ func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordi
 	if raw := os.Getenv(envStalenessOverride); raw != "" {
 		env = append(env, envStalenessOverride+"="+raw)
 	}
-	if cfg.apiToken != "" {
-		env = append(env, "SHOWMESH_API_TOKEN="+cfg.apiToken)
+	if cfg.closeReads {
+		env = append(env, "SHOWMESH_API_CLOSE_READS=true")
 	}
 	if cfg.fppEndpoints != "" {
 		env = append(env, "SHOWMESH_FPP_ENDPOINTS="+cfg.fppEndpoints)
@@ -709,7 +786,7 @@ func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordi
 	}
 
 	tc := &testCoordinator{
-		t: t, cmd: cmd, httpAddr: httpAddr, token: cfg.apiToken,
+		t: t, cmd: cmd, httpAddr: httpAddr, token: cfg.bearerToken,
 		logs: logs, client: &http.Client{Timeout: 5 * time.Second},
 		waitDone: make(chan struct{}),
 	}

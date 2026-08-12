@@ -948,9 +948,22 @@ func (h *Hub) revalidateSubscribers(ctx context.Context, now time.Time) {
 		var err error
 		switch c.cred.form {
 		case identity.FormSession:
-			_, err = h.identitySvc.AuthenticateSession(ctx, c.cred.secret, now)
+			// RevalidateSession, never AuthenticateSession: this tick is a
+			// periodic re-check the connection itself triggers, not a use
+			// of the credential by an operator — see [identity.Service.
+			// RevalidateSession]'s doc comment. A review finding
+			// (reproduced directly) caught that calling
+			// AuthenticateSession here touched LastUsedAt every tick
+			// (defaultStreamTickInterval, 5s in production), which meant a
+			// browser tab merely left open in the background — nobody
+			// there, nothing "used" — slid decision 5's 90-day idle window
+			// forever, making it unenforceable for exactly the abandoned-
+			// device case it exists to catch, while also writing one
+			// UPDATE per tick per open connection for no attribution
+			// benefit.
+			_, err = h.identitySvc.RevalidateSession(ctx, c.cred.secret, now)
 		case identity.FormToken:
-			_, err = h.identitySvc.AuthenticateToken(ctx, c.cred.secret)
+			_, err = h.identitySvc.RevalidateToken(ctx, c.cred.secret)
 		default:
 			// Unreachable: [Hub.ServeHTTP] only ever constructs a
 			// streamCredential from an authContext whose Form is one of
