@@ -15,6 +15,8 @@ Portable representation is versioned YAML export/import bundles for backup, revi
 
 Node agents cache a verified JSON subset (current assignment + fallback definitions) on local disk, checksummed, sufficient to execute reduced local fallback with the coordinator unreachable. A stale returning node must not overwrite coordinator state (RES-008 conflict rules).
 
+> **`checksummed` is superseded by [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) (2026-08-12).** The cache is **signed**, with its verifying key pinned on the node at enrollment and never fetched at boot. A checksum answers "is this file intact"; the failures that actually occur here, a cloned SD card and a restore from the wrong backup, ask "is this file *ours*", which only a per-deployment signature answers. The rest of this paragraph stands unchanged.
+
 ## Consequences
 
 - Zero-dependency persistence: backup is a file copy plus YAML export; fits the appliance model.

@@ -2,38 +2,167 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#9-configuration-model) · [Tracker](README.md) · [Failure testing](RES-009-failure-mode-testing.md)
 
-Status: unresearched · Risk: high · Verification: L0
+Status: planned · Risk: high · Verification: L1 for the constraint survey below; every decision this record exists to make is still undecided
 
-## Decision to make
+**What "L1" means here and what it does not.** The survey in section 3 is source-verified against this repository's own code and its accepted ADRs, with file paths, line numbers, and decision numbers. That is evidence about *what already constrains the answer*. It is not evidence that any answer is correct, and no part of this record has been benched, run, or exercised against a deployment. The open decisions in sections 4 and 5 remain at L0.
+
+Surveyed 2026-08-12, against the repository at Step 6 complete (schema v5). Worked now, ahead of its place in the queue, because the step after next introduces show macros and a macro definition is a configuration object.
+
+## 1. Decision to make
 
 Define authoritative runtime configuration, portable representation, revisioning, validation, secrets, node-local fallback data, and conflict handling.
 
-## Proposed boundary to validate
+## 2. Proposed boundary to validate
 
 The coordinator owns authoritative runtime configuration. Versioned YAML or JSON bundles provide backup and review. Nodes cache only the verified subset needed for assigned work and reduced local fallback.
 
-## Questions
+## 3. What is already constrained (survey, 2026-08-12)
 
-- Which objects describe nodes, capabilities, assignments, surfaces, transports, audio routes, macros, and fallbacks?
-- How are desired state and configuration revisions related?
-- Which changes are safe live, staged for the next show, or restart-required?
-- How are schema migrations, dry runs, rollback, and partial deployment handled?
-- How are secrets referenced without entering portable exports or logs?
-- What happens when a disconnected node returns with stale configuration?
-- How are user edits reconciled with discovered hardware facts?
+### 3.1 What exists in code today
 
-## Acceptance criteria
+**Fact.** `internal/coordinator/store/migrations.go` defines five forward-only migrations applied in one transaction, with downgrade refused (`ErrSchemaTooNew`). Ten tables exist through schema v5, and every one of them is observed state, history, or identity:
+
+| Table | Class |
+|---|---|
+| `nodes`, `node_lwt`, `node_health` | Observed. Populated from agent hellos, Last Will, and heartbeats. |
+| `observations` | Observed. Latest-only per `(resource_kind, resource_id, signal, source)`. |
+| `events`, `audit_log` | History. Append-only, with retention bounds in `store/retention.go`. |
+| `principals`, `principal_tokens`, `principal_sessions`, `bootstrap` | Identity. |
+
+**Fact. There is no configuration table, no desired-state table, no assignments table, no controlled-device table, no macro table, and no revision table.** Verified three ways: the `CREATE TABLE` set above is complete across the repository; the store package writes to nothing else; and every occurrence of "desired" in Go source is a doc comment, never code. `pkg/command/` is a doc-only stub, so the ARCHITECTURE §8.1 envelope, including its `requested revision` field, is unimplemented.
+
+**Fact.** There is no YAML export or import code. `gopkg.in/yaml.v3` is a direct dependency whose only consumer is the OpenAPI conformance test. ADR-009's portable-bundle half is entirely unbuilt.
+
+**Fact, and the sharpest finding in the survey.** All coordinator configuration is supplied as environment variables read once at startup by `internal/coordinator/config`. Among them, `SHOWMESH_FPP_ENDPOINTS` is a genuine operator-authored inventory decision, which FPP hosts exist and where they are, parsed into `[]FPPEndpoint`. **It lives entirely outside ADR-009's authoritative store**, with no revision, no validation history, no export, and no rollback beyond editing `.env` and restarting the container. The coordinator has configuration and zero configuration rows, and that happened without anybody deciding it. Now decided against: see D1 in section 6a.
+
+**Fact.** Secrets in configuration today are `MQTTPassword` and `FPPMQTTPassword`. `Config.LogValue` redacts both and runs both broker URLs through `redactURLUserinfo`; `Validate` rejects userinfo in FPP endpoint URLs at load. The log half of the secret rule is implemented and tested. The export half has no mechanism because there is no export.
+
+**Fact.** `internal/agent/config` reads a node's capability set from `SHOWMESH_NODE_CAPABILITIES`. **A node's capabilities are node-local environment configuration**; the coordinator learns them only by receiving the advertisement and authors nothing.
+
+**Fact. There is no cached fallback subset on the agent.** `internal/agent/agent.go` and `internal/agent/mqtt.go:255` both record its absence explicitly. ADR-009's third paragraph is unimplemented on both ends, which means reduced local fallback currently cannot work for anything, for any macro, under any condition.
+
+### 3.2 What the accepted ADRs fix, and what they leave open
+
+- **ADR-009** fixes the storage engines and the authority boundary: SQLite is authoritative with immutable configuration revisions, migrations are transactional and downgrade is refused, YAML bundles are for backup and review and are **never** the runtime source of truth, agents cache a checksummed verified subset sufficient for reduced local fallback, and a stale returning node must not overwrite coordinator state. It leaves open, by its own words, "schema shape, merge semantics, and stale-node reconciliation", and by omission: what a revision identifies, how revisions are named, and what "immutable rows" means concretely.
+- **ADR-003** fixes that desired state is stored separately from timestamped observed state, and that commands declare how success will be confirmed or explicitly state that confirmation is unavailable. It also **rejects treating discovery data as authoritative desired configuration**, which is the answer to question 7's direction of travel. It leaves the representation of desired state, and its relationship to a configuration revision, entirely open.
+- **ADR-002** fixes versioned capabilities with measurable attributes, and that assignments request capabilities rather than hardware classes. `pkg/capability` implements the identifier syntax and version; attribute typing and vocabulary membership are deliberately not enforced. **No assignment object exists in code**, though ADR-002, ADR-009, and ARCHITECTURE §6 all reference one.
+- **ADR-016** fixes the minimum field list for a controlled-device definition, requires it to follow ADR-009's revision and export semantics, requires per-device credentials to stay out of portable exports, requires macro steps touching a coordinator-hosted provider to be labelled coordinator-required, and requires an operator surface meeting an unknown provider or version to degrade to raw normalized fields rather than fail. The metadata contract itself is RES-014, which is unresearched at L0, so **the shape of the largest configuration object type ADR-016 mandates is not yet decidable.**
+- **ADR-024** makes principals, tokens, sessions, and the bootstrap file persistent state with backup and secret obligations, and requires password hashes, token hashes, session records, the broker credential mapping, and the bootstrap file to be excluded from YAML export **explicitly rather than by omission**. It fixes roles as a closed four-name vocabulary decided in the ADR, not operator-editable configuration. It hands agent broker credential provisioning to this record by name, with a recorded constraint: delivering them from the coordinator would give a rebooting node a boot-time coordinator dependency it does not have today, which ARCHITECTURE §11's power-restoration case would find. Its decision 7 also requires a macro definition to specify behaviour for a `401` or `403`.
+- **ADR-004** fixes that each critical macro defines a reduced local fallback and explicitly identifies coordinator-required steps, that macro execution must be persisted, idempotent, observable, and compensatable, and that local fallback must report its degradation when connectivity returns. **ADR-019 is emphatic that the exceptions must be recorded in the macro definitions rather than left implicit**, on the stated ground that ADR-004's purpose is protecting the show rather than populating a field. Nothing about a macro's representation is fixed anywhere.
+- **ADR-008** fixes the v1 topic set, which contains **no configuration-distribution topic**, and puts a `revision` in the `cmd` envelope. So a revision identifier must be short, stable, and JSON-safe.
+- **ADR-020** makes the contract additive-only within a major version, so configuration and macro surfaces can arrive in v1, but forbids shipping a field no code computes.
+
+### 3.3 Three inconsistencies between accepted documents
+
+Recorded because each is a place where two documents a future contributor would both trust say different things.
+
+- **The agent cache's trust model.** ADR-009 says the agent caches a "verified JSON subset ... **checksummed**"; ARCHITECTURE §9 says agents retain "the **signed or verified** subset". Both use the word *verified*, and that is the problem: ADR-009 then specifies a checksum, while ARCHITECTURE admits a signature as an alternative. A checksum detects corruption; a signature establishes origin, and only the second survives an attacker who can write the node's disk. They are different security properties behind one shared adjective, and this record must pick one. The ADR is the durable constraint, so if signing is wanted, ARCHITECTURE is not the place it gets decided. **Resolved by D3: signing, recorded in a new ADR that supersedes ADR-009's clause.**
+- **The breadth of the export exclusion.** ADR-024 names specific secret columns. The comment at `migrations.go:308` extends the exclusion to all five schema v5 tables. The wider rule may well be correct, but it is a code comment rather than an accepted decision, and the two should be reconciled deliberately rather than by whichever an implementer reads first. Resolved by D5: the behaviour is kept and the citation is corrected.
+- **The "by default" hedge on secrets in exports.** ARCHITECTURE §10.4 and ADR-009 both say secrets are excluded from exports *by default*; ADR-016 and ADR-024 state it flatly with no opt-out. FPP demonstrates what that hedge produces in practice (section 6), and this record should either define the opt-out or delete the hedge. Resolved by D4: the hedge stands and the opt-out is real, so what remains is making it explicit at the point of use.
+
+## 4. The decisions a show macro forces
+
+Every item below is undecided by any accepted ADR. The only existing constraints on a macro's representation are ADR-004's persistence and labelling requirements, ADR-016's coordinator-required class, ADR-019's silence class, and ADR-024 decision 7's refusal behaviour.
+
+- **Identity and versioning.** Macros are referenced by display name in three documents. Is the stable identifier the name or a separate id; is a macro versioned independently or only through the configuration revision containing it; can two revisions coexist; and what does FPP's native command carry as the reference? ADR-008 constrains the answer at one end and the FPP command argument constrains it at the other.
+- **How a step names its primitive.** `pkg/command` is empty, so no primitive vocabulary exists to reference. Is a primitive a namespaced identifier on the `pkg/capability` pattern, and are step parameters typed per primitive or free-form the way capability attributes deliberately are?
+- **How a step names its target.** ADR-024 decision 4 satisfies ARCHITECTURE §10.4 for **action** and explicitly not for **target**, so a step's target has no authorization model behind it. A capability-targeted step and a node-targeted step also have different staleness semantics: a capability target survives node replacement and a node id does not.
+- **How the local-fallback label is expressed and validated.** This is the highest-value open decision in the record. The label must at minimum distinguish *runs locally reduced* with the reduced behaviour stated, *coordinator-required* (ADR-016), and *silence* (ADR-019). Three constraints make it hard: free text cannot be validated, ADR-019 argues a defaulted label is worse than no label, and **ADR-016's own remedy for a coordinator-required step is to move the provider onto a node, which means the same macro definition legitimately requires different labels in two installations.** So the label can be neither free text, nor defaulted, nor purely global.
+- **Whether running a macro sets desired state or only dispatches commands.** A macro is a transition into a state per ARCHITECTURE §7.1. If it sets desired state, its steps and the desired-state revision are two views of one change and must share a revision, which determines what value goes in ADR-008's `cmd` envelope. Also open: whether an in-flight execution is pinned to the revision it started under.
+- **What the agent's cached fallback subset contains.** For a macro's reduced steps to mean anything with the coordinator unreachable, the cache must hold the macro identity and revision, the ordered locally-executable steps, each step's primitive and parameters, its target resolved to something the node can act on **without** the coordinator, and the degradation report ADR-004 requires on reconnect. Open and consequential: how it gets there, given no ADR-008 topic carries configuration; how it is invalidated; and whether a node holding a stale cache may still *execute* its stale fallback, which ADR-009's stale-node rule does not address because it only bars the node overwriting the coordinator.
+- **Whether a macro is validated against declared configuration or observed inventory.** A macro referencing a node or device that no longer exists must fail at activation, not at 17:00. But the coordinator does not own a node inventory to validate against: `nodes` rows come from agent hellos, so "node `media-03` exists" is an observation, and a powered-off node is indistinguishable at validation time from a decommissioned one. Validating against observed inventory would make macro validity depend on which nodes happen to be up; ADR-003 forbids the opposite shortcut. This needs a declared-node concept that does not exist, or an explicit rule separating referential validation from liveness.
+
+## 5. The original seven questions, with what is now answered
+
+1. **Which objects describe nodes, capabilities, assignments, surfaces, transports, audio routes, macros, and fallbacks?** Partially answered at the edges only. Capabilities are settled by ADR-002 and implemented. Controlled devices have a minimum field list from ADR-016 but a metadata contract blocked on RES-014. Nodes have a table that is an observation store rather than a declaration. Assignments, surfaces, transports, audio routes, macros, and fallbacks have no code and no ADR field list.
+2. **How are desired state and configuration revisions related?** Entirely open. ADR-003 fixes only their separation from observed state, ADR-009 only that both live in SQLite. ARCHITECTURE §7.2 requires a resource to record a desired state *and* revision, and ADR-008 puts a revision in the command envelope. Those are two constraints on the answer, not the answer.
+3. **Which changes are safe live, staged, or restart-required?** Open, but today's honest answer is "restart-required for everything", because all configuration is environment variables read once at startup. That is a true and stable answer and nothing about macros forces a live-reload story.
+4. **Migrations, dry runs, rollback, partial deployment?** One quarter answered, well. Database schema migration is forward-only, append-only by rule, transactional, and refuses downgrade. Configuration dry runs, configuration rollback, and partial deployment have no mechanism at all; ADR-009's immutable revisions are unimplemented.
+5. **How are secrets referenced without entering exports or logs?** The logs half is answered and implemented (`Config.LogValue`, userinfo rejection at load, ADR-024 decision 3). The exports half is answered as a *rule* by four documents and has no *mechanism*: no export code, no secret store, and no reference syntax by which a controlled-device definition points at a PJLink password it does not contain.
+6. **What happens when a disconnected node returns with stale configuration?** Answered only as a prohibition, and ADR-009 hands the rest to this record by name. Nothing decides whether the returning node may execute its stale cached fallback, how it detects staleness, or what the operator sees. No cache exists to be stale.
+7. **How are user edits reconciled with discovered hardware facts?** Direction fixed by ADR-003; mechanism open. Today only the discovered side exists, and ADR-002 states the need for a declared profile without defining one.
+
+## 6. Prior art: FPP's own configuration model (L1, accessed 2026-08-12)
+
+Recorded briefly because ShowMesh coordinates FPP and an operator will compare the two.
+
+- **Playlists** are one JSON file per playlist under `<mediadir>/playlists/`, with typed entries (`sequence`, `media`, `both`, `pause`, `branch`, `command`, `script`, `url`, `playlist`, `remap`, `image`, `dynamic`). Source: `src/playlist/Playlist.cpp`.
+- **Schedule entries** are a playlist run *or* a command, over a day index, time window, and date range. Source: `src/ScheduleEntry.cpp`.
+- **Command presets** live in `<mediadir>/config/commandPresets.json` as `{name, presetSlot, command, args, multisyncCommand, multisyncHosts}`. Source: `src/commands/Commands.cpp`.
+- **There are no revisions, no rollback, no diff, and no dry run.** Configuration is mutable JSON edited in place. FPP does auto-snapshot after successful playlist writes into a backups directory with a kept-count and age pruning, and it exposes validation as a separate read-only endpoint with no validate-only mode on any write. That is timestamped snapshots with pruning: no object identity, no diff, no per-object history.
+- **Backup and restore** produce a timestamped JSON document, per area or `all`. `remove_sensitive_data()` blanks the credential fields when protection is on, **which is the default**; turning it off writes credentials in plaintext and prefixes the filename `unprotected_`. Source: `www/backup.php`.
+
+Two things are instructive and only two. First, FPP's opt-out is ARCHITECTURE §10.4's "by default" hedge realized, and what it produces is a plaintext credential file whose only protection is a filename prefix; this record should decide deliberately whether ShowMesh has that opt-out at all rather than inherit the hedge. Second, FPP already demonstrates the shape ADR-009 rejected, mutable files plus whole-system snapshots, so the ecosystem has a working recovery answer and **what ShowMesh is actually adding is per-object identity and diff**. That is worth being explicit about, because it is the whole delta.
+
+## 6a. Owner decisions, 2026-08-12
+
+Taken on reading the survey. These are direction rather than evidence, and each one closes or narrows a question above.
+
+**D1. `SHOWMESH_FPP_ENDPOINTS` moves into the authoritative store, and this generalizes.** Operator-facing configuration must follow ADR-009 rather than living in `.env`. The stated reason is not architectural tidiness: **a non-technical end user cannot be asked to edit an environment file**, and "it is only a file" is not a defence when the person changing it is not the person who deployed it. So the class rule is that anything an operator may reasonably need to change during the life of an installation belongs in the store with a surface in front of it.
+
+This does **not** move secrets. Broker passwords and the like stay in the environment, where the deployment already handles them; the split is operator-facing configuration versus deployment secrets, not "everything in one place." Consequence for sequencing: the first configuration table now has a second occupant waiting for it, and migrating the FPP endpoint list is part of this record's work rather than a later cleanup.
+
+**D2. Node rows are discovery-seeded and then declared, which answers §4's hardest question.** A node is populated by observation through **an explicit operator-invoked discover action**, and from that point the row **declares** state. Offline nodes therefore do not fall off the inventory, and the operator sees the full installation rather than only what happens to be powered on. What a subsequent discovery run may and may not do to an existing declaration is D6, and the short version is that it never deletes.
+
+This threads ADR-003's needle rather than crossing it, and the distinction is worth stating precisely because the two look similar. ADR-003 rejects *discovery data as authoritative desired configuration*. What is adopted here is discovery **proposing** and an operator action **promoting** it to a declaration. Authority still comes from the operator; discovery only removes the typing. So macro validation gets a stable target to resolve against, and a powered-off node becomes a readiness finding rather than a validation error, which is exactly the narrow answer §10 item 6 asked for.
+
+**D3. The agent's cached fallback subset should be built, and it is signed rather than merely checksummed.** §3.3 records that ADR-009 and ARCHITECTURE §9 disagree behind one shared adjective. The decision resolves it toward the stronger property: **a checksum detects corruption, a signature establishes origin**, and only the second survives an attacker who can write a node's disk. That is not a hypothetical on this fleet, since [RES-015](RES-015-fpp-plugin-distribution-model.md) §7.4 establishes that an FPP host cannot keep a secret from anyone who can reach it.
+
+**Recorded as [ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md), 2026-08-12**, which supersedes ADR-009's `checksummed` clause. It needed an ADR rather than an edit because signing brings decisions ADR-009 never made, and one of them collided with a constraint ADR-024 had already recorded: delivering the key from the coordinator would give a rebooting node a boot-time coordinator dependency, and **the cache exists for the case where the coordinator is unreachable**, so the mechanism would have failed precisely when needed. Resolved by pinning the verifying key at enrollment, which is operator-initiated and therefore happens while the coordinator is up, after which the node verifies entirely offline.
+
+Two findings from writing it are worth keeping here. **The security value of signing lives entirely in where the verifying key sits**: a key in a file the agent could rewrite is checksum-level protection presenting as a signature, which is both the easiest implementation and indistinguishable from the correct one in any test. And **the threat that justifies this is operational rather than adversarial**: a cloned SD card, a restore from the wrong backup, or a cache from a different installation all produce a file that is internally consistent, passes a checksum, and is wrong.
+
+**Sequencing:** the ADR is written. Building the cache and its distribution belongs to the macro step, because no ADR-008 topic carries configuration today and there is nothing yet for a node to cache. The cache's *contents* remain a macro-definition question per §4.
+
+**D4. Exporting secrets is an explicit, supported option.** So ARCHITECTURE §10.4's "by default" hedge stands rather than being deleted: bundles exclude secrets by default and an operator may deliberately opt in. The honest cost, and it should be visible at the point of use rather than only here, is that this is precisely FPP's own `unprotected_` backup pattern (§6), and an opted-in bundle is a plaintext credential file whose only protection is where the operator puts it. The export surface should make the choice explicit and mark the resulting artifact, rather than offering a quiet checkbox.
+
+**D5. The `migrations.go` export-exclusion comment is corrected** so it no longer attributes a table-level rule to ADR-024, which names specific secret columns. The exclusion behaviour is kept; only the citation is fixed.
+
+**D6. Question 7's reconciliation policy is settled for the case that matters, and the rest stays open.** D2 supplies the surface: once a node row is a declaration seeded from discovery, a later discovery pass produces a *delta against a declared baseline* rather than an unanchored fact.
+
+**The policy on the sharpest delta is decided: a discovery run never deletes.** A node present in the declaration and absent from a discovery run is **flagged in the UI and otherwise left alone**. Deletion is a separate operator action carrying a confirmation and a warning.
+
+The reasoning is concrete rather than theoretical, and it is why this is a rule rather than a default. **Powered-off equipment is normal outside display hours for most installations**, so auto-deleting on absence would remove healthy nodes for being asleep, at exactly the time of year an operator is least likely to notice. That failure is also silent and destructive in the same move, which is the combination this architecture avoids everywhere else.
+
+**This is not a new principle, and recording it as one would be a mistake.** It is Step 5's observation-pruning decision applied to inventory: only a complete poll may prune, and a backed-off poll claims nothing, because deleting a source's evidence the first time it goes quiet is far worse than a stale ghost. It is also ADR-011's stale-is-`unknown`-never-healthy rule in a third disguise. **Absence of evidence is not evidence of absence**, and this project has now had to decide that separately for telemetry, for observations, and for inventory. A fourth subsystem should inherit it rather than rediscover it.
+
+What stays genuinely open, and is not blocking: which non-deletion deltas auto-apply and which require confirmation, and what happens when an advertised capability contradicts a declared profile. Nothing forces those until a declared capability profile exists, which no step has yet scheduled.
+
+## 7. Acceptance criteria
 
 Invalid configuration is rejected before activation; imports show a change set; revisions are immutable and reversible; partial application is visible; stale nodes cannot silently overwrite current state; secrets remain separate; and a clean coordinator can be restored from a documented export plus secret recovery procedure.
 
-## Test method
+## 8. Test method
 
-Model a small and advanced installation. Test create, edit, dry run, activation, rollback, concurrent edits, schema upgrade, downgrade refusal, stale-node return, coordinator restore, missing secret, partial node reachability, and corrupted local cache.
+Model a small and an advanced installation. Test create, edit, dry run, activation, rollback, concurrent edits, schema upgrade, downgrade refusal, stale-node return, coordinator restore, missing secret, partial node reachability, and corrupted local cache.
 
-## Evidence and findings
+## 9. Evidence and findings
 
-No evidence collected.
+The survey in section 3 is source-verified desk evidence about this repository and about FPP's published source. **No configuration mechanism has been built, run, or tested**, so sections 7 and 8 remain a work queue in full. Nothing here raises any other record.
 
-## Decision, fallback, and revalidation
+## 10. Recommended scope, and what may honestly stay open
 
-Decision pending. A minimal local configuration file may bootstrap nodes, but must not become a competing source of truth. Revalidate whenever the schema, persistence layer, migration engine, or trust model changes.
+**Now scheduled into Step 7** by the owner's decisions: D1's configuration table with the FPP endpoint list migrated into it, D2's discovery-to-declaration model with its no-delete rule, and D3's signing ADR. See [BUILD-PLAN](../build/BUILD-PLAN.md) Step 7. The list below is what remains for the **macro** step.
+
+**Settle before the macro step**, because the step cannot be written without them or because retrofitting is expensive:
+
+1. The macro object's identity, versioning, and step structure.
+2. The local-fallback label as a closed validated enum, with coordinator-required and silence as first-class members, an explicit rule that an unlabelled step is rejected at activation, and an answer for the per-deployment case ADR-016's remedy creates.
+3. The `401` and `403` behaviour as a field on the macro object, per ADR-024 decision 7. Cheap now, a schema change later.
+4. How a macro is invoked and what revision identifier travels with the invocation. Constrained at both ends already, so nearly forced, but it must be written down before either end is built.
+5. Where macro definitions live and how they get there, decided **explicitly**. `SHOWMESH_FPP_ENDPOINTS` is already an unplanned second source of truth, and a second one would set the pattern rather than repeat an accident.
+6. The referential validation *rule*: declared configuration or observed inventory. This can be answered narrowly, for example that targets validate against declared configuration while a declared node with no live agent is a readiness finding rather than a validation error, without building the declaration model yet. It must be answered because answering it wrongly is invisible until showtime.
+
+**May honestly stay open:** which changes are safe live (today's answer is restart-required for everything, which is true and stable); dry runs, rollback tooling, and partial deployment (revision *immutability* is worth fixing early, the tooling is not); reconciling user edits with discovered hardware (nothing forces it until a declared node profile exists); the secret *reference syntax* (its forcing function is ADR-016, whose metadata contract is blocked on RES-014 at L0, so building it now would be guessing); the full YAML bundle; and assignments, surfaces, transports, and audio routes. Audio routes especially: RES-007 is critical-risk at L0, the interface is unpurchased, and ADR-018's clock-domain constraint means the placement model depends on a bench fact nobody has.
+
+**Two cautions for whoever writes the decision.** The agent's cached fallback subset sits on the boundary: its *contents and trust model* are a macro-definition question and should settle now, its *distribution mechanism* should wait for the step that gives the agent something to do, and **no document may claim reduced local fallback works**, because nothing verifies that and RES-009 is planned at L0. And this record must not assert that ADR-024 puts principals in or out of export bundles beyond what ADR-024 actually says; if the wider table-level exclusion is wanted, this record states it as its own recommendation.
+
+## 11. Decision, fallback, and revalidation
+
+**Partially decided, and the decided parts are scheduled.** Section 6a settles the authority boundary for operator-facing configuration (D1), the node inventory's discovery-to-declaration model and its no-delete rule (D2, D6), the agent cache's trust model as signing (D3), the export posture for secrets (D4), and one documentation defect (D5). D1, D2, and D3's ADR land in [BUILD-PLAN](../build/BUILD-PLAN.md) Step 7. Everything in section 4 that a macro definition forces remains open, and section 10 is the order of work for the macro step.
+
+A minimal local configuration file may bootstrap nodes, but must not become a competing source of truth. `SHOWMESH_FPP_ENDPOINTS` already is one, and per D1 its migration into the authoritative store is part of this record's work rather than a separate cleanup. Deployment secrets are the deliberate exception and stay in the environment.
+
+**No fallback is defined**, because nothing has been built to fall back from. The one recorded risk is D4's: an opted-in secret export is a plaintext credential file, and the export surface has to make that visible at the point of use rather than relying on this record.
+
+Revalidate whenever the schema, persistence layer, migration engine, or trust model changes, and **re-run the section 3 survey against the repository before the macro step is specified**, because it is a snapshot of code that is still moving. In particular D1 and D2 both change section 3.1's findings the moment they are implemented, and a stale survey that still says "there is no configuration table" would be worse than no survey.

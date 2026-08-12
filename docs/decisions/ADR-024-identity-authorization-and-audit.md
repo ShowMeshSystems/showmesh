@@ -415,6 +415,19 @@ that returns a refusal**, and nothing in ADR-004, ADR-016, ARCHITECTURE §8.2, o
 the FPP plugin treats that as a fallback condition. So identity failure is not
 equivalent to coordinator loss; left unaddressed it is strictly worse.
 
+> **Corrected 2026-08-12, and the correction is load-bearing for anyone
+> implementing this decision.** The sentence above beginning "That is what an
+> ADR-004 reduced local fallback detects" is **false** for FPP's native `URL`
+> command, which is the mechanism ARCHITECTURE §8.2 describes for FPP invoking
+> a macro. FPP reads no HTTP status on any version, and on the deployed `9.4`
+> and `9.5.3` it does not detect a transport failure either, so it reports
+> success for a refused connection just as it does for a `403`. The conclusion
+> below is unaffected. What changes is the scope of the obligation: a ShowMesh
+> plugin on the FPP host must detect **both** the refusal and the transport
+> failure, because FPP supplies neither. See "What implementation and research
+> proved this record got wrong" and
+> [RES-015](../research/RES-015-fpp-plugin-distribution-model.md) §7.2.
+
 The scenario is ordinary rather than exotic. The operator rotates the
 `scheduler` machine token in November and misses the FPP host. At 17:00 FPP
 fires its native command to run `Begin Set`. The coordinator is up, healthy, and
@@ -712,11 +725,14 @@ ignores the scope list receives `403` with an RFC 9457 problem document naming
 the missing scope, distinct from the `401` that means no valid credential was
 presented.
 
-## What implementation proved this record got wrong
+## What implementation and research proved this record got wrong
 
-Step 6 implemented this record and three reviews attacked the result. Four
-things below are recorded here rather than quietly fixed, because a decision
-record that is silently wrong is worse than one that is visibly incomplete.
+Step 6 implemented this record and three reviews attacked the result. Source
+verification of FPP itself, recorded in
+[RES-015](../research/RES-015-fpp-plugin-distribution-model.md) on 2026-08-12,
+then corrected a further argument. Everything below is recorded here rather
+than quietly fixed, because a decision record that is silently wrong is worse
+than one that is visibly incomplete.
 
 - **The restore claim in decision 5 was false**, corrected in place above.
 - **`POST /api/v1/session` has no cross-site protection, and this record never
@@ -734,6 +750,60 @@ record that is silently wrong is worse than one that is visibly incomplete.
   obligation on the step that adds the first consumer of `show:macro:run`,
   because a correction this record was reshaped around should not survive only
   as prose in an ADR nobody rereads.
+- **Decision 7's asymmetry does not exist at the mechanism level, and the
+  decision is written as though it does.** The argument runs: a coordinator
+  outage is a transport failure, *which is what an ADR-004 reduced local
+  fallback detects and fires on*, whereas a `403` is a successful conversation
+  that fires nothing, so the refusal case is strictly worse than the outage.
+  The second half is right. The clause in italics is not.
+
+  Source-verified in FPP's `src/commands/MediaCommands.cpp` at tags `9.4` and
+  `9.5.3` and at `master`, and re-verified independently during fold-in:
+  `CURLINFO_RESPONSE_CODE` appears **zero times on every ref**, so a `401` is
+  `CURLE_OK` and is indistinguishable from a `200` by any code in FPP. On `9.4`
+  and `9.5.3`, which is what the deployed fleet runs, `isError()` is
+  `m_curl == nullptr || m_curlm == nullptr`, which tests handle setup only, so
+  **a URL command that hits DNS failure, a timeout, or connection refused also
+  reports success.** FPP's own comment on `master` states the consequence:
+  `isError()`/`isDone()` "only look at handle setup and CURLMSG_DONE, not the
+  HTTP status or transfer result." On the scheduler and preset paths the
+  returned `Result` is discarded outright, so there is nowhere to put a check
+  even if the status were readable, and an unresolvable command marks the
+  playlist item finished exactly as a success would.
+
+  So through FPP's native `URL` command **neither** failure fires anything,
+  because FPP detects neither. This record assumed a detection capability and
+  did not check whether it existed. The conclusion survives unchanged, `401`
+  and `403` must be defined fallback triggers, and the obligation grows: **so
+  must transport failure**, because nothing in FPP supplies it either. Both
+  detections must live in ShowMesh-authored code on the FPP host, which puts
+  RES-015 on the critical path of the step that discharges this decision rather
+  than beside it.
+
+  The generalizable shape is worth stating, because it is the third variant of
+  one defect this project keeps meeting. This decision exists because the first
+  draft made **an argument against the wrong failure direction**. This is an
+  argument against **a failure-detection capability assumed rather than
+  checked**. Both times the conclusion happened to survive and the reasoning did
+  not, and only the second kind is caught by reading the other system's source.
+- **A credential on an FPP host is effectively public, and this record's
+  `scheduler` principal is written around one living there.** Also from
+  RES-015. FPP's native `URL` command never sets `CURLOPT_HTTPHEADER` on any
+  ref, so no `Authorization` header is possible; the only way to attach a
+  credential is in the URL itself, and **every command execution publishes its
+  arguments in cleartext to MQTT `command/run`** from every trigger source. Add
+  that FPP writes config files world-readable at `0664`, that
+  `GET /api/configfile/**` streams any config file with no allowlist, that the
+  web UI is unauthenticated by default, and that backup redaction is an exact
+  key-name list containing only `emailpass`, `password`, and `secret` on the
+  deployed versions, and a ShowMesh token placed on an FPP host must be treated
+  as readable by anyone who can reach that host. The deployment posture accepts
+  cleartext on an isolated show LAN for commands and status, and does **not**
+  accept it for a credential, so the native `URL` command is unusable for an
+  authenticated call and a ShowMesh-authored plugin is required rather than
+  merely preferable. The `scheduler` principal's scope bundle should stay as
+  narrow as decision 4 permits, and its credential should be cheap to rotate.
+  Improving FPP's own posture is upstream work and is explicitly out of scope.
 - **Decision 11's same-transaction audit rule is not achieved**, and the layering
   is why: the API package cannot reach the transaction boundary, which identity
   and store own. Session and bootstrap writes audit around the commit rather than

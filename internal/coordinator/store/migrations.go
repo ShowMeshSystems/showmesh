@@ -304,6 +304,7 @@ ALTER TABLE observations_v4 RENAME TO observations;
 //     rule for the single-use bootstrap code (ADR-024 decision 9); the raw
 //     code exists only in the file the identity package writes to the
 //     data volume, never in this database.
+//
 //  2. None of these five tables may be included in a future ADR-009 YAML
 //     export bundle by omission. A password hash, a token digest, a
 //     session row, or the bootstrap file all being "just data" to a naive
@@ -312,6 +313,21 @@ ALTER TABLE observations_v4 RENAME TO observations;
 //     export must add all five to its exclusion list explicitly, and this
 //     comment is what a future contributor grepping for "export" from this
 //     migration should find.
+//
+//     Attribution, because this comment previously blurred it: ADR-024's
+//     consequences name the specific things to exclude, which are password
+//     hashes, token hashes, session records, the broker credential
+//     mapping, and the bootstrap file. The whole-table rule above is
+//     wider than that, since it also covers audit_log and the non-secret
+//     columns of principals, and it is this package's own recommendation
+//     rather than a quotation of the ADR. It is kept because an export
+//     bundle is configuration and none of these five tables is
+//     configuration, so excluding them wholesale costs nothing and
+//     removes a judgement call from whoever writes the exporter. See
+//     RES-008 section 6a decision D5, and note that D4 makes secret
+//     export an explicit opt-in elsewhere in the bundle, which does not
+//     reopen these five.
+//
 //  3. audit_log is append-only. No repository method in this package may
 //     ever UPDATE a row in it — see audit.go, where every write is an
 //     INSERT and the only other statement audit.go issues against this

@@ -44,8 +44,14 @@ Each scenario must state the injected condition, detection signal and deadline, 
 | Broker credential rotated with a show running | Effect and blast radius are known: already-connected clients are not re-authenticated, and a broker restart drops the whole fleet at once |
 | Audit store unavailable under disk exhaustion | Blackout, stop, and power-off still execute with degraded attribution; `config:write` and `principal:write` are refused |
 | Database restored from backup under active sessions | The session generation counter invalidates coherently rather than resurrecting revoked sessions |
+| Agent fallback cache fails signature verification | Cache is discarded and reported as evidence; the agent starts, connects, and runs with no local fallback, and never executes unverified content ([ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md) decision 6) |
+| Agent enrolled while the coordinator is unreachable | Defined degraded state with no pinned key and no local fallback, visible as such, resolving on the next successful enrollment, never blocking agent start |
+| Signing key rotated with a show running | Add-then-retire holds; no node loses its cache mid-show, and a cache signed by a retired key is refused rather than accepted |
+| Coordinator restored from a backup predating a key rotation | Retirement is a revocation and rolls back with the database, so the restore runbook's explicit key check catches it; the coordinator must not silently resume signing with a retired key |
 
-The nine rows above arrive from ADR-024 and none of them is verified. That record's survivability argument is an argument from requirements, and closing it is this record's work.
+The nine rows from ADR-024 and the four from [ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md) are unverified. Both records argue from requirements rather than evidence, and closing that gap is this record's work.
+
+Two of those rows exist because one rule was applied deliberately rather than discovered during an incident: **a restore must preserve identity and must not resurrect revocations.** A signing key is identity and must survive a restore; a generation counter and a key retirement are revocations and must not roll back. Since a database cannot detect its own restore, neither guarantee can be automatic, so both depend on an explicit operator step whose absence is invisible until it matters. **Any future state added to the coordinator's database should be classified against that rule before it ships**, and this table is where the resulting failure case belongs.
 
 ## Acceptance criteria
 

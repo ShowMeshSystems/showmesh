@@ -14,7 +14,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-006](ADR-006-go-implementation-language.md) | Go is the implementation language | Accepted (frontend clause closed by ADR-014, ADR-015) |
 | [ADR-007](ADR-007-gstreamer-media-engine.md) | Node agent supervises GStreamer as media engine | Accepted |
 | [ADR-008](ADR-008-mqtt-control-plane.md) | MQTT is the coordinator↔agent transport | Accepted |
-| [ADR-009](ADR-009-sqlite-configuration-storage.md) | SQLite authoritative store; YAML portable bundles | Accepted |
+| [ADR-009](ADR-009-sqlite-configuration-storage.md) | SQLite authoritative store; YAML portable bundles | Accepted (agent-cache `checksummed` superseded by ADR-025) |
 | [ADR-010](ADR-010-apache-2-license.md) | Apache-2.0 license | Accepted |
 | [ADR-011](ADR-011-context-aware-observability.md) | Health and alerts are context-aware | Accepted |
 | [ADR-012](ADR-012-docker-coordinator-deployment.md) | Docker is the primary coordinator deployment | Accepted (bundle extended by ADR-014) |
@@ -30,6 +30,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded by ADR-024) |
 | [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
 | [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted |
+| [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
 
 ## Record template
 
