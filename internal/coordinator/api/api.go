@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -19,7 +20,7 @@ import (
 // (never an error): a dependency nobody has wired in yet is not this API
 // failing, it is this API accurately reporting that it currently has
 // nothing to say about that resource. Production wiring (a later task)
-// is expected to supply all five; tests in this package exercise the
+// is expected to supply all six; tests in this package exercise the
 // no-op defaults deliberately, to prove the router itself works before any
 // real store exists.
 type Dependencies struct {
@@ -28,6 +29,17 @@ type Dependencies struct {
 	Observations ObservationLister
 	Events       EventReader
 	Collectors   CollectorStatusLister
+
+	// Identity is ADR-024's principal, session, token, bootstrap, and
+	// audit surface — internal/coordinator/identity.Service, already
+	// built (Step 6's own dependency, not this package's to define). A
+	// nil field is replaced by [noIdentityService], under which every
+	// credential fails to authenticate and every read stays exactly as
+	// open (or closed, per [Options.CloseReads]) as it already was:
+	// wiring this in is what makes POST/GET/DELETE /api/v1/session and
+	// GET /api/v1/audit do anything other than always answer 401/403 —
+	// see auth.go's noIdentityService doc comment.
+	Identity identity.Service
 }
 
 // withDefaults returns d with every nil field replaced by a no-op
@@ -47,6 +59,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Collectors == nil {
 		d.Collectors = noCollectorStatusLister{}
+	}
+	if d.Identity == nil {
+		d.Identity = noIdentityService{}
 	}
 	return d
 }
@@ -88,17 +103,63 @@ func (noCollectorStatusLister) CollectorStatuses(context.Context) ([]CollectorSt
 // is time.Now, and every stream tuning value below falls back to this
 // package's own labeled hypothesis.
 type Options struct {
-	// AuthToken is SHOWMESH_API_TOKEN's value. Empty disables auth
-	// entirely, per contract section 6.8. New does not itself log the
-	// startup warning contract section 6.8 requires when this is empty —
-	// that belongs to whatever loads config and calls New (a later
-	// wiring task), which has the logger and the deployment context this
-	// package does not.
-	AuthToken string
-
 	// AllowedOrigins is SHOWMESH_API_ALLOWED_ORIGINS, comma-split by the
 	// caller. Empty means no CORS headers at all.
 	AllowedOrigins []string
+
+	// CloseReads implements ADR-024 decision 2, carrying forward ADR-021's
+	// posture: reads are open by default (this field's zero value, false)
+	// and closable by configuration. False keeps every v1 read route this
+	// package served before Step 6 open with no credential, exactly as
+	// before — GET /api/v1/session and GET /api/v1/ are always open
+	// regardless of this setting; see auth.go's readGuard/readGuardAll
+	// doc comments for the full route-by-route accounting. New does not
+	// itself log the startup warning ADR-021 rule 3/ADR-024 require when
+	// reads are open — that belongs to whatever loads config and calls
+	// New (a later wiring task), which has the logger and deployment
+	// context this package does not.
+	//
+	// Writes have no equivalent switch: ADR-024 decision 2 states plainly
+	// "there is no opt-out" for the write surface (POST/DELETE
+	// /api/v1/session, and GET /api/v1/audit's audit:read gate), so this
+	// field controls read closure only.
+	CloseReads bool
+
+	// SecureCookie sets the ADR-024 decision 5 session cookie's Secure
+	// attribute. Off by default: ShowMesh terminates no TLS (ADR-022
+	// decision 5), so setting this unconditionally would break the
+	// default Compose bundle outright. A deployment that puts TLS in
+	// front of the UI container must set this to true — decision 5 also
+	// then wants the `__Host-` cookie name prefix, which this package
+	// does not implement (it requires Secure, and this package cannot
+	// know a deployment has TLS in front any more than it can trust
+	// X-Forwarded-Proto to tell it — see decision 5's own reasoning);
+	// that is a later, deliberately out-of-scope hardening step named in
+	// this package's report.
+	SecureCookie bool
+
+	// LoginConcurrency, LoginQueueWait, LoginPerSourceDelay, and
+	// LoginMaxDelay implement ADR-024 decision 8's login cost bound — see
+	// loginlimiter.go. All four are SHOWMESH HYPOTHESES, not measured
+	// values. Defaults: concurrency 4, queue wait 2s, per-failure delay
+	// 250ms, max delay 5s.
+	LoginConcurrency    int
+	LoginQueueWait      time.Duration
+	LoginPerSourceDelay time.Duration
+	LoginMaxDelay       time.Duration
+
+	// TrustClientAddr, when true, records the request's RemoteAddr on an
+	// audit entry (ADR-024 decision 11's "a deployment may declare a
+	// trusted proxy address to recover [client address]"). Off by
+	// default: behind the UI container's proxy, RemoteAddr is the
+	// proxy's own address, not the browser's, and ADR-022 rule 2 forbids
+	// trusting X-Forwarded-For for exactly this class of decision. This
+	// package implements no X-Forwarded-For-based recovery of the real
+	// client address at all, even when this is true — see this
+	// package's report for why that is left to a later task rather than
+	// guessed at here; setting this true only stops discarding
+	// RemoteAddr itself.
+	TrustClientAddr bool
 
 	// Clock is substituted in tests; defaults to time.Now.
 	Clock func() time.Time
@@ -133,6 +194,16 @@ type Options struct {
 const (
 	defaultStreamTickInterval      = 5 * time.Second
 	defaultStreamKeepaliveInterval = 15 * time.Second
+
+	// defaultLoginConcurrency, defaultLoginQueueWait,
+	// defaultLoginPerSourceDelay, and defaultLoginMaxDelay back
+	// [Options.LoginConcurrency]/[Options.LoginQueueWait]/
+	// [Options.LoginPerSourceDelay]/[Options.LoginMaxDelay]. See those
+	// fields' doc comments — all four are SHOWMESH HYPOTHESES.
+	defaultLoginConcurrency    = 4
+	defaultLoginQueueWait      = 2 * time.Second
+	defaultLoginPerSourceDelay = 250 * time.Millisecond
+	defaultLoginMaxDelay       = 5 * time.Second
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -192,6 +263,18 @@ func (o Options) withDefaults() Options {
 	if o.StreamSubscriberBuffer <= 0 {
 		o.StreamSubscriberBuffer = defaultStreamSubscriberBuffer
 	}
+	if o.LoginConcurrency <= 0 {
+		o.LoginConcurrency = defaultLoginConcurrency
+	}
+	if o.LoginQueueWait <= 0 {
+		o.LoginQueueWait = defaultLoginQueueWait
+	}
+	if o.LoginPerSourceDelay <= 0 {
+		o.LoginPerSourceDelay = defaultLoginPerSourceDelay
+	}
+	if o.LoginMaxDelay <= 0 {
+		o.LoginMaxDelay = defaultLoginMaxDelay
+	}
 	return o
 }
 
@@ -219,7 +302,11 @@ func New(deps Dependencies, opts Options) *API {
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 
-	h := &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger}
+	h := &handlers{
+		deps: deps, clock: opts.Clock, logger: opts.Logger,
+		closeReads: opts.CloseReads, secureCookie: opts.SecureCookie, trustClientAddr: opts.TrustClientAddr,
+		loginLimiter: newLoginLimiter(opts.LoginConcurrency, opts.LoginQueueWait, opts.LoginPerSourceDelay, opts.LoginMaxDelay, opts.Clock),
+	}
 	hub := newHub(deps, opts, opts.Logger)
 
 	mux := http.NewServeMux()
@@ -231,15 +318,57 @@ func New(deps Dependencies, opts Options) *API {
 	// the catch-all below, so a typo'd endpoint would 200 with a service
 	// descriptor instead of 404 — caught by this package's own
 	// TestUnknownV1RouteIsResourceNotFound, not by inspection.
+	//
+	// GET /api/v1/ is never gated by [Options.CloseReads]: it carries only
+	// coordinator build metadata (contract section 6.1's "service
+	// descriptor"), nothing about any node, FPP instance, observation, or
+	// event, so it is not one of the four resources ADR-024 decision 4
+	// names as what the read scopes gate. See this package's report.
 	mux.HandleFunc("GET /api/v1/{$}", h.handleServiceDescriptor)
-	mux.HandleFunc("GET /api/v1/snapshot", h.handleSnapshot)
-	mux.HandleFunc("GET /api/v1/nodes", h.handleNodes)
-	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.handleNode)
-	mux.HandleFunc("GET /api/v1/fpp", h.handleFPPList)
-	mux.HandleFunc("GET /api/v1/fpp/{instanceId}", h.handleFPPInstance)
-	mux.HandleFunc("GET /api/v1/observations", h.handleObservations)
-	mux.HandleFunc("GET /api/v1/events", h.handleEvents)
-	mux.HandleFunc("GET /api/v1/stream", hub.ServeHTTP)
+	mux.HandleFunc("GET /api/v1/snapshot", h.readGuardAll(readAllScopes, h.handleSnapshot))
+	mux.HandleFunc("GET /api/v1/nodes", h.readGuard(identity.ScopeNodeRead, h.handleNodes))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
+	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))
+	mux.HandleFunc("GET /api/v1/fpp/{instanceId}", h.readGuard(identity.ScopeFPPRead, h.handleFPPInstance))
+	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
+	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
+	mux.HandleFunc("GET /api/v1/stream", h.readGuardAll(readAllScopes, hub.ServeHTTP))
+
+	// ADR-024's own three routes. GET is always open (see
+	// v1.SessionResponse's doc comment — "signed out" must be readable
+	// with no credential at all); POST is unauthenticated by construction
+	// (decision 8); DELETE goes through [handlers.writeGuard] with no
+	// scope (decision 4 names no scope for it) because it is gated by "an
+	// authenticated principal", not a specific grant, plus decision 6's
+	// CSRF check.
+	//
+	// These, plus POST /api/v1/bootstrap below, are the only non-GET
+	// routes this step adds (BUILD-PLAN Step 6: "Step 6 adds NO show write
+	// endpoint" — bootstrap creates a principal, not a show write).
+	// Registering them as method-specific patterns on paths
+	// net/http.ServeMux otherwise only served GET for is what makes
+	// ServeMux's own method-mismatch detection handle every other method
+	// automatically (a PUT or PATCH gets 405 with an Allow header naming
+	// the real set) — no change to the GET-only "GET /api/" catch-all
+	// below was needed for this; see this package's report for why the two
+	// implementation notes BUILD-PLAN recorded turned out not to require a
+	// code change here.
+	mux.HandleFunc("GET /api/v1/session", h.handleGetSession)
+	mux.HandleFunc("POST /api/v1/session", h.handleCreateSession)
+	mux.HandleFunc("DELETE /api/v1/session", h.writeGuard(nil, h.handleDeleteSession))
+
+	// POST /api/v1/bootstrap (ADR-024 decision 9): unauthenticated by
+	// construction, exactly like POST /api/v1/session — registered
+	// directly, no [handlers.writeGuard], since there is no pre-existing
+	// credential to check a scope or CSRF header against. See bootstrap.go.
+	mux.HandleFunc("POST /api/v1/bootstrap", h.handleClaimBootstrap)
+
+	// GET /api/v1/audit is always gated by audit:read (requireScope, not
+	// readGuard): it is not one of the four pre-existing v1 read
+	// resources [Options.CloseReads] toggles, and ADR-024 decision 4
+	// grants audit:read to admin only.
+	mux.HandleFunc("GET /api/v1/audit", h.requireScope(identity.ScopeAuditRead, h.handleAudit))
+
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.
 	//
@@ -264,7 +393,7 @@ func New(deps Dependencies, opts Options) *API {
 		withAPIVersionHeader,
 		withCORS(opts.AllowedOrigins),
 		withVersionNegotiation(opts.Logger, opts.Clock),
-		withAuth(opts.AuthToken, opts.Logger, opts.Clock),
+		withIdentity(deps.Identity, opts.Logger, opts.Clock),
 	)
 
 	return &API{Handler: handler, Hub: hub}

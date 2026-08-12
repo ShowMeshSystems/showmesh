@@ -33,6 +33,7 @@ var migrations = []migration{
 	{version: 2, sql: schemaV2},
 	{version: 3, sql: schemaV3},
 	{version: 4, sql: schemaV4},
+	{version: 5, sql: schemaV5},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -277,6 +278,149 @@ FROM observations;
 DROP TABLE observations;
 
 ALTER TABLE observations_v4 RENAME TO observations;
+`
+
+// schemaV5 adds Step 6's identity, authorization, and audit tables
+// (ADR-024): principals, principal_tokens, principal_sessions, audit_log,
+// and bootstrap. This is a pure-addition migration — nothing from schemaV1
+// through schemaV4 is touched — so unlike schemaV2 and schemaV4 it needs
+// none of SQLite's "12 steps to altering a table" dance; every statement
+// below is a plain CREATE.
+//
+// Every table here holds a credential-adjacent secret or the evidence of
+// one, so three rules apply across all five and are recorded once here
+// rather than repeated per table:
+//
+//  1. No column in this migration ever stores a credential in the clear.
+//     principals.password_hash is an argon2id PHC string (identity
+//     package's password.go), never the password itself.
+//     principal_tokens.digest and principal_sessions.digest are SHA-256
+//     hex digests of the bearer token / session cookie value (identity
+//     package's token.go and session.go), never the raw value — the same
+//     reasoning ADR-009 already applies to node health evidence applies
+//     here to credentials: what is stored is what survives a backup or an
+//     export bundle, and a raw secret surviving either is the failure this
+//     schema is built to avoid. bootstrap.code_digest follows the same
+//     rule for the single-use bootstrap code (ADR-024 decision 9); the raw
+//     code exists only in the file the identity package writes to the
+//     data volume, never in this database.
+//  2. None of these five tables may be included in a future ADR-009 YAML
+//     export bundle by omission. A password hash, a token digest, a
+//     session row, or the bootstrap file all being "just data" to a naive
+//     exporter is exactly the failure ADR-009's "excluded explicitly
+//     rather than by omission" rule exists to catch; whoever implements
+//     export must add all five to its exclusion list explicitly, and this
+//     comment is what a future contributor grepping for "export" from this
+//     migration should find.
+//  3. audit_log is append-only. No repository method in this package may
+//     ever UPDATE a row in it — see audit.go, where every write is an
+//     INSERT and the only other statement audit.go issues against this
+//     table is retention's bounded DELETE (pruneAudit, mirroring
+//     pruneEvents in retention.go). ADR-024 decision 11 requires dispatch
+//     and outcome to be separate correlated entries rather than one row
+//     mutated in place — command_id is what correlates them — precisely so
+//     that no code path ever needs to UPDATE this table at all.
+//
+// principals.generation is decision 5's per-principal generation counter:
+// principal_sessions.generation is stamped with the principal's current
+// generation at the moment a session is created (see identity package's
+// CreateSession), and [Store.AuthenticateSession] rejects any session whose
+// stored generation is less than the principal's current one. A password
+// change, an admin revoke-all, or a database restore is implemented as
+// bumping principals.generation — see [Store.BumpPrincipalGeneration] — not
+// as touching every existing session row, which is what makes revoke-all
+// O(1) instead of O(sessions).
+//
+// principal_tokens.hint and principal_sessions.id are both deliberately
+// NOT secrets, unlike digest: hint is a short, non-secret slice of the
+// token's random component (enough for an operator to tell two tokens with
+// the same label apart in a listing, nowhere near enough to reconstruct the
+// token — see identity package's token.go), and principal_sessions.id is an
+// opaque row identifier distinct from the session's own secret value,
+// specifically so that listing or revoking a session never has to return
+// or accept the bearer secret again after creation — see the identity
+// package's Service doc comment for why Session.ID is not treated as
+// interchangeable with the cookie value the way the Step 6 contract's
+// literal type comment first suggested, and why this migration stores only
+// digest, never the value ID would need to equal if it were.
+//
+// ON DELETE CASCADE on principal_id in principal_tokens and
+// principal_sessions matches the FK style schemaV1 already established for
+// node_lwt/node_health referencing nodes: deleting a principal (there is no
+// repository method for this yet — Step 6 adds no delete-principal
+// endpoint — but the constraint is cheap to have correct now rather than
+// discovered missing later) takes its tokens and sessions with it rather
+// than leaving orphaned rows an unrelated future principal's row could
+// collide with if ids were ever reused.
+const schemaV5 = `
+CREATE TABLE principals (
+	id            TEXT PRIMARY KEY,
+	name          TEXT NOT NULL UNIQUE,
+	kind          TEXT NOT NULL,
+	role          TEXT NOT NULL,
+	password_hash TEXT NOT NULL DEFAULT '',
+	disabled      INTEGER NOT NULL DEFAULT 0,
+	generation    INTEGER NOT NULL DEFAULT 0,
+	created_at    TEXT NOT NULL,
+	updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE principal_tokens (
+	id           TEXT PRIMARY KEY,
+	principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+	digest       TEXT NOT NULL UNIQUE,
+	hint         TEXT NOT NULL DEFAULT '',
+	label        TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	expires_at   TEXT,
+	revoked_at   TEXT,
+	last_used_at TEXT
+);
+
+CREATE INDEX idx_principal_tokens_principal_id ON principal_tokens(principal_id);
+
+CREATE TABLE principal_sessions (
+	id           TEXT PRIMARY KEY,
+	principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+	digest       TEXT NOT NULL UNIQUE,
+	device_label TEXT NOT NULL DEFAULT '',
+	generation   INTEGER NOT NULL DEFAULT 0,
+	created_at   TEXT NOT NULL,
+	last_used_at TEXT NOT NULL,
+	revoked_at   TEXT
+);
+
+CREATE INDEX idx_principal_sessions_principal_id ON principal_sessions(principal_id);
+
+CREATE TABLE audit_log (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	recorded_at     TEXT NOT NULL,
+	principal_id    TEXT NOT NULL DEFAULT '',
+	principal_name  TEXT NOT NULL DEFAULT '',
+	form            TEXT NOT NULL DEFAULT '',
+	credential_id   TEXT NOT NULL DEFAULT '',
+	client_addr     TEXT NOT NULL DEFAULT '',
+	action          TEXT NOT NULL DEFAULT '',
+	target          TEXT NOT NULL DEFAULT '',
+	params_json     TEXT NOT NULL DEFAULT '{}',
+	idempotency_key TEXT NOT NULL DEFAULT '',
+	kind            TEXT NOT NULL,
+	command_id      TEXT NOT NULL DEFAULT '',
+	outcome         TEXT NOT NULL DEFAULT '',
+	outcome_state   TEXT NOT NULL DEFAULT '',
+	outcome_reason  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX idx_audit_log_recorded_at ON audit_log(recorded_at);
+CREATE INDEX idx_audit_log_command_id ON audit_log(command_id);
+
+CREATE TABLE bootstrap (
+	id          INTEGER PRIMARY KEY CHECK (id = 1),
+	code_digest TEXT NOT NULL,
+	created_at  TEXT NOT NULL,
+	expires_at  TEXT NOT NULL,
+	claimed_at  TEXT
+);
 `
 
 // migrate applies every pending migration inside one transaction and

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -70,31 +69,22 @@ func withVersionNegotiation(logger *slog.Logger, clock func() time.Time) func(ht
 	}
 }
 
-// withAuth implements contract section 6.8: when token is non-empty, every
-// request must carry "Authorization: Bearer <token>", compared in constant
-// time via crypto/subtle so response timing cannot leak how much of a
-// guessed token matched. When token is empty, auth is disabled entirely —
-// New's caller (internal/coordinator/coordinator.go, a later task) is
-// responsible for logging the startup warning contract section 6.8
-// requires; this middleware only enforces the check, it does not decide
-// whether the deployment is being run open.
-func withAuth(token string, logger *slog.Logger, clock func() time.Time) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		if token == "" {
-			return next
-		}
-		want := []byte(token)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got, ok := bearerToken(r.Header.Get("Authorization"))
-			if !ok || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				writeProblem(w, logger, clock(), unauthorizedProblem("a valid Authorization: Bearer <token> header is required"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
+// The old ADR-021 shared-secret middleware (every request needed
+// "Authorization: Bearer <the one configured secret>" or none did, with
+// no principal, no scope, and no session) is retired by ADR-024. Its
+// replacement is auth.go's withIdentity plus the per-route
+// readGuard/readGuardAll/requireScope/writeGuard wrappers, which resolve a
+// request to a principal (session cookie or bearer token, per ADR-024
+// decision 1) rather than to a single shared value. See this package's
+// report for the exact shape of that replacement and what a later wiring
+// task must pass instead of the retired shared-secret option.
+//
+// [bearerToken] below survives unchanged: withIdentity's
+// [resolveCredential] still needs to parse an "Authorization: Bearer
+// <token>" header exactly the same way, and ADR-024 decision 6 depends on
+// this exact strict parse (a malformed or non-Bearer header must resolve
+// to "no credential", never a fallthrough) — see resolveCredential's doc
+// comment in auth.go.
 
 // bearerToken extracts the token from an "Authorization: Bearer <token>"
 // header value. ok is false for any other shape (missing, wrong scheme, no
@@ -113,18 +103,33 @@ func bearerToken(header string) (token string, ok bool) {
 	return token, true
 }
 
-// withCORS implements contract section 6.8's CORS rule: no allowed
-// origins configured means no CORS headers at all (a browser cross-origin
-// request simply fails the browser's own same-origin check, which is the
-// safe default for a control API with no configured trust). An origin
-// present in allowedOrigins is echoed back exactly — never a "*" wildcard,
-// which contract section 6.8 forbids pairing with credentials, and this
-// API always requires credentials (the bearer token) once auth is
-// enabled. A preflight OPTIONS request is answered directly here (204, no
-// body) rather than being allowed to reach [withAuth] or a route handler:
-// a browser's own preflight request never carries the application's
-// Authorization header, so requiring one here would make every
+// withCORS implements contract section 6.8's CORS rule, carried forward
+// unchanged by ADR-024 decision 3: no allowed origins configured means no
+// CORS headers at all (a browser cross-origin request simply fails the
+// browser's own same-origin check, which is the safe default for a
+// control API with no configured trust). An origin present in
+// allowedOrigins is echoed back exactly — never a "*" wildcard, which
+// contract section 6.8 forbids pairing with credentials, and this API
+// always requires credentials (a bearer token or a session cookie) once
+// auth is enabled or a write is attempted. A preflight OPTIONS request is
+// answered directly here (204, no body) rather than being allowed to
+// reach [withIdentity] or a route handler: a browser's own preflight
+// request never carries the application's Authorization header or
+// automatically-attached cookie, so requiring one here would make every
 // cross-origin request fail before the real request is ever sent.
+//
+// ADR-024 decision 3's own added rule — "a configured CORS origin does
+// not exempt a cookie-authenticated write from the same-origin
+// requirement" — is enforced entirely OUTSIDE this function, by
+// [handlers.writeGuard]'s Sec-Fetch-Site check in auth.go, which never
+// consults allowedOrigins or the Origin header at all. This function
+// still advertises POST and DELETE here (Access-Control-Allow-Methods)
+// because a bearer-token-authenticated cross-origin write is legitimate —
+// nothing attaches an Authorization header automatically, so CORS
+// allowing it costs nothing — while a COOKIE-authenticated cross-origin
+// write is still blocked by writeGuard regardless of what this function
+// advertises. This is the interlock decision 3 requires: two independent
+// mechanisms, neither of which can be configured to override the other.
 func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := make(map[string]bool, len(allowedOrigins))
 	for _, o := range allowedOrigins {
@@ -145,7 +150,7 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 
 			if r.Method == http.MethodOptions {
 				if origin != "" && allowed[origin] {
-					w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization, "+apiVersionHeaderName)
 					w.Header().Set("Access-Control-Max-Age", "600")
 				}

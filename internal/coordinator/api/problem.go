@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
 // problemBaseURI is the fixed prefix contract section 6.6 anchors every
@@ -31,6 +32,35 @@ const (
 	ProblemTypeInvalidParameter      = problemBaseURI + "invalid-parameter"
 	ProblemTypeUnauthorized          = problemBaseURI + "unauthorized"
 	ProblemTypeMethodNotAllowed      = problemBaseURI + "method-not-allowed"
+
+	// ProblemTypeForbidden is ADR-024 decision 4's "403 means authenticated
+	// but missing a scope" class, added by this step. Distinct from
+	// [ProblemTypeUnauthorized] ("401 means no valid credential"): a client
+	// dispatching on type, not status alone, can tell "log in" apart from
+	// "this principal cannot do that" without parsing prose.
+	ProblemTypeForbidden = problemBaseURI + "forbidden"
+
+	// ProblemTypeCSRFRejected is ADR-024 decision 6's same-origin rule: a
+	// cookie-authenticated write with no (or a non-"same-origin")
+	// Sec-Fetch-Site header. Kept distinct from ProblemTypeForbidden
+	// (missing scope) even though both are 403s, because the fix for each
+	// is completely different — one names a role change, the other names a
+	// deployment/browser problem — and collapsing them would send an
+	// operator debugging "the buttons do nothing" to the wrong place.
+	ProblemTypeCSRFRejected = problemBaseURI + "csrf-rejected"
+
+	// ProblemTypeTooManyRequests is ADR-024 decision 8's login
+	// concurrency-bound rejection: a queued login attempt that would
+	// exceed [Options.LoginConcurrency]'s wait bound. Carries a
+	// Retry-After response header, per that decision's "rejected with a
+	// retry-after".
+	ProblemTypeTooManyRequests = problemBaseURI + "too-many-requests"
+
+	// ProblemTypeCredentialInURL is ADR-024 decision 1's URL rule: a
+	// request whose query string contains [identity.TokenPrefix]. The
+	// detail text never echoes the offending query string — see
+	// withIdentity in auth.go, the only caller.
+	ProblemTypeCredentialInURL = problemBaseURI + "credential-in-url"
 
 	// ProblemTypeInternalError matches the literal handlers.go's
 	// writeInternalError already writes (problemBaseURI +
@@ -107,6 +137,55 @@ func unauthorizedProblem(detail string) v1.Problem {
 		Type:   ProblemTypeUnauthorized,
 		Title:  "Unauthorized",
 		Status: http.StatusUnauthorized,
+		Detail: detail,
+	}
+}
+
+// forbiddenProblem is ADR-024 decision 4's 403: authenticated, but scope
+// does not name a scope the requesting principal holds. detail names the
+// missing scope by value — decision 4 requires this explicitly ("its RFC
+// 9457 problem document names the missing scope"), not just "forbidden".
+func forbiddenProblem(scope identity.Scope) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeForbidden,
+		Title:  "Forbidden",
+		Status: http.StatusForbidden,
+		Detail: "this principal does not hold the required scope: " + string(scope),
+	}
+}
+
+// csrfProblem is ADR-024 decision 6's same-origin rejection for a
+// cookie-authenticated write.
+func csrfProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeCSRFRejected,
+		Title:  "CSRF check failed",
+		Status: http.StatusForbidden,
+		Detail: "a cookie-authenticated write requires the Sec-Fetch-Site: same-origin request header (ADR-024 decision 6); a bearer-token-authenticated request is exempt",
+	}
+}
+
+// tooManyRequestsProblem is ADR-024 decision 8's login-concurrency
+// rejection. The caller (session.go) sets the Retry-After header
+// separately, before calling writeProblem, since [v1.Problem] carries no
+// field for it (it belongs on the HTTP response, not the problem body).
+func tooManyRequestsProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeTooManyRequests,
+		Title:  "Too many requests",
+		Status: http.StatusTooManyRequests,
+		Detail: detail,
+	}
+}
+
+// credentialInURLProblem is ADR-024 decision 1's URL rule. detail must
+// never echo the request's actual query string — see withIdentity in
+// auth.go, the only caller.
+func credentialInURLProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeCredentialInURL,
+		Title:  "Credential in URL",
+		Status: http.StatusBadRequest,
 		Detail: detail,
 	}
 }

@@ -65,28 +65,50 @@ info:
     longer exist anywhere in this system).
 
 
-    **Authentication is a coordinator-side, per-deployment choice, not a
-    fixed property of this contract.** When the coordinator was started
-    with `SHOWMESH_API_TOKEN` set, every operation below requires
-    `Authorization: Bearer <token>`; when it was not, every operation is
-    open. This document declares `bearerAuth` as an available scheme
-    rather than a mandatory one for exactly that reason (ADR-021) — a
-    generated client should send the header when it has a token
-    configured, and omit it otherwise, rather than treating its absence
-    as a client bug.
+    **Authentication is two credential forms resolving to one principal
+    (ADR-024), and reads and writes have different postures.** A request
+    authenticates with `Authorization: Bearer <token>` (an API token
+    minted by an admin) or with the `HttpOnly` session cookie
+    `POST /session` mints — never both considered together: an
+    `Authorization` header, if present at all, is the only credential path
+    considered for that request (ADR-024 decision 6). **Every write
+    requires an authenticated principal, with no opt-out.** **Reads stay
+    open by default and are closable by coordinator-side configuration**
+    (carried forward from ADR-021) — `GET /session` and `GET /` are always
+    open regardless, since a client must be able to learn it has no
+    credential without needing one to ask, and coordinator build metadata
+    carries no operational resource data. This document declares
+    `bearerAuth` and `cookieAuth` as available schemes rather than
+    mandatory ones for exactly that reason — a generated client sends
+    whichever credential it holds and omits both otherwise, rather than
+    treating absence as a client bug.
 
 
-    **Every route documented below is `GET`-only.** Any other method on
-    any of these paths returns `405 Method Not Allowed` with an `Allow`
-    header naming the methods that path actually serves; see
-    `components.responses.MethodNotAllowed`. This document omits `post`,
-    `put`, `patch`, and `delete` operations for that reason — their
-    absence here is what the 405 means, not an oversight.
+    **A `403` names the missing scope; a `401` means no valid credential
+    was presented at all.** `GET /audit` requires `audit:read` regardless
+    of whether reads are otherwise open, since it is not one of the four
+    pre-existing read resources (`node:read`, `fpp:read`,
+    `observation:read`, `event:read`) the open-reads posture covers.
+
+
+    **`POST /session`, `DELETE /session`, and `POST /bootstrap` are the
+    only non-`GET` routes this contract defines.** Every other route
+    documented below remains `GET`-only; any other method on one of THOSE
+    paths returns
+    `405 Method Not Allowed` with an `Allow` header naming the methods
+    that path actually serves; see `components.responses.MethodNotAllowed`.
+    A cookie-authenticated write additionally requires the
+    `Sec-Fetch-Site: same-origin` request header and is rejected
+    (`csrf-rejected`) when it is absent — there is no `Origin`-vs-`Host`
+    fallback (ADR-024 decision 6). A bearer-token-authenticated write is
+    exempt from that check: nothing attaches an `Authorization` header to
+    a request automatically the way a browser attaches a cookie.
 servers:
   - url: /api/v1
     description: The coordinator's own control API root.
 security:
   - bearerAuth: []
+  - cookieAuth: []
   - {}
 paths:
   /:
@@ -95,7 +117,14 @@ paths:
       summary: Service descriptor
       description: >-
         The API's own self-description: served version, every version this
-        coordinator supports, and coordinator build metadata.
+        coordinator supports, and coordinator build metadata. Always open,
+        with no credential and regardless of whether reads are otherwise
+        closed (ADR-024): it carries coordinator build metadata only, none
+        of the four resources the read-closure posture gates.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+        - {}
       responses:
         "200":
           description: OK
@@ -108,8 +137,6 @@ paths:
                 $ref: "#/components/schemas/ServiceDescriptor"
         "400":
           $ref: "#/components/responses/UnsupportedAPIVersion"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -140,6 +167,8 @@ paths:
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -162,6 +191,8 @@ paths:
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -193,6 +224,8 @@ paths:
           $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ResourceNotFound"
         "405":
@@ -217,6 +250,8 @@ paths:
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -246,6 +281,8 @@ paths:
           $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ResourceNotFound"
         "405":
@@ -296,6 +333,8 @@ paths:
           $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -348,6 +387,8 @@ paths:
           $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -491,6 +532,225 @@ paths:
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /session:
+    get:
+      operationId: getSession
+      summary: Current session (ADR-024)
+      description: >-
+        Always reachable with no credential at all, regardless of whether
+        reads are otherwise closed — see SessionResponse's own
+        description for why "signed out" must be a readable state here,
+        never a 401 this operation itself produces.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+        - {}
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createSession
+      summary: Log in (ADR-024)
+      description: >-
+        Unauthenticated by construction (ADR-024 decision 8): this is how
+        a session is created in the first place, so no pre-existing
+        credential is required or considered. Bounded by a login
+        concurrency limit and a per-source increasing delay, NEVER a
+        per-principal lockout — a correct password always eventually
+        succeeds, only more slowly from a source with recent failures. On
+        success, sets the HttpOnly session cookie via Set-Cookie.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "200":
+          description: OK. Set-Cookie carries the new session.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          description: Invalid name/password, or the principal is disabled.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteSession
+      summary: Log out / revoke a session (ADR-024)
+      description: >-
+        Requires an authenticated principal (no specific scope). A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) and is rejected
+        when absent — there is no Origin-vs-Host fallback. An empty body
+        revokes the session that authenticated this request, which
+        requires that credential to be the session cookie itself; a body
+        naming `sessionId` instead revokes that specific session (which
+        must belong to the authenticated principal) and works under either
+        credential form — this is this contract's one genuine
+        bearer-authenticated write.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteSessionRequest"
+      responses:
+        "204":
+          description: The session was revoked.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/CSRFRejected"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /bootstrap:
+    post:
+      operationId: claimBootstrap
+      summary: Claim the one-time bootstrap code and create the first admin (ADR-024 decision 9)
+      description: >-
+        Unauthenticated by construction, exactly like `POST /session` — no
+        principal exists yet for a credential to name. Useless without
+        `code`, which is readable only from a file in the coordinator's
+        data volume: possessing it proves filesystem access, which is what
+        keeps this endpoint from being a network-reachable way to become
+        administrator. Bounded by the SAME login concurrency limit and
+        per-source delay as `POST /session` (ADR-024 decision 8), never a
+        per-principal lockout. A successful claim creates the first
+        administrator (always `kind: human`, `role: admin`), invalidates
+        and deletes the bootstrap code, and immediately mints a session for
+        it exactly as `POST /session` does — the response body is the
+        identical `SessionResponse` shape.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapRequest"
+      responses:
+        "200":
+          description: OK. Set-Cookie carries the new session.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          description: >-
+            The bootstrap code is invalid, already claimed, or expired —
+            or no bootstrap code is currently available (a principal
+            already exists).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /audit:
+    get:
+      operationId: listAudit
+      summary: Audit log (ADR-024 decision 11)
+      description: >-
+        Append-only. Always requires `audit:read`, regardless of whether
+        reads are otherwise open — this is not one of the four
+        pre-existing read resources the open-reads posture covers. Not
+        carried on the SSE change stream.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: >-
+            An opaque cursor: return entries after this value. 0 (the
+            default) means "from the beginning of retained history".
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+            maximum: 500
+          description: >-
+            Maximum number of entries to return. Defaults to 100; values
+            above 500 are silently clamped to 500.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -529,11 +789,51 @@ components:
             $ref: "#/components/schemas/Problem"
     Unauthorized:
       description: >-
-        SHOWMESH_API_TOKEN is configured and the request's Authorization
-        header was missing or did not match.
+        No valid credential was presented: reads are closed and none was
+        given (or it did not authenticate), or the route is a write /
+        `GET /audit` and no credential authenticated at all.
       headers:
         ShowMesh-API-Version:
           $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: >-
+        A valid credential authenticated, but the principal does not hold
+        the scope this operation requires. `detail` names the missing
+        scope (ADR-024 decision 4).
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    CSRFRejected:
+      description: >-
+        A cookie-authenticated write was missing the
+        `Sec-Fetch-Site: same-origin` request header (ADR-024 decision 6).
+        A bearer-token-authenticated request never receives this response.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: >-
+        `POST /session`'s login concurrency bound was exceeded (ADR-024
+        decision 8). Carries a `Retry-After` response header.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
       content:
         application/problem+json:
           schema:
@@ -596,15 +896,30 @@ components:
       type: http
       scheme: bearer
       description: >-
-        `Authorization: Bearer <token>`, checked in constant time against
-        `SHOWMESH_API_TOKEN` (contract section 6.8, ADR-021). This is one
-        shared secret with no identity, no roles, and no audit
-        attribution — see ADR-021's "what this is not" — and it is
-        **optional**: a coordinator started with no token set accepts
-        every request unauthenticated, which is why this API's global
-        `security` requirement below is not exclusive. `/healthz`,
-        `/readyz`, and `/version` are outside this contract entirely and
-        are never authenticated, at any configuration.
+        `Authorization: Bearer <token>` (ADR-024). token is an API token
+        minted for a principal by an admin, displayed exactly once at
+        creation and stored coordinator-side only as a SHA-256 digest. A
+        malformed or non-`Bearer` `Authorization` header never falls
+        through to `cookieAuth` (ADR-024 decision 6) — it is treated as no
+        credential at all. Reads are open by default (this scheme is
+        optional for them, per the top-level `security` requirement not
+        being exclusive); every write requires it or `cookieAuth`, with no
+        opt-out. `/healthz`, `/readyz`, and `/version` are outside this
+        contract entirely and are never authenticated, at any
+        configuration.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: showmesh_session
+      description: >-
+        The `HttpOnly` session cookie `POST /session` mints (ADR-024
+        decision 5). Not usable outside a browser in practice (nothing
+        exposes it to script), and a write authenticated this way
+        additionally requires the `Sec-Fetch-Site: same-origin` request
+        header (decision 6) — omitted from this scheme's own contract
+        because OpenAPI's securityScheme vocabulary has no way to express
+        a conditional required header; see this document's top-level
+        description and `components.responses.CSRFRejected`.
   schemas:
     Evidence:
       type: object
@@ -1060,6 +1375,187 @@ components:
             is guaranteed.
           items:
             $ref: "#/components/schemas/CollectorStatus"
+    PrincipalSummary:
+      type: object
+      description: A principal's own non-secret identity (ADR-024).
+      required: [id, name, kind, role]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [human, machine]
+        role:
+          type: string
+          enum: [viewer, operator, admin, scheduler]
+    SessionInfo:
+      type: object
+      description: >-
+        The session that authenticated this request, present only when
+        that credential was the session cookie. id is the session's
+        non-secret row identifier — never the cookie value.
+      required: [id, deviceLabel, createdAt]
+      properties:
+        id:
+          type: string
+        deviceLabel:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    CreateSessionRequest:
+      type: object
+      description: The body of POST /session.
+      required: [name, password, deviceLabel]
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+        deviceLabel:
+          type: string
+    DeleteSessionRequest:
+      type: object
+      description: >-
+        DELETE /session's optional body. An absent/empty sessionId revokes
+        the session that authenticated this request (requiring that
+        credential to be the session cookie itself); a non-empty sessionId
+        instead revokes that specific session, which must belong to the
+        authenticated principal, and works under either credential form.
+      properties:
+        sessionId:
+          type: string
+    BootstrapRequest:
+      type: object
+      description: >-
+        The body of POST /bootstrap. code is single-use and readable only
+        from a file in the coordinator's data volume (ADR-024 decision 9);
+        deviceLabel behaves exactly as CreateSessionRequest.deviceLabel
+        does, since a successful claim immediately mints a session.
+      required: [code, name, password, deviceLabel]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        password:
+          type: string
+        deviceLabel:
+          type: string
+    SessionResponse:
+      type: object
+      description: >-
+        The body of GET and POST /session, and of POST /bootstrap on
+        success (ADR-024 decisions 5, 9, and 12). authenticated is false
+        whenever no valid credential authenticated this request — a new
+        device, cleared cookies, a revoked or idle-expired session, a bad
+        or absent bearer token — which is deliberately NOT a 401: "being
+        signed out" is a persistent, readable state, not an error a caller
+        must catch to learn. When authenticated is false, principal,
+        session, and credentialForm are all null, scopes is an empty
+        array, and scopesState is "not_applicable". scopesState is
+        "current" when scopes was computed from a fresh read of this
+        principal's role in this same request (the only case this
+        coordinator currently produces) and "unknown" on an internal error
+        computing them — a client MUST treat "unknown" exactly like an
+        empty scope list (ADR-024 decision 12: "a stale or unavailable
+        [scope list] renders as unknown, never as permissive").
+        bootstrapRequired is true whenever this coordinator currently holds
+        zero principals (ADR-024 decision 9's "loud and persistent"
+        unclaimed-bootstrap signal) — computed and returned regardless of
+        whether this particular request authenticated, so a client can
+        render the banner from GET /session on load with no credential at
+        all.
+      required:
+        [serverTime, authenticated, principal, session, credentialForm,
+         scopes, scopesState, bootstrapRequired]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        authenticated:
+          type: boolean
+        principal:
+          oneOf:
+            - $ref: "#/components/schemas/PrincipalSummary"
+            - type: "null"
+        session:
+          oneOf:
+            - $ref: "#/components/schemas/SessionInfo"
+            - type: "null"
+        credentialForm:
+          type: [string, "null"]
+          enum: [session, token, password, null]
+        scopes:
+          type: array
+          items:
+            type: string
+        scopesState:
+          type: string
+          enum: [current, unknown, not_applicable]
+        bootstrapRequired:
+          type: boolean
+    AuditEntry:
+      type: object
+      description: >-
+        One element of GET /audit (ADR-024 decision 11). params is never
+        null (an entry with none still reports an empty object).
+      required:
+        [timestamp, principalId, principalName, form, credentialId,
+         clientAddr, action, target, params, idempotencyKey, kind,
+         commandId, outcome, outcomeState, outcomeReason]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        principalId:
+          type: string
+        principalName:
+          type: string
+        form:
+          type: string
+        credentialId:
+          type: string
+        clientAddr:
+          type: string
+        action:
+          type: string
+        target:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+        kind:
+          type: string
+          enum: [dispatch, outcome, replay, auth_failure, admin]
+        commandId:
+          type: string
+        outcome:
+          type: string
+        outcomeState:
+          type: string
+        outcomeReason:
+          type: string
+    AuditResponse:
+      type: object
+      description: >-
+        The body of GET /audit. Unlike EventsResponse, this carries no
+        gap/oldestRetainedSeq-shaped fields: the coordinator's audit
+        service currently exposes no oldest-retained cursor for this
+        endpoint to report one honestly.
+      required: [serverTime, entries]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEntry"
     Problem:
       type: object
       description: >-
@@ -1067,11 +1563,21 @@ components:
         member present on every problem this API produces, with no
         exception (section 6.2 and 6.6). supportedVersions is present only
         on an "unsupported-api-version" problem. type is a stable,
-        documented identifier a client dispatches on — the six values in
-        its enum below are every class this coordinator currently
+        documented identifier a client dispatches on — the eleven values
+        in its enum below are every class this coordinator currently
         produces, and this list is the single source of truth for that
         set. It is deliberately not a fetchable URI: nothing in this API
         or its tests dereferences it over the network.
+
+
+        Four of the eleven are ADR-024: "forbidden" (401 means no valid
+        credential, this means authenticated but missing a scope — the
+        detail text names the missing scope), "csrf-rejected" (a
+        cookie-authenticated write with no `Sec-Fetch-Site: same-origin`
+        header, decision 6), "too-many-requests" (decision 8's login
+        concurrency bound, paired with a `Retry-After` response header),
+        and "credential-in-url" (decision 1: a request whose query string
+        carried a credential).
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -1084,6 +1590,10 @@ components:
             - https://showmesh.dev/problems/unauthorized
             - https://showmesh.dev/problems/method-not-allowed
             - https://showmesh.dev/problems/internal-error
+            - https://showmesh.dev/problems/forbidden
+            - https://showmesh.dev/problems/csrf-rejected
+            - https://showmesh.dev/problems/too-many-requests
+            - https://showmesh.dev/problems/credential-in-url
         title:
           type: string
         status:

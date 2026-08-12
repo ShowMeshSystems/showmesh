@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -100,9 +101,10 @@ func resetWriteDeadline(w http.ResponseWriter) {
 // caller that starts Run and later cancels its context can assert the
 // goroutine count returns to baseline.
 type Hub struct {
-	deps   Dependencies
-	clock  func() time.Time
-	logger *slog.Logger
+	deps        Dependencies
+	identitySvc identity.Service
+	clock       func() time.Time
+	logger      *slog.Logger
 
 	tickInterval      time.Duration
 	keepaliveInterval time.Duration
@@ -146,17 +148,38 @@ type Hub struct {
 
 // subscriber is one open SSE connection's mailbox. frames is the bounded
 // buffer [Hub.broadcast] delivers pending changes into; reset is a
-// capacity-1 channel used exactly once, to hand the overflow reason to
-// [Hub.ServeHTTP]'s own goroutine when frames is full — see
-// [Hub.broadcast]. deltas is fixed for the connection's whole lifetime,
-// set once from the ?deltas=1 query parameter at [Hub.ServeHTTP]'s own
-// subscribe call — ADR-023 decision 1: a connection that did not ask for
-// deltas gets exactly what it got before deltas existed, so this field is
-// never mutated after [Hub.subscribe] constructs it.
+// capacity-1 channel used to hand a reason — an overflow (ADR-023) or a
+// revoked/invalidated credential (ADR-024 decision 5, see
+// [Hub.revalidateSubscribers]) — to [Hub.ServeHTTP]'s own goroutine, which
+// closes the connection on either. deltas is fixed for the connection's
+// whole lifetime, set once from the ?deltas=1 query parameter at
+// [Hub.ServeHTTP]'s own subscribe call — ADR-023 decision 1: a connection
+// that did not ask for deltas gets exactly what it got before deltas
+// existed, so this field is never mutated after [Hub.subscribe]
+// constructs it. cred is nil for a connection that opened with no
+// credential at all (the ordinary case while reads are open) and is never
+// mutated either — see [streamCredential]'s doc comment.
 type subscriber struct {
 	frames chan pendingFrame
 	reset  chan string
 	deltas bool
+	cred   *streamCredential
+}
+
+// streamCredential is the raw secret that authenticated an SSE connection
+// at subscribe time, kept ONLY so [Hub.revalidateSubscribers] can present
+// it to identity.Service again on a later tick (ADR-024 decision 5: "the
+// coordinator therefore revalidates the credential of an open stream
+// periodically and on generation change, and closes the connection" when
+// it no longer authenticates). It is never logged and never rendered on
+// the wire; it lives no longer than the subscriber itself, and is
+// discarded with it — the same lifetime the secret already has sitting in
+// the original request's Cookie/Authorization header, which this merely
+// carries forward for the life of a connection that (unlike an ordinary
+// request) never ends.
+type streamCredential struct {
+	form   identity.CredentialForm
+	secret string
 }
 
 // frameAudience narrows which subscribers a [pendingFrame] is delivered to,
@@ -271,6 +294,7 @@ func nonNilStringSlice(v []string) []string {
 func newHub(deps Dependencies, opts Options, logger *slog.Logger) *Hub {
 	return &Hub{
 		deps:                     deps,
+		identitySvc:              deps.Identity,
 		clock:                    opts.Clock,
 		logger:                   logger,
 		tickInterval:             opts.StreamTickInterval,
@@ -310,6 +334,21 @@ func (h *Hub) Run(ctx context.Context) {
 			close(h.done)
 			return
 		case <-ticker.C:
+			// revalidateSubscribers runs only on the fixed tick, not on
+			// every Notify() poke — Notify can fire many times per second
+			// during an MQTT burst (see [Hub.render]'s own doc comment on
+			// the identical reasoning for CollectedAt churn), and each
+			// revalidation is a real identity.Service call (a session
+			// digest lookup or a token digest lookup) per authenticated
+			// subscriber. Bounding it to the tick interval (ADR-024
+			// decision 5's "periodically") is what keeps that cost
+			// bounded and predictable rather than proportional to
+			// unrelated event volume. A generation bump is caught within
+			// one tick interval of occurring, which the same call already
+			// re-checks as a side effect of re-verifying the credential
+			// (see [Hub.revalidateSubscribers]) — decision 5's "and on
+			// generation change" needs no separate mechanism.
+			h.revalidateSubscribers(ctx, h.clock())
 			h.render(ctx)
 		case <-h.notifyCh:
 			h.render(ctx)
@@ -845,9 +884,10 @@ func (h *Hub) broadcast(pf pendingFrame) {
 }
 
 // subscribe registers a new subscriber, fixing its deltas flag (ADR-023
-// decision 1) for the connection's whole lifetime — see [subscriber]'s doc
-// comment.
-func (h *Hub) subscribe(deltas bool) (id uint64, sub *subscriber) {
+// decision 1) and cred (ADR-024 decision 5 — nil when the connection
+// opened with no credential) for the connection's whole lifetime — see
+// [subscriber]'s doc comment.
+func (h *Hub) subscribe(deltas bool, cred *streamCredential) (id uint64, sub *subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	id = h.nextID
@@ -856,6 +896,7 @@ func (h *Hub) subscribe(deltas bool) (id uint64, sub *subscriber) {
 		frames: make(chan pendingFrame, h.bufSize),
 		reset:  make(chan string, 1),
 		deltas: deltas,
+		cred:   cred,
 	}
 	h.subscribers[id] = sub
 	return id, sub
@@ -865,6 +906,78 @@ func (h *Hub) unsubscribe(id uint64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.subscribers, id)
+}
+
+// revalidateSubscribers re-presents every credential-bearing subscriber's
+// original secret to h.identitySvc and, for any that no longer
+// authenticates (revoked, generation bumped, disabled principal, idle-
+// expired session, revoked or expired token), signals its reset channel
+// with "credential_invalidated" — the exact mechanism [Hub.broadcast]
+// already uses for an overflowed buffer, reused rather than duplicated,
+// which is also what satisfies ADR-024 decision 5's "it does not emit a
+// new event kind to announce it": the wire-visible SSE event name is
+// still stream.reset either way, only the reason string differs, and
+// ADR-023 already established that a stream.reset reason is informational
+// (a client need not recognize "subscriber_too_slow" to do the right
+// thing — reconnect and re-snapshot).
+//
+// A subscriber with no credential (cred == nil — the ordinary case while
+// reads are open and this connection presented none) is never touched: it
+// has nothing to revalidate and this mechanism has no opinion about it.
+//
+// I/O (an identity.Service call per credential-bearing subscriber) is
+// deliberately done AFTER releasing h.mu, on a snapshot of the relevant
+// subscriber state taken under the lock — mirroring [Hub.render]'s own
+// posture of never holding h.mu across a call that can block.
+func (h *Hub) revalidateSubscribers(ctx context.Context, now time.Time) {
+	type check struct {
+		id   uint64
+		cred streamCredential
+	}
+
+	h.mu.Lock()
+	var checks []check
+	for id, sub := range h.subscribers {
+		if sub.cred != nil {
+			checks = append(checks, check{id: id, cred: *sub.cred})
+		}
+	}
+	h.mu.Unlock()
+
+	for _, c := range checks {
+		var err error
+		switch c.cred.form {
+		case identity.FormSession:
+			_, err = h.identitySvc.AuthenticateSession(ctx, c.cred.secret, now)
+		case identity.FormToken:
+			_, err = h.identitySvc.AuthenticateToken(ctx, c.cred.secret)
+		default:
+			// Unreachable: [Hub.ServeHTTP] only ever constructs a
+			// streamCredential from an authContext whose Form is one of
+			// these two (see resolveCredential in auth.go, this
+			// connection's only source of a non-nil cred).
+			continue
+		}
+		if err == nil {
+			continue
+		}
+
+		h.mu.Lock()
+		sub, ok := h.subscribers[c.id]
+		h.mu.Unlock()
+		if !ok {
+			continue // already disconnected for an unrelated reason
+		}
+		select {
+		case sub.reset <- "credential_invalidated":
+			h.logger.Warn("stream hub: subscriber's credential no longer authenticates; closing the connection",
+				"subscriber", c.id)
+		default:
+			// Already signaled for this subscriber; it just hasn't been
+			// torn down yet — mirrors [Hub.broadcast]'s identical
+			// non-blocking send.
+		}
+	}
 }
 
 // ServeHTTP implements the SSE endpoint, GET /api/v1/stream. Contract
@@ -898,6 +1011,18 @@ func (h *Hub) unsubscribe(id uint64) {
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	deltas := r.URL.Query().Get("deltas") == "1"
 
+	// ADR-024 decision 5: carry forward whatever credential authenticated
+	// THIS request (resolved once, upstream, by withIdentity in auth.go —
+	// this handler is mounted behind that middleware exactly like every
+	// other route) for the connection's whole lifetime, so
+	// [Hub.revalidateSubscribers] can re-present it later. nil when this
+	// connection opened with no credential at all (ac.ok is false), which
+	// is the ordinary case while reads are open.
+	var cred *streamCredential
+	if ac := authFromContext(r.Context()); ac.ok {
+		cred = &streamCredential{form: ac.result.Form, secret: ac.raw}
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -930,7 +1055,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// closing finding 1.1 (see [streamWriteTimeout]'s doc comment for the
 	// failure that fix closes).
 
-	id, sub := h.subscribe(deltas)
+	id, sub := h.subscribe(deltas, cred)
 	defer h.unsubscribe(id)
 
 	start := v1.StreamStart{

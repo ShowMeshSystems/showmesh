@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -174,6 +175,18 @@ func publishOneHeartbeat(ctx context.Context, pub Publisher, topic, nodeID, boot
 	}
 
 	if err := pub.Publish(pubCtx, topic, mqttproto.ObservedDeliveryPolicy.QoS, mqttproto.ObservedDeliveryPolicy.Retain, payload); err != nil {
+		// ADR-024 decision 10: an ACL denial is "quieter" than a CONNACK
+		// rejection — the connection stays up and Mosquitto just discards
+		// the publish — so this is the one place a permanent,
+		// credential/ACL-shaped failure can hide behind the same log line
+		// as an ordinary transient publish failure (broker briefly
+		// unreachable, PUBACK timeout) unless it is checked for
+		// explicitly.
+		if errors.Is(err, ErrPublishNotAuthorized) {
+			logger.Error("heartbeat publish rejected by broker ACL (not authorized); this node's control-plane visibility is degraded until the credential/ACL is fixed — see SHOWMESH_MQTT_USERNAME",
+				"sequence", seq, "tick", tickAt, "error", err)
+			return
+		}
 		logger.Warn("heartbeat publish failed; will retry next tick", "sequence", seq, "tick", tickAt, "error", err)
 		return
 	}

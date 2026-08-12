@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,69 @@ func TestRunHeartbeatPublishFailureDoesNotStopLaterTicks(t *testing.T) {
 		if health.Sequence != uint64(i) {
 			t.Errorf("call %d Sequence = %d, want %d (failure must not stall Sequence)", i, health.Sequence, i)
 		}
+	}
+}
+
+// TestRunHeartbeatACLRejectionLogsDistinctlyAndDoesNotStopLaterTicks proves
+// two things the ADR-024 decision 10 "surface it as evidence distinct from
+// an unreachable broker" requirement demands and that
+// TestRunHeartbeatPublishFailureDoesNotStopLaterTicks alone cannot: an ACL
+// rejection (ErrPublishNotAuthorized) is logged at Error level with a
+// message that says "not authorized" — not folded into the generic Warn
+// "will retry" line an ordinary transient failure gets — AND the loop keeps
+// running afterward exactly like any other publish failure. Breaking either
+// half (removing the errors.Is branch in heartbeat.go, or making it stop
+// the loop) must fail this test.
+func TestRunHeartbeatACLRejectionLogsDistinctlyAndDoesNotStopLaterTicks(t *testing.T) {
+	pub := newFakePublisher()
+	pub.rejectOn = map[int]bool{1: true} // the second tick's publish is ACL-rejected
+
+	logger, logs := capturingLogger()
+
+	clock := &fakeClock{t: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}
+	startedAt := clock.t // captured before the goroutine starts — see drainHeartbeat's identical pattern; reading clock.t directly inside the goroutine literal races against this test's own clock.advance below, since Go evaluates a goroutine's call arguments when it actually runs, not when `go` is invoked.
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runHeartbeat(ctx, pub, "media-03", "boot-1", startedAt, clock.now, ticks, nil, logger)
+	}()
+
+	for i := 0; i < 3; i++ {
+		clock.advance(HeartbeatInterval)
+		sendAndAwait(t, ticks, clock.t, pub, "tick")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runHeartbeat did not return after ctx cancellation")
+	}
+
+	calls := pub.snapshot()
+	if len(calls) != 3 {
+		t.Fatalf("len(calls) = %d, want 3: an ACL rejection on tick 2 must not stop tick 3 from being attempted, exactly like a transient failure", len(calls))
+	}
+	for i, c := range calls {
+		_, health := decodeHealth(t, c.payload)
+		if health.Sequence != uint64(i) {
+			t.Errorf("call %d Sequence = %d, want %d (an ACL rejection must not stall Sequence either)", i, health.Sequence, i)
+		}
+	}
+
+	logged := logs.String()
+	if !strings.Contains(logged, "level=ERROR") {
+		t.Errorf("logs = %q, want an ERROR-level line for the ACL rejection", logged)
+	}
+	if !strings.Contains(logged, "not authorized") {
+		t.Errorf("logs = %q, want a message distinguishing this from a generic publish failure", logged)
+	}
+	if strings.Contains(logged, "will retry next tick") {
+		t.Errorf("logs = %q, an ACL rejection must not be logged with the generic transient-failure message (that Warn line is for TestRunHeartbeatPublishFailureDoesNotStopLaterTicks's failOn case, not this one)", logged)
 	}
 }
 

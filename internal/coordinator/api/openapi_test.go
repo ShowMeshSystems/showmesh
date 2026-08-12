@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -198,6 +200,8 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"Snapshot", "Problem", "StreamStart", "StreamReset",
 		"NodeChangedEvent", "FPPChangedEvent", "EventRecordedEvent",
 		"FPPObservationsChangedEvent",
+		"SessionResponse", "AuditResponse", "AuditEntry",
+		"PrincipalSummary", "SessionInfo", "BootstrapRequest",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -222,6 +226,7 @@ func TestOpenAPISchemasMatchRealResponses(t *testing.T) {
 		{"GET", "/api/v1/observations", "ObservationsResponse"},
 		{"GET", "/api/v1/events", "EventsResponse"},
 		{"GET", "/api/v1/snapshot", "Snapshot"},
+		{"GET", "/api/v1/session", "SessionResponse"},
 	}
 
 	for _, tt := range tests {
@@ -235,16 +240,83 @@ func TestOpenAPISchemasMatchRealResponses(t *testing.T) {
 	}
 }
 
+// TestOpenAPIAuthenticatedResponsesMatchRealResponses is
+// [TestOpenAPISchemasMatchRealResponses]'s ADR-024 sibling: the response
+// shapes that only exist once a real identity.Service is wired and a
+// principal has actually authenticated — POST /api/v1/session's success
+// body (a session cookie freshly minted, principal/session both
+// non-null) and GET /api/v1/audit's body (behind audit:read) — validated
+// against real responses from a real coordinator wiring, not buildTestAPI's
+// no-op Identity default.
+func TestOpenAPIAuthenticatedResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"name":"admin-1","password":` + `"` + testPassword + `"` + `,"deviceLabel":"laptop"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	api.Handler.ServeHTTP(rec, req)
+	resp := rec.Result()
+	loginBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login: status = %d, want 200; body: %s", resp.StatusCode, loginBody)
+	}
+	assertMatchesSchema(t, c, "SessionResponse", loginBody)
+
+	token := mustIssueToken(t, svc, admin.ID)
+	_, auditBody := doRequest(t, api.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "AuditResponse", auditBody)
+}
+
+// TestOpenAPIBootstrapResponseMatchesRealResponse is this file's ADR-024
+// decision 9 sibling: POST /api/v1/bootstrap's success body is the same
+// SessionResponse shape POST /api/v1/session's own conformance test
+// above already validates against a login response, but bootstrap is its
+// own code path (bootstrap.go, not session.go) and BUILD-PLAN Step 6
+// requires api/openapi.yaml stay conformance-green "in both directions"
+// for the endpoint this step adds — this is the real response that
+// proves it, not an inference from a different endpoint's passing test.
+func TestOpenAPIBootstrapResponseMatchesRealResponse(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	svc, dataDir := newTestIdentityServiceWithDataDir(t, fixedClock(testNow))
+	mustEnsureBootstrap(t, svc)
+	code := readBootstrapCode(t, dataDir)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"code":"` + code + `","name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bootstrap", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	api.Handler.ServeHTTP(rec, req)
+	resp := rec.Result()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	assertMatchesSchema(t, c, "SessionResponse", respBody)
+}
+
 // TestOpenAPIProblemSchemaMatchesEveryClass validates a real problem
-// response from each of the four classes Step 3 produces against the
-// shared Problem schema.
+// response from each of the classes this API produces against the shared
+// Problem schema — four from Step 3, method-not-allowed (finding 2.8),
+// and three of ADR-024's additions reachable through an ordinary request
+// (unauthorized is reused, not duplicated: decision 4's 401 and ADR-021's
+// are the identical wire class). ADR-024's forbidden class is covered by
+// its own end-to-end test in session_test.go
+// (TestWriteEndpointForbiddenNamesMissingScope), which needs a real
+// identity.Service-backed principal and is exercised against this same
+// schema there rather than being duplicated here.
 func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	api := buildTestAPI(t)
-	tokenAPI := New(Dependencies{
+	closedReadsAPI := New(Dependencies{
 		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-	}, Options{AuthToken: "s3cret", Clock: fixedClock(testNow), Logger: testLogger()})
+	}, Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
 
 	tests := []struct {
 		name    string
@@ -256,8 +328,9 @@ func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 		{"resource-not-found", api.Handler, "GET", "/api/v1/nodes/nonexistent", nil},
 		{"invalid-parameter", api.Handler, "GET", "/api/v1/nodes/Not_Valid!", nil},
 		{"unsupported-api-version", api.Handler, "GET", "/api/v2/nodes", nil},
-		{"unauthorized", tokenAPI.Handler, "GET", "/api/v1/", nil},
+		{"unauthorized", closedReadsAPI.Handler, "GET", "/api/v1/nodes", nil},
 		{"method-not-allowed", api.Handler, "POST", "/api/v1/nodes", nil},
+		{"credential-in-url", api.Handler, "GET", "/api/v1/nodes?tok=" + identity.TokenPrefix + "leaked", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -265,6 +338,20 @@ func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 			assertMatchesSchema(t, c, "Problem", body)
 		})
 	}
+
+	// too-many-requests is checked against the schema directly, through
+	// this package's own writeProblem — the same function every response
+	// above went through — rather than by racing loginLimiter's real
+	// concurrency bound here (session_test.go's
+	// TestLoginConcurrencyLimitRejectsWithRetryAfter exercises the real
+	// mechanism end to end with real goroutines; duplicating that
+	// orchestration here would only be for a schema check this simpler
+	// path already gives).
+	t.Run("too-many-requests", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeProblem(rec, testLogger(), testNow, tooManyRequestsProblem("too many concurrent login attempts"))
+		assertMatchesSchema(t, c, "Problem", rec.Body.Bytes())
+	})
 }
 
 // TestMethodNotAllowedHasAllowHeaderAndCorrectType proves finding 2.8's

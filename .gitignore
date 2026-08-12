@@ -19,6 +19,14 @@ dist/
 .env
 coverage.out
 
+# Generated per-deployment MQTT broker credentials (ADR-024 decision 10):
+# deploy/mosquitto/generate-credentials.sh and
+# deploy/mosquitto/add-agent-credential.sh write this file. It must never
+# be committed — a passwd file checked into the repo would be identical in
+# every ShowMesh installation, exactly the failure ADR-021 named when it
+# rejected a mandatory shared secret with no distribution mechanism.
+deploy/mosquitto/passwd
+
 # Editor / IDE
 .idea/
 .vscode/

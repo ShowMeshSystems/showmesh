@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
@@ -39,17 +41,6 @@ type Config struct {
 
 	// --- Step 3 Task D: the versioned public control API (ADR-014) ---
 
-	// APIToken is SHOWMESH_API_TOKEN's value: the optional shared secret
-	// that, when non-empty, every /api/v1/* request (including the SSE
-	// stream) must present as "Authorization: Bearer <token>" per contract
-	// section 6.8. Empty means the API is served with no authentication at
-	// all — a deliberate, documented default, not an oversight; the
-	// caller that wires internal/coordinator/api.New is responsible for
-	// logging the startup warning contract section 6.8 requires when this
-	// is empty. Like MQTTPassword, this is a secret and must never appear
-	// in an error body, a log line, or a problem detail; see LogValue.
-	APIToken string
-
 	// APIAllowedOrigins is SHOWMESH_API_ALLOWED_ORIGINS, comma-split into
 	// individual origins. Empty (the default) means no CORS headers are
 	// emitted at all for /api/v1/*, per contract section 6.8: this
@@ -58,6 +49,61 @@ type Config struct {
 	APIAllowedOrigins []string
 
 	// --- end Step 3 Task D ---
+
+	// --- Step 6: ADR-024 identity, authorization, and audit ---
+	//
+	// SHOWMESH_API_TOKEN (ADR-021's shared secret) is retired, not
+	// replaced by a field here: ADR-024 decision 2 requires this
+	// coordinator to REFUSE TO START when that variable is still set,
+	// rather than accept and either honor or silently ignore it — see
+	// checkAPITokenRetired, called from LoadConfigFrom before any other
+	// validation runs.
+
+	// CloseReads is SHOWMESH_API_CLOSE_READS (a bool), ADR-024 decision
+	// 2's replacement for what a non-empty SHOWMESH_API_TOKEN used to mean
+	// under ADR-021: reads are open by default (false, the zero value,
+	// matching every existing v1 read client's expectation) and closable
+	// by an operator who wants /api/v1/* to require a credential even for
+	// GET. Unlike the retired token, closing reads no longer implies a
+	// shared secret authenticates them — it means every read now goes
+	// through the same principal/session/token check every write already
+	// requires unconditionally (decision 2: "there is no opt-out" for
+	// writes). internal/coordinator/coordinator.go logs the ADR-021-carried-
+	// forward startup warning naming the exposure whenever this is false.
+	CloseReads bool
+
+	// SecureCookie is SHOWMESH_API_SECURE_COOKIE (a bool), passed straight
+	// through to api.Options.SecureCookie — see that field's doc comment
+	// for why it defaults to false (ShowMesh terminates no TLS by
+	// default; ADR-022 decision 5) and must be set true by any deployment
+	// that puts TLS in front of the coordinator.
+	SecureCookie bool
+
+	// LoginConcurrency, LoginQueueWait, LoginPerSourceDelay, and
+	// LoginMaxDelay are SHOWMESH_API_LOGIN_CONCURRENCY,
+	// SHOWMESH_API_LOGIN_QUEUE_WAIT, SHOWMESH_API_LOGIN_PER_SOURCE_DELAY,
+	// and SHOWMESH_API_LOGIN_MAX_DELAY — ADR-024 decision 8's login cost
+	// bound (see internal/coordinator/api's loginlimiter.go). Each
+	// defaults to its Go zero value when unset, which
+	// api.Options.withDefaults then replaces with that package's own
+	// labeled-hypothesis default (concurrency 4, queue wait 2s, per-
+	// failure delay 250ms, max delay 5s) — the "sensible default" for
+	// every one of these four lives in exactly one place (the api
+	// package), not duplicated here as a second copy that could drift
+	// from it.
+	LoginConcurrency    int
+	LoginQueueWait      time.Duration
+	LoginPerSourceDelay time.Duration
+	LoginMaxDelay       time.Duration
+
+	// TrustClientAddr is SHOWMESH_API_TRUST_CLIENT_ADDR (a bool), passed
+	// straight through to api.Options.TrustClientAddr — see that field's
+	// doc comment. Off by default: behind the UI container's proxy,
+	// RemoteAddr is the proxy's own address, and ADR-022 rule 2 forbids
+	// trusting X-Forwarded-For for an audit-attribution decision.
+	TrustClientAddr bool
+
+	// --- end Step 6 ---
 
 	// FPPEndpoints are the FPP instances the coordinator's FPP REST
 	// collector polls, from SHOWMESH_FPP_ENDPOINTS. Empty (the default,
@@ -141,15 +187,25 @@ const (
 	// DefaultHTTPAddr is used when EnvHTTPAddr is unset.
 	DefaultHTTPAddr = ":8080"
 
+	// EnvDataDir and DefaultDataDir are exported for the same reason
+	// EnvHTTPAddr/DefaultHTTPAddr already are (see cmd/showmesh-coordinator's
+	// -healthcheck flag): the coordinator's bootstrap/lockout-recovery
+	// subcommands (ADR-024 decision 9) need the data directory's env var
+	// and default WITHOUT going through full [LoadConfig] validation —
+	// running config.Validate (and, since Step 6, checkAPITokenRetired)
+	// against a recovery tool would make a leftover SHOWMESH_API_TOKEN
+	// block the exact tool an operator needs to migrate off of it. See
+	// cmd/showmesh-coordinator/main.go's subcommand dispatch.
+	EnvDataDir     = "SHOWMESH_DATA_DIR"
+	DefaultDataDir = "/var/lib/showmesh"
+
 	envMQTTBroker   = "SHOWMESH_MQTT_BROKER"
 	envMQTTClientID = "SHOWMESH_MQTT_CLIENT_ID"
 	envMQTTUsername = "SHOWMESH_MQTT_USERNAME"
 	envMQTTPassword = "SHOWMESH_MQTT_PASSWORD"
-	envDataDir      = "SHOWMESH_DATA_DIR"
 	envLogLevel     = "SHOWMESH_LOG_LEVEL"
 	defaultBroker   = "tcp://localhost:1883"
 	defaultClientID = "showmesh-coordinator"
-	defaultDataDir  = "/var/lib/showmesh"
 	defaultLogLevel = "info"
 
 	// envFPPEndpoints is SHOWMESH_FPP_ENDPOINTS, a comma-separated list of
@@ -158,10 +214,31 @@ const (
 	// means no FPP collector runs; see [Config.FPPEndpoints].
 	envFPPEndpoints = "SHOWMESH_FPP_ENDPOINTS"
 
-	// envAPIToken and envAPIAllowedOrigins back [Config.APIToken] and
-	// [Config.APIAllowedOrigins]. See those fields' doc comments.
-	envAPIToken          = "SHOWMESH_API_TOKEN"
+	// envAPIToken is SHOWMESH_API_TOKEN, ADR-021's shared secret. ADR-024
+	// decision 2 retires it: this constant now exists only so
+	// checkAPITokenRetired can name it in the refusal-to-start error and
+	// check the raw environment for its presence, never to populate a
+	// Config field again — see that function's doc comment.
+	envAPIToken = "SHOWMESH_API_TOKEN"
+
+	// envAPIAllowedOrigins backs [Config.APIAllowedOrigins]. See that
+	// field's doc comment.
 	envAPIAllowedOrigins = "SHOWMESH_API_ALLOWED_ORIGINS"
+
+	// envAPICloseReads, envAPISecureCookie, envAPILoginConcurrency,
+	// envAPILoginQueueWait, envAPILoginPerSourceDelay,
+	// envAPILoginMaxDelay, and envAPITrustClientAddr back
+	// [Config.CloseReads]/[Config.SecureCookie]/[Config.LoginConcurrency]/
+	// [Config.LoginQueueWait]/[Config.LoginPerSourceDelay]/
+	// [Config.LoginMaxDelay]/[Config.TrustClientAddr]. See those fields'
+	// doc comments.
+	envAPICloseReads          = "SHOWMESH_API_CLOSE_READS"
+	envAPISecureCookie        = "SHOWMESH_API_SECURE_COOKIE"
+	envAPILoginConcurrency    = "SHOWMESH_API_LOGIN_CONCURRENCY"
+	envAPILoginQueueWait      = "SHOWMESH_API_LOGIN_QUEUE_WAIT"
+	envAPILoginPerSourceDelay = "SHOWMESH_API_LOGIN_PER_SOURCE_DELAY"
+	envAPILoginMaxDelay       = "SHOWMESH_API_LOGIN_MAX_DELAY"
+	envAPITrustClientAddr     = "SHOWMESH_API_TRUST_CLIENT_ADDR"
 
 	// envFPPMQTTBrokerURL, envFPPMQTTUsername, envFPPMQTTPassword,
 	// envFPPMQTTTopicPrefix, and envFPPMQTTHosts back the Step 5 Seam B
@@ -219,6 +296,16 @@ func LoadConfig() (Config, error) {
 // environment state (which t.Setenv cannot do, since an empty string is a
 // meaningful, distinct value from "unset" for every one of these variables).
 func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
+	// Checked FIRST, before any other parsing: ADR-024 decision 2 requires
+	// this coordinator to refuse to start deterministically and visibly
+	// the moment a leftover SHOWMESH_API_TOKEN is found, not after
+	// spending effort parsing everything else. See checkAPITokenRetired's
+	// doc comment for why this is the harshest of three possible
+	// behaviors and why it is chosen anyway.
+	if err := checkAPITokenRetired(lookup); err != nil {
+		return Config{}, err
+	}
+
 	fppEndpoints, err := parseFPPEndpoints(getEnvDefault(lookup, envFPPEndpoints, ""))
 	if err != nil {
 		return Config{}, err
@@ -229,18 +316,54 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	closeReads, err := parseBoolEnv(lookup, envAPICloseReads, false)
+	if err != nil {
+		return Config{}, err
+	}
+	secureCookie, err := parseBoolEnv(lookup, envAPISecureCookie, false)
+	if err != nil {
+		return Config{}, err
+	}
+	trustClientAddr, err := parseBoolEnv(lookup, envAPITrustClientAddr, false)
+	if err != nil {
+		return Config{}, err
+	}
+	loginConcurrency, err := parseIntEnv(lookup, envAPILoginConcurrency, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	loginQueueWait, err := parseDurationEnv(lookup, envAPILoginQueueWait, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	loginPerSourceDelay, err := parseDurationEnv(lookup, envAPILoginPerSourceDelay, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	loginMaxDelay, err := parseDurationEnv(lookup, envAPILoginMaxDelay, 0)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
 		MQTTClientID: getEnvDefault(lookup, envMQTTClientID, defaultClientID),
 		MQTTUsername: getEnvDefault(lookup, envMQTTUsername, ""),
 		MQTTPassword: getEnvDefault(lookup, envMQTTPassword, ""),
-		DataDir:      getEnvDefault(lookup, envDataDir, defaultDataDir),
+		DataDir:      getEnvDefault(lookup, EnvDataDir, DefaultDataDir),
 		LogLevel:     getEnvDefault(lookup, envLogLevel, defaultLogLevel),
 		FPPEndpoints: fppEndpoints,
 
-		APIToken:          getEnvDefault(lookup, envAPIToken, ""),
 		APIAllowedOrigins: parseAPIAllowedOrigins(getEnvDefault(lookup, envAPIAllowedOrigins, "")),
+
+		CloseReads:          closeReads,
+		SecureCookie:        secureCookie,
+		TrustClientAddr:     trustClientAddr,
+		LoginConcurrency:    loginConcurrency,
+		LoginQueueWait:      loginQueueWait,
+		LoginPerSourceDelay: loginPerSourceDelay,
+		LoginMaxDelay:       loginMaxDelay,
 
 		FPPMQTTBrokerURL:   getEnvDefault(lookup, envFPPMQTTBrokerURL, ""),
 		FPPMQTTUsername:    getEnvDefault(lookup, envFPPMQTTUsername, ""),
@@ -254,6 +377,85 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// checkAPITokenRetired implements ADR-024 decision 2's refusal-to-start
+// rule: "If the [SHOWMESH_API_TOKEN] variable is still set when a
+// coordinator carrying this record starts, the coordinator refuses to
+// start and names the migration in the error." This is deliberately the
+// harshest of three possible behaviors — decision 2's own reasoning,
+// restated here because this function is where it is enforced: ignoring
+// the variable would silently reopen a read API an operator deliberately
+// closed (a security control failing open on a container tag change);
+// honoring it would keep a retired shared secret alive indefinitely and
+// contradict the retirement outright. A refusal is deterministic, visible
+// in the first seconds of a failed startup, and fixed by editing one line
+// of an operator's .env.
+//
+// "Set" is checked as non-empty, not merely present in the environment
+// (lookup's ok return alone): under the retired ADR-021 posture,
+// SHOWMESH_API_TOKEN="" already meant "no authentication" — functionally
+// identical to unset — so a blank-but-present line in an operator's .env
+// file (a common pattern, and not evidence anyone ever closed their read
+// API with it) must not trip a refusal the decision's own reasoning does
+// not apply to. A genuinely non-empty value is the only case that ever
+// had the old meaning this decision requires migrating off of.
+func checkAPITokenRetired(lookup func(string) (string, bool)) error {
+	raw, ok := lookup(envAPIToken)
+	if !ok || raw == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s is set, but ADR-024 retired it: this coordinator no longer accepts a shared bearer-token secret for the read API. "+
+			"Remove %s from your environment. If you want the read API to require a credential the way a non-empty %s used to, "+
+			"set %s=true instead, then create your first administrator via the one-time bootstrap code "+
+			"(POST /api/v1/bootstrap, or run `showmesh-coordinator bootstrap` against this coordinator's data volume) — "+
+			"see ADR-024 decision 2 for the full migration",
+		envAPIToken, envAPIToken, envAPIToken, envAPICloseReads)
+}
+
+// parseBoolEnv reads key via lookup and parses it with strconv.ParseBool,
+// returning def when key is unset or empty. A present-but-invalid value
+// (e.g. "yes" instead of "true") is a startup error naming key, matching
+// this file's existing "a malformed value is a startup error, not a
+// silently-ignored default" posture for every other typed field.
+func parseBoolEnv(lookup func(string) (string, bool), key string, def bool) (bool, error) {
+	raw := getEnvDefault(lookup, key, "")
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s: %q is not a valid boolean (true/false/1/0/...): %w", key, raw, err)
+	}
+	return v, nil
+}
+
+// parseIntEnv mirrors [parseBoolEnv] for an integer-valued variable.
+func parseIntEnv(lookup func(string) (string, bool), key string, def int) (int, error) {
+	raw := getEnvDefault(lookup, key, "")
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a valid integer: %w", key, raw, err)
+	}
+	return v, nil
+}
+
+// parseDurationEnv mirrors [parseBoolEnv] for a time.Duration-valued
+// variable, in Go duration syntax (e.g. "2s", "250ms").
+func parseDurationEnv(lookup func(string) (string, bool), key string, def time.Duration) (time.Duration, error) {
+	raw := getEnvDefault(lookup, key, "")
+	if raw == "" {
+		return def, nil
+	}
+	v, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a valid duration (e.g. \"2s\", \"250ms\"): %w", key, raw, err)
+	}
+	return v, nil
 }
 
 // parseFPPEndpoints splits raw (SHOWMESH_FPP_ENDPOINTS's value) into
@@ -594,17 +796,8 @@ func (c Config) LogValue() slog.Value {
 		password = redactedPassword
 	}
 
-	// apiToken is redacted the same way and for the same reason as
-	// MQTTPassword above: this field is a shared secret (contract section
-	// 6.8), and the enforcement that matters is this method existing at
-	// all, not a doc comment promising it — see [Config.APIToken].
-	apiToken := ""
-	if c.APIToken != "" {
-		apiToken = redactedPassword
-	}
-
 	// fppMQTTPassword is redacted the same way and for the same reason as
-	// mqtt_password and api_token above: this is SHOWMESH_FPP_MQTT_PASSWORD,
+	// mqtt_password above: this is SHOWMESH_FPP_MQTT_PASSWORD,
 	// exactly as sensitive as the control-plane broker's password, and the
 	// Step 5 contract requires it "never appear in a log line" — see
 	// [Config.FPPMQTTPassword].
@@ -627,8 +820,17 @@ func (c Config) LogValue() slog.Value {
 		slog.String("data_dir", c.DataDir),
 		slog.String("log_level", c.LogLevel),
 		slog.Any("fpp_endpoints", fppEndpointIDs(c.FPPEndpoints)),
-		slog.String("api_token", apiToken),
 		slog.Any("api_allowed_origins", c.APIAllowedOrigins),
+		// None of the seven ADR-024 fields below is a credential — see
+		// each Config field's doc comment — so, unlike password/token
+		// fields, they are logged directly rather than redacted.
+		slog.Bool("api_close_reads", c.CloseReads),
+		slog.Bool("api_secure_cookie", c.SecureCookie),
+		slog.Bool("api_trust_client_addr", c.TrustClientAddr),
+		slog.Int("api_login_concurrency", c.LoginConcurrency),
+		slog.Duration("api_login_queue_wait", c.LoginQueueWait),
+		slog.Duration("api_login_per_source_delay", c.LoginPerSourceDelay),
+		slog.Duration("api_login_max_delay", c.LoginMaxDelay),
 		slog.String("fpp_mqtt_broker_url", redactURLUserinfo(c.FPPMQTTBrokerURL)),
 		slog.String("fpp_mqtt_username", c.FPPMQTTUsername),
 		slog.String("fpp_mqtt_password", fppMQTTPassword),

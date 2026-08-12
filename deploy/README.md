@@ -7,10 +7,48 @@ Docker Compose bundle for the coordinator and its Mosquitto broker (ADR-008), su
 ```sh
 cd deploy
 cp .env.example .env   # edit as needed, especially before exposing beyond an isolated show VLAN
+./mosquitto/generate-credentials.sh   # REQUIRED, once, before the first `up` — see below
 docker compose up -d --build
 ```
 
 This builds the coordinator image from the repo root Dockerfile, the Operator UI image from `../ui/Dockerfile`, and starts both alongside the bundled Mosquitto broker. Check status with `docker compose ps` and `curl -fsS localhost:8080/healthz`.
+
+The `generate-credentials.sh` step is not optional: the bundled Mosquitto now requires authentication (`allow_anonymous false`), and it will not start with a usable password file until that script has run at least once. If you skip it, `docker compose ps` will show the `mosquitto` service crash-looping and its own log will say plainly why (`Error: /mosquitto/config/passwd is not a file.`) — run the script and `docker compose up -d` again.
+
+## MQTT broker credentials (ADR-024)
+
+**This changed from earlier releases, and it changes what an existing deployment must do before upgrading.** The bundled Mosquitto used to accept anonymous connections (`allow_anonymous true`); it now requires a credential and enforces an access-control list, per [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10.
+
+**What breaks on upgrade, stated plainly, because this record claims to know what it breaks:**
+
+- **The bundled broker's own container healthcheck**, which used to run an unauthenticated `mosquitto_sub` against `$SYS/#`. It now needs a credential (see below); an upgraded deployment that has not run `generate-credentials.sh` will see the `mosquitto` service report unhealthy, or fail to start at all if the password file does not exist yet.
+- **Every ShowMesh agent**, which used to connect anonymously. Each one now needs its own broker credential (`./mosquitto/add-agent-credential.sh <node-id>`, run once per node) and `SHOWMESH_MQTT_USERNAME`/`SHOWMESH_MQTT_PASSWORD` set in that node's own agent configuration — not in this bundle's `.env`, since agents run natively on media-node hosts, not in this Compose bundle. An agent with no credential, or the wrong one, does **not** exit: it keeps running and keeps retrying, exactly as it already did for an unreachable broker, but now logs a distinct `mqtt broker rejected connection: not authorized` message instead of the generic "will retry" line, and appears in the coordinator's inventory as control-plane offline, not as a crashed process.
+- **FPP's own MQTT output**, if you followed [ADR-008](../docs/decisions/ADR-008-mqtt-control-plane.md)'s recommendation to point FPP at this same broker rather than running a second one. FPP needs the dedicated `fpp` publisher-role credential this script also generates (printed once — see below), set in FPP's own MQTT configuration (System Configuration → MQTT in FPP's UI), or its status output silently stops arriving at this broker the moment anonymous access closes.
+
+**How credentials are generated, and why never by hand-editing a file in this repository:** run, once, before the first `docker compose up`:
+
+```sh
+./mosquitto/generate-credentials.sh
+```
+
+It creates `mosquitto/passwd` (gitignored — see this repository's `.gitignore` — bcrypt-hashed via Mosquitto's own `mosquitto_passwd`, using the exact `eclipse-mosquitto` image version this bundle runs) with three fixed roles this bundle itself needs: `coordinator` and `healthcheck`, whose freshly generated passwords it writes directly into `deploy/.env` for you, and `fpp` (the publisher role above), whose password it prints once to the terminal for you to copy into FPP's own configuration. It is idempotent — safe to run again, it does nothing if `mosquitto/passwd` already exists — and it never authors a credential into anything checked into version control: a password file committed to the repository would be identical in every ShowMesh installation, which is precisely the failure [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) named when it rejected a mandatory shared secret with no distribution mechanism, and which [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10 repeats for the broker specifically.
+
+**Each ShowMesh agent (node) needs its own credential**, provisioned individually as that node is set up:
+
+```sh
+./mosquitto/add-agent-credential.sh <node-id>
+```
+
+`<node-id>` must be the exact node id that node's agent will present as `SHOWMESH_NODE_ID` — the script enforces the same character rule `pkg/mqttproto` validates a node id against (lowercase letters, digits, and internal hyphens only) before ever writing to the password file, because the broker username being provisioned is what the ACL's per-agent rules trust to equal the node's own id (see `mosquitto/acl.conf`'s header comment for exactly why that matters and what goes wrong if it is not enforced). The printed password is shown once; set it as that node's own `SHOWMESH_MQTT_USERNAME`/`SHOWMESH_MQTT_PASSWORD` (not in this bundle's `.env` — see "The full picture" below).
+
+**Access control**, not just authentication: `mosquitto/acl.conf` (committed — it names topic shapes, never a credential) grants four principal classes exactly what ADR-024 decision 10 specifies and nothing more — each agent may publish only beneath its own `showmesh/nodes/<node-id>/` prefix (explicitly **excluding** that node's own `cmd` topic: see the file's header comment for why publish access to hello/lwt/observed/result is not the same grant as publish access to `showmesh/nodes/<node-id>/#` would have been) and subscribe only to its own `cmd` topic; only the coordinator may publish to any node's `cmd` topic; the `fpp` role above is confined to FPP's own status topics (`falcon/player/#` by default) with no access to any `showmesh/` topic at all; and the `healthcheck` principal can only read `$SYS`.
+
+**What "revocable" does and does not mean here — two limits, stated so an upgrade does not surprise you at showtime:**
+
+- Mosquitto re-reads `passwd` and `acl.conf` on `SIGHUP` (`docker compose kill -s HUP mosquitto`, which `add-agent-credential.sh` reminds you of every time it runs) but does **not** re-authenticate a client that is already connected. Rotating a compromised or retired agent's credential takes effect only when that agent's connection actually drops and it reconnects, or when the broker itself restarts (which flips every node's control-plane state to offline at once — a bigger hammer, use deliberately).
+- Every credential this bundle provisions is a **hand-provisioned, permanent-in-practice** credential, not a rotating one. A node agent's credential lives in that node's own configuration on a controller that may be mounted in a yard; rotating it means editing that node's config and restarting its agent, which for a physically deployed node means a visit. This will not change until node-enrollment automation exists (not part of this release — see ADR-024's supersession section).
+
+**Residual exposure, recorded rather than glossed over:** the ACL bounds what a compromised *agent* credential can do (a stolen node, per ADR-024 decision 10's own reasoning: "a node is a Pi in a weatherproof box in a front yard, physically reachable by anyone walking past"). It does not defend against a compromised *coordinator* broker credential: anyone holding it can publish a forged command to any node's `cmd` topic, and an agent has no way to tell. Message-level command authentication would close that and is deliberately not built here (see ADR-024's own consequences and alternatives sections). If FPP's own broker credential — whether on this bundle's broker or, as in the reference installation, a separate home-automation broker — is ever a shared, general-purpose account with publish rights rather than a dedicated read-only or FPP-scoped one, that account is a larger command-authority exposure than anything this ACL restricts; see ADR-024 decision 10's own closing paragraphs.
 
 ## The read-only control API
 
@@ -33,7 +71,9 @@ Everything the API reports carries provenance and freshness, and absent evidence
 
 **By default the API is open to anyone who can reach this port**, and the coordinator logs a warning saying so at startup. Setting `SHOWMESH_API_TOKEN` in `.env` closes it behind a shared bearer token.
 
-[ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.** The bundled Mosquitto also allows anonymous access, and that is the larger exposure of the two, since publish rights there affect coordinator state while the API only discloses it.
+[ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.**
+
+*This paragraph is narrower than it used to be, and on purpose.* Earlier revisions of this document also named the bundled Mosquitto's anonymous access as "the larger exposure of the two". That is no longer accurate: the bundled broker now requires authentication and enforces an access-control list ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10) — see "MQTT broker credentials" above for what that means and what it does not close (a compromised *coordinator* broker credential can still forge a command to any node; that residual exposure is recorded there, not solved here).
 
 There are no write operations at all in this release. Nothing reachable through this API can change a device, a playlist, or a show.
 

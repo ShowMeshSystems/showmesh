@@ -36,6 +36,20 @@ import (
 // check a returned error.
 func publishHelloBurst(t *testing.T, n int) {
 	t.Helper()
+	// ADR-024 decision 10: the broker no longer allows anonymous
+	// connections, and — deliberately — no credential for any of the four
+	// real principal classes (each agent, the coordinator, the fpp role,
+	// the healthcheck principal) can publish hello for arbitrary,
+	// never-before-seen node IDs from one connection; that is exactly the
+	// deferred item this ACL exists to close (see ADR-024's context
+	// section). This helper needs a dedicated, clearly TEST-ONLY
+	// credential instead — see envTestMQTTBurstPublisherUsername's doc
+	// comment in harness_test.go and scripts/test-integration.sh's own
+	// comment on the acl.conf stanza that grants it.
+	if testMQTTBurstPublisherUsername == "" {
+		t.Skipf("%s is not set; this test needs `make test-integration`'s broker, which provisions the dedicated test-only burst-publisher credential", envTestMQTTBurstPublisherUsername)
+	}
+
 	serverURL, err := url.Parse(brokerURL)
 	if err != nil {
 		t.Fatalf("parse broker url %q: %v", brokerURL, err)
@@ -46,9 +60,11 @@ func publishHelloBurst(t *testing.T, n int) {
 
 	connected := make(chan struct{}, 1)
 	cfg := autopaho.ClientConfig{
-		ServerUrls:     []*url.URL{serverURL},
-		KeepAlive:      30,
-		ConnectTimeout: 10 * time.Second,
+		ServerUrls:      []*url.URL{serverURL},
+		KeepAlive:       30,
+		ConnectTimeout:  10 * time.Second,
+		ConnectUsername: testMQTTBurstPublisherUsername,
+		ConnectPassword: []byte(testMQTTBurstPublisherPassword),
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) {
 			select {
 			case connected <- struct{}{}:

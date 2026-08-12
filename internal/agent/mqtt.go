@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
@@ -32,6 +34,48 @@ const keepAliveSeconds = uint16(30)
 // mqttConnectTimeout bounds each individual connection attempt.
 const mqttConnectTimeout = 10 * time.Second
 
+// isAuthReasonCode reports whether code is an MQTT v5 reason code in the
+// "the broker understood who you are and refused you" family, as opposed to
+// a transport-level failure (connection refused, timeout, DNS failure)
+// that never produces a reason code at all because no packet was ever
+// exchanged. These four values carry the same meaning on every packet type
+// that can carry them (CONNACK, PUBACK, PUBREC, SUBACK, ...) per the MQTT
+// v5 spec; packets.ConnackNotAuthorized (0x87) and packets.PubackNotAuthorized
+// are literally the same numeric value, so one classifier serves both the
+// CONNACK case (newMQTTConn's OnConnectError, below) and the PUBACK case
+// (mqttConn.Publish, below) rather than duplicating the switch per packet
+// type.
+//
+// Per ADR-024 decision 10, a rejection in this family is a permanent,
+// credential-related condition an agent must surface distinctly from "the
+// broker is unreachable" — the CONNACK case is the CONNACK reason code
+// 0x87 Not Authorized decision 10 names directly; Bad Username or Password,
+// Banned, and Bad Authentication Method are the same family of condition
+// under a different label and get the same treatment.
+func isAuthReasonCode(code byte) bool {
+	switch code {
+	case packets.ConnackBadUsernameOrPassword, // 0x86
+		packets.ConnackNotAuthorized,           // 0x87 (== packets.PubackNotAuthorized)
+		packets.ConnackBanned,                  // 0x8A
+		packets.ConnackBadAuthenticationMethod: // 0x8C
+		return true
+	}
+	return false
+}
+
+// ErrPublishNotAuthorized is wrapped by the error [mqttConn.Publish] returns
+// when the broker accepted the publish transaction at the transport level
+// (the connection is up, a PUBACK/PUBREC round-trip completed) but rejected
+// it with an authorization-family reason code. Per ADR-024 decision 10 this
+// is "quieter" than a CONNACK rejection — Mosquitto accepts the connection
+// and simply declines the message — and this project's Step 5 lesson about
+// GET-only vs. read-only generalizes here: a client that only checks
+// "did Publish return non-nil" cannot tell this apart from a transient
+// network failure on the same call. Callers (advertise.go, heartbeat.go)
+// check for this with errors.Is and log it distinctly rather than folding
+// it into the generic "publish failed; will retry" line.
+var ErrPublishNotAuthorized = errors.New("mqtt: publish rejected by broker (not authorized)")
+
 // mqttConn adapts *autopaho.ConnectionManager to this package's Publisher
 // and Conn interfaces, so production code and tests share the same call
 // shape (see publisher.go).
@@ -40,17 +84,48 @@ type mqttConn struct {
 }
 
 func (m *mqttConn) Publish(ctx context.Context, topic string, qos byte, retain bool, payload []byte) error {
-	_, err := m.cm.Publish(ctx, &paho.Publish{
+	resp, err := m.cm.Publish(ctx, &paho.Publish{
 		QoS:     qos,
 		Retain:  retain,
 		Topic:   topic,
 		Payload: payload,
 	})
+	if err != nil && resp != nil && isAuthReasonCode(resp.ReasonCode) {
+		return fmt.Errorf("%w: topic %q, reason code %d: %w", ErrPublishNotAuthorized, topic, resp.ReasonCode, err)
+	}
 	return err
 }
 
 func (m *mqttConn) Disconnect(ctx context.Context) error {
 	return m.cm.Disconnect(ctx)
+}
+
+// classifyConnectError inspects an error passed to autopaho's OnConnectError
+// callback and reports whether it represents a CONNACK-level authorization
+// rejection (rejected=true, with the reason code and any CONNACK reason
+// string the broker supplied) as opposed to every other connect failure
+// (connection refused, DNS failure, timeout, TLS failure, ...), which never
+// produces a CONNACK at all. autopaho wraps a CONNACK it received — even a
+// rejecting one — in *autopaho.ConnackError (see that type's doc comment
+// and autopaho/net.go's establishServerConnection, which only constructs
+// one when connack != nil); a bare transport error is passed through
+// unwrapped, so errors.As returning false here means exactly "no CONNACK
+// was ever received," not "the CONNACK we got isn't a ConnackError".
+//
+// Factored out of newMQTTConn's OnConnectError closure so it can be unit
+// tested directly (see mqtt_test.go) without dialing a broker: this is the
+// one piece of "does the agent tell a permanent credential rejection apart
+// from a transient network fault" that a unit test can actually prove: see
+// TestClassifyConnectError*.
+func classifyConnectError(err error) (rejected bool, code byte, reason string) {
+	var connackErr *autopaho.ConnackError
+	if !errors.As(err, &connackErr) {
+		return false, 0, ""
+	}
+	if !isAuthReasonCode(connackErr.ReasonCode) {
+		return false, connackErr.ReasonCode, connackErr.Reason
+	}
+	return true, connackErr.ReasonCode, connackErr.Reason
 }
 
 // buildWillMessage builds the paho Will registered at CONNECT time for
@@ -163,6 +238,33 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 			return true // never give up retrying
 		},
 		OnConnectError: func(err error) {
+			// ADR-024 decision 10: before allow_anonymous was disabled on
+			// the reference broker, "the broker will not take my
+			// connection" was always transient (unreachable, DNS,
+			// timeout). A CONNACK authorization rejection is a permanent,
+			// self-inflicted condition that presents identically to an
+			// operator watching a dashboard unless this agent tells the
+			// two apart itself — the broker will never fix a wrong or
+			// revoked credential by being retried harder. This is NOT
+			// treated as fatal: autopaho keeps retrying with backoff
+			// exactly as it does for a transport failure (this callback
+			// never stops that), because the agent has no way to know the
+			// credential will still be wrong on the next attempt, and an
+			// agent that exits on this is useless exactly when it is most
+			// needed. There is also, today, no ADR-009 cached local
+			// fallback subset for this Step 2-era agent to fall back to —
+			// see the internal/agent package doc comment: no GStreamer, no
+			// media, no command handling. "Continues" currently means
+			// exactly what it already meant for a transport failure: the
+			// process keeps running and keeps retrying; the only new
+			// behavior here is that the log line below is distinct and
+			// unmissable rather than folded into the generic retry
+			// message.
+			if rejected, code, reason := classifyConnectError(err); rejected {
+				logger.Error("mqtt broker rejected connection: not authorized; this is a permanent condition (wrong or revoked credential), not a transient network fault, and will not resolve by retrying — the agent is NOT exiting and will keep retrying anyway in case the credential is fixed, but see SHOWMESH_MQTT_USERNAME/SHOWMESH_MQTT_PASSWORD",
+					"broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID, "reason_code", code, "reason", reason)
+				return
+			}
 			logger.Warn("mqtt broker connect attempt failed; will retry", "broker", cfg.MQTTBroker, "error", err)
 		},
 		ClientConfig: paho.ClientConfig{

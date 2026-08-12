@@ -22,6 +22,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -50,20 +51,26 @@ func Run() int {
 		"mqtt_username_set", cfg.MQTTUsername != "",
 		"data_dir", cfg.DataDir,
 		"log_level", cfg.LogLevel,
-		"api_auth_enabled", cfg.APIToken != "",
+		"api_reads_closed", cfg.CloseReads,
 		"fpp_endpoint_count", len(cfg.FPPEndpoints),
 	)
 
-	// contract section 6.8: "when unset [SHOWMESH_API_TOKEN]: no
-	// authentication, and the coordinator logs a warning at startup naming
-	// the exposure in plain words. Not debug, not info." internal/coordinator/api.New
+	// ADR-024 decision 2, carrying ADR-021 rule 3 forward: reads stay open
+	// by default and closable by configuration, and whichever posture is
+	// in effect gets a startup warning naming it. internal/coordinator/api.New
 	// itself does not log this (it has no logger opinion about deployment
-	// posture, only about request handling — see that package's Options.AuthToken
-	// doc comment); this is the one place that decision belongs.
-	if cfg.APIToken == "" {
-		logger.Warn("SHOWMESH_API_TOKEN is not set: the /api/v1 control API is served with NO AUTHENTICATION. " +
+	// posture, only about request handling); this is the one place that
+	// decision belongs. Unlike the retired SHOWMESH_API_TOKEN warning this
+	// replaces, "reads closed" is not itself unconditionally safe to leave
+	// unremarked either: an operator who sets SHOWMESH_API_CLOSE_READS=true
+	// with zero principals yet provisioned has locked themselves out of
+	// their own dashboard, which watchUnclaimedBootstrap's own loud,
+	// repeated warning (started below) is what actually surfaces.
+	if !cfg.CloseReads {
+		logger.Warn("SHOWMESH_API_CLOSE_READS is not set: the /api/v1 read surface is served with NO AUTHENTICATION required. " +
 			"Anyone who can reach this coordinator's HTTP port can read the full node inventory, FPP state, and event history. " +
-			"Set SHOWMESH_API_TOKEN to require a bearer token.")
+			"Every write endpoint still requires an authenticated principal regardless (ADR-024 decision 2); " +
+			"set SHOWMESH_API_CLOSE_READS=true to require one for reads too.")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -83,6 +90,15 @@ func Run() int {
 		logger.Error("failed to open coordinator store", "error", err)
 		return 1
 	}
+
+	// identitySvc is ADR-024's principal/session/token/bootstrap/audit
+	// surface (internal/coordinator/identity), constructed once here over
+	// the same *store.Store and the same real time.Now st itself was
+	// opened with (store.Open's default clock — see identity.NewService's
+	// doc comment for why the two must share a clock). cfg.DataDir is
+	// where the bootstrap file lives (ADR-024 decision 9), the same
+	// directory the SQLite database above already lives in.
+	identitySvc := identity.NewService(st, time.Now, cfg.DataDir, identity.WithLogger(logger))
 
 	// hub is assigned below, once api.New has built it, but inv (which can
 	// start delivering MQTT messages the instant broker.NewBrokerManager
@@ -143,11 +159,22 @@ func Run() int {
 			fppCollectorStatusLister{endpoints: cfg.FPPEndpoints},
 			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
 		},
+		// Identity is ADR-024's own dependency: wiring it in is what makes
+		// POST/GET/DELETE /api/v1/session, POST /api/v1/bootstrap, and
+		// GET /api/v1/audit do anything other than always answer 401/403
+		// against api.noIdentityService's no-op default.
+		Identity: identitySvc,
 	}
 	apiInst := api.New(apiDeps, api.Options{
-		AuthToken:      cfg.APIToken,
-		AllowedOrigins: cfg.APIAllowedOrigins,
-		Logger:         logger,
+		CloseReads:          cfg.CloseReads,
+		SecureCookie:        cfg.SecureCookie,
+		TrustClientAddr:     cfg.TrustClientAddr,
+		LoginConcurrency:    cfg.LoginConcurrency,
+		LoginQueueWait:      cfg.LoginQueueWait,
+		LoginPerSourceDelay: cfg.LoginPerSourceDelay,
+		LoginMaxDelay:       cfg.LoginMaxDelay,
+		AllowedOrigins:      cfg.APIAllowedOrigins,
+		Logger:              logger,
 	})
 	hub = apiInst.Hub
 
@@ -240,7 +267,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(2)
+	backgroundWG.Add(3)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -248,6 +275,22 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		fppRunner.Run(ctx)
+	}()
+	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
+	// persistent" unclaimed-bootstrap signal's other half — the log side,
+	// alongside SessionResponse.bootstrapRequired's UI-banner side (see
+	// internal/coordinator/api/session.go). It logs once immediately (so a
+	// fresh coordinator's very first log lines already carry it, not only
+	// GET /api/v1/session's own visibility once a browser opens) and then
+	// repeats on bootstrapWarningInterval for as long as no principal
+	// exists — decision 9's own reasoning for why one line at startup is
+	// not enough: a volume loss or a move to a fresh host returns this
+	// coordinator to zero principals with reads still open, so the
+	// dashboard renders and nothing looks wrong unless something says so
+	// loudly and keeps saying so.
+	go func() {
+		defer backgroundWG.Done()
+		watchUnclaimedBootstrap(ctx, identitySvc, logger)
 	}()
 
 	// mqttFPPCollector.Run owns the FPP MQTT broker connection's own
@@ -323,6 +366,57 @@ func Run() int {
 
 	logger.Info("showmesh-coordinator exited cleanly")
 	return 0
+}
+
+// bootstrapWarningInterval is how often [watchUnclaimedBootstrap] re-logs
+// its warning while no principal has claimed the bootstrap code. A
+// SHOWMESH HYPOTHESIS, not a measured value: frequent enough that an
+// operator who only skims recent scrollback still catches it within one
+// visit to this coordinator's logs, infrequent enough not to spam a log
+// that is also carrying everything else this coordinator does.
+const bootstrapWarningInterval = 5 * time.Minute
+
+// watchUnclaimedBootstrap logs a loud warning immediately and then every
+// bootstrapWarningInterval for as long as identitySvc reports zero
+// principals, until ctx is cancelled. See its call site's doc comment for
+// why this exists as a repeating log rather than a single startup line.
+func watchUnclaimedBootstrap(ctx context.Context, identitySvc identity.Service, logger *slog.Logger) {
+	logBootstrapStateIfUnclaimed(ctx, identitySvc, logger)
+
+	ticker := time.NewTicker(bootstrapWarningInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			logBootstrapStateIfUnclaimed(ctx, identitySvc, logger)
+		}
+	}
+}
+
+// logBootstrapStateIfUnclaimed logs ADR-024 decision 9's unclaimed-
+// bootstrap warning if and only if identitySvc currently reports zero
+// principals. Never the code itself, and never anything read from the
+// bootstrap file — see identity.Service.HasAnyPrincipal's own doc
+// comment for why this call alone is sufficient (it is what generates
+// and maintains the bootstrap file/row as a side effect) and OBSERVABILITY
+// section 13's "never log a secret" rule, which this function's silence
+// about the code's actual value is what satisfies.
+func logBootstrapStateIfUnclaimed(ctx context.Context, identitySvc identity.Service, logger *slog.Logger) {
+	has, err := identitySvc.HasAnyPrincipal(ctx)
+	if err != nil {
+		logger.Warn("failed to check whether this coordinator has any administrator principal yet", "error", err)
+		return
+	}
+	if has {
+		return
+	}
+	logger.Warn("this coordinator has NO administrator principal yet: the write surface is unusable and the dashboard is showing " +
+		"you an UNCLAIMED coordinator with reads still open (ADR-024 decision 9). Read the one-time bootstrap code from " +
+		"the data volume (identity.BootstrapFileName under SHOWMESH_DATA_DIR) and claim it with POST /api/v1/bootstrap, " +
+		"or run `showmesh-coordinator bootstrap` directly against this coordinator's data volume, before relying on this " +
+		"coordinator for a real show.")
 }
 
 func newLogger(level string) *slog.Logger {

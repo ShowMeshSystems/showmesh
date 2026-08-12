@@ -422,6 +422,156 @@ type EventRecordedEvent struct {
 	Event      Event  `json:"event"`
 }
 
+// PrincipalSummary is a principal's own non-secret identity (ADR-024),
+// rendered by GET and POST /api/v1/session. Never a password hash, a
+// token digest, or a session/token secret.
+type PrincipalSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Role string `json:"role"`
+}
+
+// SessionInfo is the session that authenticated this request, rendered
+// only when that credential was a session cookie. ID is the session's
+// non-secret row identifier (never the cookie value — see
+// internal/coordinator/identity's package doc comment for why
+// [identity.Session.ID] is deliberately not that).
+type SessionInfo struct {
+	ID          string `json:"id"`
+	DeviceLabel string `json:"deviceLabel"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+// CreateSessionRequest is the body of POST /api/v1/session.
+type CreateSessionRequest struct {
+	Name        string `json:"name"`
+	Password    string `json:"password"`
+	DeviceLabel string `json:"deviceLabel"`
+}
+
+// BootstrapRequest is the body of POST /api/v1/bootstrap (ADR-024
+// decision 9). Unauthenticated by construction — no principal exists yet
+// for a credential to name — and useless without Code, which is readable
+// only from a file in the coordinator's data volume: possessing it proves
+// filesystem access, the host-level property decision 9 requires this
+// endpoint preserve rather than weaken. A successful claim creates the
+// first administrator (always human, always admin — see
+// internal/coordinator/identity.Service.ClaimBootstrap) and, exactly like
+// POST /api/v1/session, immediately mints a session for it: see
+// [SessionResponse], which this endpoint's success response reuses
+// verbatim rather than inventing a second, near-identical shape.
+type BootstrapRequest struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Password    string `json:"password"`
+	DeviceLabel string `json:"deviceLabel"`
+}
+
+// DeleteSessionRequest is DELETE /api/v1/session's optional body.
+// SessionID is empty (the common case: the request body is omitted
+// entirely) to revoke the session that authenticated this very request,
+// which requires that credential to be the session cookie itself — a
+// bearer-token-authenticated caller has no session of its own to name
+// implicitly. A non-empty SessionID instead revokes that specific,
+// already-known session — self-service management of one of the
+// authenticated principal's OTHER sessions (ADR-024 decision 5: "device-
+// scoped and individually revocable"), which works under either
+// credential form as long as the named session belongs to the
+// authenticated principal; the server rejects one that does not.
+type DeleteSessionRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionResponse is the body of GET and POST /api/v1/session (ADR-024
+// decisions 5 and 12).
+//
+// Authenticated is false whenever no valid credential authenticated this
+// request — a new device, cleared cookies, a revoked or idle-expired
+// session, a bad or absent bearer token. This is deliberately NOT a 401:
+// decision 5 requires "being signed out" to be a persistent, readable
+// state a client learns on load, covering a device that has never
+// authenticated at all as well as one whose credential has stopped
+// working, never an error the caller has to catch to find out which.
+// Principal, Session, and CredentialForm are all null when Authenticated
+// is false; Scopes is an empty array (never null, per this API's standing
+// "absent evidence is stated, never omitted" rule applied to a
+// collection) and ScopesState is "not_applicable".
+//
+// ScopesState follows this API's standing evidence-state discipline
+// (ADR-020 decision 5, restated for authorization by ADR-024 decision
+// 12): "current" when Scopes was computed from a fresh read of this
+// principal's role in this same request — the only case this
+// implementation currently produces, since scopes are derived
+// synchronously from the authenticated principal rather than cached —
+// and "unknown" on an internal error computing them, which a client MUST
+// treat exactly like an empty scope list (decision 12: "a stale or
+// unavailable [scope list] renders as unknown, never as permissive").
+// This field, plus ServerTime, is what lets a client bound how long it
+// trusts an already-fetched SessionResponse: ADR-024 decision 5's
+// generation-triggered stream closure is what bounds that window, not a
+// freshness computation this field performs itself.
+//
+// BootstrapRequired is ADR-024 decision 9's "loud and persistent"
+// unclaimed-bootstrap signal, exposed here — on the one endpoint every
+// client already fetches unauthenticated, on load, per decision 5 —
+// specifically so a UI can render its banner with no credential and no
+// second round trip. true means this coordinator currently holds zero
+// principals: the volume-loss/fresh-host case decision 9 names, where
+// reads stay open and the dashboard renders normally with nothing else
+// visibly wrong. It is computed fresh on every request from
+// identity.Service.HasAnyPrincipal, never cached, and an error computing
+// it fails toward true (show the banner) rather than toward false (hide
+// a real unclaimed state behind a transient store hiccup) — the same
+// "stale/unknown must not read as fine" direction ADR-011 and this
+// contract's own evidence rules take everywhere else.
+type SessionResponse struct {
+	ServerTime        string            `json:"serverTime"`
+	Authenticated     bool              `json:"authenticated"`
+	Principal         *PrincipalSummary `json:"principal"`
+	Session           *SessionInfo      `json:"session"`
+	CredentialForm    *string           `json:"credentialForm"`
+	Scopes            []string          `json:"scopes"`
+	ScopesState       string            `json:"scopesState"`
+	BootstrapRequired bool              `json:"bootstrapRequired"`
+}
+
+// AuditEntry is one element of GET /api/v1/audit (ADR-024 decision 11).
+// Params is never null (an entry with none still reports an empty
+// object), matching Event.Details' identical convention. There is
+// deliberately no numeric id/cursor field here:
+// internal/coordinator/identity.Service.ListAudit (a package this task
+// does not own) exposes since/limit paging but no per-entry identifier a
+// client could echo back — see [AuditResponse]'s doc comment for the
+// resulting narrowing against [EventsResponse]'s richer cursor contract.
+type AuditEntry struct {
+	Timestamp      string         `json:"timestamp"`
+	PrincipalID    string         `json:"principalId"`
+	PrincipalName  string         `json:"principalName"`
+	Form           string         `json:"form"`
+	CredentialID   string         `json:"credentialId"`
+	ClientAddr     string         `json:"clientAddr"`
+	Action         string         `json:"action"`
+	Target         string         `json:"target"`
+	Params         map[string]any `json:"params"`
+	IdempotencyKey string         `json:"idempotencyKey"`
+	Kind           string         `json:"kind"`
+	CommandID      string         `json:"commandId"`
+	Outcome        string         `json:"outcome"`
+	OutcomeState   string         `json:"outcomeState"`
+	OutcomeReason  string         `json:"outcomeReason"`
+}
+
+// AuditResponse is the body of GET /api/v1/audit. Unlike
+// [EventsResponse], it carries no gap/oldestRetainedSeq-shaped fields:
+// internal/coordinator/identity.Service.ListAudit — a package this task
+// does not own — exposes no oldest-retained cursor for this package to
+// report one honestly. See this package's report for that narrowing.
+type AuditResponse struct {
+	ServerTime string       `json:"serverTime"`
+	Entries    []AuditEntry `json:"entries"`
+}
+
 // FPPObservationsChangedEvent is the payload of an
 // "fpp.observations.changed" SSE event (ADR-023), delivered only to a
 // connection that opted into delta frames via

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,5 +183,34 @@ func TestPublishAdvertisementPublishesHelloThenOnline(t *testing.T) {
 	}
 	if calls[1].topic != lwtTopic {
 		t.Errorf("second publish topic = %q, want lwt topic %q", calls[1].topic, lwtTopic)
+	}
+}
+
+// TestPublishAdvertisementACLRejectionLogsDistinctlyAndStillAttemptsOnline
+// is advertise.go's half of the ADR-024 decision 10 "surface it as evidence
+// distinct from an unreachable broker" requirement: an ACL rejection on the
+// hello publish must be logged with a message naming the rejection (not
+// folded into the generic "failed to publish hello" line), and — matching
+// publishAdvertisement's existing "both publishes are individually
+// best-effort" contract — must not stop the online publish that follows it.
+func TestPublishAdvertisementACLRejectionLogsDistinctlyAndStillAttemptsOnline(t *testing.T) {
+	pub := newFakePublisher()
+	pub.rejectOn = map[int]bool{0: true} // the hello publish (call 0) is ACL-rejected
+	logger, logs := capturingLogger()
+
+	cfg := agentconfig.Config{NodeID: "media-03"}
+	publishAdvertisement(context.Background(), pub, cfg, "boot-1", time.Now(), logger)
+
+	calls := pub.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2: an ACL-rejected hello publish must not prevent the online publish attempt that follows it", len(calls))
+	}
+
+	logged := logs.String()
+	if !strings.Contains(logged, "level=ERROR") || !strings.Contains(logged, "not authorized") {
+		t.Errorf("logs = %q, want an ERROR-level line naming the ACL rejection for the hello publish", logged)
+	}
+	if strings.Contains(logged, `msg="failed to publish hello"`) {
+		t.Errorf("logs = %q, an ACL rejection must not be logged with the plain generic-failure message (no distinguishing detail)", logged)
 	}
 }

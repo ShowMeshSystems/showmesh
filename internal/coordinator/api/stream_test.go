@@ -433,7 +433,7 @@ func TestHubBroadcastSignalsResetOnOverflow(t *testing.T) {
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 	}, Options{StreamSubscriberBuffer: 1}.withDefaults(), testLogger())
 
-	id, sub := hub.subscribe(false)
+	id, sub := hub.subscribe(false, nil)
 	defer hub.unsubscribe(id)
 
 	frame := pendingFrame{event: "node.changed", serverTime: formatTime(testNow), node: &v1.Node{}}

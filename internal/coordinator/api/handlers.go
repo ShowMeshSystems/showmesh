@@ -52,6 +52,15 @@ type handlers struct {
 	deps   Dependencies
 	clock  func() time.Time
 	logger *slog.Logger
+
+	// closeReads, secureCookie, trustClientAddr, and loginLimiter back
+	// ADR-024 (auth.go, session.go, audit.go, loginlimiter.go) — see
+	// [Options.CloseReads]/[Options.SecureCookie]/[Options.TrustClientAddr]'s
+	// doc comments in api.go for what each controls.
+	closeReads      bool
+	secureCookie    bool
+	trustClientAddr bool
+	loginLimiter    *loginLimiter
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

@@ -1,0 +1,243 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+)
+
+// This file holds audit_log's repository methods. See migrations.go's
+// schemaV5 doc comment, rule 3: no method in this file ever issues an
+// UPDATE against audit_log. AppendAuditEntry is the only write path other
+// than pruneAudit's bounded DELETE, and there is no UpdateAuditEntry, no
+// SetAuditOutcome-style mutator, and there must never be one — ADR-024
+// decision 11 requires dispatch and outcome to be separate, append-only
+// entries correlated by CommandID for exactly this reason.
+
+// AuditRecord is one row of the append-only audit_log table. It mirrors
+// the identity package's AuditEntry field-for-field; see that type's doc
+// comment for what each field means and identity/audit.go for the
+// identity <-> store conversion, which is the only place these two types
+// meet.
+type AuditRecord struct {
+	// ID is assigned by [Store.AppendAuditEntry]; a caller-set value is
+	// ignored on input, matching [EventRecord.Seq]'s convention.
+	ID int64
+
+	// RecordedAt is this Store's own clock at the moment of the write,
+	// exactly like [EventRecord.RecordedAt] — bookkeeping, not evidence,
+	// and ignored on input.
+	RecordedAt time.Time
+
+	PrincipalID    string
+	PrincipalName  string
+	Form           string
+	CredentialID   string
+	ClientAddr     string
+	Action         string
+	Target         string
+	ParamsJSON     string // a JSON object; "{}" when there are no params
+	IdempotencyKey string
+	Kind           string
+	CommandID      string
+	Outcome        string
+	OutcomeState   string
+	OutcomeReason  string
+}
+
+// AppendAuditEntry validates the minimum shape (Kind and Action are always
+// required; every other field may be empty, since e.g. an auth_failure
+// entry has no PrincipalID yet) and records rec as the next append-only
+// entry, returning its assigned ID.
+//
+// The insert and the amortized pruning pass it may trigger (see
+// [pruneAudit] below) share one transaction, exactly matching
+// [Store.AppendEvent]'s reasoning in events.go: either both happen, or on
+// any error neither does — never a partial state where an audit row was
+// written but a failed prune silently never ran.
+func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, error) {
+	if rec.Kind == "" {
+		return 0, fmt.Errorf("store: append audit entry: Kind is empty")
+	}
+	if rec.Action == "" {
+		return 0, fmt.Errorf("store: append audit entry: Action is empty")
+	}
+	params := rec.ParamsJSON
+	if params == "" {
+		params = "{}"
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin append audit entry: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO audit_log (
+			recorded_at, principal_id, principal_name, form, credential_id,
+			client_addr, action, target, params_json, idempotency_key,
+			kind, command_id, outcome, outcome_state, outcome_reason
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		timeToDB(s.now()), rec.PrincipalID, rec.PrincipalName, rec.Form, rec.CredentialID,
+		rec.ClientAddr, rec.Action, rec.Target, params, rec.IdempotencyKey,
+		rec.Kind, rec.CommandID, rec.Outcome, rec.OutcomeState, rec.OutcomeReason,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store: append audit entry: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store: append audit entry: read assigned id: %w", err)
+	}
+
+	// Same two independent triggers as AppendEvent (events.go): insert
+	// volume, which alone bounds row count correctly, and elapsed
+	// wall-clock time since the last prune pass, which alone bounds age
+	// correctly under a low write rate. See pruneEveryNAuditEntries and
+	// pruneCheckInterval's (shared with events) doc comments in
+	// retention.go for why both are needed rather than either alone.
+	byCount := s.auditAppendCount.Add(1)%pruneEveryNAuditEntries == 0
+	byAge := false
+	if !byCount {
+		last := s.lastAuditPruneAtNanos.Load()
+		byAge = last == 0 || s.now().Sub(time.Unix(0, last)) >= pruneCheckInterval
+	}
+	if byCount || byAge {
+		if err := s.pruneAudit(ctx, tx); err != nil {
+			return 0, fmt.Errorf("store: append audit entry: %w", err)
+		}
+		s.lastAuditPruneAtNanos.Store(s.now().UnixNano())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: commit append audit entry: %w", err)
+	}
+	return id, nil
+}
+
+const auditColumns = `
+	id, recorded_at, principal_id, principal_name, form, credential_id,
+	client_addr, action, target, params_json, idempotency_key,
+	kind, command_id, outcome, outcome_state, outcome_reason
+`
+
+func scanAudit(row interface{ Scan(dest ...any) error }) (AuditRecord, error) {
+	var (
+		rec        AuditRecord
+		recordedAt string
+	)
+	if err := row.Scan(
+		&rec.ID, &recordedAt, &rec.PrincipalID, &rec.PrincipalName, &rec.Form, &rec.CredentialID,
+		&rec.ClientAddr, &rec.Action, &rec.Target, &rec.ParamsJSON, &rec.IdempotencyKey,
+		&rec.Kind, &rec.CommandID, &rec.Outcome, &rec.OutcomeState, &rec.OutcomeReason,
+	); err != nil {
+		return AuditRecord{}, err
+	}
+	var err error
+	if rec.RecordedAt, err = dbToTime(recordedAt); err != nil {
+		return AuditRecord{}, fmt.Errorf("store: parse audit recorded_at: %w", err)
+	}
+	return rec, nil
+}
+
+// DefaultAuditPageSize and MaxAuditPageSize bound [Store.ListAuditEntries]'s
+// limit parameter, mirroring [DefaultEventsPageSize]/[MaxEventsPageSize] in
+// events.go for the identical reason.
+const (
+	DefaultAuditPageSize = 100
+	MaxAuditPageSize     = 500
+)
+
+// ListAuditEntries returns audit entries with id > since, ordered
+// ascending, capped at limit (limit <= 0 defaults to
+// [DefaultAuditPageSize]; anything above [MaxAuditPageSize] is clamped
+// down to it). Unlike [Store.ListEvents], this reports no gap flag: the
+// audit API this backs (`/api/v1/audit`, behind audit:read) is a
+// paginated investigation tool, not a change-stream resumption cursor —
+// nothing in ADR-024 promises a caller "no gap and no duplicate" across a
+// prune the way ADR-020's events contract does for since. A caller that
+// cares whether retention has already trimmed part of its requested range
+// can compare its since against [Store.OldestAuditID].
+func (s *Store) ListAuditEntries(ctx context.Context, since int64, limit int) ([]AuditRecord, error) {
+	if since < 0 {
+		return nil, fmt.Errorf("store: list audit entries: since must be >= 0, got %d", since)
+	}
+	switch {
+	case limit <= 0:
+		limit = DefaultAuditPageSize
+	case limit > MaxAuditPageSize:
+		limit = MaxAuditPageSize
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT`+auditColumns+`
+		FROM audit_log WHERE id > ? ORDER BY id ASC LIMIT ?
+	`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list audit entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AuditRecord
+	for rows.Next() {
+		rec, err := scanAudit(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: list audit entries: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list audit entries: %w", err)
+	}
+	return out, nil
+}
+
+// OldestAuditID returns the lowest id currently retained in audit_log, and
+// true — or (0, false, nil) if the table currently retains no row.
+// Mirrors [Store.OldestEventSeq] exactly; see that method's doc comment.
+func (s *Store) OldestAuditID(ctx context.Context) (int64, bool, error) {
+	var oldest sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(id) FROM audit_log`).Scan(&oldest); err != nil {
+		return 0, false, fmt.Errorf("store: oldest audit id: %w", err)
+	}
+	if !oldest.Valid {
+		return 0, false, nil
+	}
+	return oldest.Int64, true, nil
+}
+
+// pruneEveryNAuditEntries mirrors [pruneEveryNEvents] in retention.go,
+// applied to audit_log; see that constant's doc comment for the tradeoff
+// it encodes. 100 is kept identical to the events value deliberately —
+// neither number is derived from a measured write rate for either table,
+// so there is no basis yet for picking a different one.
+const pruneEveryNAuditEntries = 100
+
+// pruneAudit deletes audit entries older than maxAuditAge (if positive)
+// and, of whatever remains, all but the newest maxAuditRows. Always
+// called from inside the same transaction as the [Store.AppendAuditEntry]
+// write that triggered it — see that method — mirroring [pruneEvents]
+// exactly, including which bound is allowed to be disabled (age, via
+// [WithMaxAuditAge] with a non-positive duration) and which is not (row
+// count) — see those two Options' doc comments in retention.go.
+func (s *Store) pruneAudit(ctx context.Context, tx *sql.Tx) error {
+	if s.maxAuditAge > 0 {
+		cutoff := timeToDB(s.now().Add(-s.maxAuditAge))
+		if _, err := tx.ExecContext(ctx, `DELETE FROM audit_log WHERE recorded_at < ?`, cutoff); err != nil {
+			return fmt.Errorf("store: prune audit by age: %w", err)
+		}
+	}
+	if s.maxAuditRows > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM audit_log WHERE id NOT IN (
+				SELECT id FROM audit_log ORDER BY id DESC LIMIT ?
+			)
+		`, s.maxAuditRows); err != nil {
+			return fmt.Errorf("store: prune audit by row count: %w", err)
+		}
+	}
+	return nil
+}

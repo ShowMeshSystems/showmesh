@@ -7,6 +7,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -191,6 +193,33 @@ type BrokerState struct {
 	// Connected changed. Callers use it to judge freshness: evidence older
 	// than a staleness window is not proof of current health.
 	ObservedAt time.Time
+
+	// Rejected is true when the most recent connection attempt failed
+	// because the broker authenticated the CONNECT packet and explicitly
+	// refused it (an MQTT v5 CONNACK reason code in the authorization
+	// family — see isAuthReasonCode), as opposed to being unreachable
+	// (connection refused, DNS failure, timeout — none of which ever
+	// produce a CONNACK at all). Per ADR-024 decision 10 this is a
+	// permanent, self-inflicted condition (a wrong or revoked broker
+	// credential) rather than a transient network fault, and CLAUDE.md's
+	// standing constraint that the coordinator starts and stays up with no
+	// broker reachable now extends to a broker that actively rejects it —
+	// this field is what lets Readiness (below) and anything reading
+	// BrokerState say so distinctly rather than reporting the same "mqtt
+	// broker not connected" an ordinary outage would.
+	//
+	// Cleared back to false the moment a connection actually succeeds (see
+	// setConnected): a stale "rejected" reading must not survive past the
+	// evidence it was based on, the same ADR-011 principle that governs
+	// every other field here.
+	Rejected bool
+
+	// RejectReasonCode and RejectReason are the CONNACK reason code (see
+	// isAuthReasonCode's doc comment for which values set Rejected) and any
+	// broker-supplied reason string from the rejection that produced
+	// Rejected=true. Both are the zero value whenever Rejected is false.
+	RejectReasonCode byte
+	RejectReason     string
 }
 
 // BrokerManager owns the coordinator's connection to the MQTT broker.
@@ -275,6 +304,24 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 			return true // never give up retrying
 		},
 		OnConnectError: func(err error) {
+			// ADR-024 decision 10: with allow_anonymous disabled on the
+			// reference broker, a CONNACK authorization rejection is a
+			// permanent, self-inflicted condition (a wrong or missing
+			// coordinator credential) that presents identically to an
+			// ordinary transient outage unless told apart here. This is
+			// NOT treated as fatal — the underlying autopaho connection
+			// manager keeps retrying with backoff regardless of which
+			// branch below runs, exactly as CLAUDE.md's standing
+			// constraint 13 (starts and stays up with no broker reachable)
+			// already required for a plain outage, now extended to a
+			// broker that actively rejects the coordinator. The only
+			// difference is what gets recorded in BrokerState and logged.
+			if rejected, code, reason := classifyConnectError(err); rejected {
+				bm.setRejected(code, reason)
+				logger.Error("mqtt broker rejected connection: not authorized; this is a permanent condition (wrong or revoked credential), not a transient network fault, and will not resolve by retrying — the coordinator is NOT exiting and will keep retrying anyway in case the credential is fixed, but see SHOWMESH_MQTT_USERNAME/SHOWMESH_MQTT_PASSWORD",
+					"broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID, "reason_code", code, "reason", reason)
+				return
+			}
 			bm.setConnected(false)
 			logger.Warn("mqtt broker connect attempt failed; will retry", "broker", cfg.MQTTBroker, "error", err)
 		},
@@ -327,10 +374,62 @@ func (b *BrokerManager) runProbe(ctx context.Context) {
 	}
 }
 
+// isAuthReasonCode reports whether code is an MQTT v5 CONNACK reason code
+// in the "the broker understood who I am and refused me" family, as
+// opposed to a transport-level failure (connection refused, timeout, DNS
+// failure) that never reaches a CONNACK at all, or a non-authorization
+// CONNACK failure (e.g. the broker being busy). Per ADR-024 decision 10
+// this is the reason-code family the coordinator must surface as evidence
+// distinct from "broker unreachable" — see BrokerState.Rejected's doc
+// comment. Duplicated in internal/agent/mqtt.go's own isAuthReasonCode
+// rather than shared: this builder's task deliberately scoped ownership to
+// internal/agent, internal/coordinator/broker, deploy, and
+// broker-authentication parts of test/integration, and not pkg/mqttproto,
+// so the two copies stay independent the same way
+// internal/agent/config's package doc comment already explains for
+// internal/coordinator/config (different processes, different operators,
+// expected to diverge). Keep both in sync if this reason-code family ever
+// changes; that risk is the cost of not touching a package outside this
+// task's ownership.
+func isAuthReasonCode(code byte) bool {
+	switch code {
+	case packets.ConnackBadUsernameOrPassword, // 0x86
+		packets.ConnackNotAuthorized,           // 0x87
+		packets.ConnackBanned,                  // 0x8A
+		packets.ConnackBadAuthenticationMethod: // 0x8C
+		return true
+	}
+	return false
+}
+
+// classifyConnectError inspects an error passed to autopaho's
+// OnConnectError callback and reports whether it represents a CONNACK-level
+// authorization rejection, mirroring internal/agent/mqtt.go's function of
+// the same name and same behavior (see that copy's doc comment for the
+// full reasoning, including why errors.As — not a type assertion — is used
+// and what autopaho.ConnackError being present, or absent, actually
+// proves). Factored out of the OnConnectError closure so it is directly
+// unit testable without dialing a broker; see broker_test.go.
+func classifyConnectError(err error) (rejected bool, code byte, reason string) {
+	var connackErr *autopaho.ConnackError
+	if !errors.As(err, &connackErr) {
+		return false, 0, ""
+	}
+	if !isAuthReasonCode(connackErr.ReasonCode) {
+		return false, connackErr.ReasonCode, connackErr.Reason
+	}
+	return true, connackErr.ReasonCode, connackErr.Reason
+}
+
 // setConnected records a fresh observation of the connection state. Since
 // only moves when Connected actually changes value; ObservedAt always
 // advances, since a re-confirmation of the same value is still new
 // evidence.
+//
+// A successful call always clears Rejected: a live connection is direct,
+// current proof that whatever credential problem produced an earlier
+// rejection (if any) no longer applies, and per ADR-011 evidence must not
+// outlive what it was based on.
 func (b *BrokerManager) setConnected(connected bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -340,6 +439,32 @@ func (b *BrokerManager) setConnected(connected bool) {
 		b.state.Since = now
 	}
 	b.state.Connected = connected
+	if connected {
+		b.state.Rejected = false
+		b.state.RejectReasonCode = 0
+		b.state.RejectReason = ""
+	}
+	b.state.ObservedAt = now
+}
+
+// setRejected records a fresh observation of a CONNACK authorization
+// rejection: Connected becomes false (a rejected CONNECT is not a
+// connection), Rejected becomes true, and the reason code/string are
+// recorded for Readiness (and any other BrokerState reader) to report. See
+// BrokerState.Rejected's doc comment for why this is tracked separately
+// from an ordinary "not connected" observation.
+func (b *BrokerManager) setRejected(code byte, reason string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := b.now()
+	if b.state.Connected {
+		b.state.Since = now
+	}
+	b.state.Connected = false
+	b.state.Rejected = true
+	b.state.RejectReasonCode = code
+	b.state.RejectReason = reason
 	b.state.ObservedAt = now
 }
 
@@ -356,7 +481,17 @@ func (b *BrokerManager) State() BrokerState {
 //
 //   - Connected and evidence fresh (ObservedAt within evidenceStalenessWindow):
 //     Ready.
-//   - Not connected: not ready, reason "mqtt broker not connected".
+//   - Not connected, and the last attempt was an authorization rejection
+//     (ADR-024 decision 10): not ready, reason "mqtt broker rejected
+//     connection (not authorized)", with the reason code in Details — kept
+//     distinct from the plain "not connected" case below because an
+//     operator (or an automated check) reading this must be able to tell
+//     "credential problem, fix the config" apart from "network problem,
+//     check the wire", per CLAUDE.md's Step 5 "GET-only is not read-only"
+//     family of lessons: a fault that presents identically to a different
+//     fault sends whoever is debugging it to the wrong place.
+//   - Not connected, no rejection on record: not ready, reason "mqtt broker
+//     not connected".
 //   - Connected but evidence stale: not ready. Per ADR-011 this is unknown,
 //     not healthy, so it is reported as not-ready rather than papering over
 //     the missing confirmation.
@@ -364,6 +499,22 @@ func (b *BrokerManager) Readiness() readiness.Report {
 	state := b.State()
 
 	if !state.Connected {
+		if state.Rejected {
+			details := map[string]any{
+				"connected":        state.Connected,
+				"rejected":         state.Rejected,
+				"rejectReasonCode": state.RejectReasonCode,
+			}
+			if state.RejectReason != "" {
+				details["rejectReason"] = state.RejectReason
+			}
+			return readiness.Report{
+				Ready:      false,
+				Reason:     "mqtt broker rejected connection (not authorized)",
+				ObservedAt: state.ObservedAt,
+				Details:    details,
+			}
+		}
 		return readiness.Report{
 			Ready:      false,
 			Reason:     "mqtt broker not connected",

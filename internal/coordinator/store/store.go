@@ -109,6 +109,18 @@ type Store struct {
 	// requirement across a zero value and a set one.
 	eventAppendCount atomic.Int64
 	lastPruneAtNanos atomic.Int64
+
+	// maxAuditAge, maxAuditRows, auditAppendCount, and lastAuditPruneAtNanos
+	// are audit.go's exact counterparts to the four fields above, applied
+	// to audit_log instead of events: see retention.go's
+	// DefaultMaxAuditAge/DefaultMaxAuditRows doc comment for why bounding
+	// this table is a Step 6 obligation rather than an RES-013 deferral,
+	// and audit.go's pruneAudit for the write-coupled trigger logic, which
+	// is pruneEvents's, unchanged in shape.
+	maxAuditAge           time.Duration
+	maxAuditRows          int64
+	auditAppendCount      atomic.Int64
+	lastAuditPruneAtNanos atomic.Int64
 }
 
 // Open opens (creating if necessary) the SQLite database under dataDir,
@@ -130,7 +142,21 @@ type Store struct {
 // with the broker's tolerance — the two are asymmetric on purpose; see the
 // Step 2 round 2 store task spec.
 func Open(ctx context.Context, dataDir string, logger *slog.Logger, opts ...Option) (*Store, error) {
-	return open(ctx, dataDir, logger, time.Now, opts...)
+	// [WithClock] is read here, ahead of open's own opts parsing, purely to
+	// pick which clock function to pass as open's explicit now parameter;
+	// open parses opts again itself for every other Option, which is safe
+	// because every Option is an idempotent pure setter. See WithClock's
+	// doc comment in retention.go for why this indirection exists instead
+	// of threading a clock override through open's signature directly.
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	now := cfg.clock
+	if now == nil {
+		now = time.Now
+	}
+	return open(ctx, dataDir, logger, now, opts...)
 }
 
 // open is Open with the clock made explicit, so tests can drive Store's
@@ -197,6 +223,8 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() t
 		logger:       logger,
 		maxEventAge:  cfg.maxEventAge,
 		maxEventRows: cfg.maxEventRows,
+		maxAuditAge:  cfg.maxAuditAge,
+		maxAuditRows: cfg.maxAuditRows,
 	}, nil
 }
 

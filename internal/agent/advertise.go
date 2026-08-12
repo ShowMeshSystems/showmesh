@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -119,14 +120,31 @@ func publishAdvertisement(ctx context.Context, pub Publisher, cfg config.Config,
 	defer cancel()
 
 	if err := publishHello(pubCtx, pub, cfg, bootID, startedAt); err != nil {
-		logger.Error("failed to publish hello", "node_id", cfg.NodeID, "error", err)
+		logPublishFailure(logger, "hello", cfg.NodeID, err)
 	} else {
 		logger.Info("published hello", "node_id", cfg.NodeID, "capability_count", len(cfg.Capabilities))
 	}
 
 	if err := publishOnline(pubCtx, pub, cfg.NodeID); err != nil {
-		logger.Error("failed to publish lwt online=true", "node_id", cfg.NodeID, "error", err)
+		logPublishFailure(logger, "lwt online=true", cfg.NodeID, err)
 	} else {
 		logger.Info("published lwt online=true", "node_id", cfg.NodeID)
 	}
+}
+
+// logPublishFailure logs a failed publish of what (a short description,
+// e.g. "hello" or "lwt online=true"), distinguishing an ADR-024 decision 10
+// ACL rejection — a permanent condition where the broker accepted the
+// connection and discarded the message — from every other publish failure,
+// which is logged as a transient error the caller's own retry path (the
+// next reconnect, for hello/online; the next tick, for a heartbeat) is
+// expected to resolve on its own. See ErrPublishNotAuthorized's doc comment
+// in mqtt.go.
+func logPublishFailure(logger *slog.Logger, what, nodeID string, err error) {
+	if errors.Is(err, ErrPublishNotAuthorized) {
+		logger.Error("failed to publish "+what+": rejected by broker ACL (not authorized); this node's control-plane visibility is degraded until the credential/ACL is fixed",
+			"node_id", nodeID, "error", err)
+		return
+	}
+	logger.Error("failed to publish "+what, "node_id", nodeID, "error", err)
 }

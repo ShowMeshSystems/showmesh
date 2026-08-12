@@ -18,6 +18,28 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch happens BEFORE the top-level flag.Parse() below,
+	// and is checked first: the flag package stops parsing at the first
+	// non-flag argument, so a call like `showmesh-coordinator bootstrap
+	// -name=...` would otherwise leave -version/-healthcheck both false
+	// and fall straight through to a normal coordinator.Run(), silently
+	// ignoring "bootstrap" and every flag after it. See subcommands.go for
+	// what each of these does and why they exist outside the HTTP API
+	// (ADR-024 decision 9: bootstrap and lockout recovery are host-level,
+	// never network-level).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "bootstrap":
+			os.Exit(runBootstrapSubcommand(os.Args[2:]))
+		case "create-admin":
+			os.Exit(runCreateAdminSubcommand(os.Args[2:]))
+		case "reset-password":
+			os.Exit(runResetPasswordSubcommand(os.Args[2:]))
+		case "list-principals":
+			os.Exit(runListPrincipalsSubcommand(os.Args[2:]))
+		}
+	}
+
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	healthcheckFlag := flag.Bool("healthcheck", false, "check the local /healthz endpoint and exit (used by container HEALTHCHECK)")
 	flag.Parse()

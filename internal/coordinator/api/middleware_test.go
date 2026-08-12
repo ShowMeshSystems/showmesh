@@ -1,11 +1,12 @@
 package api
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
 func testAPI(t *testing.T, opts Options) *API {
@@ -102,86 +103,148 @@ func TestUnknownV1RouteIsResourceNotFound(t *testing.T) {
 	}
 }
 
-// --- Auth (contract section 6.8) ---
+// --- Auth (ADR-024; see auth_test.go for the shared real-identity.Service
+// scaffolding, and session_test.go/audit_test.go for the endpoint-level
+// coverage of login, sessions, and audit). This section covers what
+// middleware.go/auth.go own directly: read closure, and that the retired
+// ADR-021 shared-secret mechanism is actually gone. ---
 
-func TestAuthDisabledByDefault(t *testing.T) {
+// TestReadsOpenByDefault proves ADR-024 decision 2's carried-forward
+// ADR-021 posture: with no [Options.CloseReads] set (the zero value) and
+// no credential of any kind presented, a v1 read route still answers 200
+// — exactly the property every pre-Step-6 client depends on continuing to
+// work.
+func TestReadsOpenByDefault(t *testing.T) {
 	api := testAPI(t, Options{})
 	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 with no token configured; body: %s", resp.StatusCode, body)
+		t.Fatalf("status = %d, want 200 with reads open and no credential; body: %s", resp.StatusCode, body)
 	}
 }
 
-func TestAuthRejectsMissingToken(t *testing.T) {
-	api := testAPI(t, Options{AuthToken: "s3cret"})
-	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/", nil)
+// TestCloseReadsRejectsRequestWithNoCredential proves the other half:
+// [Options.CloseReads] true closes a real read route (not GET /api/v1/
+// or GET /api/v1/session, which stay open regardless — see readGuard's
+// doc comment) to a caller presenting nothing.
+func TestCloseReadsRejectsRequestWithNoCredential(t *testing.T) {
+	api := testAPI(t, Options{CloseReads: true})
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/nodes", nil)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, body)
-	}
-	if resp.Header.Get("WWW-Authenticate") != "Bearer" {
-		t.Errorf("WWW-Authenticate = %q, want \"Bearer\"", resp.Header.Get("WWW-Authenticate"))
 	}
 	m := decodeMap(t, body)
 	if m["type"] != ProblemTypeUnauthorized {
 		t.Errorf("type = %v, want %v", m["type"], ProblemTypeUnauthorized)
 	}
-	if strings.Contains(string(body), "s3cret") {
-		t.Fatalf("problem body leaks the configured token: %s", body)
+}
+
+// TestCloseReadsAcceptsValidBearerToken proves a real token (minted
+// through internal/coordinator/identity.Service, not a shared secret)
+// authenticates a closed-reads request holding the resource's scope.
+func TestCloseReadsAcceptsValidBearerToken(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
+	token := mustIssueToken(t, svc, p.ID)
+
+	api := New(authTestDeps(svc), Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/nodes", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with a valid token; body: %s", resp.StatusCode, body)
 	}
 }
 
-func TestAuthRejectsWrongToken(t *testing.T) {
-	api := testAPI(t, Options{AuthToken: "s3cret"})
-	resp, _ := doRequest(t, api.Handler, "GET", "/api/v1/", map[string]string{
-		"Authorization": "Bearer wrong-token",
+// TestCloseReadsRejectsWrongToken proves an invalid bearer value never
+// authenticates, unlike ADR-021's constant-string comparison this
+// replaces — this is now a real digest lookup against
+// internal/coordinator/identity's store, which the wrong value simply
+// does not match.
+func TestCloseReadsRejectsWrongToken(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
+	_ = mustIssueToken(t, svc, p.ID)
+
+	api := New(authTestDeps(svc), Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
+	resp, _ := doRequest(t, api.Handler, "GET", "/api/v1/nodes", map[string]string{
+		"Authorization": "Bearer " + identity.TokenPrefix + "wrong-value-entirely",
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 }
 
-func TestAuthAcceptsCorrectToken(t *testing.T) {
-	api := testAPI(t, Options{AuthToken: "s3cret"})
-	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/", map[string]string{
-		"Authorization": "Bearer s3cret",
-	})
+// TestCloseReadsEnforcedOnStreamEndpoint proves GET /api/v1/stream is not
+// a hole in read closure — it is gated by readGuardAll, exactly like
+// every other read route, per auth.go's readAllScopes.
+func TestCloseReadsEnforcedOnStreamEndpoint(t *testing.T) {
+	api := testAPI(t, Options{CloseReads: true})
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/stream", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 on /api/v1/stream with reads closed and no credential; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestGetSessionAlwaysOpenEvenWithClosedReads proves ADR-024 decision 5's
+// "being signed out is a persistent, readable state": GET /api/v1/session
+// answers 200 (never 401) with no credential, regardless of
+// [Options.CloseReads] — a client must be able to learn it is
+// unauthenticated without itself needing a credential to ask.
+func TestGetSessionAlwaysOpenEvenWithClosedReads(t *testing.T) {
+	api := testAPI(t, Options{CloseReads: true})
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/session", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
 	}
-}
-
-func TestAuthEnforcedOnStreamEndpoint(t *testing.T) {
-	api := testAPI(t, Options{AuthToken: "s3cret"})
-	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/stream", nil)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 on /api/v1/stream with no token; body: %s", resp.StatusCode, body)
+	m := decodeMap(t, body)
+	if m["authenticated"] != false {
+		t.Errorf("authenticated = %v, want false", m["authenticated"])
 	}
 }
 
-// TestAuthUsesConstantTimeCompare is the structural check Task D spec
-// section 7 asks for in preference to a flaky timing test ("assert subtle
-// is used, or test that response timing does not correlate with prefix
-// length if you can do it without flakiness; prefer the structural
-// check"). It does two things: proves crypto/subtle.ConstantTimeCompare
-// itself behaves as withAuth depends on (equal-vs-differing byte slices),
-// and inspects middleware.go's own source to confirm withAuth's
-// implementation actually calls it — a source-level structural fact a
-// wall-clock timing measurement could never prove as reliably, and would
-// only prove flakily.
-func TestAuthUsesConstantTimeCompare(t *testing.T) {
-	if subtle.ConstantTimeCompare([]byte("abc"), []byte("abc")) != 1 {
-		t.Fatalf("sanity check failed: ConstantTimeCompare(equal) != 1")
+// TestHealthzReadyzVersionOutsideThisPackage documents, rather than
+// tests (they are not routes this package registers at all — see doc.go
+// and internal/coordinator/httpapi), that /healthz, /readyz, and /version
+// are unreachable through api.New's mux under any path this package
+// controls: a request for any of them 404s through this package's own
+// catch-all exactly like any other unknown path, which is what proves
+// this package never re-implements or intercepts them. ADR-021 rule 3,
+// carried forward by ADR-024 decision 3, requires they stay OUTSIDE this
+// package's middleware entirely, mounted directly on the coordinator's
+// HTTP server by a different file this task does not own
+// (internal/coordinator/httpapi) — this test exists so a future change
+// that accidentally registers one of these three paths INSIDE this
+// package's mux is caught immediately, rather than only being noticed
+// when it collides with httpapi's own registration at wiring time.
+func TestHealthzReadyzVersionOutsideThisPackage(t *testing.T) {
+	api := testAPI(t, Options{CloseReads: true})
+	for _, path := range []string{"/healthz", "/readyz", "/version"} {
+		resp, body := doRequest(t, api.Handler, "GET", path, nil)
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("%s: this package's mux answered 200 for a path it must never register — internal/coordinator/httpapi owns these three; body: %s", path, body)
+		}
 	}
-	if subtle.ConstantTimeCompare([]byte("abc"), []byte("abz")) != 0 {
-		t.Fatalf("sanity check failed: ConstantTimeCompare(differing) != 0")
-	}
+}
 
-	src, err := os.ReadFile("middleware.go")
-	if err != nil {
-		t.Fatalf("reading middleware.go: %v", err)
-	}
-	if !strings.Contains(string(src), "subtle.ConstantTimeCompare") {
-		t.Fatalf("middleware.go no longer calls subtle.ConstantTimeCompare for the bearer token comparison")
+// TestSharedSecretMechanismIsRetired is a structural regression guard,
+// not a behavioral one: it proves the retired ADR-021 shared-secret
+// comparison (an AuthToken field, compared via subtle.ConstantTimeCompare
+// against every request) is actually gone from this package's source,
+// not merely unreachable. ADR-024 decision 2 requires
+// SHOWMESH_API_TOKEN's coordinator-side refusal-to-start check (a
+// wiring-layer concern outside this package — see this package's report);
+// what this package itself must never do is silently keep the old
+// comparison alive as dead code that a future edit could accidentally
+// re-wire.
+func TestSharedSecretMechanismIsRetired(t *testing.T) {
+	for _, name := range []string{"api.go", "middleware.go", "auth.go"} {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		if strings.Contains(string(src), "AuthToken") {
+			t.Fatalf("%s still references AuthToken — ADR-024 decision 2 retires the ADR-021 shared secret entirely", name)
+		}
 	}
 }
 
@@ -213,12 +276,61 @@ func TestCORSAllowsConfiguredOriginOnly(t *testing.T) {
 }
 
 func TestCORSPreflightDoesNotRequireAuth(t *testing.T) {
-	api := testAPI(t, Options{AuthToken: "s3cret", AllowedOrigins: []string{"https://ui.example.com"}})
+	api := testAPI(t, Options{CloseReads: true, AllowedOrigins: []string{"https://ui.example.com"}})
 	resp, body := doRequest(t, api.Handler, "OPTIONS", "/api/v1/nodes", map[string]string{
 		"Origin":                        "https://ui.example.com",
 		"Access-Control-Request-Method": "GET",
 	})
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204 for a CORS preflight, even with auth configured; body: %s", resp.StatusCode, body)
+		t.Fatalf("status = %d, want 204 for a CORS preflight, even with reads closed; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestCORSAdvertisesWriteMethods proves the fix to BUILD-PLAN Step 6's
+// first recorded implementation note: the CORS preflight response must
+// advertise POST and DELETE now that this package has write routes, not
+// only the pre-ADR-024 "GET, OPTIONS".
+func TestCORSAdvertisesWriteMethods(t *testing.T) {
+	api := testAPI(t, Options{AllowedOrigins: []string{"https://ui.example.com"}})
+	resp, _ := doRequest(t, api.Handler, "OPTIONS", "/api/v1/session", map[string]string{
+		"Origin":                        "https://ui.example.com",
+		"Access-Control-Request-Method": "POST",
+	})
+	allow := resp.Header.Get("Access-Control-Allow-Methods")
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		if !strings.Contains(allow, method) {
+			t.Errorf("Access-Control-Allow-Methods = %q, want it to contain %q", allow, method)
+		}
+	}
+}
+
+// TestCORSDoesNotExemptCookieWriteFromSameOrigin is ADR-024 decision 3's
+// interlock, proven directly: an allow-listed CORS origin on a
+// cookie-authenticated write must NOT bypass decision 6's Sec-Fetch-Site
+// requirement. This is the mutation-style check for the exact regression
+// this decision exists to name — an implementation that special-cased "if
+// Origin is in the CORS allow-list, skip the CSRF check" would pass every
+// other test in this file while failing only this one.
+func TestCORSDoesNotExemptCookieWriteFromSameOrigin(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	p := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+
+	api := New(authTestDeps(svc), Options{
+		AllowedOrigins: []string{"https://ui.example.com"},
+		Clock:          fixedClock(testNow), Logger: testLogger(),
+	})
+	cookie := loginAndGetCookie(t, api.Handler, p.Name, testPassword)
+
+	resp, body := doRequest(t, api.Handler, "DELETE", "/api/v1/session", map[string]string{
+		"Cookie": sessionCookieName + "=" + cookie,
+		"Origin": "https://ui.example.com", // allow-listed, and irrelevant to the check
+		// Sec-Fetch-Site deliberately omitted.
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (CSRF rejected) even with an allow-listed Origin; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	if m["type"] != ProblemTypeCSRFRejected {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeCSRFRejected)
 	}
 }

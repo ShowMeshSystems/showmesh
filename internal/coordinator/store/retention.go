@@ -37,18 +37,66 @@ const (
 	DefaultMaxEventRows int64 = 50_000
 )
 
+// DefaultMaxAuditAge and DefaultMaxAuditRows bound audit_log the same way
+// DefaultMaxEventAge/DefaultMaxEventRows bound events, when [Open] is
+// called with no [WithMaxAuditAge]/[WithMaxAuditRows] option.
+//
+// SHOWMESH HYPOTHESES, NOT DERIVED FROM ANY MEASUREMENT — labeled exactly
+// as DefaultMaxEventAge/DefaultMaxEventRows already are above, for the
+// identical reason: nothing has measured a real season's write-attempt
+// volume or how far back an operator investigating an incident actually
+// needs to look. Unlike event retention, though, ADR-024 decision 11 does
+// NOT leave this to RES-013: "audit retention is bounded before the first
+// write endpoint ships... because an unbounded table that gates commands
+// is a scheduled outage." That is why this bound exists at all in Step 6
+// rather than being deferred like event retention's tiers were — it is
+// not a claim that these particular numbers are right, only that some
+// finite bound must exist before decision 11's "a write that cannot be
+// attributed does not proceed" rule can be enforced safely.
+//
+// The two values differ from the event defaults on purpose. 180 days
+// (double DefaultMaxEventAge's 30) because an audit trail is read
+// retrospectively far less often but is exactly the record an operator
+// reaches for when something is disputed months later — "who changed the
+// schedule before the November show" — where an event history is read
+// day-to-day. 200,000 rows (four times DefaultMaxEventRows) because every
+// write attempt produces at least a dispatch entry and often a correlated
+// outcome or a replay too (ADR-024 decision 11), so the write volume
+// behind one row of "the operator did something" is structurally higher
+// than one event.
+const (
+	DefaultMaxAuditAge        = 180 * 24 * time.Hour
+	DefaultMaxAuditRows int64 = 200_000
+)
+
 // storeConfig holds every [Option]'s target. It exists only inside Open —
 // the resolved values it produces live on *Store (maxEventAge,
 // maxEventRows) — so a caller never sees storeConfig itself.
 type storeConfig struct {
 	maxEventAge  time.Duration
 	maxEventRows int64
+
+	// maxAuditAge and maxAuditRows are audit.go's equivalent bounds for
+	// audit_log, following the identical pattern for the identical reason
+	// (see DefaultMaxAuditAge/DefaultMaxAuditRows in audit.go); kept in
+	// this same storeConfig/Option machinery rather than a parallel one so
+	// [Open]'s call sites gain audit retention control the same way they
+	// already gained event retention control.
+	maxAuditAge  time.Duration
+	maxAuditRows int64
+
+	// clock overrides [Open]'s hardcoded time.Now, when set by [WithClock].
+	// nil (the default) leaves Open's existing time.Now behavior
+	// unchanged for every pre-Step-6 call site.
+	clock func() time.Time
 }
 
 func defaultConfig() storeConfig {
 	return storeConfig{
 		maxEventAge:  DefaultMaxEventAge,
 		maxEventRows: DefaultMaxEventRows,
+		maxAuditAge:  DefaultMaxAuditAge,
+		maxAuditRows: DefaultMaxAuditRows,
 	}
 }
 
@@ -82,6 +130,42 @@ func WithMaxEventRows(n int64) Option {
 			c.maxEventRows = n
 		}
 	}
+}
+
+// WithMaxAuditAge and WithMaxAuditRows override [DefaultMaxAuditAge] and
+// [DefaultMaxAuditRows] respectively, mirroring [WithMaxEventAge] and
+// [WithMaxEventRows] exactly, including the asymmetry (a non-positive
+// WithMaxAuditAge disables the age bound; a non-positive WithMaxAuditRows
+// is ignored) and its reasoning — see those two doc comments.
+func WithMaxAuditAge(d time.Duration) Option {
+	return func(c *storeConfig) { c.maxAuditAge = d }
+}
+
+func WithMaxAuditRows(n int64) Option {
+	return func(c *storeConfig) {
+		if n > 0 {
+			c.maxAuditRows = n
+		}
+	}
+}
+
+// WithClock overrides the clock [Open] uses for this package's own
+// bookkeeping timestamps (see [Store.now]'s doc comment for exactly which
+// columns that is and, just as importantly, which it is not — evidence
+// timestamps a caller supplies are never affected by this option). Every
+// pre-Step-6 call site left this unset and keeps using real time.Now
+// unchanged; this exists because the identity package (Step 6) needs a
+// single injected clock shared between its own domain logic and the rows
+// this package stamps on its behalf (principals.created_at,
+// principal_sessions.created_at/last_used_at, audit_log.recorded_at, and
+// so on), so a test can advance one fake clock and see both move together,
+// the same way store's own test suite already does internally via the
+// unexported open(...) helper's explicit now parameter — WithClock is
+// that same seam, made reachable through the public [Open] constructor
+// for the first time because identity is the first caller outside this
+// package that needs it.
+func WithClock(now func() time.Time) Option {
+	return func(c *storeConfig) { c.clock = now }
 }
 
 // pruneEveryNEvents is how many [Store.AppendEvent] calls elapse between

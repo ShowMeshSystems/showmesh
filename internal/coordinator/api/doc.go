@@ -5,10 +5,14 @@
 // internal/coordinator/httpapi's and stay outside the versioned contract
 // (contract section 6.1).
 //
-// This package is read-only, by construction and by review: it issues no
-// MQTT publish, mutates no FPP instance, and defines no PUT/POST/DELETE
-// route. Step 3 is read-only observability; a write endpoint belongs to a
-// later step with its own ADR, not to a quiet addition here.
+// This package issues no MQTT publish and mutates no FPP instance: no
+// show-affecting write exists here, and ADR-021 rule 5 continued to bar
+// one until ADR-024 lifted it. Step 6 adds exactly three non-GET routes —
+// POST and DELETE /api/v1/session, and no others — because authenticating
+// is not a show operation; see auth.go and session.go. Every other route
+// in this package remains GET-only, and the first actual show write
+// endpoint (show:macro:run, device:power, fpp:command, or config:write)
+// belongs to a later step, not to a quiet addition here.
 //
 // # Boundaries this package holds
 //
@@ -41,6 +45,22 @@
 // placeholder field that no code computes would be read by an operator as
 // a verdict). No metric history (observations are latest-only; see
 // pkg/observation and OBSERVABILITY's retention note). No alert model.
-// No write operations of any kind, including through the SSE stream, which
-// is strictly server-to-client (contract section 6.4).
+// The SSE stream itself remains strictly server-to-client (contract
+// section 6.4) — ADR-024 decision 5's periodic credential revalidation
+// closes a connection rather than sending it anything the client could
+// mistake for a command, and no write of any kind is reachable through
+// it.
+//
+// # ADR-024: identity, authorization, and audit
+//
+// [Dependencies.Identity] is internal/coordinator/identity.Service,
+// already built and not this package's to define (see that package's own
+// doc comment for the layering rule: identity imports store, api imports
+// identity, neither store nor identity may import api). This package owns
+// the HTTP-layer half of ADR-024: credential resolution (auth.go),
+// per-route scope enforcement and the CSRF rule (auth.go), the login cost
+// bound (loginlimiter.go), the three session routes (session.go), the
+// audit route (audit.go), and SSE stream revalidation (stream.go). It
+// does not own principal/session/token storage, password hashing, or the
+// audit trail's persistence — those are identity.Service's.
 package api

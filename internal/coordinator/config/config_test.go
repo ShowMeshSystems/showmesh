@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // lookupFrom builds a lookup function for LoadConfigFrom backed by an
@@ -429,13 +430,10 @@ func renderLogValue(t *testing.T, cfg Config) string {
 
 // --- Step 3 Task D: the versioned public control API (ADR-014) ---
 
-func TestLoadConfigAPITokenAndAllowedOriginsDefaults(t *testing.T) {
+func TestLoadConfigAPIAllowedOriginsDefaultsToNil(t *testing.T) {
 	cfg, err := LoadConfigFrom(lookupFrom(nil))
 	if err != nil {
 		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
-	}
-	if cfg.APIToken != "" {
-		t.Errorf("APIToken = %q, want empty when SHOWMESH_API_TOKEN is unset", cfg.APIToken)
 	}
 	if cfg.APIAllowedOrigins != nil {
 		t.Errorf("APIAllowedOrigins = %v, want nil when SHOWMESH_API_ALLOWED_ORIGINS is unset", cfg.APIAllowedOrigins)
@@ -458,42 +456,146 @@ func TestLoadConfigAPIAllowedOriginsSplitsAndTrims(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAPIToken(t *testing.T) {
-	env := map[string]string{"SHOWMESH_API_TOKEN": "top-secret-token"}
+// --- Step 6: ADR-024 decision 2 — SHOWMESH_API_TOKEN retirement ---
 
+// TestLoadConfigRefusesToStartWithAPITokenSet is BUILD-PLAN Step 6's own
+// acceptance criterion, at the config layer: "A coordinator started with
+// SHOWMESH_API_TOKEN still set refuses to start and names the migration."
+// This is deliberately a table across several non-empty values, not one
+// case, because "refuses to start" is the harshest of the three behaviors
+// ADR-024 decision 2 considered and rejecting it silently (by only testing
+// one string) would be exactly the kind of coin-flip test CLAUDE.md warns
+// against for a security-relevant refusal.
+func TestLoadConfigRefusesToStartWithAPITokenSet(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{"short token", "x"},
+		{"realistic-looking token", "top-secret-token"},
+		{"whitespace-only value", " "},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := map[string]string{"SHOWMESH_API_TOKEN": tt.value}
+			_, err := LoadConfigFrom(lookupFrom(env))
+			if err == nil {
+				t.Fatalf("LoadConfigFrom() error = nil, want a refusal naming the ADR-024 migration")
+			}
+			if !strings.Contains(err.Error(), "SHOWMESH_API_TOKEN") {
+				t.Errorf("error = %q, want it to name SHOWMESH_API_TOKEN", err.Error())
+			}
+			if !strings.Contains(err.Error(), "ADR-024") {
+				t.Errorf("error = %q, want it to name the ADR-024 migration", err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadConfigToleratesEmptySHOWMESHAPIToken proves the deliberate,
+// documented exception in checkAPITokenRetired: a present-but-EMPTY
+// SHOWMESH_API_TOKEN (a blank .env line, not a removed one) never had the
+// old "reads require a bearer token" meaning under ADR-021 in the first
+// place, so it must not trip the refusal — only a genuinely non-empty
+// value does.
+func TestLoadConfigToleratesEmptySHOWMESHAPIToken(t *testing.T) {
+	env := map[string]string{"SHOWMESH_API_TOKEN": ""}
+	if _, err := LoadConfigFrom(lookupFrom(env)); err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil for a present-but-empty SHOWMESH_API_TOKEN", err)
+	}
+}
+
+// --- Step 6: ADR-024 read-closure, secure-cookie, and login-limiter config ---
+
+func TestLoadConfigADR024FieldsDefaultToZeroValue(t *testing.T) {
+	cfg, err := LoadConfigFrom(lookupFrom(nil))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.CloseReads {
+		t.Errorf("CloseReads = true, want false (reads open) when SHOWMESH_API_CLOSE_READS is unset")
+	}
+	if cfg.SecureCookie {
+		t.Errorf("SecureCookie = true, want false when SHOWMESH_API_SECURE_COOKIE is unset")
+	}
+	if cfg.TrustClientAddr {
+		t.Errorf("TrustClientAddr = true, want false when SHOWMESH_API_TRUST_CLIENT_ADDR is unset")
+	}
+	if cfg.LoginConcurrency != 0 || cfg.LoginQueueWait != 0 || cfg.LoginPerSourceDelay != 0 || cfg.LoginMaxDelay != 0 {
+		t.Errorf("login limiter fields = %+v, want all zero (api.Options.withDefaults supplies the real defaults)", cfg)
+	}
+}
+
+func TestLoadConfigADR024FieldsFromEnv(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_API_CLOSE_READS":            "true",
+		"SHOWMESH_API_SECURE_COOKIE":          "true",
+		"SHOWMESH_API_TRUST_CLIENT_ADDR":      "true",
+		"SHOWMESH_API_LOGIN_CONCURRENCY":      "8",
+		"SHOWMESH_API_LOGIN_QUEUE_WAIT":       "3s",
+		"SHOWMESH_API_LOGIN_PER_SOURCE_DELAY": "500ms",
+		"SHOWMESH_API_LOGIN_MAX_DELAY":        "10s",
+	}
 	cfg, err := LoadConfigFrom(lookupFrom(env))
 	if err != nil {
 		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
 	}
-	if cfg.APIToken != "top-secret-token" {
-		t.Errorf("APIToken = %q, want %q", cfg.APIToken, "top-secret-token")
+	if !cfg.CloseReads {
+		t.Errorf("CloseReads = false, want true")
+	}
+	if !cfg.SecureCookie {
+		t.Errorf("SecureCookie = false, want true")
+	}
+	if !cfg.TrustClientAddr {
+		t.Errorf("TrustClientAddr = false, want true")
+	}
+	if cfg.LoginConcurrency != 8 {
+		t.Errorf("LoginConcurrency = %d, want 8", cfg.LoginConcurrency)
+	}
+	if cfg.LoginQueueWait != 3*time.Second {
+		t.Errorf("LoginQueueWait = %v, want 3s", cfg.LoginQueueWait)
+	}
+	if cfg.LoginPerSourceDelay != 500*time.Millisecond {
+		t.Errorf("LoginPerSourceDelay = %v, want 500ms", cfg.LoginPerSourceDelay)
+	}
+	if cfg.LoginMaxDelay != 10*time.Second {
+		t.Errorf("LoginMaxDelay = %v, want 10s", cfg.LoginMaxDelay)
 	}
 }
 
-// TestConfigLogValueRedactsAPIToken mirrors
-// TestConfigLogValueRedactsPassword: APIToken is exactly as sensitive as
-// MQTTPassword (contract section 6.8) and must go through the same
-// enforced-by-code redaction, not a doc comment's promise.
-func TestConfigLogValueRedactsAPIToken(t *testing.T) {
-	cfg := Config{APIToken: "s3cret-api-token-must-not-appear"}
-
-	rendered := renderLogValue(t, cfg)
-
-	if strings.Contains(rendered, cfg.APIToken) {
-		t.Fatalf("Config.LogValue() output contains the raw API token: %s", rendered)
+func TestLoadConfigADR024FieldsInvalidValuesAreErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantVar string
+	}{
+		{"invalid bool", map[string]string{"SHOWMESH_API_CLOSE_READS": "sorta"}, "SHOWMESH_API_CLOSE_READS"},
+		{"invalid int", map[string]string{"SHOWMESH_API_LOGIN_CONCURRENCY": "many"}, "SHOWMESH_API_LOGIN_CONCURRENCY"},
+		{"invalid duration", map[string]string{"SHOWMESH_API_LOGIN_QUEUE_WAIT": "a while"}, "SHOWMESH_API_LOGIN_QUEUE_WAIT"},
 	}
-	if !strings.Contains(rendered, redactedPassword) {
-		t.Errorf("Config.LogValue() output = %s, want it to contain the redaction placeholder %q", rendered, redactedPassword)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadConfigFrom(lookupFrom(tt.env))
+			if err == nil {
+				t.Fatalf("LoadConfigFrom() error = nil, want error mentioning %s", tt.wantVar)
+			}
+			if !strings.Contains(err.Error(), tt.wantVar) {
+				t.Errorf("LoadConfigFrom() error = %q, want it to mention %s", err.Error(), tt.wantVar)
+			}
+		})
 	}
 }
 
-func TestConfigLogValueEmptyAPIToken(t *testing.T) {
-	cfg := Config{APIToken: ""}
+// TestConfigLogValueDoesNotRedactADR024Fields proves the seven new fields
+// are NOT run through redactedPassword — none of them is a credential
+// (see each Config field's doc comment) — so a debugging operator can see
+// their effective values directly rather than a placeholder.
+func TestConfigLogValueDoesNotRedactADR024Fields(t *testing.T) {
+	cfg := Config{CloseReads: true, SecureCookie: true, TrustClientAddr: true, LoginConcurrency: 8}
 
 	rendered := renderLogValue(t, cfg)
 
-	if strings.Contains(rendered, redactedPassword) {
-		t.Errorf("Config.LogValue() output = %s, want no redaction placeholder when APIToken is unset", rendered)
+	if !strings.Contains(rendered, "api_close_reads") || !strings.Contains(rendered, "true") {
+		t.Errorf("Config.LogValue() output = %s, want api_close_reads:true visible, not redacted", rendered)
 	}
 }
 

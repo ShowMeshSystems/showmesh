@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 )
 
@@ -167,6 +169,142 @@ func TestBrokerManagerReadinessConnectedButStale(t *testing.T) {
 	}
 	if _, ok := report.Details["observedAgeSecs"]; ok {
 		t.Errorf("Details contains observedAgeSecs = %v, want it omitted now that ObservedAt is the single source of freshness", report.Details["observedAgeSecs"])
+	}
+}
+
+// TestIsAuthReasonCode mirrors internal/agent/mqtt_test.go's test of the
+// same name against this package's own copy of the classifier (see
+// isAuthReasonCode's doc comment for why there are two copies): every
+// reason code ADR-024 decision 10 treats as an authorization rejection
+// must classify true, and a merely-busy broker (a very different,
+// plausibly-transient condition) must not be conflated with one.
+func TestIsAuthReasonCode(t *testing.T) {
+	authCodes := []byte{
+		packets.ConnackBadUsernameOrPassword,
+		packets.ConnackNotAuthorized,
+		packets.ConnackBanned,
+		packets.ConnackBadAuthenticationMethod,
+	}
+	for _, code := range authCodes {
+		if !isAuthReasonCode(code) {
+			t.Errorf("isAuthReasonCode(0x%02X) = false, want true", code)
+		}
+	}
+
+	nonAuthCodes := []byte{packets.ConnackSuccess, packets.ConnackServerBusy, packets.ConnackUnspecifiedError}
+	for _, code := range nonAuthCodes {
+		if isAuthReasonCode(code) {
+			t.Errorf("isAuthReasonCode(0x%02X) = true, want false", code)
+		}
+	}
+}
+
+// TestClassifyConnectErrorDistinguishesRejectionFromTransportFailure is the
+// coordinator-side counterpart of the same-named test in
+// internal/agent/mqtt_test.go: a CONNACK authorization rejection classifies
+// as rejected with its reason code/string carried through, a non-auth
+// CONNACK failure and a bare transport error (which never produced a
+// CONNACK at all) both classify as not-rejected. Getting the transport case
+// backward would be the worse of the two mistakes — see that test's doc
+// comment for why.
+func TestClassifyConnectErrorDistinguishesRejectionFromTransportFailure(t *testing.T) {
+	t.Run("auth rejection", func(t *testing.T) {
+		err := &autopaho.ConnackError{ReasonCode: packets.ConnackNotAuthorized, Reason: "not authorized", Err: errors.New("connect failed")}
+		rejected, code, reason := classifyConnectError(err)
+		if !rejected {
+			t.Fatalf("rejected = false, want true")
+		}
+		if code != packets.ConnackNotAuthorized || reason != "not authorized" {
+			t.Errorf("code/reason = %d/%q, want %d/%q", code, reason, packets.ConnackNotAuthorized, "not authorized")
+		}
+	})
+
+	t.Run("non-auth connack", func(t *testing.T) {
+		err := &autopaho.ConnackError{ReasonCode: packets.ConnackServerBusy, Err: errors.New("connect failed")}
+		rejected, _, _ := classifyConnectError(err)
+		if rejected {
+			t.Errorf("rejected = true for ConnackServerBusy, want false")
+		}
+	})
+
+	t.Run("transport failure never reaches connack", func(t *testing.T) {
+		err := errors.New("dial tcp 10.0.1.5:1883: connect: connection refused")
+		rejected, code, reason := classifyConnectError(err)
+		if rejected {
+			t.Errorf("rejected = true for a plain transport error, want false")
+		}
+		if code != 0 || reason != "" {
+			t.Errorf("code/reason = %d/%q, want zero values when no CONNACK was ever received", code, reason)
+		}
+	})
+}
+
+// TestBrokerManagerSetRejectedMarksDisconnectedAndRejected proves setRejected
+// (called from OnConnectError on an auth-family CONNACK) records evidence
+// distinct from an ordinary "not connected" observation, and that a
+// subsequent successful connection (setConnected(true)) clears it — per
+// ADR-011, evidence must not outlive what it was based on.
+func TestBrokerManagerSetRejectedMarksDisconnectedAndRejected(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}
+	bm := newTestBrokerManager(clock)
+
+	bm.setRejected(packets.ConnackNotAuthorized, "not authorized")
+
+	state := bm.State()
+	if state.Connected {
+		t.Errorf("Connected = true after setRejected, want false")
+	}
+	if !state.Rejected {
+		t.Fatalf("Rejected = false after setRejected, want true")
+	}
+	if state.RejectReasonCode != packets.ConnackNotAuthorized {
+		t.Errorf("RejectReasonCode = %d, want %d", state.RejectReasonCode, packets.ConnackNotAuthorized)
+	}
+	if state.RejectReason != "not authorized" {
+		t.Errorf("RejectReason = %q, want %q", state.RejectReason, "not authorized")
+	}
+
+	// A later successful connection must clear the rejected evidence: it is
+	// no longer true, and stale evidence saying otherwise must not survive
+	// past the observation that superseded it.
+	clock.advance(5 * time.Second)
+	bm.setConnected(true)
+
+	afterConnect := bm.State()
+	if afterConnect.Rejected {
+		t.Errorf("Rejected = true after a subsequent successful connect, want false")
+	}
+	if afterConnect.RejectReasonCode != 0 || afterConnect.RejectReason != "" {
+		t.Errorf("RejectReasonCode/RejectReason = %d/%q after a successful connect, want zero values", afterConnect.RejectReasonCode, afterConnect.RejectReason)
+	}
+}
+
+// TestBrokerManagerReadinessRejectedDistinctFromNotConnected is the
+// Readiness-level assertion that ADR-024 decision 10's "surface it as
+// evidence distinct from an unreachable broker" requirement actually holds:
+// a rejected coordinator must report a different Reason (and a Details
+// entry an operator or a monitoring check can key off) than a merely
+// unreachable one, even though both are "not ready".
+func TestBrokerManagerReadinessRejectedDistinctFromNotConnected(t *testing.T) {
+	clock := &fakeClock{t: time.Now()}
+	bm := newTestBrokerManager(clock)
+	bm.setRejected(packets.ConnackNotAuthorized, "not authorized")
+
+	report := bm.Readiness()
+	if report.Ready {
+		t.Errorf("Ready = true, want false for a rejected connection")
+	}
+	if report.Reason != "mqtt broker rejected connection (not authorized)" {
+		t.Errorf("Reason = %q, want the distinct rejected-connection reason", report.Reason)
+	}
+	if report.Reason == "mqtt broker not connected" {
+		t.Fatalf("Reason equals the plain not-connected reason; a rejection must not be indistinguishable from an ordinary outage")
+	}
+	if report.Details["rejected"] != true {
+		t.Errorf("Details[rejected] = %v, want true", report.Details["rejected"])
+	}
+	if report.Details["rejectReasonCode"] != byte(packets.ConnackNotAuthorized) {
+		t.Errorf("Details[rejectReasonCode] = %v (%T), want %d", report.Details["rejectReasonCode"], report.Details["rejectReasonCode"], packets.ConnackNotAuthorized)
 	}
 }
 

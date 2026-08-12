@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/eclipse/paho.golang/paho"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 )
@@ -69,6 +72,31 @@ const (
 	// override, silently, because nothing before depended on the
 	// coordinator's own staleness computation happening quickly.
 	envStalenessOverride = "SHOWMESH_TEST_STALENESS_WINDOW"
+
+	// envTestMQTTCoordinatorUsername and envTestMQTTCoordinatorPassword name
+	// the broker credential scripts/test-integration.sh generates and seeds
+	// into the throwaway broker's password file before it ever starts (see
+	// that script's comment on why: mosquitto now refuses to start at all
+	// with allow_anonymous false and no password_file present — ADR-024
+	// decision 10). Every coordinator subprocess this package starts uses
+	// this credential by default; a test that specifically needs a WRONG
+	// credential (proving a rejection, not merely a successful connect)
+	// overrides it via coordinatorConfig's own mqttUsername/mqttPassword
+	// fields instead of touching these.
+	envTestMQTTCoordinatorUsername = "SHOWMESH_TEST_MQTT_COORDINATOR_USERNAME"
+	envTestMQTTCoordinatorPassword = "SHOWMESH_TEST_MQTT_COORDINATOR_PASSWORD"
+
+	// envTestMQTTBurstPublisherUsername and envTestMQTTBurstPublisherPassword
+	// name the dedicated, TEST-ONLY broker credential
+	// scripts/test-integration.sh provisions (with a matching TEST-ONLY
+	// acl.conf stanza appended to a copy of the real committed file — see
+	// that script's own comment) for api_test.go's publishHelloBurst. No
+	// credential provisioned for a real ADR-024 decision 10 principal class
+	// can do what that helper needs (publish hello for many distinct
+	// synthetic node IDs from one connection) — see the script's comment on
+	// why that is deliberate, not a gap.
+	envTestMQTTBurstPublisherUsername = "SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME"
+	envTestMQTTBurstPublisherPassword = "SHOWMESH_TEST_MQTT_BURST_PUBLISHER_PASSWORD"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -93,6 +121,25 @@ var (
 	// this suite deliberately never runs with.
 	testHeartbeatInterval time.Duration
 	testStalenessWindow   time.Duration
+
+	// testMQTTCoordinatorUsername and testMQTTCoordinatorPassword are read
+	// from envTestMQTTCoordinatorUsername/Password in TestMain — see those
+	// constants' doc comment. Empty when unset, which every test that
+	// starts a coordinator or an agent must treat as "this suite cannot
+	// authenticate to the broker" rather than silently connecting
+	// anonymously (the broker no longer allows that at all): see
+	// startCoordinatorWithConfig and startAgent, both of which fail t
+	// loudly rather than starting a subprocess that can only ever be
+	// rejected.
+	testMQTTCoordinatorUsername string
+	testMQTTCoordinatorPassword string
+
+	// testMQTTBurstPublisherUsername and testMQTTBurstPublisherPassword are
+	// read from envTestMQTTBurstPublisherUsername/Password in TestMain —
+	// see those constants' doc comment. Used only by api_test.go's
+	// publishHelloBurst.
+	testMQTTBurstPublisherUsername string
+	testMQTTBurstPublisherPassword string
 )
 
 func parseDurationEnv(key string, def time.Duration) time.Duration {
@@ -132,6 +179,11 @@ func TestMain(m *testing.M) {
 
 	testHeartbeatInterval = parseDurationEnv(envHeartbeatOverride, 10*time.Second)
 	testStalenessWindow = parseDurationEnv(envStalenessOverride, 30*time.Second)
+
+	testMQTTCoordinatorUsername = os.Getenv(envTestMQTTCoordinatorUsername)
+	testMQTTCoordinatorPassword = os.Getenv(envTestMQTTCoordinatorPassword)
+	testMQTTBurstPublisherUsername = os.Getenv(envTestMQTTBurstPublisherUsername)
+	testMQTTBurstPublisherPassword = os.Getenv(envTestMQTTBurstPublisherPassword)
 
 	brokerReachable = probeBroker(brokerURL, 2*time.Second)
 
@@ -298,6 +350,17 @@ type agentConfig struct {
 	nodeID       string
 	label        string
 	capabilities string
+
+	// mqttUsername and mqttPassword, when mqttUsername is non-empty,
+	// override startAgent's default behavior of provisioning a fresh,
+	// correct broker credential for nodeID via provisionAgentCredential.
+	// Used by broker_auth_test.go to start an agent with a wrong or
+	// unprovisioned credential and observe the ADR-024 decision 10
+	// rejection behavior, rather than a working connection. Every other
+	// caller in this package leaves these empty and gets a real,
+	// provisioned credential transparently — see startAgent.
+	mqttUsername string
+	mqttPassword string
 }
 
 // testAgent wraps one real showmesh-agent subprocess: a genuine OS process
@@ -321,11 +384,26 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	t.Helper()
 	requireBroker(t)
 
+	username, password := cfg.mqttUsername, cfg.mqttPassword
+	if username == "" {
+		// ADR-024 decision 10: the broker no longer allows anonymous
+		// connections at all, so every agent subprocess this package
+		// starts needs a real, working credential unless a test
+		// deliberately asked for a broken one (cfg.mqttUsername set — see
+		// agentConfig's doc comment). provisionAgentCredential adds it to
+		// the running broker's password file and confirms it is live
+		// before returning, so every existing test in this package that
+		// calls startAgent needs no changes of its own to keep working.
+		username, password = provisionAgentCredential(t, cfg.nodeID)
+	}
+
 	env := []string{
 		"PATH=" + os.Getenv("PATH"), // harmless if unused; costs nothing to include
 		"SHOWMESH_NODE_ID=" + cfg.nodeID,
 		"SHOWMESH_MQTT_BROKER=" + brokerURL,
 		"SHOWMESH_MQTT_CLIENT_ID=showmesh-agent-test-" + cfg.nodeID,
+		"SHOWMESH_MQTT_USERNAME=" + username,
+		"SHOWMESH_MQTT_PASSWORD=" + password,
 		"SHOWMESH_LOG_LEVEL=debug",
 	}
 	if raw := os.Getenv(envHeartbeatOverride); raw != "" {
@@ -493,6 +571,19 @@ type coordinatorConfig struct {
 	// 6.4's overflow-then-disconnect behavior deterministically with a
 	// small burst of real changes, rather than an implausibly large flood.
 	streamSubscriberBuffer int
+
+	// mqttUsername and mqttPassword override the package-level
+	// testMQTTCoordinatorUsername/Password (the working credential
+	// scripts/test-integration.sh seeds into the broker before it starts —
+	// see envTestMQTTCoordinatorUsername's doc comment) when mqttUsername
+	// is non-empty. Used by broker_auth_test.go to start a coordinator
+	// with a wrong credential and observe the ADR-024 decision 10
+	// rejection behavior (the coordinator must still start and stay up —
+	// this is deliverable 5's own acceptance test) rather than a
+	// successful connection. Every other caller leaves these empty and
+	// gets the suite's normal working credential.
+	mqttUsername string
+	mqttPassword string
 }
 
 // testCoordinator wraps one real showmesh-coordinator subprocess — a
@@ -551,11 +642,27 @@ func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordi
 		httpAddr = fmt.Sprintf("127.0.0.1:%d", findFreePort(t))
 	}
 
+	// ADR-024 decision 10: allow_anonymous is false, so a credential is
+	// mandatory, not optional, for every coordinator subprocess this
+	// package starts. cfg.mqttUsername overrides the suite's normal
+	// working credential (see coordinatorConfig's doc comment) for the
+	// one test that deliberately wants a rejection.
+	mqttUsername, mqttPassword := cfg.mqttUsername, cfg.mqttPassword
+	if mqttUsername == "" {
+		if testMQTTCoordinatorUsername == "" {
+			t.Fatalf("no MQTT broker credential available (%s is unset) — run via `make test-integration`, which provisions one, rather than `go test` directly against an ad hoc broker",
+				envTestMQTTCoordinatorUsername)
+		}
+		mqttUsername, mqttPassword = testMQTTCoordinatorUsername, testMQTTCoordinatorPassword
+	}
+
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"SHOWMESH_HTTP_ADDR=" + httpAddr,
 		"SHOWMESH_MQTT_BROKER=" + broker,
 		"SHOWMESH_MQTT_CLIENT_ID=" + cfg.clientID,
+		"SHOWMESH_MQTT_USERNAME=" + mqttUsername,
+		"SHOWMESH_MQTT_PASSWORD=" + mqttPassword,
 		"SHOWMESH_DATA_DIR=" + cfg.dataDir,
 		"SHOWMESH_LOG_LEVEL=debug",
 	}
@@ -805,6 +912,128 @@ func waitFor(t *testing.T, timeout, interval time.Duration, cond func() bool, ms
 		}
 		time.Sleep(interval)
 	}
+}
+
+// provisionMu serializes every call to provisionBrokerCredential: each one
+// runs `docker exec ... mosquitto_passwd -b ...` against the SAME password
+// file inside the broker container, which reads-modifies-writes the whole
+// file, so two concurrent invocations could race and lose an entry. This
+// package's tests do not currently call t.Parallel(), so this is
+// defense-in-depth against that changing later rather than a fix for an
+// observed race.
+var provisionMu sync.Mutex
+
+// provisionAgentCredential is provisionBrokerCredential for the common
+// case: a credential whose username equals the agent's own node id,
+// matching mosquitto/acl.conf's %u pattern rules (see that file's header
+// comment in the deploy/ bundle) — which is what makes an agent's own
+// credential authorize it for its own node's topics and nothing else.
+func provisionAgentCredential(t *testing.T, nodeID string) (username, password string) {
+	t.Helper()
+	return provisionBrokerCredential(t, nodeID)
+}
+
+// provisionBrokerCredential adds a broker credential for username to the
+// running Mosquitto test container's password file, reloads the broker via
+// SIGHUP so the addition takes effect (ADR-024 decision 10: Mosquitto only
+// re-reads passwd/acl.conf on SIGHUP), and confirms the credential is
+// actually usable before returning — via a real, throwaway MQTT CONNECT
+// (mqttCredentialWorks), not a fixed sleep — so callers never race the
+// reload. username need not be a valid ShowMesh node id: broker_auth_test.go
+// uses this directly (not through provisionAgentCredential) to provision
+// the "healthcheck" and "fpp" role usernames mosquitto/acl.conf grants
+// broader per-user access to, and to deliberately provision a credential
+// under one username while an agent subprocess is told to use a DIFFERENT
+// node id, to prove the ACL's per-node pattern rules actually bind
+// publish access to the authenticated username rather than to whatever
+// node id the client claims in its own topics.
+//
+// Requires envMosquittoContainer to be set, exactly like restartBroker:
+// `docker exec` needs a container to exec into, and
+// scripts/test-integration.sh (the `make test-integration` path) always
+// sets it. A developer running `go test -tags=integration` directly
+// against their own already-running broker, without going through that
+// script, gets a clear skip here rather than every agent-starting test
+// failing deep inside a subprocess launch.
+func provisionBrokerCredential(t *testing.T, username string) (gotUsername, password string) {
+	t.Helper()
+	if mosquittoContainer == "" {
+		t.Skipf(
+			"%s is not set, so this harness has no way to add a broker credential for %q (the broker now requires one — ADR-024 decision 10); "+
+				"run via `make test-integration` (which sets it), or export it yourself pointing at a running eclipse-mosquitto container whose password file you can `docker exec` into",
+			envMosquittoContainer, username)
+	}
+
+	provisionMu.Lock()
+	defer provisionMu.Unlock()
+
+	password = fmt.Sprintf("test-%s-%s", username, uniqueSuffix())
+
+	cmd := exec.Command("docker", "exec", mosquittoContainer,
+		"mosquitto_passwd", "-b", "/mosquitto/config/passwd", username, password)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("docker exec %s mosquitto_passwd -b ... %s: %v\n%s", mosquittoContainer, username, err, out)
+	}
+
+	reload := exec.Command("docker", "kill", "--signal=HUP", mosquittoContainer)
+	if out, err := reload.CombinedOutput(); err != nil {
+		t.Fatalf("docker kill --signal=HUP %s: %v\n%s", mosquittoContainer, err, out)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if mqttCredentialWorks(ctx, brokerURL, username, password) {
+			return username, password
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("credential for %q was added and the broker was reloaded, but never became usable within 5s", username)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// mqttCredentialWorks attempts one throwaway MQTT CONNECT against
+// brokerURL with username/password, and reports whether the broker
+// accepted it (CONNACK success). It speaks just enough MQTT to answer that
+// one question — no subscriptions, no publishes — and always disconnects
+// cleanly (or simply drops the TCP connection on failure), so it never
+// leaves a session behind for a later test to trip over. Used by
+// provisionAgentCredential to confirm a just-added credential is actually
+// live rather than assuming a fixed delay was enough.
+func mqttCredentialWorks(ctx context.Context, brokerURL, username, password string) bool {
+	u, err := url.Parse(brokerURL)
+	if err != nil {
+		return false
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(dialCtx, "tcp", u.Host)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+
+	cli := paho.NewClient(paho.ClientConfig{Conn: conn})
+	connCtx, cancelConn := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelConn()
+	ack, err := cli.Connect(connCtx, &paho.Connect{
+		ClientID:     "showmesh-test-credcheck-" + uniqueSuffix(),
+		UsernameFlag: true,
+		Username:     username,
+		PasswordFlag: true,
+		Password:     []byte(password),
+		KeepAlive:    30,
+		CleanStart:   true,
+	})
+	if err != nil || ack == nil || ack.ReasonCode != 0 {
+		return false
+	}
+	_ = cli.Disconnect(&paho.Disconnect{ReasonCode: 0})
+	return true
 }
 
 // restartBroker docker-restarts the Mosquitto container named by

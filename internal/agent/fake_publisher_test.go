@@ -1,17 +1,34 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
+
+	"github.com/eclipse/paho.golang/packets"
 )
 
 // discardLogger is a *slog.Logger that writes nowhere, for tests that need
 // a non-nil logger but do not assert on its output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// capturingLogger returns a *slog.Logger backed by an in-memory buffer, for
+// the ADR-024 decision 10 tests that assert a specific failure is logged
+// distinctly (level and message) from an ordinary transient one, rather
+// than merely "logged somehow" — a plain discardLogger cannot tell those
+// apart. The buffer's String() is safe to call only after the logger calls
+// that fill it have returned (no internal locking of its own), matching how
+// every caller in this package uses it: synchronously, right after the
+// call under test.
+func capturingLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
 }
 
 // recordedPublish captures one call to fakePublisher.Publish.
@@ -32,6 +49,15 @@ type fakePublisher struct {
 	mu     sync.Mutex
 	calls  []recordedPublish
 	failOn map[int]bool // zero-based call index -> whether that call should return an error
+
+	// rejectOn forces the given zero-based call index to fail with
+	// ErrPublishNotAuthorized instead of the generic simulated failure
+	// failOn produces — the ADR-024 decision 10 "ACL denial" shape (broker
+	// accepted the connection, discarded this one publish) that
+	// heartbeat.go's and advertise.go's distinct-logging paths key off of.
+	// Checked before failOn, so a call index need only be set in one map.
+	rejectOn map[int]bool
+
 	notify chan struct{}
 }
 
@@ -43,6 +69,7 @@ func (f *fakePublisher) Publish(_ context.Context, topic string, qos byte, retai
 	f.mu.Lock()
 	idx := len(f.calls)
 	fail := f.failOn[idx]
+	reject := f.rejectOn[idx]
 	f.calls = append(f.calls, recordedPublish{
 		topic:   topic,
 		qos:     qos,
@@ -53,6 +80,9 @@ func (f *fakePublisher) Publish(_ context.Context, topic string, qos byte, retai
 
 	f.notify <- struct{}{}
 
+	if reject {
+		return fmt.Errorf("%w: topic %q, reason code %d: simulated puback", ErrPublishNotAuthorized, topic, packets.PubackNotAuthorized)
+	}
 	if fail {
 		return errors.New("fakePublisher: simulated publish failure")
 	}

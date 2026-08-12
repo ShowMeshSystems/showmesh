@@ -89,10 +89,10 @@ func TestNodeByIDNotFound(t *testing.T) {
 // and [writeProblem] is the only thing that actually enforces it.
 func TestEveryProblemClassCarriesServerTime(t *testing.T) {
 	api := buildTestAPI(t)
-	tokenAPI := New(Dependencies{
+	closedReadsAPI := New(Dependencies{
 		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-	}, Options{AuthToken: "s3cret", Clock: fixedClock(testNow), Logger: testLogger()})
+	}, Options{CloseReads: true, Clock: fixedClock(testNow), Logger: testLogger()})
 
 	cases := []struct {
 		name    string
@@ -105,7 +105,7 @@ func TestEveryProblemClassCarriesServerTime(t *testing.T) {
 		{"invalid-parameter", api.Handler, "GET", "/api/v1/nodes/Not_Valid!", nil},
 		{"unsupported-api-version (header)", api.Handler, "GET", "/api/v1/", map[string]string{apiVersionHeaderName: "2"}},
 		{"unsupported-api-version (path)", api.Handler, "GET", "/api/v2/nodes", nil},
-		{"unauthorized", tokenAPI.Handler, "GET", "/api/v1/", nil},
+		{"unauthorized", closedReadsAPI.Handler, "GET", "/api/v1/nodes", nil},
 	}
 
 	for _, tc := range cases {

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +97,43 @@ func doRequest(t *testing.T, h http.Handler, method, target string, headers map[
 		t.Fatalf("reading response body: %v", err)
 	}
 	return resp, body
+}
+
+// newJSONRequest builds an httptest.NewRequest with an
+// "application/json" Content-Type and the given headers, for a test that
+// needs to POST/DELETE a JSON body — every doRequest call site sends no
+// body at all, which is not enough for the ADR-024 session endpoints.
+func newJSONRequest(t *testing.T, method, target, body string, headers map[string]string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return req
+}
+
+// doRawRequest is [doRequest] for a caller that already built its own
+// *http.Request (via [newJSONRequest]) rather than starting from a bare
+// method/target/headers triple.
+func doRawRequest(t *testing.T, h http.Handler, req *http.Request) (*http.Response, []byte) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	return resp, body
+}
+
+// slogTestLogger is [testLogger] but writing to buf instead of discarding,
+// for a test asserting on what does or (per ADR-021 rule 4/ADR-024) does
+// NOT appear in a log line — e.g. that a credential value never reaches
+// one.
+func slogTestLogger(buf *strings.Builder) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, nil))
 }
 
 // decodeMap decodes body into a generic map[string]any, the contract's

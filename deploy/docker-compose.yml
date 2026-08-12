@@ -16,15 +16,54 @@ services:
     restart: unless-stopped
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # acl.conf is committed (no secrets — see its own header comment for
+      # why). passwd is NOT committed and will not exist until you run
+      # ./mosquitto/generate-credentials.sh once from this directory
+      # (mosquitto.conf's own comment covers this; see also
+      # deploy/README.md). Both read-only: this service only ever needs to
+      # read them, and generate-credentials.sh /
+      # add-agent-credential.sh write to the host path directly rather
+      # than through this container.
+      - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-log:/mosquitto/log
     ports:
       - "${MOSQUITTO_PORT:-1883}:1883"
+    # No env_file here, deliberately, matching the reasoning already
+    # documented on the `ui` service below: env_file loads EVERY variable
+    # in .env into the container, not only the two this service needs, and
+    # that would hand this container the coordinator's own broker password
+    # (SHOWMESH_MQTT_PASSWORD) and any future secret .env grows for no
+    # reason. Naming exactly the two variables the healthcheck below needs
+    # keeps this container's own environment as small as what it actually
+    # uses.
+    environment:
+      MOSQUITTO_HEALTHCHECK_USERNAME: ${MOSQUITTO_HEALTHCHECK_USERNAME:-}
+      MOSQUITTO_HEALTHCHECK_PASSWORD: ${MOSQUITTO_HEALTHCHECK_PASSWORD:-}
     healthcheck:
-      # mosquitto_sub with a 1-second wait is the standard liveness probe
-      # for this image; it ships in the image so no extra tooling is
-      # needed. A failed connect exits non-zero.
-      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"]
+      # ADR-024 decision 10: allow_anonymous is now false, so an
+      # unauthenticated mosquitto_sub against $SYS/# fails twice over (no
+      # credential, and $SYS needs an explicit ACL grant the per-node
+      # pattern rules do not supply) — see acl.conf's "healthcheck
+      # principal" block for that grant and
+      # ./mosquitto/generate-credentials.sh for where this credential
+      # comes from.
+      #
+      # The credential is referenced here by VARIABLE NAME ($$VAR, a
+      # literal '$VAR' once Compose's own ${...} escaping is undone),
+      # never by VALUE: Compose does its own ${...} substitution on this
+      # YAML file at `docker compose` invocation time, so writing
+      # ${MOSQUITTO_HEALTHCHECK_PASSWORD} directly into this string would
+      # bake the plaintext password into Config.Healthcheck.Test — visible
+      # to `docker inspect` for as long as this container exists, exactly
+      # the exposure ADR-024 decision 10 names by name. Written this way,
+      # `docker inspect` shows only the variable's NAME in the command;
+      # the value is resolved from this container's own environment (set
+      # above) when the healthcheck actually runs, the same place
+      # SHOWMESH_MQTT_PASSWORD already lives for the coordinator service
+      # below without anyone treating that as a new exposure.
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -i healthcheck -u \"$$MOSQUITTO_HEALTHCHECK_USERNAME\" -P \"$$MOSQUITTO_HEALTHCHECK_PASSWORD\" -W 3 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
