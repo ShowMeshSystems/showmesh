@@ -732,8 +732,15 @@ func TestLoadConfigFPPMQTTTopicPrefixCustom(t *testing.T) {
 // FPPMQTTBrokerURL is set"). Before trusting this test, the behavior it
 // names was broken (the check made conditional on BrokerURL != "") and
 // confirmed to fail; see the Step 5 Seam B report for that verification.
+//
+// SHOWMESH_FPP_ENDPOINTS is set here (unlike this test's original form)
+// specifically so this stays a test of the broker-URL axis, not the
+// endpoints-empty-defers-to-the-store axis Step 7 seam A adds — see
+// [TestLoadConfigFPPMQTTHostsWithEmptyEndpointsDeferredNotRejected] below
+// for that one.
 func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	env := map[string]string{
+		"SHOWMESH_FPP_ENDPOINTS":  "main=http://192.168.133.159",
 		"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
 	}
 
@@ -743,6 +750,31 @@ func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SHOWMESH_FPP_MQTT_HOSTS") || !strings.Contains(err.Error(), "shed") {
 		t.Errorf("LoadConfigFrom() error = %q, want it to name SHOWMESH_FPP_MQTT_HOSTS and the unmatched id %q", err.Error(), "shed")
+	}
+}
+
+// TestLoadConfigFPPMQTTHostsWithEmptyEndpointsDeferredNotRejected is Step 7
+// seam A's own test: RES-008 D1 moves SHOWMESH_FPP_ENDPOINTS's authority
+// into the store, so a fully migrated deployment legitimately runs with
+// this variable unset while SHOWMESH_FPP_MQTT_HOSTS still names real
+// instance ids — ids this package cannot see from the environment alone.
+// validateFPPMQTTConfig must defer the cross-check rather than reject here
+// (see that function's doc comment and [config.ValidateFPPMQTTHostIDs],
+// which internal/coordinator's configsync.go calls against the resolved,
+// authoritative endpoint list instead). Before trusting this test, this
+// exact input was confirmed to return an error prior to that change.
+func TestLoadConfigFPPMQTTHostsWithEmptyEndpointsDeferredNotRejected(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
+	}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil: an empty SHOWMESH_FPP_ENDPOINTS must defer this cross-check "+
+			"to the coordinator's store-authoritative re-validation rather than reject here", err)
+	}
+	if len(cfg.FPPEndpoints) != 0 {
+		t.Fatalf("FPPEndpoints = %v, want empty", cfg.FPPEndpoints)
 	}
 }
 

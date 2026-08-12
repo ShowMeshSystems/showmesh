@@ -202,6 +202,8 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"FPPObservationsChangedEvent",
 		"SessionResponse", "AuditResponse", "AuditEntry",
 		"PrincipalSummary", "SessionInfo", "BootstrapRequest",
+		"ConfigFPPEndpoint", "ConfigFPPEndpointsPayload",
+		"FPPEndpointsConfigResponse", "ConfigRevisionMeta", "ConfigRevisionsResponse",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -270,6 +272,35 @@ func TestOpenAPIAuthenticatedResponsesMatchRealResponses(t *testing.T) {
 	token := mustIssueToken(t, svc, admin.ID)
 	_, auditBody := doRequest(t, api.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + token})
 	assertMatchesSchema(t, c, "AuditResponse", auditBody)
+}
+
+// TestOpenAPIConfigResponsesMatchRealResponses is Step 7 seam A's own
+// conformance test: PUT /config/fpp.endpoints' success body, GET
+// /config/fpp.endpoints' body, and GET /config/fpp.endpoints/revisions'
+// body, each validated against a REAL response from a real coordinator
+// wiring (not hand-built JSON) — BUILD-PLAN Step 7's "api/openapi.yaml
+// grows additively, stays conformance-tested in both directions."
+func TestOpenAPIConfigResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "FPPEndpointsConfigResponse", putBody)
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.endpoints", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "FPPEndpointsConfigResponse", getBody)
+
+	_, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.endpoints/revisions", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
 // TestOpenAPIBootstrapResponseMatchesRealResponse is this file's ADR-024

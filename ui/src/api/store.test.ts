@@ -2482,3 +2482,107 @@ describe('ApiStore: ADR-024 sessions', () => {
     expect(store.getSnapshot().session?.serverTime).toBe(newer)
   })
 })
+
+describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
+  const fppEndpointsConfigResponse = {
+    serverTime: new Date().toISOString(),
+    kind: 'fpp.endpoints',
+    revision: 1,
+    payload: { endpoints: [{ id: 'player-01', url: 'http://10.0.1.20' }] },
+    updatedAt: new Date().toISOString(),
+    createdByPrincipalId: 'p-1',
+    createdByPrincipalName: 'admin-1',
+    source: 'api',
+    restartRequired: true,
+    restartRequiredReason: 'this coordinator does not hot-reload configuration',
+  }
+
+  // None of these three methods needs store.connect() / the SSE read loop
+  // at all — see store.ts's "Step 7 seam A" section comment for why they
+  // are plain pass-throughs independent of Model — so every test below
+  // constructs a store and calls the method directly.
+
+  it('getFPPEndpointsConfig() returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, fppEndpointsConfigResponse)
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getFPPEndpointsConfig()
+
+    expect(gotPath).toBe('/config/fpp.endpoints')
+    expect(resp.revision).toBe(1)
+    expect(resp.payload.endpoints).toEqual([{ id: 'player-01', url: 'http://10.0.1.20' }])
+  })
+
+  it('getFPPEndpointsConfig() rejects with a typed error on 404 (nothing configured yet)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 404, makeProblem({
+        type: 'https://showmesh.dev/problems/resource-not-found', status: 404,
+        detail: 'no fpp.endpoints configuration has been created yet',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.getFPPEndpointsConfig()).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('putFPPEndpointsConfig() PUTs the payload and returns the new active revision', async () => {
+    let gotMethod = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        respondJson(res, 200, { ...fppEndpointsConfigResponse, revision: 2 })
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.putFPPEndpointsConfig({ endpoints: [{ id: 'shed', url: 'http://10.0.1.21' }] })
+
+    expect(gotMethod).toBe('PUT')
+    expect(JSON.parse(gotBody)).toEqual({ endpoints: [{ id: 'shed', url: 'http://10.0.1.21' }] })
+    expect(resp.revision).toBe(2)
+  })
+
+  it('putFPPEndpointsConfig() rejects with the coordinator’s validation error, not a fabricated success', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 400, makeProblem({
+        type: 'https://showmesh.dev/problems/invalid-parameter', status: 400,
+        detail: 'instance id "bad id" is not valid',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.putFPPEndpointsConfig({ endpoints: [{ id: 'bad id', url: 'http://x' }] }))
+      .rejects.toThrow('not valid')
+  })
+
+  it('getFPPEndpointsConfigRevisions() returns revision history', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        kind: 'fpp.endpoints',
+        revisions: [
+          { revision: 2, createdAt: new Date().toISOString(), createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: true },
+          { revision: 1, createdAt: new Date().toISOString(), createdByPrincipalId: null, createdByPrincipalName: null, source: 'env_migration', note: 'migrated', active: false },
+        ],
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getFPPEndpointsConfigRevisions()
+
+    expect(gotPath).toBe('/config/fpp.endpoints/revisions')
+    expect(resp.revisions).toHaveLength(2)
+    expect(resp.revisions[0]?.active).toBe(true)
+    expect(resp.revisions[1]?.createdByPrincipalName).toBeNull()
+  })
+})

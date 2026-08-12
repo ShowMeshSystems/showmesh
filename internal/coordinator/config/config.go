@@ -158,12 +158,20 @@ type Config struct {
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
 // collector to poll, parsed from one "id=url" pair in
 // SHOWMESH_FPP_ENDPOINTS.
+// Step 7 seam A (RES-008 D1): ID and URL carry JSON tags because this type
+// is now ALSO config_revisions.payload_json's decoded shape for the
+// fpp.endpoints configuration kind (see fppendpoints.go), not only an
+// env-var-parsed value — a config revision's payload and
+// SHOWMESH_FPP_ENDPOINTS's parsed shape are the same (id, url) pairs by
+// design (that identity is what makes the env->store migration a straight
+// copy, not a translation), so this struct is reused rather than declaring
+// a second, payload-only type that could drift from it.
 type FPPEndpoint struct {
 	// ID identifies this instance on the wire and in logs. Same syntax as
 	// an agent node ID (Step 3 contract section 7): validated with
 	// [mqttproto.ValidateNodeID] rather than a second, possibly-drifting
 	// copy of that regexp.
-	ID string
+	ID string `json:"id"`
 
 	// URL is the base URL of this FPP's HTTP API, e.g. "http://10.0.1.20".
 	// Validate rejects a URL carrying userinfo (e.g.
@@ -175,7 +183,7 @@ type FPPEndpoint struct {
 	// rejecting it costs nothing real and closes the leak at its only
 	// entry point instead of relying on every downstream consumer to
 	// remember to scrub it.
-	URL string
+	URL string `json:"url"`
 }
 
 const (
@@ -620,6 +628,20 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// ValidateFPPEndpoints is [validateFPPEndpoints] exported for Step 7 seam
+// A's config:write surface (internal/coordinator/api's PUT
+// /api/v1/config/fpp.endpoints and the startup env->store migration in
+// internal/coordinator's configsync.go): ADR-009 requires invalid
+// configuration be rejected before activation, and the BUILD-PLAN Step 7
+// spec requires reusing this package's existing validation rather than
+// writing a second one that could drift from what SHOWMESH_FPP_ENDPOINTS
+// itself enforces at config-load time. Every rule below — id syntax, URL
+// scheme/host, no userinfo, no duplicate ids — applies identically whether
+// the list came from the environment or from an API request body.
+func ValidateFPPEndpoints(endpoints []FPPEndpoint) error {
+	return validateFPPEndpoints(endpoints)
+}
+
 // validateFPPEndpoints enforces the semantic rules a structural
 // parseFPPEndpoints pair must additionally satisfy: a valid node-ID-syntax
 // id (contract section 7), a URL with an http/https scheme and a host, no
@@ -761,16 +783,51 @@ func validateFPPMQTTConfig(c Config) error {
 		return nil
 	}
 
-	knownFPPEndpoints := make(map[string]bool, len(c.FPPEndpoints))
-	for _, ep := range c.FPPEndpoints {
-		knownFPPEndpoints[ep.ID] = true
-	}
-	for id := range c.FPPMQTTHosts {
-		if !knownFPPEndpoints[id] {
-			return fmt.Errorf("%s: instance id %q is not configured in %s", envFPPMQTTHosts, id, envFPPEndpoints)
-		}
+	// Step 7 seam A (RES-008 D1): once SHOWMESH_FPP_ENDPOINTS is empty, the
+	// true endpoint list may be store-authoritative rather than absent —
+	// an operator who followed the migration warning and removed the
+	// variable from .env still has FPPMQTTHosts referencing real instance
+	// ids, just ones this package cannot see at config-load time (it has
+	// no store access). Rejecting here would make a fully-migrated,
+	// correctly-configured deployment fail to start. The cross-check is
+	// NOT skipped, only deferred: internal/coordinator's startup sequence
+	// re-runs [ValidateFPPMQTTHostIDs] against the resolved,
+	// authoritative endpoint list (store or env, whichever the disagreement
+	// rule settles on) before constructing any collector — see that
+	// package's configsync.go — so "must not silently stop running" (this
+	// step's spec) still holds; it just cannot run from inside this
+	// function once the endpoint list has genuinely left the environment.
+	//
+	// When FPPEndpoints is non-empty (env still carries the list, migrated
+	// or not), the check below still runs here exactly as before — this
+	// only widens the empty-FPPEndpoints case, it does not weaken the
+	// common one.
+	if len(c.FPPEndpoints) == 0 {
+		return nil
 	}
 
+	return ValidateFPPMQTTHostIDs(c.FPPMQTTHosts, c.FPPEndpoints)
+}
+
+// ValidateFPPMQTTHostIDs checks that every id in hosts also appears in
+// endpoints — contract section 4.4's cross-check ("every id in
+// SHOWMESH_FPP_MQTT_HOSTS must also appear in SHOWMESH_FPP_ENDPOINTS;
+// reject the configuration ... with a message naming the unmatched ID"),
+// factored out so [validateFPPMQTTConfig] (against the env-parsed list at
+// config-load time) and internal/coordinator's post-startup re-validation
+// against the store-authoritative list (Step 7 seam A, RES-008 D1 — see
+// that package's configsync.go) run the IDENTICAL rule rather than two
+// copies that could silently drift apart from each other.
+func ValidateFPPMQTTHostIDs(hosts map[string]string, endpoints []FPPEndpoint) error {
+	known := make(map[string]bool, len(endpoints))
+	for _, ep := range endpoints {
+		known[ep.ID] = true
+	}
+	for id := range hosts {
+		if !known[id] {
+			return fmt.Errorf("%s: instance id %q is not configured in %s (nor in the store-authoritative fpp.endpoints configuration, if migrated)", envFPPMQTTHosts, id, envFPPEndpoints)
+		}
+	}
 	return nil
 }
 

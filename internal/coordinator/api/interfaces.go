@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -180,4 +181,33 @@ type CollectorState struct {
 // (not the resources they observe) for GET /api/v1/snapshot.
 type CollectorStatusLister interface {
 	CollectorStatuses(ctx context.Context) ([]CollectorState, error)
+}
+
+// ConfigStore is the read half of the configuration write surface (Step 7
+// seam A, RES-008 D1, ADR-009): a config object's current active-revision
+// pointer, one immutable revision's full row, and the complete revision
+// history for one (kind, id). Declared here against
+// internal/coordinator/store's own record types directly, matching this
+// package's existing precedent for a dependency this package does not own
+// production wiring of but that is cheap to type-check against exactly
+// (audit.go's defaultAuditLimit/maxAuditLimit and mapping.go's
+// store.HelloRecord/store.LWTRecord/store.HealthRecord already do this) —
+// *store.Store's own [store.Store.GetConfigObject]/[store.Store.GetConfigRevision]/
+// [store.Store.ListConfigRevisions] methods already satisfy this interface
+// with no adapter needed, unlike NodeLister/FPPLister/EventReader above,
+// which exist specifically so this package need not import a producer
+// package that did not exist yet when THEY were declared.
+//
+// The WRITE half (creating and activating a revision) is deliberately NOT
+// a method here: it is composed directly against a live [store.Tx] inside
+// [identity.Service.AuditedWrite]'s closure (see config.go in this
+// package), because ADR-024 decision 11's same-transaction rule requires
+// exactly that transaction boundary — a ConfigStore.PutFPPEndpoints-shaped
+// method would have to either open its own transaction (defeating the
+// rule this seam exists to prove) or leak store.Tx through this interface
+// anyway, so there is nothing a narrower write method would add.
+type ConfigStore interface {
+	GetConfigObject(ctx context.Context, kind, id string) (store.ConfigObjectRecord, error)
+	GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error)
+	ListConfigRevisions(ctx context.Context, kind, id string) ([]store.ConfigRevisionRecord, error)
 }

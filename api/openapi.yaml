@@ -765,6 +765,125 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/fpp.endpoints:
+    get:
+      operationId: getFPPEndpointsConfig
+      summary: The active fpp.endpoints configuration (Step 7 seam A, RES-008 D1)
+      description: >-
+        Always requires `config:write` — there is no `config:read` scope
+        (ADR-024 decision 4 fixes exactly four read scopes, and this
+        surface is a new, always-sensitive one exactly like `GET /audit`,
+        not one of the four the open-reads posture covers). `404` when no
+        revision has ever been activated. `restartRequired` is always
+        `true`: this coordinator does not hot-reload configuration, so a
+        change here takes effect on the coordinator's next restart, never
+        immediately — see `restartRequiredReason`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPEndpointsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putFPPEndpointsConfig
+      summary: Write a new fpp.endpoints configuration revision (Step 7 seam A, RES-008 D1)
+      description: >-
+        Requires `config:write` (admin only). Validates the request body
+        (instance id syntax, URL scheme/host, no userinfo, no duplicate
+        ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is
+        checked against at coordinator startup) BEFORE activation
+        (ADR-009): a rejected write appends no revision. On success,
+        appends a new immutable revision and activates it in the SAME
+        transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule for `config:write`) — with the audit store
+        failing, the write is refused and no revision is created. A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigFPPEndpointsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPEndpointsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see
+            `components.responses.Forbidden` and
+            `components.responses.CSRFRejected`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/fpp.endpoints/revisions:
+    get:
+      operationId: listFPPEndpointsConfigRevisions
+      summary: fpp.endpoints revision history, newest first (Step 7 seam A, RES-008 D1)
+      description: >-
+        Always requires `config:write`, exactly like `GET
+        /config/fpp.endpoints`. Metadata only — no payload — per revision:
+        ADR-009 requires revisions stay immutable and available, and this
+        endpoint is for browsing that history, not for rollback tooling
+        (deliberately out of scope — RES-008 section 10). An object that
+        has never been created returns `200` with an empty `revisions`
+        array, unlike `GET /config/fpp.endpoints`'s `404` for the same
+        case: "no history yet" is not an absent resource the way "no
+        active configuration" is.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -1585,6 +1704,111 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AuditEntry"
+    ConfigFPPEndpoint:
+      type: object
+      description: >-
+        One FPP instance's (id, url) pair (RES-008 D1) — the same shape
+        `SHOWMESH_FPP_ENDPOINTS` carries.
+      required: [id, url]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+    ConfigFPPEndpointsPayload:
+      type: object
+      description: >-
+        The "fpp.endpoints" configuration kind's payload: the body PUT
+        /config/fpp.endpoints accepts, and the "payload" member of GET
+        /config/fpp.endpoints' response. endpoints is never null — an
+        empty configured-endpoints list is a real, valid state.
+      required: [endpoints]
+      properties:
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigFPPEndpoint"
+    FPPEndpointsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/fpp.endpoints. createdByPrincipalId
+        and createdByPrincipalName are null for the one revision the
+        startup env->store migration creates (source "env_migration"): a
+        startup migration has no principal. restartRequired is always
+        true; restartRequiredReason states why (this coordinator does not
+        hot-reload configuration).
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source,
+         restartRequired, restartRequiredReason]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: fpp.endpoints
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigFPPEndpointsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api, env_migration]
+        restartRequired:
+          type: boolean
+          const: true
+        restartRequiredReason:
+          type: string
+    ConfigRevisionMeta:
+      type: object
+      description: >-
+        One element of ConfigRevisionsResponse.revisions: a config
+        revision's metadata, WITHOUT its payload. createdByPrincipalId and
+        createdByPrincipalName are null for a revision created by the
+        startup env->store migration (source "env_migration").
+      required:
+        [revision, createdAt, createdByPrincipalId, createdByPrincipalName,
+         source, note, active]
+      properties:
+        revision:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api, env_migration]
+        note:
+          type: string
+        active:
+          type: boolean
+    ConfigRevisionsResponse:
+      type: object
+      description: The body of GET /config/fpp.endpoints/revisions, newest first.
+      required: [serverTime, kind, revisions]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          const: fpp.endpoints
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigRevisionMeta"
     Problem:
       type: object
       description: >-

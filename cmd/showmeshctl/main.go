@@ -48,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSession(rest, stdout, stderr, clock)
 	case "audit":
 		return cmdAudit(rest, stdout, stderr, clock)
+	case "config":
+		return cmdConfig(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -63,10 +65,11 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 // help` alone is enough to use this tool without reading source.
 func printTopLevelUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `showmeshctl is the non-UI client for a ShowMesh coordinator's public
-control API (ADR-014). It is read-only: there is no write or command
-subcommand, matching the API it talks to. Since ADR-024, reads and the
-audit log are gated by an authenticated principal's scopes rather than by
-one shared secret — see --token below and "showmeshctl session --help".
+control API (ADR-014). Almost every command is read-only; "config set"
+(Step 7 seam A) is this CLI's first and, as of this build, only write —
+see "showmeshctl config --help". Since ADR-024, reads and the audit log
+are gated by an authenticated principal's scopes rather than by one shared
+secret — see --token below and "showmeshctl session --help".
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -80,6 +83,9 @@ Commands:
   watch             fetch the snapshot, then stream live changes
   session           show the current principal, role, and effective scopes
   audit             show the audit log (requires the audit:read scope)
+  config            read or write the fpp.endpoints configuration
+                    (requires config:write, admin only; "config set" is
+                    this CLI's one write subcommand)
   version           show this CLI's and the coordinator's version and API negotiation
   help              show this help
 

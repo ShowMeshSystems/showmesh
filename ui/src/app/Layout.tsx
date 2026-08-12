@@ -12,16 +12,17 @@ export interface LayoutProps {
 
 /**
  * Navigation is grouped by the OPERATOR-UI section 8 information
- * architecture: Monitor, Control, Configure. Only Monitor exists today,
- * and only Monitor is rendered.
+ * architecture: Monitor, Control, Configure.
  *
- * Control and Configure are deliberately NOT rendered as empty or
- * disabled groups. This is the same rule the dashboard follows for
- * subsystems the coordinator does not model: a visible-but-empty group
- * asserts that the section exists and currently has nothing in it, which
- * is a false statement about a system that has no write operations at
- * all (ADR-021 rule 5 bars the first write endpoint). They appear when
- * the behaviour behind them does.
+ * Configure now exists: Step 7 seam A ships this application's first
+ * configuration write surface (RES-008 D1). Control remains deliberately
+ * NOT rendered as an empty or disabled group — this is the same rule the
+ * dashboard follows for subsystems the coordinator does not model: a
+ * visible-but-empty group asserts that the section exists and currently
+ * has nothing in it, which is a false statement about a system whose
+ * FIRST device/show command (seam C) had not landed when this comment was
+ * written. It appears when the behaviour behind it does, the same way
+ * Configure just did.
  */
 const NAV_GROUPS: Array<{
   heading: string
@@ -36,6 +37,10 @@ const NAV_GROUPS: Array<{
       { to: '/capabilities', label: 'Capabilities', end: false },
       { to: '/events', label: 'Events', end: false },
     ],
+  },
+  {
+    heading: 'Configure',
+    items: [{ to: '/config', label: 'FPP endpoints', end: false }],
   },
 ]
 

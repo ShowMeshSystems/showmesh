@@ -10,6 +10,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -40,6 +41,17 @@ type Dependencies struct {
 	// GET /api/v1/audit do anything other than always answer 401/403 —
 	// see auth.go's noIdentityService doc comment.
 	Identity identity.Service
+
+	// Config is Step 7 seam A's read half of the configuration write
+	// surface (RES-008 D1) — see [ConfigStore]'s doc comment for why the
+	// write half is composed against Identity.AuditedWrite instead of a
+	// method here. A nil field is replaced by [noConfigStore], under which
+	// every config read reports [store.ErrConfigObjectNotFound] — the
+	// identical "no revision has ever been activated" answer a real,
+	// freshly-migrated *store.Store gives, so a coordinator that has not
+	// wired this in renders the honest "nothing configured yet" state
+	// rather than a 500.
+	Config ConfigStore
 }
 
 // withDefaults returns d with every nil field replaced by a no-op
@@ -62,6 +74,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
+	}
+	if d.Config == nil {
+		d.Config = noConfigStore{}
 	}
 	return d
 }
@@ -95,6 +110,26 @@ func (noEventReader) OldestEventSeq(context.Context) (uint64, bool, error) {
 type noCollectorStatusLister struct{}
 
 func (noCollectorStatusLister) CollectorStatuses(context.Context) ([]CollectorState, error) {
+	return nil, nil
+}
+
+// noConfigStore is [Dependencies.Config]'s nil-safe default. Every method
+// returns [store.ErrConfigObjectNotFound] (GetConfigObject/GetConfigRevision)
+// or an empty, successful list (ListConfigRevisions) — never a fabricated
+// object — matching this package's standing "a dependency nobody has wired
+// in yet is not this API failing" posture (see [Dependencies.withDefaults]'s
+// doc comment).
+type noConfigStore struct{}
+
+func (noConfigStore) GetConfigObject(context.Context, string, string) (store.ConfigObjectRecord, error) {
+	return store.ConfigObjectRecord{}, store.ErrConfigObjectNotFound
+}
+
+func (noConfigStore) GetConfigRevision(context.Context, string, string, int64) (store.ConfigRevisionRecord, error) {
+	return store.ConfigRevisionRecord{}, store.ErrConfigRevisionNotFound
+}
+
+func (noConfigStore) ListConfigRevisions(context.Context, string, string) ([]store.ConfigRevisionRecord, error) {
 	return nil, nil
 }
 
@@ -368,6 +403,23 @@ func New(deps Dependencies, opts Options) *API {
 	// resources [Options.CloseReads] toggles, and ADR-024 decision 4
 	// grants audit:read to admin only.
 	mux.HandleFunc("GET /api/v1/audit", h.requireScope(identity.ScopeAuditRead, h.handleAudit))
+
+	// GET/PUT /api/v1/config/fpp.endpoints and its revisions list (Step 7
+	// seam A, RES-008 D1). Every one of these three routes — including
+	// both GETs — requires config:write and is NEVER open under
+	// [Options.CloseReads]: ADR-024 decision 4 defines no config:read
+	// scope, so a read here uses requireScope exactly the way GET
+	// /api/v1/audit already does for the identical reason (a new,
+	// always-sensitive surface, not one of the four pre-existing read
+	// resources the open-reads posture covers) — see config.go's own doc
+	// comment for the fuller reasoning this step's spec asks be recorded
+	// in code, not only here. The PUT is additionally gated by
+	// [handlers.writeGuard]'s CSRF check (decision 6) and fails closed on
+	// its own audit write (decision 11) via [identity.Service.AuditedWrite] —
+	// see handlePutFPPEndpointsConfig.
+	mux.HandleFunc("GET /api/v1/config/fpp.endpoints", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfig))
+	mux.HandleFunc("PUT /api/v1/config/fpp.endpoints", h.writeGuard(&scopeConfigWrite, h.handlePutFPPEndpointsConfig))
+	mux.HandleFunc("GET /api/v1/config/fpp.endpoints/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfigRevisions))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

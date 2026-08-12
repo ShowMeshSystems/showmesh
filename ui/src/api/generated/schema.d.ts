@@ -270,6 +270,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/fpp.endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active fpp.endpoints configuration (Step 7 seam A, RES-008 D1)
+         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated. `restartRequired` is always `true`: this coordinator does not hot-reload configuration, so a change here takes effect on the coordinator's next restart, never immediately — see `restartRequiredReason`.
+         */
+        get: operations["getFPPEndpointsConfig"];
+        /**
+         * Write a new fpp.endpoints configuration revision (Step 7 seam A, RES-008 D1)
+         * @description Requires `config:write` (admin only). Validates the request body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putFPPEndpointsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/fpp.endpoints/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * fpp.endpoints revision history, newest first (Step 7 seam A, RES-008 D1)
+         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints`. Metadata only — no payload — per revision: ADR-009 requires revisions stay immutable and available, and this endpoint is for browsing that history, not for rollback tooling (deliberately out of scope — RES-008 section 10). An object that has never been created returns `200` with an empty `revisions` array, unlike `GET /config/fpp.endpoints`'s `404` for the same case: "no history yet" is not an absent resource the way "no active configuration" is.
+         */
+        get: operations["listFPPEndpointsConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -539,6 +583,53 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             entries: components["schemas"]["AuditEntry"][];
+        };
+        /** @description One FPP instance's (id, url) pair (RES-008 D1) — the same shape `SHOWMESH_FPP_ENDPOINTS` carries. */
+        ConfigFPPEndpoint: {
+            id: string;
+            url: string;
+        };
+        /** @description The "fpp.endpoints" configuration kind's payload: the body PUT /config/fpp.endpoints accepts, and the "payload" member of GET /config/fpp.endpoints' response. endpoints is never null — an empty configured-endpoints list is a real, valid state. */
+        ConfigFPPEndpointsPayload: {
+            endpoints: components["schemas"]["ConfigFPPEndpoint"][];
+        };
+        /** @description The body of GET and PUT /config/fpp.endpoints. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always true; restartRequiredReason states why (this coordinator does not hot-reload configuration). */
+        FPPEndpointsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "fpp.endpoints";
+            revision: number;
+            payload: components["schemas"]["ConfigFPPEndpointsPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: true;
+            restartRequiredReason: string;
+        };
+        /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
+        ConfigRevisionMeta: {
+            revision: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            note: string;
+            active: boolean;
+        };
+        /** @description The body of GET /config/fpp.endpoints/revisions, newest first. */
+        ConfigRevisionsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "fpp.endpoints";
+            revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the eleven values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
@@ -1134,6 +1225,96 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPEndpointsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPEndpointsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFPPEndpointsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFPPEndpointsPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPEndpointsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listFPPEndpointsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];

@@ -77,6 +77,34 @@ describe('ApiClient.postJson', () => {
   })
 })
 
+describe('ApiClient.putJson', () => {
+  it('sends PUT with a JSON-encoded body and Content-Type, and returns the parsed response', async () => {
+    let recordedMethod = ''
+    let recordedContentType: string | undefined
+    let recordedBody = ''
+    const s = await server((req, res) => {
+      recordedMethod = req.method ?? ''
+      recordedContentType = req.headers['content-type']
+      void readBody(req).then((body) => {
+        recordedBody = body
+        respondJson(res, 200, { ok: true })
+      })
+    })
+    const client = new ApiClient(s.baseUrl)
+
+    const result = await client.putJson<{ ok: boolean }>(
+      '/config/fpp.endpoints',
+      { endpoints: [{ id: 'player-01', url: 'http://10.0.1.20' }] },
+      new AbortController().signal,
+    )
+
+    expect(recordedMethod).toBe('PUT')
+    expect(recordedContentType).toBe('application/json')
+    expect(JSON.parse(recordedBody)).toEqual({ endpoints: [{ id: 'player-01', url: 'http://10.0.1.20' }] })
+    expect(result).toEqual({ ok: true })
+  })
+})
+
 describe('ApiClient.deleteJson', () => {
   it('sends DELETE with no body and no Content-Type when body is omitted, and returns undefined on 204', async () => {
     let recordedMethod = ''

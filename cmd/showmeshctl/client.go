@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -138,6 +139,65 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 		return nil, err
 	}
 	return body, nil
+}
+
+// putJSON issues an authenticated PUT with a JSON body against apiPath —
+// this CLI's first write (Step 7 seam A: `showmeshctl config set`) — and
+// decodes a successful JSON response into out.
+//
+// No Sec-Fetch-Site handling here, and none is needed: ADR-024 decision
+// 6's same-origin CSRF check applies only to a request authenticated by
+// the SESSION COOKIE, and this client never holds or presents one — see
+// cmd_session.go's doc comment ("this CLI is bearer-only"). --token is
+// always sent as Authorization: Bearer (applyHeaders), which
+// [handlers.writeGuard]'s bearer exemption in the coordinator already
+// excuses from that check by construction (nothing attaches an
+// Authorization header to a request automatically the way a browser
+// attaches a cookie). An unauthenticated PUT (no --token/$SHOWMESH_CTL_TOKEN
+// set) still reaches the coordinator and gets back a real 401, exactly
+// like every other write path this program does not special-case.
+func (c *client) putJSON(ctx context.Context, apiPath string, body any, out any) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return newCLIError(exitUsage, "encoding request body: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.endpoint(apiPath, nil), bytes.NewReader(payload))
+	if err != nil {
+		return newCLIError(exitUsage, "building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.applyHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return classifyRequestError(c.baseURL.String(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Bounded read, identical posture to getRaw — see that method's doc
+	// comment for why.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return newCLIError(exitUnreachable, "reading response body: %v", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return newCLIError(exitAPIError, "%v (from %s)", errResponseTooLarge, c.endpoint(apiPath, nil))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return decodeProblemError(resp, respBody)
+	}
+	if err := c.checkAPIVersionHeader(resp); err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
+	}
+	return nil
 }
 
 // applyHeaders sets the headers common to every /api/v1 request: the

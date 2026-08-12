@@ -311,6 +311,64 @@ type auditResponse struct {
 	Entries    []auditEntry `json:"entries"`
 }
 
+// configFPPEndpoint is one element of configFPPEndpointsPayload.endpoints
+// (Step 7 seam A, RES-008 D1): the same (id, url) pair
+// SHOWMESH_FPP_ENDPOINTS carries.
+type configFPPEndpoint struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// configFPPEndpointsPayload is the "fpp.endpoints" configuration kind's
+// payload: the body PUT /api/v1/config/fpp.endpoints accepts, and the
+// "payload" member of GET /api/v1/config/fpp.endpoints' response.
+type configFPPEndpointsPayload struct {
+	Endpoints []configFPPEndpoint `json:"endpoints"`
+}
+
+// fppEndpointsConfigResponse is the body of GET and PUT
+// /api/v1/config/fpp.endpoints. createdByPrincipalId/createdByPrincipalName
+// are null for the one revision the coordinator's startup env->store
+// migration creates (source "env_migration") — a startup migration has no
+// principal. restartRequired is always true: this coordinator does not
+// hot-reload configuration, so a change here takes effect on the
+// coordinator's NEXT RESTART, never immediately.
+type fppEndpointsConfigResponse struct {
+	ServerTime             time.Time                 `json:"serverTime"`
+	Kind                   string                    `json:"kind"`
+	Revision               int64                     `json:"revision"`
+	Payload                configFPPEndpointsPayload `json:"payload"`
+	UpdatedAt              time.Time                 `json:"updatedAt"`
+	CreatedByPrincipalID   *string                   `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                   `json:"createdByPrincipalName"`
+	Source                 string                    `json:"source"`
+	RestartRequired        bool                      `json:"restartRequired"`
+	RestartRequiredReason  string                    `json:"restartRequiredReason"`
+}
+
+// configRevisionMeta is one element of configRevisionsResponse.revisions:
+// a config revision's metadata, without its payload (Step 7 seam A:
+// rollback tooling is deliberately out of scope, so this CLI has no way to
+// fetch a PAST revision's payload either, only the active one via
+// `showmeshctl config get`).
+type configRevisionMeta struct {
+	Revision               int64     `json:"revision"`
+	CreatedAt              time.Time `json:"createdAt"`
+	CreatedByPrincipalID   *string   `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string   `json:"createdByPrincipalName"`
+	Source                 string    `json:"source"`
+	Note                   string    `json:"note"`
+	Active                 bool      `json:"active"`
+}
+
+// configRevisionsResponse is the body of GET
+// /api/v1/config/fpp.endpoints/revisions: every revision, newest first.
+type configRevisionsResponse struct {
+	ServerTime time.Time            `json:"serverTime"`
+	Kind       string               `json:"kind"`
+	Revisions  []configRevisionMeta `json:"revisions"`
+}
+
 // Stream frame payloads (contract §6.4/§6.10). streamEnvelope is decoded
 // first, from the frame's "event:" line and raw "data:" bytes; the
 // concrete payload is then decoded from the same bytes by event type.

@@ -572,6 +572,86 @@ type AuditResponse struct {
 	Entries    []AuditEntry `json:"entries"`
 }
 
+// ConfigFPPEndpoint is one element of [ConfigFPPEndpointsPayload.Endpoints]:
+// one FPP instance's (id, url) pair, the same shape
+// SHOWMESH_FPP_ENDPOINTS carries (RES-008 D1). Kept as its own wire type
+// rather than reusing internal/coordinator/config.FPPEndpoint directly, for
+// the identical reason every other wire type in this package is kept
+// separate from its domain source — see this package's doc comment.
+type ConfigFPPEndpoint struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// ConfigFPPEndpointsPayload is the "fpp.endpoints" configuration kind's
+// decoded payload (Step 7 seam A, RES-008 D1): the body PUT
+// /config/fpp.endpoints accepts, and the "payload" member of GET
+// /config/fpp.endpoints' response. Endpoints is never null on the wire — an
+// empty configured-endpoints list is a real, valid state, not an absence.
+type ConfigFPPEndpointsPayload struct {
+	Endpoints []ConfigFPPEndpoint `json:"endpoints"`
+}
+
+// FPPEndpointsConfigResponse is the body of GET and PUT
+// /config/fpp.endpoints.
+//
+// RestartRequired is always true and RestartRequiredReason states why —
+// RES-008 section 10 records "restart-required for everything" as today's
+// true and stable answer; no configuration change in this coordinator
+// hot-reloads. This is carried on the wire, not left for a client to know
+// out of band, per this step's own spec: "a configuration surface that
+// silently does nothing until a restart nobody mentioned is the same
+// defect class as a control that renders enabled when it is not."
+//
+// CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
+// the startup env->store migration creates (Source
+// "env_migration"): a startup migration has no principal, and inventing
+// one to fill the field would misattribute it — see
+// internal/coordinator's configsync.go.
+type FPPEndpointsConfigResponse struct {
+	ServerTime             string                    `json:"serverTime"`
+	Kind                   string                    `json:"kind"`
+	Revision               int64                     `json:"revision"`
+	Payload                ConfigFPPEndpointsPayload `json:"payload"`
+	UpdatedAt              string                    `json:"updatedAt"`
+	CreatedByPrincipalID   *string                   `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                   `json:"createdByPrincipalName"`
+	Source                 string                    `json:"source"`
+	RestartRequired        bool                      `json:"restartRequired"`
+	RestartRequiredReason  string                    `json:"restartRequiredReason"`
+}
+
+// ConfigRevisionMeta is one element of [ConfigRevisionsResponse.Revisions]:
+// a config_revisions row's metadata, WITHOUT its payload — the revisions
+// list is for browsing history (which revision, when, by whom, from what
+// source), not for fetching one's full content; GET /config/fpp.endpoints
+// serves the active revision's payload, and revision immutability (ADR-009)
+// means any past revision's payload is recoverable later without this
+// endpoint needing to carry it now. See BUILD-PLAN Step 7 seam A: "rollback
+// tooling is deliberately out of scope... nothing you build may make
+// rollback harder to add later" — a metadata-only list is exactly that: it
+// documents history without committing this API to a shape a future
+// rollback endpoint would have to match.
+type ConfigRevisionMeta struct {
+	Revision               int64   `json:"revision"`
+	CreatedAt              string  `json:"createdAt"`
+	CreatedByPrincipalID   *string `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string `json:"createdByPrincipalName"`
+	Source                 string  `json:"source"`
+	Note                   string  `json:"note"`
+	Active                 bool    `json:"active"`
+}
+
+// ConfigRevisionsResponse is the body of GET
+// /config/fpp.endpoints/revisions: every revision, newest first (Kind's
+// history is never pruned — ADR-009 requires revisions stay immutable and
+// available).
+type ConfigRevisionsResponse struct {
+	ServerTime string               `json:"serverTime"`
+	Kind       string               `json:"kind"`
+	Revisions  []ConfigRevisionMeta `json:"revisions"`
+}
+
 // FPPObservationsChangedEvent is the payload of an
 // "fpp.observations.changed" SSE event (ADR-023), delivered only to a
 // connection that opted into delta frames via

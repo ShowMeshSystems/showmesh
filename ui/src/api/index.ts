@@ -7,12 +7,17 @@
 export type {
   Capability,
   CollectorStatus,
+  ConfigFPPEndpoint,
+  ConfigFPPEndpointsPayload,
+  ConfigRevisionMeta,
+  ConfigRevisionsResponse,
   ConnectionState,
   ControlPlane,
   Evidence,
   EvidenceState,
   Event,
   EventSeq,
+  FPPEndpointsConfigResponse,
   FPPInstance,
   Model,
   Node,
@@ -30,6 +35,9 @@ export {
   login,
   logout,
   claimBootstrap,
+  getFPPEndpointsConfig,
+  putFPPEndpointsConfig,
+  getFPPEndpointsConfigRevisions,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

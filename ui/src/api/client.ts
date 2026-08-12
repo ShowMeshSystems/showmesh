@@ -210,6 +210,20 @@ export class ApiClient {
   }
 
   /**
+   * `PUT` with a JSON body, expecting a JSON response — Step 7 seam A's
+   * `PUT /config/fpp.endpoints`, this application's first write endpoint
+   * besides the session/bootstrap pair above. No special Sec-Fetch-Site
+   * handling is needed here (ADR-024 decision 6): that header is set by
+   * the BROWSER itself on same-origin `fetch` calls, never something a
+   * script can set or needs to set — this method sends nothing beyond
+   * what `request()` already does for every other call.
+   */
+  async putJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
+    const response = await this.request(path, signal, { method: 'PUT', body })
+    return (await response.json()) as T
+  }
+
+  /**
    * `DELETE`, optionally with a JSON body — `DELETE /session`. Returns
    * `undefined` for a `204 No Content` (this route's success response,
    * api/openapi.yaml) rather than calling `response.json()` on an empty

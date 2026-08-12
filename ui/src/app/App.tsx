@@ -19,6 +19,7 @@ import { FPPList } from '../views/FPPList'
 import { FPPDetail } from '../views/FPPDetail'
 import { Capabilities } from '../views/Capabilities'
 import { Events } from '../views/Events'
+import { Configuration } from '../views/Configuration'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="fpp/:instanceId" element={<FPPDetail />} />
             <Route path="capabilities" element={<Capabilities />} />
             <Route path="events" element={<Events />} />
+            <Route path="config" element={<Configuration />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

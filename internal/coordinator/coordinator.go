@@ -100,6 +100,42 @@ func Run() int {
 	// directory the SQLite database above already lives in.
 	identitySvc := identity.NewService(st, time.Now, cfg.DataDir, identity.WithLogger(logger))
 
+	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
+	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE
+	// anything below reads cfg.FPPEndpoints — see configsync.go. From this
+	// point on, cfg.FPPEndpoints is overwritten with the AUTHORITATIVE
+	// list (the store's active configuration, or the freshly migrated
+	// environment value); nothing downstream — apiDeps, the FPP collector
+	// construction loop, the FPPMQTTHosts cross-check below — may read the
+	// raw env-parsed value again.
+	authoritativeFPPEndpoints, err := syncFPPEndpointsConfig(ctx, st, identitySvc, cfg.FPPEndpoints, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative fpp.endpoints configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+	cfg.FPPEndpoints = authoritativeFPPEndpoints
+	logger.Info("resolved authoritative fpp.endpoints configuration (RES-008 D1)",
+		"fpp_endpoint_count", len(cfg.FPPEndpoints))
+
+	// config.Config.Validate already cross-checked SHOWMESH_FPP_MQTT_HOSTS
+	// against cfg.FPPEndpoints as parsed from the ENVIRONMENT (deferred,
+	// not skipped, when that was empty — see
+	// internal/coordinator/config's validateFPPMQTTConfig doc comment).
+	// Now that cfg.FPPEndpoints is the store-authoritative list, which may
+	// differ in EXISTENCE (env unset, store populated) from what config.Validate
+	// saw, the identical rule is re-run here against the list this
+	// coordinator will actually use — this is the "must keep working
+	// against the store-sourced list ... and must not silently stop
+	// running" requirement from this seam's own spec, not a redundant
+	// check: it is the only place that requirement can be discharged once
+	// SHOWMESH_FPP_ENDPOINTS is no longer the source of truth.
+	if err := config.ValidateFPPMQTTHostIDs(cfg.FPPMQTTHosts, cfg.FPPEndpoints); err != nil {
+		logger.Error("SHOWMESH_FPP_MQTT_HOSTS no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
 	// hub is assigned below, once api.New has built it, but inv (which can
 	// start delivering MQTT messages the instant broker.NewBrokerManager
 	// begins connecting) needs a notify callback wired in before that
@@ -164,6 +200,11 @@ func Run() int {
 		// GET /api/v1/audit do anything other than always answer 401/403
 		// against api.noIdentityService's no-op default.
 		Identity: identitySvc,
+		// Config is Step 7 seam A's read half of the configuration write
+		// surface (RES-008 D1) — *store.Store already satisfies
+		// api.ConfigStore directly (see that interface's doc comment), no
+		// adapter needed, the same way Identity is wired directly above.
+		Config: st,
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		CloseReads:          cfg.CloseReads,

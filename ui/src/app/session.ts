@@ -61,13 +61,14 @@ export function describeSignInState(session: SessionResponse | null): SignInStat
 // ---------------------------------------------------------------------
 // Scope-driven controls (ADR-024 decision 12 / OPERATOR-UI section 14):
 // "a control the principal may not use is rendered disabled with a
-// stated reason rather than hidden." Step 6 adds no write endpoint of
-// its own (BUILD-PLAN Step 6), so nothing in this application calls
-// evaluateScope yet — it exists, and is tested, as the mechanism the
-// first real write control (a future step) wires a button to, the same
-// way Layout.tsx's "Control"/"Configure" nav groups exist in the
-// information architecture without being rendered until something real
-// lives in them.
+// stated reason rather than hidden." Step 6 shipped this with no caller,
+// since it added no write endpoint of its own (BUILD-PLAN Step 6). Step 7
+// seam A is the first real caller: views/Configuration.tsx gates its
+// "Save configuration" button through ScopedButton (which calls this),
+// and gates the whole page's data fetch on the identical result — see
+// that view's own comment for why a page whose every request requires one
+// scope treats "not currently vouched for" as a reason not to even try,
+// not merely a reason to disable one button.
 // ---------------------------------------------------------------------
 
 export type ScopeGateResult =

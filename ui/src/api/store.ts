@@ -81,6 +81,9 @@ type SchemaNode = components['schemas']['Node']
 type SchemaFPPInstance = components['schemas']['FPPInstance']
 type SchemaEvent = components['schemas']['Event']
 type SchemaSessionResponse = components['schemas']['SessionResponse']
+type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
+type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
+type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -355,6 +358,67 @@ export class ApiStore {
       this.applySessionResponse(resp)
       this.clearShadowingToken()
       this.wakeReadLoop()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Step 7 seam A: the configuration write surface (RES-008 D1) -----
+  //
+  // None of the three methods below touches `this.model` or the read
+  // loop: config.write is admin-only (there is no config:read scope),
+  // this data is not part of the SSE snapshot/delta stream at all (it is
+  // not a "resource" ADR-020's change stream models), and — unlike
+  // login/logout/claimBootstrap — nothing here changes what credential
+  // this browser presents, so there is no `wakeReadLoop()` call to make.
+  // Each is a plain pass-through the config view (views/Configuration.tsx)
+  // calls directly and renders (or fails to reach, and renders THAT)
+  // itself.
+
+  /** `GET /api/v1/config/fpp.endpoints` (Step 7 seam A). Throws (404) when nothing has been configured yet. */
+  async getFPPEndpointsConfig(): Promise<SchemaFPPEndpointsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPEndpointsConfigResponse>(
+        '/config/fpp.endpoints',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/fpp.endpoints` (Step 7 seam A): this application's
+   * first write besides the session/bootstrap pair. Validated
+   * before-activation server-side (ADR-009) — a rejected payload throws
+   * and appends no revision; the caller (the config view's save handler)
+   * renders the thrown error via `describeApiError`, matching every other
+   * write path in this app.
+   */
+  async putFPPEndpointsConfig(
+    payload: SchemaConfigFPPEndpointsPayload,
+  ): Promise<SchemaFPPEndpointsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPEndpointsConfigResponse>(
+        '/config/fpp.endpoints',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/fpp.endpoints/revisions` (Step 7 seam A): revision history, newest first, metadata only. */
+  async getFPPEndpointsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/fpp.endpoints/revisions',
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }

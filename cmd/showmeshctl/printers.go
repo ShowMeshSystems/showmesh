@@ -294,6 +294,52 @@ func printAuditTable(w io.Writer, resp auditResponse) {
 	_ = tw.Flush()
 }
 
+// printFPPEndpointsConfig renders GET/PUT /api/v1/config/fpp.endpoints
+// (Step 7 seam A, RES-008 D1). restartRequired is always rendered — never
+// silently dropped — so the operator sees the "takes effect on next
+// restart" fact at the point of use, matching the API's own carrying of it
+// on the wire rather than leaving a client to know it out of band.
+func printFPPEndpointsConfig(w io.Writer, resp fppEndpointsConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+
+	if len(resp.Payload.Endpoints) == 0 {
+		_, _ = fmt.Fprintln(w, "(no FPP endpoints configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tURL")
+	for _, e := range resp.Payload.Endpoints {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", e.ID, e.URL)
+	}
+	_ = tw.Flush()
+}
+
+// printConfigRevisionsTable renders GET
+// /api/v1/config/fpp.endpoints/revisions, newest first.
+func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {
+	if len(resp.Revisions) == 0 {
+		_, _ = fmt.Fprintln(w, "(no revisions)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "REVISION\tACTIVE\tCREATED AT\tCREATED BY\tSOURCE\tNOTE")
+	for _, r := range resp.Revisions {
+		active := ""
+		if r.Active {
+			active = "*"
+		}
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
+			r.Revision, active, r.CreatedAt.Format(time.RFC3339),
+			stringOrDash(r.CreatedByPrincipalName), r.Source, emptyOrDash(r.Note))
+	}
+	_ = tw.Flush()
+}
+
 func printSnapshotDetail(w io.Writer, s snapshot) {
 	_, _ = fmt.Fprintf(w, "serverTime:     %s\n", s.ServerTime.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(w, "latestEventSeq: %d\n\n", s.LatestEventSeq)

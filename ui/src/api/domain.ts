@@ -58,6 +58,16 @@ export type SessionResponse = components['schemas']['SessionResponse']
 export type PrincipalSummary = components['schemas']['PrincipalSummary']
 export type SessionInfo = components['schemas']['SessionInfo']
 
+// Step 7 seam A (RES-008 D1): the configuration write surface's shapes,
+// aliased for the identical reason as every type above. Not part of
+// `Model` — see store.ts's "Step 7 seam A" section header comment for why
+// this data lives outside the SSE snapshot/delta stream.
+export type FPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
+export type ConfigFPPEndpoint = components['schemas']['ConfigFPPEndpoint']
+export type ConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
+export type ConfigRevisionMeta = components['schemas']['ConfigRevisionMeta']
+export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

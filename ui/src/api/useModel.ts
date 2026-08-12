@@ -21,7 +21,12 @@
  */
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
-import type { Model } from './domain'
+import type {
+  ConfigFPPEndpointsPayload,
+  ConfigRevisionsResponse,
+  FPPEndpointsConfigResponse,
+  Model,
+} from './domain'
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -53,4 +58,22 @@ export function claimBootstrap(
   deviceLabel: string,
 ): Promise<void> {
   return store.claimBootstrap(code, name, password, deviceLabel)
+}
+
+// Step 7 seam A (RES-008 D1): the same thin pass-through pattern as
+// login/logout/claimBootstrap above, for the configuration write surface —
+// see store.ts's "Step 7 seam A" methods for why none of these three
+// touches `Model`.
+export function getFPPEndpointsConfig(): Promise<FPPEndpointsConfigResponse> {
+  return store.getFPPEndpointsConfig()
+}
+
+export function putFPPEndpointsConfig(
+  payload: ConfigFPPEndpointsPayload,
+): Promise<FPPEndpointsConfigResponse> {
+  return store.putFPPEndpointsConfig(payload)
+}
+
+export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPEndpointsConfigRevisions()
 }
