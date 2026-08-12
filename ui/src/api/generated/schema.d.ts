@@ -18,7 +18,7 @@ export interface paths {
         };
         /**
          * Service descriptor
-         * @description The API's own self-description: served version, every version this coordinator supports, and coordinator build metadata.
+         * @description The API's own self-description: served version, every version this coordinator supports, and coordinator build metadata. Always open, with no credential and regardless of whether reads are otherwise closed (ADR-024): it carries coordinator build metadata only, none of the four resources the read-closure posture gates.
          */
         get: operations["getServiceDescriptor"];
         put?: never;
@@ -194,6 +194,74 @@ export interface paths {
          *     **A stream closes with a clean end-of-response and no terminating frame of any kind**, including when the coordinator is the one shutting down — there is no `stream.end` event and none is planned, deliberately: correctness here depends only on a client re-fetching `GET /snapshot` on *any* interruption (this operation's own reconnection rule, above), which already covers an orderly shutdown exactly the same way it covers a network fault or a crash. A client cannot distinguish "the coordinator shut down cleanly" from "a proxy in between timed the connection out" from the stream alone, and is not meant to try; it should simply reconnect and re-snapshot either way.
          */
         get: operations["streamChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current session (ADR-024)
+         * @description Always reachable with no credential at all, regardless of whether reads are otherwise closed — see SessionResponse's own description for why "signed out" must be a readable state here, never a 401 this operation itself produces.
+         */
+        get: operations["getSession"];
+        put?: never;
+        /**
+         * Log in (ADR-024)
+         * @description Unauthenticated by construction (ADR-024 decision 8): this is how a session is created in the first place, so no pre-existing credential is required or considered. Bounded by a login concurrency limit and a per-source increasing delay, NEVER a per-principal lockout — a correct password always eventually succeeds, only more slowly from a source with recent failures. On success, sets the HttpOnly session cookie via Set-Cookie.
+         */
+        post: operations["createSession"];
+        /**
+         * Log out / revoke a session (ADR-024)
+         * @description Requires an authenticated principal (no specific scope). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) and is rejected when absent — there is no Origin-vs-Host fallback. An empty body revokes the session that authenticated this request, which requires that credential to be the session cookie itself; a body naming `sessionId` instead revokes that specific session (which must belong to the authenticated principal) and works under either credential form — this is this contract's one genuine bearer-authenticated write.
+         */
+        delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim the one-time bootstrap code and create the first admin (ADR-024 decision 9)
+         * @description Unauthenticated by construction, exactly like `POST /session` — no principal exists yet for a credential to name. Useless without `code`, which is readable only from a file in the coordinator's data volume: possessing it proves filesystem access, which is what keeps this endpoint from being a network-reachable way to become administrator. Bounded by the SAME login concurrency limit and per-source delay as `POST /session` (ADR-024 decision 8), never a per-principal lockout. A successful claim creates the first administrator (always `kind: human`, `role: admin`), invalidates and deletes the bootstrap code, and immediately mints a session for it exactly as `POST /session` does — the response body is the identical `SessionResponse` shape.
+         */
+        post: operations["claimBootstrap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audit log (ADR-024 decision 11)
+         * @description Append-only. Always requires `audit:read`, regardless of whether reads are otherwise open — this is not one of the four pre-existing read resources the open-reads posture covers. Not carried on the SSE change stream.
+         */
+        get: operations["listAudit"];
         put?: never;
         post?: never;
         delete?: never;
@@ -397,13 +465,92 @@ export interface components {
             /** @description Ordered exactly as this coordinator's own FPP endpoint configuration lists them (one collector per configured instance), stable for the life of the process. This ordering is guaranteed. */
             collectors: components["schemas"]["CollectorStatus"][];
         };
-        /** @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the six values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network. */
+        /** @description A principal's own non-secret identity (ADR-024). */
+        PrincipalSummary: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "human" | "machine";
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler";
+        };
+        /** @description The session that authenticated this request, present only when that credential was the session cookie. id is the session's non-secret row identifier — never the cookie value. */
+        SessionInfo: {
+            id: string;
+            deviceLabel: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The body of POST /session. */
+        CreateSessionRequest: {
+            name: string;
+            password: string;
+            deviceLabel: string;
+        };
+        /** @description DELETE /session's optional body. An absent/empty sessionId revokes the session that authenticated this request (requiring that credential to be the session cookie itself); a non-empty sessionId instead revokes that specific session, which must belong to the authenticated principal, and works under either credential form. */
+        DeleteSessionRequest: {
+            sessionId?: string;
+        };
+        /** @description The body of POST /bootstrap. code is single-use and readable only from a file in the coordinator's data volume (ADR-024 decision 9); deviceLabel behaves exactly as CreateSessionRequest.deviceLabel does, since a successful claim immediately mints a session. */
+        BootstrapRequest: {
+            code: string;
+            name: string;
+            password: string;
+            deviceLabel: string;
+        };
+        /** @description The body of GET and POST /session, and of POST /bootstrap on success (ADR-024 decisions 5, 9, and 12). authenticated is false whenever no valid credential authenticated this request — a new device, cleared cookies, a revoked or idle-expired session, a bad or absent bearer token — which is deliberately NOT a 401: "being signed out" is a persistent, readable state, not an error a caller must catch to learn. When authenticated is false, principal, session, and credentialForm are all null, scopes is an empty array, and scopesState is "not_applicable". scopesState is "current" when scopes was computed from a fresh read of this principal's role in this same request (the only case this coordinator currently produces) and "unknown" on an internal error computing them — a client MUST treat "unknown" exactly like an empty scope list (ADR-024 decision 12: "a stale or unavailable [scope list] renders as unknown, never as permissive"). bootstrapRequired is true whenever this coordinator currently holds zero principals (ADR-024 decision 9's "loud and persistent" unclaimed-bootstrap signal) — computed and returned regardless of whether this particular request authenticated, so a client can render the banner from GET /session on load with no credential at all. */
+        SessionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            authenticated: boolean;
+            principal: components["schemas"]["PrincipalSummary"] | null;
+            session: components["schemas"]["SessionInfo"] | null;
+            /** @enum {string|null} */
+            credentialForm: "session" | "token" | "password" | null;
+            scopes: string[];
+            /** @enum {string} */
+            scopesState: "current" | "unknown" | "not_applicable";
+            bootstrapRequired: boolean;
+        };
+        /** @description One element of GET /audit (ADR-024 decision 11). params is never null (an entry with none still reports an empty object). */
+        AuditEntry: {
+            /** Format: date-time */
+            timestamp: string;
+            principalId: string;
+            principalName: string;
+            form: string;
+            credentialId: string;
+            clientAddr: string;
+            action: string;
+            target: string;
+            params: {
+                [key: string]: unknown;
+            };
+            idempotencyKey: string;
+            /** @enum {string} */
+            kind: "dispatch" | "outcome" | "replay" | "auth_failure" | "admin";
+            commandId: string;
+            outcome: string;
+            outcomeState: string;
+            outcomeReason: string;
+        };
+        /** @description The body of GET /audit. Unlike EventsResponse, this carries no gap/oldestRetainedSeq-shaped fields: the coordinator's audit service currently exposes no oldest-retained cursor for this endpoint to report one honestly. */
+        AuditResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            entries: components["schemas"]["AuditEntry"][];
+        };
+        /**
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the eleven values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         *
+         *     Four of the eleven are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential).
+         */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url";
             title: string;
             status: number;
             detail: string;
@@ -490,10 +637,42 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description SHOWMESH_API_TOKEN is configured and the request's Authorization header was missing or did not match. */
+        /** @description No valid credential was presented: reads are closed and none was given (or it did not authenticate), or the route is a write / `GET /audit` and no credential authenticated at all. */
         Unauthorized: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description A valid credential authenticated, but the principal does not hold the scope this operation requires. `detail` names the missing scope (ADR-024 decision 4). */
+        Forbidden: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description A cookie-authenticated write was missing the `Sec-Fetch-Site: same-origin` request header (ADR-024 decision 6). A bearer-token-authenticated request never receives this response. */
+        CSRFRejected: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `POST /session`'s login concurrency bound was exceeded (ADR-024 decision 8). Carries a `Retry-After` response header. */
+        TooManyRequests: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                /** @description Seconds to wait before retrying. */
+                "Retry-After"?: number;
                 [name: string]: unknown;
             };
             content: {
@@ -554,7 +733,6 @@ export interface operations {
                 };
             };
             400: components["responses"]["UnsupportedAPIVersion"];
-            401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -580,6 +758,7 @@ export interface operations {
             };
             400: components["responses"]["UnsupportedAPIVersion"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -605,6 +784,7 @@ export interface operations {
             };
             400: components["responses"]["UnsupportedAPIVersion"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -633,6 +813,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
@@ -659,6 +840,7 @@ export interface operations {
             };
             400: components["responses"]["UnsupportedAPIVersion"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -687,6 +869,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
@@ -720,6 +903,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -750,6 +934,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
@@ -776,6 +961,169 @@ export interface operations {
             };
             400: components["responses"]["UnsupportedAPIVersion"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            400: components["responses"]["UnsupportedAPIVersion"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. Set-Cookie carries the new session. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            /** @description Invalid name/password, or the principal is disabled. */
+            401: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeleteSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description The session was revoked. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["CSRFRejected"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    claimBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. Set-Cookie carries the new session. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            /** @description The bootstrap code is invalid, already claimed, or expired — or no bootstrap code is currently available (a principal already exists). */
+            401: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                /** @description An opaque cursor: return entries after this value. 0 (the default) means "from the beginning of retained history". */
+                since?: number;
+                /** @description Maximum number of entries to return. Defaults to 100; values above 500 are silently clamped to 500. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };

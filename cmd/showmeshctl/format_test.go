@@ -147,3 +147,57 @@ func TestStringOrDash(t *testing.T) {
 		t.Errorf("stringOrDash(&\"hello\") = %q, want \"hello\"", got)
 	}
 }
+
+func TestEmptyOrDash(t *testing.T) {
+	if got := emptyOrDash(""); got != "-" {
+		t.Errorf("emptyOrDash(\"\") = %q, want \"-\"", got)
+	}
+	if got := emptyOrDash("10.0.0.5"); got != "10.0.0.5" {
+		t.Errorf("emptyOrDash(\"10.0.0.5\") = %q, want \"10.0.0.5\"", got)
+	}
+}
+
+// TestScopesStateGlyphUnknownIsLoud pins ADR-024 decision 12's rule in
+// code: "a stale or unavailable [scope list] renders as unknown, never as
+// permissive." A bare "unknown" that read no differently from "current"
+// would fail exactly that requirement, so this asserts the rendered string
+// is visibly distinct AND explicitly warns against treating it as granted.
+func TestScopesStateGlyphUnknownIsLoud(t *testing.T) {
+	got := scopesStateGlyph("unknown")
+	if got == "current" || got == "unknown" {
+		t.Fatalf("scopesStateGlyph(\"unknown\") = %q, must not render as a bare/inert value", got)
+	}
+	if !strings.Contains(strings.ToUpper(got), "UNKNOWN") {
+		t.Errorf("scopesStateGlyph(\"unknown\") = %q, want it to visibly say UNKNOWN", got)
+	}
+}
+
+func TestScopesStateGlyphCurrentIsBare(t *testing.T) {
+	if got := scopesStateGlyph("current"); got != "current" {
+		t.Errorf("scopesStateGlyph(\"current\") = %q, want bare \"current\"", got)
+	}
+}
+
+// TestAuditKindGlyphReplayAndAuthFailureAreLoud pins ADR-024 decision 11:
+// "An idempotent replay writes its own entry marked as a replay... because
+// the replay is precisely the case an investigator wants to see." A replay
+// or an auth failure rendering identically to an ordinary dispatch/outcome
+// row would defeat the entire point of marking it distinctly.
+func TestAuditKindGlyphReplayAndAuthFailureAreLoud(t *testing.T) {
+	cases := []struct{ kind, mustContain string }{
+		{"dispatch", "dispatch"},
+		{"outcome", "outcome"},
+		{"admin", "admin"},
+		{"replay", "REPLAY"},
+		{"auth_failure", "AUTH-FAILURE"},
+	}
+	for _, tc := range cases {
+		got := auditKindGlyph(tc.kind)
+		if !strings.Contains(got, tc.mustContain) {
+			t.Errorf("auditKindGlyph(%q) = %q, want it to contain %q", tc.kind, got, tc.mustContain)
+		}
+	}
+	if got := auditKindGlyph("replay"); got == auditKindGlyph("dispatch") {
+		t.Error("auditKindGlyph(\"replay\") must not render identically to auditKindGlyph(\"dispatch\")")
+	}
+}

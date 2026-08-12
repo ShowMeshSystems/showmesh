@@ -44,6 +44,10 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSnapshot(rest, stdout, stderr, clock)
 	case "watch":
 		return cmdWatch(rest, stdout, stderr, clock)
+	case "session":
+		return cmdSession(rest, stdout, stderr, clock)
+	case "audit":
+		return cmdAudit(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -60,7 +64,9 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 func printTopLevelUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `showmeshctl is the non-UI client for a ShowMesh coordinator's public
 control API (ADR-014). It is read-only: there is no write or command
-subcommand, matching the API it talks to.
+subcommand, matching the API it talks to. Since ADR-024, reads and the
+audit log are gated by an authenticated principal's scopes rather than by
+one shared secret — see --token below and "showmeshctl session --help".
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -72,16 +78,35 @@ Commands:
   events            show event history
   snapshot          show the authoritative snapshot
   watch             fetch the snapshot, then stream live changes
+  session           show the current principal, role, and effective scopes
+  audit             show the audit log (requires the audit:read scope)
   version           show this CLI's and the coordinator's version and API negotiation
   help              show this help
 
 Global flags (place before any positional arguments):
   --server <url>    coordinator base URL (default http://localhost:8080,
                      or $SHOWMESH_SERVER)
-  --token <token>   API bearer token. Prefer $SHOWMESH_API_TOKEN over this
-                     flag: a value passed on the command line is visible to
-                     anyone on the same host who can read the process table
-                     (ps, /proc), while an environment variable is not.
+  --token <token>   API bearer token (ADR-024): a token minted for a
+                     principal by an admin (see "showmesh-coordinator
+                     issue-token" on the coordinator host), sent as
+                     "Authorization: Bearer <token>" and NEVER placed in a
+                     URL or query string — the coordinator rejects any
+                     request whose query string carries the token prefix
+                     with 400 credential-in-url. Prefer $SHOWMESH_CTL_TOKEN
+                     over this flag: a value passed on the command line is
+                     visible to anyone on the same host who can read the
+                     process table (ps, /proc), while an environment
+                     variable is not. This is deliberately NOT
+                     $SHOWMESH_API_TOKEN, the ADR-021 shared secret ADR-024
+                     retired: a coordinator that still sees that variable
+                     set refuses to start, so this CLI uses a distinct
+                     name rather than colliding with a variable an
+                     operator may still have exported for an unrelated
+                     reason. Kind does not restrict credential form: a
+                     human principal may mint a token and use it here
+                     exactly as a machine principal would, and every
+                     action taken this way is attributed to that human in
+                     the audit log, not to a robot.
   --output text|json
                      output format (default text). json re-serializes this
                      CLI's OWN decoded structs, not the coordinator's raw
@@ -100,12 +125,17 @@ Exit codes:
   0  success
   1  usage error (bad flags, bad arguments, unknown command)
   2  coordinator unreachable (connection refused, DNS failure, timeout)
-  3  unauthorized (401 from the coordinator)
+  3  unauthorized (401: no valid credential was presented)
   4  API version incompatible (the coordinator does not serve a version
      this CLI supports)
   5  not found (404 from the coordinator)
   6  the coordinator returned some other error (see stderr for the
      RFC 9457 problem detail)
+  7  forbidden (403: authenticated, but missing a required scope — see
+     stderr for the scope name; distinct from 3, which means no credential
+     authenticated at all)
+  8  rate limited (429: the login concurrency bound was exceeded — see
+     stderr for how long to wait before retrying)
 `)
 }
 
@@ -134,7 +164,16 @@ func newFlagSet(name string, stderr io.Writer) (*flag.FlagSet, *globalFlags) {
 	fs.SetOutput(stderr)
 	g := &globalFlags{}
 	fs.StringVar(&g.server, "server", envOr("SHOWMESH_SERVER", "http://localhost:8080"), "coordinator base URL")
-	fs.StringVar(&g.token, "token", os.Getenv("SHOWMESH_API_TOKEN"), "API bearer token")
+	// SHOWMESH_CTL_TOKEN, deliberately not SHOWMESH_API_TOKEN: that name is
+	// the ADR-021 shared secret ADR-024 decision 2 retired, and a
+	// coordinator that still sees it set refuses to start by design. An
+	// operator who exports SHOWMESH_API_TOKEN to use this CLI would
+	// otherwise be unable to start a coordinator from the same shell, and
+	// the resulting refusal names a migration that has nothing to do with
+	// what they set. This flag intentionally does NOT fall back to the old
+	// name — a fallback would recreate the exact collision this rename
+	// exists to remove.
+	fs.StringVar(&g.token, "token", os.Getenv("SHOWMESH_CTL_TOKEN"), "API bearer token")
 	fs.StringVar(&g.output, "output", outputText, "output format: text|json")
 	fs.DurationVar(&g.timeout, "timeout", 10*time.Second, "request timeout")
 	return fs, g

@@ -142,6 +142,64 @@ func stringOrDash(s *string) string {
 	return *s
 }
 
+// emptyOrDash renders a plain (non-pointer) string field for a text table
+// as "-" when empty. Unlike stringOrDash, this is for fields the API
+// declares always-present (audit entries: openapi.yaml marks every
+// AuditEntry field required with no null variant) but that can still be
+// the empty string on the wire (e.g. clientAddr when no trusted proxy is
+// configured — ADR-024 decision 11's "an audit entry records who and, by
+// default, cannot record from where"). "-" here means "empty value", not
+// "absent field" — there is no absent-vs-empty distinction to preserve for
+// a field that is never a pointer.
+func emptyOrDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// scopesStateGlyph renders SessionResponse.scopesState (ADR-024 decision
+// 12). "unknown" must read as loudly distinct as every other
+// non-"current" state this program renders (stateGlyph, healthGlyph):
+// decision 12 requires a client treat "unknown" exactly like an empty
+// scope list, never as permissive, and a bare "unknown" in a column an
+// operator skims would not carry that warning on its own.
+func scopesStateGlyph(s string) string {
+	switch s {
+	case "current":
+		return "current"
+	case "not_applicable":
+		return "not-applicable (not authenticated)"
+	case "unknown":
+		return "UNKNOWN — treat as no scopes, never as permissive (ADR-024 decision 12)"
+	default:
+		return "UNRECOGNIZED-STATE(" + s + ")"
+	}
+}
+
+// auditKindGlyph renders auditEntry.kind (ADR-024 decision 11's five
+// values). "replay" and "auth_failure" are made visually loud for the same
+// reason severityGlyph makes "warning"/"critical" loud: decision 11 is
+// explicit that a replay "is precisely the case an investigator wants to
+// see... it means the operator did not get their response," so it must not
+// blend into a column of ordinary dispatch/outcome rows.
+func auditKindGlyph(k string) string {
+	switch k {
+	case "dispatch":
+		return "dispatch"
+	case "outcome":
+		return "outcome"
+	case "admin":
+		return "admin"
+	case "replay":
+		return "REPLAY"
+	case "auth_failure":
+		return "AUTH-FAILURE"
+	default:
+		return "UNRECOGNIZED(" + k + ")"
+	}
+}
+
 // timeOrDash renders an optional timestamp for a text table.
 func timeOrDash(t *time.Time) string {
 	if t == nil {

@@ -61,17 +61,56 @@ func cliLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 }
 
-// openIdentityService opens the coordinator's real SQLite store and a real
-// identity.Service over it, against SHOWMESH_DATA_DIR (see
-// dataDirFromEnv). The caller must Close the returned *store.Store.
-func openIdentityService(ctx context.Context, logger *slog.Logger) (*store.Store, identity.Service, string, error) {
-	dataDir := dataDirFromEnv()
-	st, err := store.Open(ctx, dataDir, logger)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("open store at %q (%s): %w", dataDir, config.EnvDataDir, err)
+// cliDeps bundles every subcommand's external dependencies — where its
+// output goes, where a password is read from, which data directory to
+// open, which clock stamps a claimed bootstrap code's comparison against
+// its expiry, and where its (best-effort) log warnings go — behind one
+// struct threaded through every run*Subcommand function.
+//
+// This is the only refactor this file received to add test coverage, and
+// it exists for one reason: every run*Subcommand function talked to
+// os.Stdout, os.Stderr, os.Stdin, SHOWMESH_DATA_DIR, and time.Now directly
+// before this change, none of which a test can substitute a deterministic
+// double for without either mutating process-wide globals (os.Stdout et
+// al., unsafe under `go test -race` and across parallel tests) or waiting
+// out a real 24-hour bootstrap-code expiry. Every run*Subcommand exported
+// to main.go (unchanged, still `func(args []string) int`) is now a thin
+// wrapper that builds a [defaultCLIDeps] and delegates to a
+// `*WithDeps` function carrying the actual logic — production behavior is
+// identical, only reachable now through an injectable seam.
+type cliDeps struct {
+	stdout  io.Writer
+	stderr  io.Writer
+	stdin   io.Reader
+	dataDir string
+	now     func() time.Time
+	logger  *slog.Logger
+}
+
+// defaultCLIDeps is exactly what every production entrypoint in this file
+// used directly before the [cliDeps] refactor: os.Stdout, os.Stderr,
+// os.Stdin, dataDirFromEnv(), time.Now, and cliLogger().
+func defaultCLIDeps() *cliDeps {
+	return &cliDeps{
+		stdout:  os.Stdout,
+		stderr:  os.Stderr,
+		stdin:   os.Stdin,
+		dataDir: dataDirFromEnv(),
+		now:     time.Now,
+		logger:  cliLogger(),
 	}
-	svc := identity.NewService(st, time.Now, dataDir, identity.WithLogger(logger))
-	return st, svc, dataDir, nil
+}
+
+// openIdentityService opens the coordinator's real SQLite store and a real
+// identity.Service over it, against deps.dataDir and deps.now. The caller
+// must Close the returned *store.Store.
+func openIdentityService(ctx context.Context, deps *cliDeps) (*store.Store, identity.Service, error) {
+	st, err := store.Open(ctx, deps.dataDir, deps.logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store at %q (%s): %w", deps.dataDir, config.EnvDataDir, err)
+	}
+	svc := identity.NewService(st, deps.now, deps.dataDir, identity.WithLogger(deps.logger))
+	return st, svc, nil
 }
 
 // formCLI marks an audit entry written by one of these subcommands rather
@@ -103,14 +142,14 @@ const formCLI identity.CredentialForm = "cli"
 // would be the audit-gates-blackout mistake decision 11 explicitly
 // rejected, applied to the tool meant to recover from exactly that kind of
 // breakage.
-func auditCLIAction(ctx context.Context, svc identity.Service, logger *slog.Logger, action string, p identity.Principal) {
+func auditCLIAction(ctx context.Context, deps *cliDeps, svc identity.Service, action string, p identity.Principal) {
 	err := svc.WriteAudit(ctx, identity.AuditEntry{
-		Timestamp: time.Now(), PrincipalID: p.ID, PrincipalName: p.Name,
+		Timestamp: deps.now(), PrincipalID: p.ID, PrincipalName: p.Name,
 		Form: formCLI, Action: action, Target: p.ID,
 		Kind: identity.AuditAdmin,
 	})
 	if err != nil {
-		logger.Warn("failed to write audit entry for a coordinator subcommand action", "action", action, "error", err)
+		deps.logger.Warn("failed to write audit entry for a coordinator subcommand action", "action", action, "error", err)
 	}
 }
 
@@ -121,18 +160,25 @@ func auditCLIAction(ctx context.Context, svc identity.Service, logger *slog.Logg
 // deployment automating recovery already chose not to use an interactive
 // terminal, so there is no echo to suppress and no reason to refuse the
 // input. Never logs or echoes the password itself either way.
-func readPassword(prompt string) (string, error) {
-	fd := int(os.Stdin.Fd())
-	if term.IsTerminal(fd) {
-		fmt.Fprint(os.Stderr, prompt)
-		b, err := term.ReadPassword(fd)
-		fmt.Fprintln(os.Stderr)
+//
+// stdin is typed as io.Reader (deps.stdin) rather than *os.File so a test
+// can substitute a strings.Reader/bytes.Buffer; the terminal-echo-
+// suppression path only ever activates for a genuine *os.File that
+// term.IsTerminal reports true for, which production's real os.Stdin can
+// be and a test double never is, so this preserves the exact production
+// behavior of the two branches this function had before the [cliDeps]
+// refactor.
+func readPassword(prompt string, stdin io.Reader, stderr io.Writer) (string, error) {
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprint(stderr, prompt)
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(stderr)
 		if err != nil {
 			return "", fmt.Errorf("read password: %w", err)
 		}
 		return string(b), nil
 	}
-	reader := bufio.NewReader(os.Stdin)
+	reader := bufio.NewReader(stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", fmt.Errorf("read password: %w", err)
@@ -178,11 +224,269 @@ func findPrincipal(ctx context.Context, svc identity.Service, id, name string) (
 	return identity.Principal{}, fmt.Errorf("no principal named %q", name)
 }
 
+// resolvePrincipal resolves a single `-principal` value that may be
+// either a principal id or its exact display name, for the three token
+// subcommands below. Unlike reset-password (which forces the caller to
+// say up front whether they hold an id or a name via two mutually
+// exclusive flags), a single flag is what the task spec asks for
+// ("issue-token -principal=<name|id>"), so this tries an id lookup first
+// — generated principal ids (see identity.Principal.ID) do not collide
+// with operator-chosen display names — and falls back to findPrincipal's
+// name scan on store.ErrPrincipalNotFound. Any other error (a closed
+// store, a corrupt row) is returned as-is rather than masked by a second
+// lookup attempt.
+func resolvePrincipal(ctx context.Context, svc identity.Service, ref string) (identity.Principal, error) {
+	p, err := svc.GetPrincipal(ctx, ref)
+	if err == nil {
+		return p, nil
+	}
+	if !errors.Is(err, store.ErrPrincipalNotFound) {
+		return identity.Principal{}, err
+	}
+	return findPrincipal(ctx, svc, "", ref)
+}
+
+// parseExpiry interprets `-expires` as either an absolute RFC3339
+// timestamp or a Go duration (e.g. "4380h") measured from now. It only
+// ever runs when an operator explicitly passes -expires: ADR-024 decision
+// 1 fixes machine tokens' default to no expiry at all ("the default is
+// none, and the control is revocation"), so runIssueTokenSubcommand never
+// calls this unless the flag was set, and passes nil straight to
+// identity.Service.IssueToken otherwise.
+func parseExpiry(raw string, now time.Time) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp (e.g. 2027-01-15T00:00:00Z) or Go duration (e.g. 4380h): %w", err)
+	}
+	if d <= 0 {
+		return time.Time{}, fmt.Errorf("duration must be positive")
+	}
+	return now.Add(d), nil
+}
+
+// runIssueTokenSubcommand implements `showmesh-coordinator issue-token`:
+// this record's fix for a defect found while folding in Step 6.
+// identity.Service.IssueToken was implemented and audited by this
+// package's own tests, but had exactly one caller in the whole tree — the
+// no-op stub in internal/coordinator/api/auth.go — leaving no way for an
+// operator to actually mint a token at all. ADR-024 decision 1's central
+// promise, that a human may mint a token so the audit log records a
+// person rather than a robot, and that FPP's scheduler principal and
+// showmeshctl authenticate as machine principals holding tokens, was
+// therefore unusable.
+//
+// This is a coordinator subcommand rather than an HTTP endpoint
+// deliberately, matching BUILD-PLAN Step 6's "adds no write endpoint of
+// its own" and ADR-024 decision 0's "does not decide... node enrollment
+// automation" framing: principal/token management over HTTP is a surface
+// ADR-024 did not specify, and a local subcommand matches decision 9's
+// host-level posture, where possessing filesystem access on this data
+// volume is already the proof of authority the rest of this file relies
+// on. It shares this file's SHOWMESH_DATA_DIR bypass of
+// config.LoadConfig() for the same reason bootstrap/create-admin/
+// reset-password do (see the file-level doc comment): an operator minting
+// a recovery token is often the operator with a leftover
+// SHOWMESH_API_TOKEN blocking a normal coordinator start.
+func runIssueTokenSubcommand(args []string) int {
+	return runIssueTokenSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
+	fs := flag.NewFlagSet("issue-token", flag.ExitOnError)
+	principalRef := fs.String("principal", "", "principal id or exact display name to mint a token for (required)")
+	label := fs.String("label", "", "label to help tell this token apart from others in list-tokens")
+	expires := fs.String("expires", "", "optional expiry: an RFC3339 timestamp or a Go duration from now (e.g. 4380h); default: never (ADR-024 decision 1)")
+	_ = fs.Parse(args)
+
+	trimmedRef := strings.TrimSpace(*principalRef)
+	if trimmedRef == "" {
+		fmt.Fprintln(deps.stderr, "issue-token: -principal is required")
+		return 2
+	}
+
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+
+	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		return 1
+	}
+
+	var expiresAt *time.Time
+	if trimmedExpires := strings.TrimSpace(*expires); trimmedExpires != "" {
+		t, err := parseExpiry(trimmedExpires, deps.now())
+		if err != nil {
+			fmt.Fprintf(deps.stderr, "issue-token: -expires: %v\n", err)
+			return 2
+		}
+		expiresAt = &t
+	}
+
+	tok, err := svc.IssueToken(ctx, principal.ID, strings.TrimSpace(*label), expiresAt)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		return 1
+	}
+	auditCLIAction(ctx, deps, svc, "token.issue", principal)
+
+	fmt.Fprintf(deps.stdout, "Issued a token for %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role)
+	if expiresAt != nil {
+		fmt.Fprintf(deps.stdout, "Expires: %s\n", expiresAt.Format(time.RFC3339))
+	} else {
+		fmt.Fprintln(deps.stdout, "Expires: never (ADR-024 decision 1's default — pass -expires to set one; revoke-token is the control)")
+	}
+	fmt.Fprintln(deps.stdout)
+	fmt.Fprintln(deps.stdout, "This token is displayed exactly once and cannot be retrieved again — store it now:")
+	fmt.Fprintln(deps.stdout, tok.Value)
+	return 0
+}
+
+// runListTokensSubcommand implements `showmesh-coordinator list-tokens`: a
+// companion to issue-token so tokens minted from the host can actually be
+// inventoried and told apart before deciding what to revoke-token. Never
+// prints a digest or a raw token value — identity.Service.ListTokens
+// itself returns neither (see TokenInfo's doc comment); this command adds
+// nothing that would change that.
+func runListTokensSubcommand(args []string) int {
+	return runListTokensSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runListTokensSubcommandWithDeps(deps *cliDeps, args []string) int {
+	fs := flag.NewFlagSet("list-tokens", flag.ExitOnError)
+	principalRef := fs.String("principal", "", "principal id or exact display name (required)")
+	_ = fs.Parse(args)
+
+	trimmedRef := strings.TrimSpace(*principalRef)
+	if trimmedRef == "" {
+		fmt.Fprintln(deps.stderr, "list-tokens: -principal is required")
+		return 2
+	}
+
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+
+	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		return 1
+	}
+
+	tokens, err := svc.ListTokens(ctx, principal.ID)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(deps.stdout, "Tokens for %q (id %s):\n", principal.Name, principal.ID)
+	fmt.Fprintf(deps.stdout, "%-36s  %-8s  %-24s  %-24s  %-24s  %s\n", "ID", "HINT", "LABEL", "CREATED", "EXPIRES", "LAST USED")
+	for _, t := range tokens {
+		label := t.Label
+		if label == "" {
+			label = "-"
+		}
+		expires := "never"
+		if t.ExpiresAt != nil {
+			expires = t.ExpiresAt.Format(time.RFC3339)
+		}
+		lastUsed := "never"
+		if t.LastUsedAt != nil {
+			lastUsed = t.LastUsedAt.Format(time.RFC3339)
+		}
+		fmt.Fprintf(deps.stdout, "%-36s  %-8s  %-24s  %-24s  %-24s  %s\n",
+			t.ID, t.Hint, label, t.CreatedAt.Format(time.RFC3339), expires, lastUsed)
+	}
+	return 0
+}
+
+// runRevokeTokenSubcommand implements `showmesh-coordinator revoke-token`:
+// issue-token's undo, and per ADR-024 decision 1 the intended control for
+// a token that never expires by default. Requires -principal as well as
+// -id, and confirms the token belongs to that principal via ListTokens
+// before revoking, both so the audit entry attributes the right principal
+// and so a copy-pasted wrong id fails loudly rather than silently
+// revoking an unrelated token id (token ids are UUIDs and not namespaced
+// per principal at the store layer).
+func runRevokeTokenSubcommand(args []string) int {
+	return runRevokeTokenSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runRevokeTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
+	fs := flag.NewFlagSet("revoke-token", flag.ExitOnError)
+	principalRef := fs.String("principal", "", "principal id or exact display name the token belongs to (required)")
+	tokenID := fs.String("id", "", "token id to revoke, from list-tokens (required)")
+	_ = fs.Parse(args)
+
+	trimmedRef := strings.TrimSpace(*principalRef)
+	trimmedID := strings.TrimSpace(*tokenID)
+	if trimmedRef == "" || trimmedID == "" {
+		fmt.Fprintln(deps.stderr, "revoke-token: -principal and -id are both required")
+		return 2
+	}
+
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+
+	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		return 1
+	}
+
+	tokens, err := svc.ListTokens(ctx, principal.ID)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		return 1
+	}
+	owned := false
+	for _, t := range tokens {
+		if t.ID == trimmedID {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		fmt.Fprintf(deps.stderr, "revoke-token: no token %q belongs to %q (id %s)\n", trimmedID, principal.Name, principal.ID)
+		return 1
+	}
+
+	if err := svc.RevokeToken(ctx, trimmedID); err != nil {
+		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		return 1
+	}
+	auditCLIAction(ctx, deps, svc, "token.revoke", principal)
+
+	fmt.Fprintf(deps.stdout, "Revoked token %s for %q (id %s).\n", trimmedID, principal.Name, principal.ID)
+	return 0
+}
+
 // runBootstrapSubcommand implements `showmesh-coordinator bootstrap`: the
 // host-level equivalent of POST /api/v1/bootstrap (see
 // internal/coordinator/api/bootstrap.go), for a coordinator that cannot or
 // should not be reached over HTTP to claim its own bootstrap code.
 func runBootstrapSubcommand(args []string) int {
+	return runBootstrapSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runBootstrapSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	code := fs.String("code", "", "the one-time bootstrap code (default: read from <data-dir>/"+identity.BootstrapFileName+")")
 	name := fs.String("name", "", "display name for the new administrator (required)")
@@ -191,49 +495,47 @@ func runBootstrapSubcommand(args []string) int {
 
 	trimmedName := strings.TrimSpace(*name)
 	if trimmedName == "" {
-		fmt.Fprintln(os.Stderr, "bootstrap: -name is required")
+		fmt.Fprintln(deps.stderr, "bootstrap: -name is required")
 		return 2
 	}
 
-	logger := cliLogger()
 	ctx := context.Background()
 
-	dataDir := dataDirFromEnv()
 	trimmedCode := strings.TrimSpace(*code)
 	if trimmedCode == "" {
 		var err error
-		trimmedCode, err = readBootstrapCodeFromFile(dataDir)
+		trimmedCode, err = readBootstrapCodeFromFile(deps.dataDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "bootstrap: -code was not given and could not be read from the data volume: %v\n", err)
+			fmt.Fprintf(deps.stderr, "bootstrap: -code was not given and could not be read from the data volume: %v\n", err)
 			return 1
 		}
 	}
 
-	st, svc, _, err := openIdentityService(ctx, logger)
+	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bootstrap: %v\n", err)
+		fmt.Fprintf(deps.stderr, "bootstrap: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
-	password, err := readPassword("New administrator password: ")
+	password, err := readPassword("New administrator password: ", deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bootstrap: %v\n", err)
+		fmt.Fprintf(deps.stderr, "bootstrap: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(os.Stderr, "bootstrap: password must not be empty")
+		fmt.Fprintln(deps.stderr, "bootstrap: password must not be empty")
 		return 1
 	}
 
-	principal, err := svc.ClaimBootstrap(ctx, trimmedCode, trimmedName, password, time.Now())
+	principal, err := svc.ClaimBootstrap(ctx, trimmedCode, trimmedName, password, deps.now())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bootstrap: claim failed: %v\n", err)
+		fmt.Fprintf(deps.stderr, "bootstrap: claim failed: %v\n", err)
 		return 1
 	}
-	auditCLIAction(ctx, svc, logger, "bootstrap.claim", principal)
+	auditCLIAction(ctx, deps, svc, "bootstrap.claim", principal)
 
-	fmt.Printf("Created administrator %q (id %s, device label %q). "+
+	fmt.Fprintf(deps.stdout, "Created administrator %q (id %s, device label %q). "+
 		"The bootstrap code has been invalidated and its file deleted.\n", principal.Name, principal.ID, *deviceLabel)
 	return 0
 }
@@ -246,43 +548,46 @@ func runBootstrapSubcommand(args []string) int {
 // already required the filesystem access decision 9 treats as equivalent
 // to owning the deployment.
 func runCreateAdminSubcommand(args []string) int {
+	return runCreateAdminSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runCreateAdminSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("create-admin", flag.ExitOnError)
 	name := fs.String("name", "", "display name for the new administrator (required)")
 	_ = fs.Parse(args)
 
 	trimmedName := strings.TrimSpace(*name)
 	if trimmedName == "" {
-		fmt.Fprintln(os.Stderr, "create-admin: -name is required")
+		fmt.Fprintln(deps.stderr, "create-admin: -name is required")
 		return 2
 	}
 
-	logger := cliLogger()
 	ctx := context.Background()
-	st, svc, _, err := openIdentityService(ctx, logger)
+	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create-admin: %v\n", err)
+		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
-	password, err := readPassword(fmt.Sprintf("Password for new administrator %q: ", trimmedName))
+	password, err := readPassword(fmt.Sprintf("Password for new administrator %q: ", trimmedName), deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create-admin: %v\n", err)
+		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(os.Stderr, "create-admin: password must not be empty")
+		fmt.Fprintln(deps.stderr, "create-admin: password must not be empty")
 		return 1
 	}
 
 	principal, err := svc.CreatePrincipal(ctx, trimmedName, identity.KindHuman, identity.RoleAdmin, password)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create-admin: %v\n", err)
+		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
 		return 1
 	}
-	auditCLIAction(ctx, svc, logger, "principal.create", principal)
+	auditCLIAction(ctx, deps, svc, "principal.create", principal)
 
-	fmt.Printf("Created administrator %q (id %s).\n", principal.Name, principal.ID)
+	fmt.Fprintf(deps.stdout, "Created administrator %q (id %s).\n", principal.Name, principal.ID)
 	return 0
 }
 
@@ -297,6 +602,10 @@ func runCreateAdminSubcommand(args []string) int {
 // stolen-but-still-valid cookie cannot survive a password reset issued
 // from the host.
 func runResetPasswordSubcommand(args []string) int {
+	return runResetPasswordSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runResetPasswordSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	name := fs.String("name", "", "principal name to reset (mutually exclusive with -id)")
 	id := fs.String("id", "", "principal id to reset (mutually exclusive with -name)")
@@ -305,42 +614,41 @@ func runResetPasswordSubcommand(args []string) int {
 	trimmedName := strings.TrimSpace(*name)
 	trimmedID := strings.TrimSpace(*id)
 	if (trimmedName == "" && trimmedID == "") || (trimmedName != "" && trimmedID != "") {
-		fmt.Fprintln(os.Stderr, "reset-password: exactly one of -name or -id is required")
+		fmt.Fprintln(deps.stderr, "reset-password: exactly one of -name or -id is required")
 		return 2
 	}
 
-	logger := cliLogger()
 	ctx := context.Background()
-	st, svc, _, err := openIdentityService(ctx, logger)
+	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reset-password: %v\n", err)
+		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principal, err := findPrincipal(ctx, svc, trimmedID, trimmedName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reset-password: %v\n", err)
+		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
 		return 1
 	}
 
-	password, err := readPassword(fmt.Sprintf("New password for %q: ", principal.Name))
+	password, err := readPassword(fmt.Sprintf("New password for %q: ", principal.Name), deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reset-password: %v\n", err)
+		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(os.Stderr, "reset-password: password must not be empty")
+		fmt.Fprintln(deps.stderr, "reset-password: password must not be empty")
 		return 1
 	}
 
 	if _, err := svc.SetPassword(ctx, principal.ID, password); err != nil {
-		fmt.Fprintf(os.Stderr, "reset-password: %v\n", err)
+		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
 		return 1
 	}
-	auditCLIAction(ctx, svc, logger, "principal.reset_password", principal)
+	auditCLIAction(ctx, deps, svc, "principal.reset_password", principal)
 
-	fmt.Printf("Password reset for %q (id %s). Every existing session and open stream for this principal is now invalid.\n",
+	fmt.Fprintf(deps.stdout, "Password reset for %q (id %s). Every existing session and open stream for this principal is now invalid.\n",
 		principal.Name, principal.ID)
 	return 0
 }
@@ -354,27 +662,30 @@ func runResetPasswordSubcommand(args []string) int {
 // deciding which recovery path applies). Local-only, exactly like the
 // other subcommands in this file — never reachable over the API.
 func runListPrincipalsSubcommand(args []string) int {
+	return runListPrincipalsSubcommandWithDeps(defaultCLIDeps(), args)
+}
+
+func runListPrincipalsSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("list-principals", flag.ExitOnError)
 	_ = fs.Parse(args)
 
-	logger := cliLogger()
 	ctx := context.Background()
-	st, svc, _, err := openIdentityService(ctx, logger)
+	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list-principals: %v\n", err)
+		fmt.Fprintf(deps.stderr, "list-principals: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principals, err := svc.ListPrincipals(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list-principals: %v\n", err)
+		fmt.Fprintf(deps.stderr, "list-principals: %v\n", err)
 		return 1
 	}
 
-	fmt.Printf("%-36s  %-24s  %-8s  %-10s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "CREATED")
+	fmt.Fprintf(deps.stdout, "%-36s  %-24s  %-8s  %-10s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "CREATED")
 	for _, p := range principals {
-		fmt.Printf("%-36s  %-24s  %-8s  %-10s  %-8v  %s\n",
+		fmt.Fprintf(deps.stdout, "%-36s  %-24s  %-8s  %-10s  %-8v  %s\n",
 			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.CreatedAt.Format(time.RFC3339))
 	}
 	return 0

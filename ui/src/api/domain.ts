@@ -51,6 +51,13 @@ export type EvidenceState = components['schemas']['Evidence']['state']
 export type Evidence = components['schemas']['Evidence']
 export type ResourceRef = components['schemas']['ResourceRef']
 
+// ADR-024: the session/identity shapes, aliased from the generated schema
+// for the same reason as every type above (ADR-015: generated from or
+// verified against the Go types, never hand-copied a second time).
+export type SessionResponse = components['schemas']['SessionResponse']
+export type PrincipalSummary = components['schemas']['PrincipalSummary']
+export type SessionInfo = components['schemas']['SessionInfo']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare
@@ -127,6 +134,35 @@ export interface Model {
    */
   eventsGap: boolean
   oldestRetainedSeq: number | null
+
+  /**
+   * The last `GET/POST /api/v1/session` response this store received, or
+   * `null` before the first one arrives (spec section 5.5's "before the
+   * first response" pattern, reused here). `null` must never be read as
+   * "signed out": that is `session !== null && session.authenticated ===
+   * false`, a distinct, positively-known state — see
+   * app/session.ts's `describeSignInState`, the one place this
+   * distinction is turned into what the persistent banner (ADR-024
+   * decision 5's "signed out is a persistent state") actually shows.
+   */
+  session: SessionResponse | null
+  /** Browser clock, paired with `session` the same way `snapshotReceivedAt` pairs with the model's data. */
+  sessionReceivedAt: number | null
+  /**
+   * `true` when the MOST RECENT attempt to fetch `/session` failed (network
+   * error, non-2xx, or a body that failed to parse) — `session` above is
+   * then a stale, possibly-wrong last-known value rather than freshly
+   * confirmed. ADR-024 decision 12: "a stale or unavailable [scope list]
+   * renders as unknown, never as permissive" — this is the flag
+   * `app/session.ts`'s scope-gate reads to force that degradation,
+   * exactly as `eventsGap` above is a flag a view reads rather than the
+   * store silently discarding the events it already has. Cleared back to
+   * `false` by the next fetch that succeeds, unlike `eventsGap` (which is
+   * sticky for a different, permanent reason — see that field's comment);
+   * this one is a transient "can we currently vouch for this" bit, not a
+   * record of data permanently lost.
+   */
+  sessionFetchFailed: boolean
 }
 
 export function initialModel(): Model {
@@ -142,5 +178,8 @@ export function initialModel(): Model {
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
+    session: null,
+    sessionReceivedAt: null,
+    sessionFetchFailed: false,
   }
 }

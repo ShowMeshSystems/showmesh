@@ -29,7 +29,10 @@ export type {
   Model,
   Node,
   NodeEvidence,
+  PrincipalSummary,
   ResourceRef,
+  SessionInfo,
+  SessionResponse,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);

@@ -37,6 +37,12 @@ func main() {
 			os.Exit(runResetPasswordSubcommand(os.Args[2:]))
 		case "list-principals":
 			os.Exit(runListPrincipalsSubcommand(os.Args[2:]))
+		case "issue-token":
+			os.Exit(runIssueTokenSubcommand(os.Args[2:]))
+		case "list-tokens":
+			os.Exit(runListTokensSubcommand(os.Args[2:]))
+		case "revoke-token":
+			os.Exit(runRevokeTokenSubcommand(os.Args[2:]))
 		}
 	}
 

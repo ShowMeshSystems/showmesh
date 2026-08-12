@@ -36,6 +36,58 @@ export class UnauthorizedError extends ApiError {
 }
 
 /**
+ * A `403` carrying the `forbidden` problem type (ADR-024 decision 4): a
+ * valid credential authenticated, but the principal does not hold the
+ * scope this operation requires. `detail` names the missing scope, per
+ * decision 4's "its RFC 9457 problem document names the missing scope" —
+ * this class exists so a caller can render that sentence directly rather
+ * than a generic failure, and so this case is never confused with a `401`
+ * (ApiClient never presented a credential at all, or it was rejected).
+ */
+export class ForbiddenError extends ApiError {
+  constructor(detail: string) {
+    super(detail, 403, 'https://showmesh.dev/problems/forbidden')
+    this.name = 'ForbiddenError'
+  }
+}
+
+/**
+ * A `403` carrying the `csrf-rejected` problem type (ADR-024 decision 6):
+ * a cookie-authenticated write with no `Sec-Fetch-Site: same-origin`
+ * request header. The coordinator sets this header requirement itself —
+ * this client sends nothing to satisfy or violate it — so seeing this
+ * error means the BROWSER never attached the header, which decision 6
+ * names as Safari older than 16.4. Kept as its own class (not folded into
+ * ForbiddenError) because the two need different user-facing text: a
+ * missing scope is "you may not do this," this is "your browser can't
+ * prove this request came from this page — use the token field instead."
+ */
+export class CSRFRejectedError extends ApiError {
+  constructor(detail: string) {
+    super(detail, 403, 'https://showmesh.dev/problems/csrf-rejected')
+    this.name = 'CSRFRejectedError'
+  }
+}
+
+/**
+ * A `429` from `POST /api/v1/session` or `POST /api/v1/bootstrap`
+ * (ADR-024 decision 8's login concurrency bound — never a per-principal
+ * lockout, so this is always transient and always says "try again," never
+ * "you are locked out"). `retryAfterSeconds` is null when the response
+ * carried no parseable `Retry-After` header, which a caller should treat
+ * as "wait a little and retry" rather than assuming any particular delay.
+ */
+export class TooManyRequestsError extends ApiError {
+  readonly retryAfterSeconds: number | null
+
+  constructor(detail: string, retryAfterSeconds: number | null) {
+    super(detail, 429, 'https://showmesh.dev/problems/too-many-requests')
+    this.name = 'TooManyRequestsError'
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+/**
  * Either the `unsupported-api-version` problem, or a response whose
  * `ShowMesh-API-Version` header did not match the version this client
  * requires. Terminal per spec section 5.4: the store must stop

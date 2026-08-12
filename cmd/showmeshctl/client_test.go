@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,97 @@ func TestGetJSONUnauthorized(t *testing.T) {
 	}
 	if !containsAll(ce.Error(), "Unauthorized", "missing or invalid bearer token") {
 		t.Errorf("error message = %q, want it to surface the problem's title and detail", ce.Error())
+	}
+}
+
+// TestGetJSONForbiddenSurfacesMissingScope pins ADR-024 decision 4: "a
+// 403 names the missing scope; a 401 means no valid credential was
+// presented at all." This must land on a DIFFERENT exit code than
+// TestGetJSONUnauthorized's 401 (exitForbidden vs exitUnauthorized), and
+// the scope name from the problem's detail text must actually reach the
+// error message an operator sees, not just the raw problem struct.
+func TestGetJSONForbiddenSurfacesMissingScope(t *testing.T) {
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/forbidden","title":"Forbidden","status":403,"detail":"this principal does not hold the required scope: audit:read"}`)
+	})
+
+	var resp auditResponse
+	err := c.getJSON(context.Background(), "/api/v1/audit", nil, &resp)
+	ce := requireCLIError(t, err)
+	if ce.code != exitForbidden {
+		t.Errorf("exit code = %d, want exitForbidden (%d)", ce.code, exitForbidden)
+	}
+	if ce.code == exitUnauthorized {
+		t.Fatal("403 (missing scope) must not classify the same as 401 (no credential)")
+	}
+	if !containsAll(ce.Error(), "audit:read") {
+		t.Errorf("error message = %q, want it to name the missing scope", ce.Error())
+	}
+}
+
+// TestGetJSONForbiddenFallsBackOnStatusWhenTypeUnrecognized covers the
+// same 403-vs-401 distinction when this build predates the problem "type"
+// value entirely (contract §6.2 additive tolerance) — classification must
+// still fall back to the HTTP status, not to exitAPIError generically,
+// which would re-collapse the exact distinction decision 4 exists to
+// preserve.
+func TestGetJSONForbiddenFallsBackOnStatusWhenTypeUnrecognized(t *testing.T) {
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/some-future-403-class","title":"Forbidden-ish","status":403,"detail":"x"}`)
+	})
+
+	var resp auditResponse
+	err := c.getJSON(context.Background(), "/api/v1/audit", nil, &resp)
+	ce := requireCLIError(t, err)
+	if ce.code != exitForbidden {
+		t.Errorf("exit code = %d, want exitForbidden (%d) via status fallback", ce.code, exitForbidden)
+	}
+}
+
+// TestGetJSONTooManyRequestsSurfacesRetryAfter pins ADR-024 decision 8:
+// the 429 carries a Retry-After header the problem body's detail text does
+// not repeat (session.go sets it separately) — a client that only reads
+// the body would silently drop it, leaving an operator to guess how long
+// to wait.
+func TestGetJSONTooManyRequestsSurfacesRetryAfter(t *testing.T) {
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/too-many-requests","title":"Too many requests","status":429,"detail":"too many concurrent login attempts; try again shortly"}`)
+	})
+
+	var resp auditResponse
+	err := c.getJSON(context.Background(), "/api/v1/audit", nil, &resp)
+	ce := requireCLIError(t, err)
+	if ce.code != exitRateLimited {
+		t.Errorf("exit code = %d, want exitRateLimited (%d)", ce.code, exitRateLimited)
+	}
+	if !containsAll(ce.Error(), "7") {
+		t.Errorf("error message = %q, want it to surface the Retry-After value", ce.Error())
+	}
+}
+
+// TestGetJSONTooManyRequestsWithNoRetryAfterHeaderStillClassifiesCorrectly
+// guards the case where a coordinator sends 429 with no Retry-After at
+// all: the classification must not depend on the header being present
+// (only the extra wording in the message should).
+func TestGetJSONTooManyRequestsWithNoRetryAfterHeaderStillClassifiesCorrectly(t *testing.T) {
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/too-many-requests","title":"Too many requests","status":429,"detail":"slow down"}`)
+	})
+
+	var resp auditResponse
+	err := c.getJSON(context.Background(), "/api/v1/audit", nil, &resp)
+	ce := requireCLIError(t, err)
+	if ce.code != exitRateLimited {
+		t.Errorf("exit code = %d, want exitRateLimited (%d) even with no Retry-After header", ce.code, exitRateLimited)
 	}
 }
 
@@ -273,6 +365,57 @@ func TestApplyHeadersOmitsAuthorizationWhenTokenUnset(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "" {
 		t.Errorf("Authorization header = %q, want empty when no token is configured", got)
 	}
+}
+
+// TestTokenNeverAppearsInURLOrErrorMessages is a defensive test for the
+// task spec's "never appears in a log line, an error message, or any
+// output" requirement and for ADR-024 decision 1's URL rule ("a credential
+// is never carried in a URL"). It asserts BOTH directions: the request
+// this client actually sends carries the token only in the Authorization
+// header, never in the query string a server (or a proxy access log)
+// would see; and an error message this client constructs from a FAILED
+// request never echoes the token value even though that value is present
+// in scope at the point the error is built (c.endpoint(apiPath, query),
+// used by every error-message call site in client.go, never receives the
+// token as an input).
+func TestTokenNeverAppearsInURLOrErrorMessages(t *testing.T) {
+	const secret = "smsh_dhZ3x9superSecretTokenValue"
+
+	var gotRawQuery, gotAuthHeader string
+	c, _ := testServerWithToken(t, secret, func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		gotAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/internal-error","title":"Internal error","status":500,"detail":"x"}`)
+	})
+
+	var resp auditResponse
+	err := c.getJSON(context.Background(), "/api/v1/audit", url.Values{"since": {"10"}}, &resp)
+
+	if strings.Contains(gotRawQuery, secret) {
+		t.Fatalf("request query string = %q, must never contain the bearer token (ADR-024 decision 1)", gotRawQuery)
+	}
+	if gotAuthHeader != "Bearer "+secret {
+		t.Fatalf("Authorization header = %q, want the token to travel there instead", gotAuthHeader)
+	}
+	if err == nil {
+		t.Fatal("expected an error from the 500 response")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error message = %q, must never contain the bearer token", err.Error())
+	}
+}
+
+func testServerWithToken(t *testing.T, token string, handler http.HandlerFunc) (*client, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	c, err := newClient(ts.URL, token, &http.Client{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	return c, ts
 }
 
 func requireCLIError(t *testing.T, err error) *cliError {

@@ -127,9 +127,12 @@ func runWatch(ctx context.Context, streamClient, snapshotClient *client, g *glob
 		}
 
 		var ce *cliError
-		if errors.As(err, &ce) && (ce.code == exitUnauthorized || ce.code == exitVersionIncompatible) {
-			// Reconnecting will not fix a bad token or a coordinator that
-			// will never advertise a version this CLI supports. Task
+		if errors.As(err, &ce) && (ce.code == exitUnauthorized || ce.code == exitForbidden || ce.code == exitVersionIncompatible) {
+			// Reconnecting will not fix a bad token, a principal missing a
+			// required scope (ADR-024 decision 4 — a 403 here means "this
+			// principal does not hold node:read/fpp:read/etc.", not a
+			// transient condition retrying will clear), or a coordinator
+			// that will never advertise a version this CLI supports. Task
 			// spec §3: "version skew is reported, not guessed at."
 			return reportError(stderr, "watch", err)
 		}

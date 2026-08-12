@@ -164,3 +164,114 @@
   cursor: pointer;
   font-weight: 600;
 }
+
+/*
+ * ADR-024's persistent sign-in banner (SessionPanel). Deliberately its own
+ * tokens rather than --connection-problem-* or --status-bad-*: "signed
+ * out" is neither a browser-connectivity fault (ConnectionBanner) nor a
+ * report about the show (a bad Evidence reading) — see this project's
+ * running rule that these failure modes must never share a visual
+ * language (spec section 6.3, restated for a third failure mode here). It
+ * is a NORMAL, expected state (an operator who has never needed to act
+ * has no reason to be signed in), so it reads as neutral information, not
+ * as an alarm — --status-warn-* would overstate it.
+ */
+.session-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+/* ADR-024 decision 9: the unclaimed-bootstrap banner is "loud and
+   persistent," not neutral information — it means anyone reaching this
+   coordinator's network can become its administrator. */
+.session-panel--urgent {
+  background: var(--connection-problem-bg);
+  color: var(--connection-problem-fg);
+  font-weight: 600;
+}
+
+.session-panel--signed-in {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.session-panel button {
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.session-panel__error {
+  color: var(--status-bad-fg);
+  font-weight: 600;
+}
+
+/* Sign-in / bootstrap-claim forms: a plain stacked field list, phone-first
+   (spec section 6.6 — unqualified rules target a 360px phone). */
+.session-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.session-form label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.session-form input {
+  min-height: var(--touch-target-min);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.session-form button {
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-surface);
+  cursor: pointer;
+  font-weight: 600;
+  align-self: flex-start;
+}
+
+.session-form__error {
+  color: var(--status-bad-fg);
+  font-weight: 600;
+}
+
+/* ScopedButton (ADR-024 decision 12): a disabled control never renders
+   silently — the reason sits next to it, visible, not just in a `title`
+   tooltip a touchscreen operator can't hover. */
+.scoped-button {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.scoped-button__reason {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  max-width: 32ch;
+}

@@ -230,6 +230,87 @@ type snapshot struct {
 	Collectors     []collectorState `json:"collectors"`
 }
 
+// principalSummary is SessionResponse.principal (ADR-024 decision 1): a
+// principal's own non-secret identity. Non-nil only when Authenticated is
+// true (openapi.yaml's SessionResponse doc comment).
+type principalSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Role string `json:"role"`
+}
+
+// sessionInfo is SessionResponse.session: the session that authenticated
+// this request, present only when that credential was the session cookie
+// (openapi.yaml SessionInfo). showmeshctl never presents a cookie (see
+// cmd_session.go's doc comment on why this CLI is bearer-only), so this is
+// decoded for completeness against the wire shape but this program never
+// expects it non-nil in practice.
+type sessionInfo struct {
+	ID          string    `json:"id"`
+	DeviceLabel string    `json:"deviceLabel"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// sessionResponse is the body of GET /api/v1/session (ADR-024 decisions 5,
+// 9, and 12). Authenticated is false whenever no valid credential
+// authenticated this request — deliberately not a 401 (see
+// openapi.yaml's SessionResponse description: "being signed out" is a
+// persistent, readable state). scopesState is "current", "unknown", or
+// "not_applicable": decision 12 requires "unknown" be treated exactly
+// like an empty scope list, never as permissive — see
+// scopesStateGlyph in format.go.
+type sessionResponse struct {
+	ServerTime        time.Time         `json:"serverTime"`
+	Authenticated     bool              `json:"authenticated"`
+	Principal         *principalSummary `json:"principal"`
+	Session           *sessionInfo      `json:"session"`
+	CredentialForm    *string           `json:"credentialForm"`
+	Scopes            []string          `json:"scopes"`
+	ScopesState       string            `json:"scopesState"`
+	BootstrapRequired bool              `json:"bootstrapRequired"`
+}
+
+// auditEntry is one element of GET /api/v1/audit (ADR-024 decision 11).
+// Params is never null on the wire (an entry with none still reports an
+// empty object) but is declared as a plain map here rather than a pointer
+// for that reason. Every field here is a plain (non-pointer) string:
+// unlike node/fpp fields, the API's own AuditEntry schema marks every
+// field required with no null variant, so there is no absent-vs-empty
+// distinction this type needs to preserve.
+//
+// Deliberately carries no row id / cursor field, because the wire shape
+// does not have one — see cmd_audit.go's doc comment for why that is a
+// known contract limitation this CLI works around rather than papers
+// over.
+type auditEntry struct {
+	Timestamp      time.Time      `json:"timestamp"`
+	PrincipalID    string         `json:"principalId"`
+	PrincipalName  string         `json:"principalName"`
+	Form           string         `json:"form"`
+	CredentialID   string         `json:"credentialId"`
+	ClientAddr     string         `json:"clientAddr"`
+	Action         string         `json:"action"`
+	Target         string         `json:"target"`
+	Params         map[string]any `json:"params"`
+	IdempotencyKey string         `json:"idempotencyKey"`
+	Kind           string         `json:"kind"`
+	CommandID      string         `json:"commandId"`
+	Outcome        string         `json:"outcome"`
+	OutcomeState   string         `json:"outcomeState"`
+	OutcomeReason  string         `json:"outcomeReason"`
+}
+
+// auditResponse is the body of GET /api/v1/audit. Unlike eventsResponse,
+// this carries no gap/oldestRetainedSeq-shaped fields on the wire — see
+// openapi.yaml's AuditResponse description: "the coordinator's audit
+// service currently exposes no oldest-retained cursor for this endpoint
+// to report one honestly."
+type auditResponse struct {
+	ServerTime time.Time    `json:"serverTime"`
+	Entries    []auditEntry `json:"entries"`
+}
+
 // Stream frame payloads (contract §6.4/§6.10). streamEnvelope is decoded
 // first, from the frame's "event:" line and raw "data:" bytes; the
 // concrete payload is then decoded from the same bytes by event type.

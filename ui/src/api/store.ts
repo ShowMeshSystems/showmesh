@@ -80,6 +80,7 @@ type SchemaEventsResponse = components['schemas']['EventsResponse']
 type SchemaNode = components['schemas']['Node']
 type SchemaFPPInstance = components['schemas']['FPPInstance']
 type SchemaEvent = components['schemas']['Event']
+type SchemaSessionResponse = components['schemas']['SessionResponse']
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -158,6 +159,18 @@ export class ApiStore {
   private lastError: string | null = null
   private loopAbort: AbortController | null = null
 
+  /**
+   * ADR-024: independent, short-lived requests this store makes outside
+   * the `/stream` read loop above — `GET /session` on connect(), and
+   * `login`/`logout`/`claimBootstrap`. Tracked in a set (rather than one
+   * field) because more than one can be in flight at once (the
+   * connect()-time session fetch and the first reconnect's own refresh
+   * race deliberately — see applySessionResponse's ordering guard) and so
+   * dispose() can abort every one of them, the same guarantee loopAbort
+   * already gives the read loop.
+   */
+  private readonly sideControllers = new Set<AbortController>()
+
   constructor(options: ApiStoreOptions = {}) {
     this.clock = options.clock ?? SYSTEM_CLOCK
     this.client = new ApiClient(
@@ -188,11 +201,22 @@ export class ApiStore {
     if (this.disposed || this.running) return
     this.running = true
     void this.runLoop()
+    // ADR-024: "GET /api/v1/session is always open ... so the banner
+    // costs one request." Fired independently of the read loop above,
+    // not as part of it, because it must reach a state even when the
+    // loop never does — a coordinator running with reads closed answers
+    // `GET /stream` with a `401` before ever reaching reloadSnapshot's
+    // own session refresh (see that method), and an anonymous device on
+    // a coordinator with reads open still needs this on first paint to
+    // learn it has never authenticated at all (decision 5's third case).
+    const controller = this.beginSideCall()
+    void this.fetchSession(controller.signal).finally(() => this.endSideCall(controller))
   }
 
   dispose(): void {
     this.disposed = true
     this.loopAbort?.abort()
+    for (const controller of this.sideControllers) controller.abort()
   }
 
   /**
@@ -213,6 +237,173 @@ export class ApiStore {
     clearStoredToken()
     this.attempt = 0
     this.loopAbort?.abort()
+  }
+
+  // -- ADR-024: sessions ------------------------------------------------
+  //
+  // These three are deliberately NOT folded into the read loop's ERROR
+  // handling above: a wrong password submitted at the sign-in form is a
+  // fact about ONE request, to be shown next to that form, and must never
+  // flip the whole app's connection banner to "unauthorized". Each method
+  // here lets its error propagate to the caller — the form component —
+  // to render; only fetchSession (the background refresh) swallows its
+  // own failures, because nothing is waiting synchronously on it.
+  //
+  // A SUCCESSFUL call is different: login/logout/claimBootstrap all end
+  // by calling wakeReadLoop(), deliberately reaching into the read loop's
+  // state — see that method's own comment for the real-browser-only
+  // defect this exists to fix.
+
+  private beginSideCall(): AbortController {
+    const controller = new AbortController()
+    this.sideControllers.add(controller)
+    return controller
+  }
+
+  private endSideCall(controller: AbortController): void {
+    this.sideControllers.delete(controller)
+  }
+
+  /**
+   * Found only by loading this in a real browser against a coordinator
+   * running with reads closed (`SHOWMESH_API_CLOSE_READS=true`) — the
+   * exact class of defect this project's own standing lesson names: a
+   * unit suite exercising `login()` in isolation has no read loop sitting
+   * in `unauthorized` to fail to wake, so it cannot see this.
+   *
+   * Without this, a cookie-authenticated `login()`/`claimBootstrap()`
+   * success updates `model.session` correctly, but the READ loop
+   * (runLoop) — if it was already parked in `{ kind: 'unauthorized' }`
+   * because reads are closed and this browser had no credential yet — has
+   * no way to learn a credential now exists: it is sitting in
+   * `waitUntilAborted(signal)`, and the only two things that have ever
+   * aborted that wait are `submitToken`/`clearToken`. The persistent
+   * session banner would then show "Signed in as ..." while the rest of
+   * the dashboard stayed stuck on "Waiting for the first response from
+   * the coordinator" indefinitely — an operator who just proved their
+   * identity, looking at a UI that still won't show them anything.
+   *
+   * Mirrors submitToken/clearToken's own unconditional `attempt = 0` +
+   * abort exactly, including firing even when the loop was NOT parked
+   * waiting (the ordinary case: reads open, the stream never needed a
+   * credential at all) — that costs one harmless extra reconnect
+   * (isAbortError's "retry immediately, no backoff" branch), the same
+   * accepted cost submitToken already pays on every call, and is
+   * simpler and more robust than trying to detect which case applies.
+   */
+  private wakeReadLoop(): void {
+    this.attempt = 0
+    this.loopAbort?.abort()
+  }
+
+  /** `POST /api/v1/session` (ADR-024 decisions 1, 5, 8). Throws on invalid credentials, rate limiting, etc — the caller renders the failure. */
+  async login(name: string, password: string, deviceLabel: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaSessionResponse>(
+        '/session',
+        { name, password, deviceLabel },
+        controller.signal,
+      )
+      this.applySessionResponse(resp)
+      this.wakeReadLoop()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/session` (ADR-024 decisions 5, 6). No `sessionId`
+   * revokes the session that authenticated THIS request — which must be
+   * the cookie itself (server-enforced; see api/openapi.yaml) — the
+   * ordinary "sign out this device" action. A `204` carries no body, so
+   * the authoritative post-logout state (signed out, or — for a
+   * `sessionId` naming some OTHER session — still signed in) is learned
+   * by re-fetching rather than guessed at client-side.
+   */
+  async logout(sessionId?: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson<SchemaSessionResponse>(
+        '/session',
+        sessionId === undefined ? undefined : { sessionId },
+        controller.signal,
+      )
+      await this.fetchSession(controller.signal)
+      // See wakeReadLoop's own comment. Symmetrical with login: if reads
+      // are closed and this was the credential the read loop was living
+      // on, that loop must re-attempt now and land on 'unauthorized'
+      // promptly, rather than an already-live stream (revalidated on its
+      // own schedule — ADR-024 decision 5) being the only thing that
+      // eventually notices.
+      this.wakeReadLoop()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/bootstrap` (ADR-024 decision 9). Throws on an invalid/claimed/expired code — the caller renders the failure. */
+  async claimBootstrap(code: string, name: string, password: string, deviceLabel: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaSessionResponse>(
+        '/bootstrap',
+        { code, name, password, deviceLabel },
+        controller.signal,
+      )
+      this.applySessionResponse(resp)
+      this.wakeReadLoop()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/session`, silently. Never throws: this is the background
+   * refresh fired at connect() and on every stream reconnect
+   * (reloadSnapshot below), and nothing is synchronously waiting on it to
+   * report a failure to. A failure instead sets `sessionFetchFailed`,
+   * which app/session.ts's scope-gate treats as "cannot currently vouch
+   * for this" — the ADR-024 decision 12 degradation — while leaving the
+   * last-known `session` in place rather than discarding it (a momentary
+   * blip must not flash "signed out" over a session that is actually
+   * fine).
+   */
+  private async fetchSession(signal: AbortSignal): Promise<void> {
+    try {
+      const resp = await this.client.getJson<SchemaSessionResponse>('/session', signal)
+      this.applySessionResponse(resp)
+    } catch (err) {
+      if (isAbortError(err)) return
+      this.setModel({ ...this.model, sessionFetchFailed: true })
+    }
+  }
+
+  /**
+   * Applies a `SessionResponse` from any of the four call sites above.
+   * Guarded by `serverTime` rather than arrival order: connect()'s
+   * independent fetch and the first reconnect's own reloadSnapshot
+   * refresh are fired close together on purpose (see connect()'s
+   * comment), and either may resolve second — this store's existing
+   * posture (store.ts's header comment; computeClockSkewMs) is that the
+   * coordinator's own clock, not receipt order, is authoritative, so a
+   * response that is (by serverTime) OLDER than what's already held is
+   * dropped rather than allowed to overwrite fresher data with stale.
+   * An unparseable serverTime is treated as "not older" (applied
+   * anyway) rather than silently discarded — this mirrors
+   * IncompatibleVersionError's own posture of surfacing a malformed
+   * server response instead of pretending it didn't happen.
+   */
+  private applySessionResponse(resp: SchemaSessionResponse): void {
+    const incomingMs = Date.parse(resp.serverTime)
+    const currentMs = this.model.session === null ? -Infinity : Date.parse(this.model.session.serverTime)
+    if (!Number.isNaN(incomingMs) && !Number.isNaN(currentMs) && incomingMs < currentMs) return
+    this.setModel({
+      ...this.model,
+      session: resp,
+      sessionReceivedAt: this.now(),
+      sessionFetchFailed: false,
+    })
   }
 
   // -- the loop -----------------------------------------------------------
@@ -270,6 +461,20 @@ export class ApiStore {
 
         if (err instanceof UnauthorizedError) {
           this.attempt = 0
+          // ADR-024 item 7: "a closed change stream may mean a revoked
+          // session ... the client's existing reconnect and snapshot path
+          // then hits a 401, which must surface as an explicit
+          // authentication state." That's the `setConnection` call below,
+          // unchanged since Step 4 — this refresh is what ALSO updates
+          // the persistent sign-in banner (app/session.ts,
+          // model.session), which is a separate piece of state from
+          // `connection` and would otherwise still read "signed in" from
+          // whatever /session last reported, stale, until the operator
+          // happened to trigger another read of it. Fire-and-forget: the
+          // 'unauthorized' connection state below must render immediately
+          // regardless of how long this fetch takes, and fetchSession
+          // never throws.
+          void this.fetchSession(signal)
           if (err.tokenWasPresent) {
             // Spec section 5.6: "clear the stored token and return to
             // unauthorized with a distinguishable ... detail, so a
@@ -491,6 +696,16 @@ export class ApiStore {
     )
     if (gen !== this.generation) return
     this.applyInitialEvents(events)
+
+    // ADR-024 decision 12: a reconnect is exactly the moment the coordinator
+    // may have closed the PREVIOUS connection over a generation bump (decision
+    // 5's "closes open streams and forces a re-fetch, so the stale window is
+    // bounded") — refreshing session/scopes here, on every reconnect, is what
+    // makes that bound real on the client side rather than only asserted
+    // coordinator-side. Swallows its own errors (see fetchSession) so a
+    // /session hiccup never blocks reaching `live`.
+    await this.fetchSession(signal)
+    if (gen !== this.generation) return
 
     this.attempt = 0
     this.lastError = null

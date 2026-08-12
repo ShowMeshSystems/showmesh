@@ -12,11 +12,13 @@ import {
   type TestServer,
 } from './test-support/test-server'
 import {
+  makeAuthenticatedSession,
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
   makeNode,
   makeProblem,
+  makeSessionResponse,
   makeSnapshot,
 } from './test-support/fixtures'
 import {
@@ -1894,5 +1896,408 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
     expect((finalInstance?.observations ?? []).map((o) => o.signal).sort()).toEqual(
       after.observations.map((o) => o.signal).sort(),
     )
+  })
+})
+
+describe('ApiStore: ADR-024 sessions', () => {
+  it('fetches /session independently of the read loop, so it resolves even when /stream never does (reads closed, no credential)', async () => {
+    let sessionAttempts = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        // Simulates a coordinator running with reads closed: every
+        // /stream attempt is rejected, so runConnectionAttempt never
+        // even reaches reloadSnapshot's own /session refresh — the
+        // ONLY thing that can still answer "am I signed in" here is
+        // connect()'s independent fetch.
+        respondProblem(res, 401, makeProblem({ type: 'https://showmesh.dev/problems/unauthorized', status: 401, detail: 'reads closed' }))
+        return
+      }
+      if (req.url === '/session') {
+        sessionAttempts += 1
+        respondJson(res, 200, makeSessionResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'unauthorized', {
+      message: 'connection never reached unauthorized',
+    })
+    await waitFor(() => store.getSnapshot().session !== null, {
+      message: 'session was never fetched even though GET /session is always open',
+    })
+    expect(store.getSnapshot().session?.authenticated).toBe(false)
+    expect(sessionAttempts).toBeGreaterThanOrEqual(1)
+  })
+
+  it('re-fetches /session on every stream reconnect, bounding the staleness window ADR-024 decision 12 describes', async () => {
+    let streamAttempt = 0
+    let sessionAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamAttempt += 1
+        const thisAttempt = streamAttempt
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: `s${thisAttempt}`,
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        if (thisAttempt === 1) {
+          setTimeout(() => req.socket.destroy(), 60)
+        }
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      if (req.url === '/session') {
+        sessionAttempt += 1
+        respondJson(res, 200, makeSessionResponse({ serverTime: new Date(Date.now() + sessionAttempt).toISOString() }))
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => sessionAttempt >= 1, { message: 'the initial connect()-time session fetch never happened' })
+    const afterFirstConnect = sessionAttempt
+
+    await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected the stream' })
+    await waitFor(() => store.getSnapshot().connection.kind === 'live', {
+      message: 'store never returned to live after reconnect',
+    })
+    // A test's name is a claim: this is the assertion that fails if
+    // reloadSnapshot's own fetchSession call (store.ts) were ever deleted
+    // — sessionAttempt would stop at whatever connect() alone produced.
+    await waitFor(() => sessionAttempt > afterFirstConnect, {
+      message: 'session was never re-fetched after the stream reconnected',
+    })
+  })
+
+  it('login() updates model.session from the POST response and leaves an already-live connection live', async () => {
+    let capturedBody = ''
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'GET') return respondJson(res, 200, makeSessionResponse())
+      if (req.url === '/session' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          capturedBody = Buffer.concat(chunks).toString('utf-8')
+          respondJson(res, 200, makeAuthenticatedSession({
+            principal: { id: 'p1', name: 'alice', kind: 'human', role: 'operator' },
+          }))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await store.login('alice', 'secret123', 'porch tablet')
+
+    expect(JSON.parse(capturedBody)).toEqual({ name: 'alice', password: 'secret123', deviceLabel: 'porch tablet' })
+    expect(store.getSnapshot().session?.authenticated).toBe(true)
+    expect(store.getSnapshot().session?.principal?.name).toBe('alice')
+    // login() now deliberately wakes the read loop (wakeReadLoop, added
+    // after a real-browser finding — see that method's own comment), so
+    // an already-live connection may pass through a brief reconnect
+    // before settling back to 'live'; this waits it out rather than
+    // asserting the synchronous value immediately after the await, which
+    // would be racing microtask ordering rather than testing behavior.
+    await waitFor(() => store.getSnapshot().connection.kind === 'live', {
+      message: 'connection never returned to live after the post-login reconnect',
+    })
+  })
+
+  it('login() wakes a read loop parked in "unauthorized" (reads closed), so a cookie-authenticated sign-in actually reaches "live" — found only against a real browser and a coordinator running with reads closed', async () => {
+    // The regression this guards: login()/claimBootstrap() used to only
+    // update model.session, never touch the read loop. Against a
+    // coordinator with SHOWMESH_API_CLOSE_READS=true, that loop sits in
+    // `{ kind: 'unauthorized' }`, parked on `waitUntilAborted(signal)`
+    // (store.ts's runLoop) — and the only two things that had ever woken
+    // it were submitToken/clearToken. A cookie-authenticated login left
+    // the dashboard showing "Signed in as ..." in the persistent banner
+    // while the rest of the page stayed stuck on "waiting for the first
+    // response," forever. No unit test targeting login() in isolation
+    // could see this, because it has no read loop sitting in
+    // 'unauthorized' to fail to wake — this test constructs exactly that
+    // loop first, the same way the real browser session that found the
+    // bug did.
+    let authenticated = false
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        if (!authenticated) {
+          respondProblem(res, 401, makeProblem({ type: 'https://showmesh.dev/problems/unauthorized', status: 401, detail: 'reads closed' }))
+          return
+        }
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'GET') {
+        return respondJson(res, 200, authenticated ? makeAuthenticatedSession() : makeSessionResponse())
+      }
+      if (req.url === '/session' && req.method === 'POST') {
+        authenticated = true
+        respondJson(res, 200, makeAuthenticatedSession())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'unauthorized', {
+      message: 'the read loop never reached the closed-reads unauthorized state to begin with',
+    })
+
+    await store.login('alice', 'secret123', 'porch tablet')
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live', {
+      message: 'the read loop never woke up after a successful cookie-authenticated login — it would still be stuck showing "unauthorized" or waiting, exactly the real-browser defect this test guards',
+    })
+  })
+
+  it('login() rejects on invalid credentials and leaves session/connection untouched', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'GET') return respondJson(res, 200, makeSessionResponse())
+      if (req.url === '/session' && req.method === 'POST') {
+        return respondProblem(res, 401, makeProblem({ type: 'https://showmesh.dev/problems/unauthorized', status: 401, detail: 'invalid name or password' }))
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await expect(store.login('alice', 'wrong', 'porch tablet')).rejects.toThrow('invalid name or password')
+
+    expect(store.getSnapshot().session?.authenticated).toBe(false)
+    // A wrong password at the login form must never be confused, at the
+    // connection-state level, with the read loop's own 401 handling —
+    // it must not flip to 'unauthorized' just because SOME request
+    // somewhere got a 401.
+    expect(store.getSnapshot().connection.kind).toBe('live')
+  })
+
+  it('logout() revokes and re-fetches, leaving model.session signed out', async () => {
+    let deleteCalls = 0
+    let sessionGetCalls = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session' && req.method === 'DELETE') {
+        deleteCalls += 1
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+        return
+      }
+      if (req.url === '/session' && req.method === 'GET') {
+        sessionGetCalls += 1
+        // Signed in until the DELETE lands, signed out after — the
+        // fixture a real coordinator would produce across this sequence.
+        respondJson(res, 200, deleteCalls === 0 ? makeAuthenticatedSession() : makeSessionResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().session?.authenticated === true, {
+      message: 'never observed the initial signed-in state',
+    })
+
+    await store.logout()
+
+    expect(deleteCalls).toBe(1)
+    expect(sessionGetCalls).toBeGreaterThanOrEqual(2) // the initial fetch(es), plus logout's own re-fetch
+    expect(store.getSnapshot().session?.authenticated).toBe(false)
+  })
+
+  it('claimBootstrap() applies the returned session on success', async () => {
+    let capturedBody = ''
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        respondProblem(res, 401, makeProblem({ type: 'https://showmesh.dev/problems/unauthorized', status: 401, detail: 'reads closed' }))
+        return
+      }
+      if (req.url === '/session') return respondJson(res, 200, makeSessionResponse({ bootstrapRequired: true }))
+      if (req.url === '/bootstrap' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          capturedBody = Buffer.concat(chunks).toString('utf-8')
+          respondJson(res, 200, makeAuthenticatedSession({ bootstrapRequired: false, principal: { id: 'p1', name: 'root', kind: 'human', role: 'admin' } }))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().session?.bootstrapRequired === true)
+
+    await store.claimBootstrap('the-code', 'root', 'secret123', 'porch tablet')
+
+    expect(JSON.parse(capturedBody)).toEqual({
+      code: 'the-code', name: 'root', password: 'secret123', deviceLabel: 'porch tablet',
+    })
+    expect(store.getSnapshot().session?.authenticated).toBe(true)
+    expect(store.getSnapshot().session?.bootstrapRequired).toBe(false)
+    expect(store.getSnapshot().session?.principal?.role).toBe('admin')
+  })
+
+  it('a 401 that puts the read loop into "unauthorized" also refreshes the persistent session banner, not just the connection state', async () => {
+    // Item 7: "a closed change stream may mean a revoked session ... the
+    // client's existing reconnect and snapshot path then hits a 401,
+    // which must surface as an explicit authentication state." This test
+    // is the part of that claim specific to this step: the PERSISTENT
+    // banner (model.session) must also update, not only model.connection
+    // — otherwise SessionPanel would still read "signed in" from
+    // whatever /session last reported, stale, after the revocation.
+    let streamAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamAttempt += 1
+        if (streamAttempt === 1) {
+          openSSE(res)
+          writeSSEFrame(res, 'stream.start', {
+            streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+          })
+          setTimeout(() => req.socket.destroy(), 60)
+          return
+        }
+        // Second attempt onward: the coordinator has closed reads and
+        // this device's session was revoked — simulates decision 5's
+        // "closes the connection ... the client's existing reconnect
+        // ... then hits a 401."
+        respondProblem(res, 401, makeProblem({ type: 'https://showmesh.dev/problems/unauthorized', status: 401, detail: 'session revoked' }))
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session') {
+        // Signed in for the first (successful) connection; signed out
+        // from the moment the stream starts failing, mirroring what a
+        // real coordinator would answer once the session is actually gone.
+        respondJson(res, 200, streamAttempt <= 1 ? makeAuthenticatedSession() : makeSessionResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().session?.authenticated === true, {
+      message: 'never observed the initial signed-in state',
+    })
+    await waitFor(() => store.getSnapshot().connection.kind === 'unauthorized', {
+      message: 'connection never surfaced the explicit authentication state',
+    })
+    await waitFor(() => store.getSnapshot().session?.authenticated === false, {
+      message: 'the persistent session banner never learned about the revocation — it would still read "signed in"',
+    })
+  })
+
+  it('applySessionResponse keeps the newer serverTime even when the OLDER response resolves SECOND', async () => {
+    // connect()'s own independent fetch and reloadSnapshot's refresh are
+    // fired close together on purpose (store.ts's connect() comment) —
+    // this constructs the one ordering that actually distinguishes
+    // "guarded by serverTime" from "guarded by nothing" (plain last-
+    // write-wins would already pass a same-order race). The FIRST
+    // /session request to ARRIVE (connect()'s) is answered immediately
+    // with a NEWER serverTime; the SECOND to arrive (reloadSnapshot's) is
+    // answered LATER, but with OLDER data — exactly what a real
+    // coordinator would never do, constructed here specifically because a
+    // real timing race cannot be relied on to expose an ordering bug (this
+    // project's own "do not race a kernel; construct it structurally"
+    // rule, restated for wall-clock races instead of buffer-overflow ones).
+    const older = new Date('2020-01-01T00:00:00.000Z').toISOString()
+    const newer = new Date('2030-01-01T00:00:00.000Z').toISOString()
+    let sessionRequestsSeen = 0
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1', apiVersion: 1, serverTime: new Date().toISOString(), snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') return respondJson(res, 200, makeSnapshot())
+      if (req.url?.startsWith('/events')) return respondJson(res, 200, makeEventsResponse())
+      if (req.url === '/session') {
+        sessionRequestsSeen += 1
+        if (sessionRequestsSeen === 1) {
+          respondJson(res, 200, makeSessionResponse({ serverTime: newer }))
+        } else {
+          setTimeout(() => respondJson(res, 200, makeSessionResponse({ serverTime: older })), 40)
+        }
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().session?.serverTime === newer, {
+      message: 'the first (newer) session response was never applied',
+    })
+    await waitFor(() => sessionRequestsSeen >= 2, { message: 'the second session request never arrived' })
+    // Give the delayed, older-data second response time to resolve and
+    // (if the guard were missing) overwrite the newer one already applied.
+    await sleepMs(80)
+
+    expect(store.getSnapshot().session?.serverTime).toBe(newer)
   })
 })

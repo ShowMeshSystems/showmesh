@@ -14,6 +14,7 @@ type Snapshot = components['schemas']['Snapshot']
 type EventsResponse = components['schemas']['EventsResponse']
 type Event = components['schemas']['Event']
 type Problem = components['schemas']['Problem']
+type SessionResponse = components['schemas']['SessionResponse']
 
 const NOW = '2026-08-11T12:00:00.000Z'
 
@@ -102,6 +103,34 @@ export function makeEventsResponse(overrides: Partial<EventsResponse> = {}): Eve
     oldestRetainedSeq: null,
     ...overrides,
   }
+}
+
+/** ADR-024. Defaults to the signed-out shape (SessionResponse's own doc comment: authenticated false => principal/session/credentialForm null, scopes []). */
+export function makeSessionResponse(overrides: Partial<SessionResponse> = {}): SessionResponse {
+  return {
+    serverTime: NOW,
+    authenticated: false,
+    principal: null,
+    session: null,
+    credentialForm: null,
+    scopes: [],
+    scopesState: 'not_applicable',
+    bootstrapRequired: false,
+    ...overrides,
+  }
+}
+
+/** An authenticated SessionResponse, for tests that need one — layered on makeSessionResponse's defaults rather than duplicating them. */
+export function makeAuthenticatedSession(overrides: Partial<SessionResponse> = {}): SessionResponse {
+  return makeSessionResponse({
+    authenticated: true,
+    principal: { id: 'p1', name: 'operator', kind: 'human', role: 'operator' },
+    session: { id: 's1', deviceLabel: 'test device', createdAt: NOW },
+    credentialForm: 'session',
+    scopes: ['node:read', 'fpp:read', 'observation:read', 'event:read', 'show:macro:run', 'device:power', 'fpp:command'],
+    scopesState: 'current',
+    ...overrides,
+  })
 }
 
 export function makeProblem(overrides: Partial<Problem> = {}): Problem {

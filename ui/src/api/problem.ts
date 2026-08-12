@@ -15,4 +15,15 @@ export const PROBLEM_TYPE = {
   unauthorized: 'https://showmesh.dev/problems/unauthorized',
   methodNotAllowed: 'https://showmesh.dev/problems/method-not-allowed',
   internalError: 'https://showmesh.dev/problems/internal-error',
+  // ADR-024's four additions (api/openapi.yaml Problem.type enum, and this
+  // document's own top-level description: "Four of the eleven are
+  // ADR-024"). forbidden is 403-authenticated-but-missing-scope, distinct
+  // from unauthorized's 401-no-credential-at-all; csrfRejected is 403 too,
+  // but names a different cause (a cookie-authenticated write missing
+  // Sec-Fetch-Site) that a client must explain differently — never dispatch
+  // on HTTP status alone for either.
+  forbidden: 'https://showmesh.dev/problems/forbidden',
+  csrfRejected: 'https://showmesh.dev/problems/csrf-rejected',
+  tooManyRequests: 'https://showmesh.dev/problems/too-many-requests',
+  credentialInUrl: 'https://showmesh.dev/problems/credential-in-url',
 } as const

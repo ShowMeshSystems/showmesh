@@ -25,11 +25,50 @@ const (
 	problemResourceNotFound      = "https://showmesh.dev/problems/resource-not-found"
 	problemInvalidParameter      = "https://showmesh.dev/problems/invalid-parameter"
 	problemUnauthorized          = "https://showmesh.dev/problems/unauthorized"
+
+	// The four ADR-024 additions (internal/coordinator/api/problem.go's
+	// exact same four constants; matched by exact string, not by path
+	// suffix, for the same "do not misread an unrelated 404" reason the
+	// original four are).
+
+	// problemForbidden is decision 4's 403: authenticated, but missing a
+	// scope. Distinct from problemUnauthorized (401, no valid credential
+	// at all) so this CLI can send an operator to "ask for a scope" rather
+	// than "check your token" — see exitForbidden and decodeProblemError.
+	problemForbidden = "https://showmesh.dev/problems/forbidden"
+	// problemCSRFRejected is decision 6's same-origin rule for a
+	// cookie-authenticated write. showmeshctl never presents a cookie
+	// (see cmd_session.go's doc comment), so this CLI cannot itself
+	// trigger it, but it is still classified explicitly rather than
+	// falling through to a generic 403 handler, in case a future command
+	// ever does add cookie support.
+	problemCSRFRejected = "https://showmesh.dev/problems/csrf-rejected"
+	// problemTooManyRequests is decision 8's login concurrency-bound
+	// rejection, carrying a Retry-After response header this client
+	// surfaces explicitly (decodeProblemError) rather than leaving an
+	// operator to guess how long to wait.
+	problemTooManyRequests = "https://showmesh.dev/problems/too-many-requests"
+	// problemCredentialInURL is decision 1's URL rule: a request whose
+	// query string carried the token prefix. showmeshctl never puts a
+	// token in a query string (see client.go's applyHeaders, the only
+	// place this program ever attaches a credential), so this should be
+	// unreachable in practice; classified anyway so a defect that ever
+	// did put one there is reported as a usage bug in this CLI rather than
+	// an opaque server error.
+	problemCredentialInURL = "https://showmesh.dev/problems/credential-in-url"
 )
 
 // Exit codes. Documented in --help (see usage.go) so a script wrapping this
 // tool can branch on $? instead of scraping stderr, per task spec §3
 // ("Exit codes are meaningful").
+//
+// exitForbidden and exitRateLimited are ADR-024 additions, deliberately
+// distinct from exitUnauthorized: conflating "no valid credential" (401),
+// "authenticated but missing a scope" (403), and "rate limited, retry
+// later" (429) into one exit code would send an operator's retry script or
+// runbook to the wrong branch — the task's own framing for why this
+// distinction matters ("conflating them sends an operator to the wrong
+// place").
 const (
 	exitOK                  = 0
 	exitUsage               = 1
@@ -38,6 +77,8 @@ const (
 	exitVersionIncompatible = 4
 	exitNotFound            = 5
 	exitAPIError            = 6
+	exitForbidden           = 7
+	exitRateLimited         = 8
 )
 
 // cliError carries an exit code alongside a human-readable message, so
@@ -69,17 +110,25 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitNotFound
 		case problemUnauthorized:
 			return exitUnauthorized
-		case problemInvalidParameter:
+		case problemInvalidParameter, problemCredentialInURL:
 			return exitUsage
+		case problemForbidden, problemCSRFRejected:
+			return exitForbidden
+		case problemTooManyRequests:
+			return exitRateLimited
 		}
 	}
 	switch status {
 	case 401:
 		return exitUnauthorized
+	case 403:
+		return exitForbidden
 	case 404:
 		return exitNotFound
 	case 400:
 		return exitUsage
+	case 429:
+		return exitRateLimited
 	default:
 		return exitAPIError
 	}

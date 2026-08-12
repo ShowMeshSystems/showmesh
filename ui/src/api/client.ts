@@ -1,4 +1,11 @@
-import { ApiError, IncompatibleVersionError, UnauthorizedError } from './errors'
+import {
+  ApiError,
+  CSRFRejectedError,
+  ForbiddenError,
+  IncompatibleVersionError,
+  TooManyRequestsError,
+  UnauthorizedError,
+} from './errors'
 import { PROBLEM_TYPE, type Problem } from './problem'
 import { getStoredToken } from './token'
 import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
@@ -14,6 +21,19 @@ export const REQUIRED_API_VERSION = 1
 const API_VERSION_HEADER = 'ShowMesh-API-Version'
 
 export type FetchLike = typeof fetch
+
+/**
+ * The subset of `RequestInit` this client's callers actually need:
+ * `method` for `POST`/`DELETE`, and a plain-object `body` this client
+ * JSON-encodes itself (see [ApiClient.request]'s own comment) rather than
+ * the raw `BodyInit` `fetch` expects — every caller has an object, never a
+ * pre-encoded string, so encoding it here is one fewer thing every call
+ * site has to get right identically.
+ */
+export interface JsonRequestInit {
+  method?: string
+  body?: unknown
+}
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how long a request may take before this
@@ -69,15 +89,53 @@ export class ApiClient {
     this.requestTimeoutMs = requestTimeoutMs
   }
 
-  /** Performs the request and returns the raw Response on success (2xx). Throws a typed error otherwise. */
-  async request(path: string, signal: AbortSignal): Promise<Response> {
+  /**
+   * Performs the request and returns the raw Response on success (2xx).
+   * Throws a typed error otherwise.
+   *
+   * `init.method`/`init.body` exist for `POST /session`, `DELETE
+   * /session`, and `POST /bootstrap` (ADR-024) — every other route this
+   * client calls is a bare `GET`, so `init` defaults to that and every
+   * existing call site (store.ts) is unaffected. `init.body`, when
+   * present, is JSON-encoded and paired with `Content-Type:
+   * application/json`; a body-less request (every `GET`, and `DELETE
+   * /session` with no `sessionId`) sends neither.
+   *
+   * `credentials: 'same-origin'` is set explicitly on every request
+   * rather than relied on as `fetch`'s default. The default already
+   * matches (browsers omit credentials only for `'omit'`/cross-origin
+   * cases), but ADR-024 decision 5's whole session model depends on the
+   * `showmesh_session` cookie actually attaching to same-origin requests,
+   * and Step 4's own lesson (client.ts's constructor comment, `this`
+   * receiver binding) is that an assumption about `fetch` unverified in a
+   * browser is not a fact about `fetch` in a browser. Being explicit also
+   * makes this an assertion a test can read off the constructed request
+   * rather than a behavior only a browser can confirm.
+   */
+  async request(path: string, signal: AbortSignal, init: JsonRequestInit = {}): Promise<Response> {
     const token = getStoredToken()
     const tokenWasPresent = token !== null
     const headers: Record<string, string> = {
       [API_VERSION_HEADER]: String(REQUIRED_API_VERSION),
     }
+    // ADR-024 decision 6: "an Authorization header, if present at all, is
+    // the only credential path considered for this request." A stored
+    // break-glass token therefore always wins over the cookie the browser
+    // would otherwise attach automatically — this client does not choose
+    // between them, it just decides whether to ADD the header, and the
+    // coordinator's own resolveCredential (internal/coordinator/api/auth.go)
+    // is what enforces the precedence this comment names.
     if (token !== null) {
       headers.Authorization = `Bearer ${token}`
+    }
+    // `null`, not `undefined`: `fetch`'s own `body` option type is
+    // `BodyInit | null` under `exactOptionalPropertyTypes` — see
+    // JsonRequestInit's doc comment for why every caller passes a plain
+    // object instead of a pre-encoded BodyInit in the first place.
+    let body: string | null = null
+    if (init.body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(init.body)
     }
 
     // Combine the caller's signal (deliberate interruption: dispose(),
@@ -101,7 +159,13 @@ export class ApiClient {
     let response: Response
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: init.method ?? 'GET',
         headers,
+        body,
+        // See this method's own doc comment: explicit rather than relied
+        // on as fetch's default, so ADR-024's cookie actually attaches
+        // and a test can assert this was asked for rather than hoped for.
+        credentials: 'same-origin',
         signal: combined.signal,
       })
     } catch (err) {
@@ -136,6 +200,26 @@ export class ApiClient {
 
   async getJson<T>(path: string, signal: AbortSignal): Promise<T> {
     const response = await this.request(path, signal)
+    return (await response.json()) as T
+  }
+
+  /** `POST` with a JSON body, expecting a JSON response — `POST /session`, `POST /bootstrap`. */
+  async postJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
+    const response = await this.request(path, signal, { method: 'POST', body })
+    return (await response.json()) as T
+  }
+
+  /**
+   * `DELETE`, optionally with a JSON body — `DELETE /session`. Returns
+   * `undefined` for a `204 No Content` (this route's success response,
+   * api/openapi.yaml) rather than calling `response.json()` on an empty
+   * body, which throws. Typed `T | undefined` rather than always-`void`
+   * so a future `DELETE` route that does return a body is not forced
+   * through a second method.
+   */
+  async deleteJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T | undefined> {
+    const response = await this.request(path, signal, { method: 'DELETE', body })
+    if (response.status === 204) return undefined
     return (await response.json()) as T
   }
 
@@ -180,6 +264,20 @@ export class ApiClient {
         problem.detail,
       )
     }
+    // ADR-024's three new dispatchable problem types — never inferred from
+    // the `403`/`429` HTTP status alone (both statuses cover more than one
+    // `type`: `403` is also plain `forbidden`, and this client must not
+    // guess which). See errors.ts for why forbidden and csrfRejected stay
+    // separate classes despite sharing a status code.
+    if (problem?.type === PROBLEM_TYPE.forbidden) {
+      throw new ForbiddenError(problem.detail)
+    }
+    if (problem?.type === PROBLEM_TYPE.csrfRejected) {
+      throw new CSRFRejectedError(problem.detail)
+    }
+    if (problem?.type === PROBLEM_TYPE.tooManyRequests) {
+      throw new TooManyRequestsError(problem.detail, parseRetryAfter(response))
+    }
 
     throw new ApiError(
       problem?.detail ?? `${path} failed with status ${response.status}`,
@@ -187,4 +285,17 @@ export class ApiClient {
       problem?.type,
     )
   }
+}
+
+/**
+ * `Retry-After` (ADR-024 decision 8, `components.responses.TooManyRequests`
+ * in api/openapi.yaml) as whole seconds, or null when absent or not a
+ * plain integer — this API never sends the HTTP-date form of the header,
+ * so that form is deliberately not parsed here rather than half-supported.
+ */
+function parseRetryAfter(response: Response): number | null {
+  const header = response.headers.get('Retry-After')
+  if (header === null) return null
+  const seconds = Number(header)
+  return Number.isInteger(seconds) && seconds >= 0 ? seconds : null
 }

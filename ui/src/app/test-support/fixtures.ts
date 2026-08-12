@@ -144,6 +144,9 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
+    session: null,
+    sessionReceivedAt: null,
+    sessionFetchFailed: false,
     ...overrides,
   }
 }

@@ -185,6 +185,14 @@ func (c *client) checkAPIVersionHeader(resp *http.Response) error {
 // problem at all, the resulting error still carries a status-derived exit
 // code and the raw body (truncated) for diagnosis, rather than failing
 // silently.
+//
+// A 429 (ADR-024 decision 8's login concurrency bound) carries a
+// Retry-After response header the problem body itself does not repeat —
+// session.go's tooManyRequestsProblem sets it separately from the detail
+// text — so this reads it directly from resp and appends it to the
+// message; an operator (or a script parsing stderr) should not have to
+// re-derive "how long do I wait" from a header this function already had
+// in hand.
 func decodeProblemError(resp *http.Response, body []byte) error {
 	var p problem
 	if err := json.Unmarshal(body, &p); err != nil || p.Title == "" {
@@ -202,6 +210,9 @@ func decodeProblemError(resp *http.Response, body []byte) error {
 	}
 	if p.Type == problemUnsupportedAPIVersion && len(p.SupportedVersions) > 0 {
 		msg = fmt.Sprintf("%s (this CLI requested version %s; coordinator supports %v)", msg, clientAPIVersion, p.SupportedVersions)
+	}
+	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+		msg = fmt.Sprintf("%s (Retry-After: %s seconds)", msg, retryAfter)
 	}
 	return newCLIError(exitCodeForProblem(resp.StatusCode, &p), "%s", msg)
 }

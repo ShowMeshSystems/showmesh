@@ -13,6 +13,11 @@
  * `submitApiToken`/`clearApiToken`) to match seam C's documented
  * assumption in src/app/App.tsx, discovered once both seams' code
  * existed side by side.
+ *
+ * `login`/`logout`/`claimBootstrap` (ADR-024) are the same pattern for
+ * the session/cookie credential form: thin pass-throughs to the one
+ * `ApiStore` instance, so a form component never touches the store
+ * class directly.
  */
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
@@ -31,4 +36,21 @@ export function submitToken(token: string): void {
 
 export function clearToken(): void {
   store.clearToken()
+}
+
+export function login(name: string, password: string, deviceLabel: string): Promise<void> {
+  return store.login(name, password, deviceLabel)
+}
+
+export function logout(sessionId?: string): Promise<void> {
+  return store.logout(sessionId)
+}
+
+export function claimBootstrap(
+  code: string,
+  name: string,
+  password: string,
+  deviceLabel: string,
+): Promise<void> {
+  return store.claimBootstrap(code, name, password, deviceLabel)
 }

@@ -20,6 +20,9 @@ function model(connection: ConnectionState, snapshotReceivedAt: number | null): 
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
+    session: null,
+    sessionReceivedAt: null,
+    sessionFetchFailed: false,
   }
 }
 

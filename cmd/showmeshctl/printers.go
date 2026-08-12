@@ -229,6 +229,71 @@ func printEventsTable(w io.Writer, resp eventsResponse) {
 	_, _ = fmt.Fprintf(w, "latestSeq: %d\n", resp.LatestSeq)
 }
 
+// printSessionDetail renders GET /api/v1/session (ADR-024 decisions 5, 9,
+// 12). "not authenticated" is printed as a plain, readable fact rather
+// than an error banner: SessionResponse's own contract makes that a
+// success response, and this function must not editorialize it into
+// looking like something went wrong.
+func printSessionDetail(w io.Writer, s sessionResponse) {
+	if !s.Authenticated {
+		_, _ = fmt.Fprintln(w, "Authenticated: no")
+		if s.BootstrapRequired {
+			_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED — this coordinator holds zero principals (ADR-024 decision 9)")
+		}
+		_, _ = fmt.Fprintln(w, "\nNo credential authenticated this request. Set --token or $SHOWMESH_CTL_TOKEN")
+		_, _ = fmt.Fprintln(w, "to an API token minted for a principal by an admin.")
+		return
+	}
+
+	_, _ = fmt.Fprintln(w, "Authenticated: yes")
+	if s.Principal != nil {
+		_, _ = fmt.Fprintf(w, "Principal:     %s (id %s, kind %s)\n", s.Principal.Name, s.Principal.ID, s.Principal.Kind)
+		_, _ = fmt.Fprintf(w, "Role:          %s\n", s.Principal.Role)
+	}
+	if s.CredentialForm != nil {
+		_, _ = fmt.Fprintf(w, "Credential:    %s\n", *s.CredentialForm)
+	}
+	if s.Session != nil {
+		label := s.Session.DeviceLabel
+		if label == "" {
+			label = "-"
+		}
+		_, _ = fmt.Fprintf(w, "Session:       id=%s device=%s\n", s.Session.ID, label)
+	}
+	_, _ = fmt.Fprintf(w, "Scopes state:  %s\n", scopesStateGlyph(s.ScopesState))
+	if len(s.Scopes) == 0 {
+		_, _ = fmt.Fprintln(w, "Scopes:        (none)")
+	} else {
+		for i, sc := range s.Scopes {
+			prefix := "Scopes:        "
+			if i > 0 {
+				prefix = "               "
+			}
+			_, _ = fmt.Fprintf(w, "%s%s\n", prefix, sc)
+		}
+	}
+	if s.BootstrapRequired {
+		_, _ = fmt.Fprintln(w, "Bootstrap:     REQUIRED — this coordinator holds zero principals (ADR-024 decision 9)")
+	}
+}
+
+// printAuditTable renders GET /api/v1/audit (ADR-024 decision 11).
+func printAuditTable(w io.Writer, resp auditResponse) {
+	if len(resp.Entries) == 0 {
+		_, _ = fmt.Fprintln(w, "(no audit entries)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "TIMESTAMP\tKIND\tPRINCIPAL\tFORM\tACTION\tTARGET\tOUTCOME\tOUTCOME STATE")
+	for _, e := range resp.Entries {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s (%s)\t%s\t%s\t%s\t%s\t%s\n",
+			e.Timestamp.Format(time.RFC3339), auditKindGlyph(e.Kind),
+			emptyOrDash(e.PrincipalName), emptyOrDash(e.PrincipalID), emptyOrDash(e.Form),
+			e.Action, e.Target, emptyOrDash(e.Outcome), emptyOrDash(e.OutcomeState))
+	}
+	_ = tw.Flush()
+}
+
 func printSnapshotDetail(w io.Writer, s snapshot) {
 	_, _ = fmt.Fprintf(w, "serverTime:     %s\n", s.ServerTime.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(w, "latestEventSeq: %d\n\n", s.LatestEventSeq)

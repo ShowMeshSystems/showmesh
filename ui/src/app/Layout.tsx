@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
+import { SessionPanel } from '../components/SessionPanel'
 import { useHighContrast } from './useHighContrast'
 import { useModelContext } from './ModelContext'
 
@@ -93,6 +94,14 @@ export function Layout({ onSubmitToken }: LayoutProps) {
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
         )}
+        {/* ADR-024: independent of `connection` above — this renders
+            whenever GET /api/v1/session has answered, regardless of
+            whether reads are open, closed, or currently interrupted. See
+            SessionPanel's own header comment for why it is not gated on
+            `blockContent` below: an operator must be able to see "you are
+            signed out" even while the rest of the page is showing "no
+            data yet". */}
+        <SessionPanel />
         <main className="app-main">
           {blockContent ? (
             <p className="text-muted" role="status">
