@@ -3,6 +3,7 @@ import { useModelContext } from '../app/ModelContext'
 import { FPPHealthBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
+import { FPPStopPlaylistControl } from '../components/FPPStopPlaylistControl'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { PortGrid } from '../components/PortGrid'
 import { formatAbsolute } from '../app/time'
@@ -65,6 +66,18 @@ export function FPPDetail() {
                 <dt>Last poll error</dt>
                 <dd>{instance.lastPollError ?? 'none'}</dd>
               </dl>
+            </section>
+          </PanelErrorBoundary>
+
+          {/* Step 7 seam C, ADR-001/ADR-003: this application's first
+              write control. FPPStopPlaylistControl owns its own
+              scope-gating (ScopedButton, ADR-024 decision 12) and its
+              own outcome rendering (confirmed/unconfirmed/pending, never
+              a bare "done" on a 200 alone). */}
+          <PanelErrorBoundary panelLabel="Commands">
+            <section className="panel">
+              <h3 className="panel__title">Commands</h3>
+              <FPPStopPlaylistControl instanceId={instance.instanceId} />
             </section>
           </PanelErrorBoundary>
 

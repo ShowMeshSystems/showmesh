@@ -10,11 +10,26 @@ import (
 )
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	// "stop-playlist <instance-id>" (Step 7 seam C) is dispatched before
+	// this subcommand's own flag set ever parses args: it has its own
+	// flag set (cmdFPPStopPlaylist), the same way "showmeshctl session"
+	// and "showmeshctl audit" are top-level subcommands with their own
+	// flags rather than flags of some other command. It lives under
+	// "fpp" — not as a fourth top-level verb — because it is FPP-specific
+	// in the same way "fpp [id]" already is, and because BUILD-PLAN's own
+	// framing names it that way: "showmeshctl fpp stop-playlist
+	// <instanceId>".
+	if len(args) > 0 && args[0] == "stop-playlist" {
+		return cmdFPPStopPlaylist(args[1:], stdout, stderr, clock)
+	}
+
 	fs, g := newFlagSet("showmeshctl fpp", stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp [flags] [instance-id]")
+		_, _ = fmt.Fprintln(stderr, "       showmeshctl fpp stop-playlist [flags] <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nList configured FPP instances (GET /api/v1/fpp), or show one instance")
 		_, _ = fmt.Fprintln(stderr, "in detail if instance-id is given (GET /api/v1/fpp/{instanceId}).")
+		_, _ = fmt.Fprintln(stderr, "\nRun \"showmeshctl fpp stop-playlist --help\" for the write subcommand.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

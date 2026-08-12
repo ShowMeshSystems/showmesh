@@ -141,28 +141,33 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 	return body, nil
 }
 
-// putJSON issues an authenticated PUT with a JSON body against apiPath —
-// this CLI's first write (Step 7 seam A: `showmeshctl config set`) — and
-// decodes a successful JSON response into out.
+// writeJSON issues an authenticated request carrying a JSON body against
+// apiPath and decodes a successful JSON response into out. It backs both
+// write subcommands this CLI has: `config set` (Step 7 seam A, PUT) and
+// `fpp stop-playlist` (Step 7 seam C, POST).
+//
+// One helper rather than a putJSON and a postJSON, because the two seams
+// arrived with near-identical copies of it and two copies of a bounded
+// read, a status check and a version check are two places for those to
+// stop agreeing.
 //
 // No Sec-Fetch-Site handling here, and none is needed: ADR-024 decision
 // 6's same-origin CSRF check applies only to a request authenticated by
-// the SESSION COOKIE, and this client never holds or presents one — see
+// the SESSION COOKIE, and this client never holds or presents one, see
 // cmd_session.go's doc comment ("this CLI is bearer-only"). --token is
 // always sent as Authorization: Bearer (applyHeaders), which
-// [handlers.writeGuard]'s bearer exemption in the coordinator already
-// excuses from that check by construction (nothing attaches an
-// Authorization header to a request automatically the way a browser
-// attaches a cookie). An unauthenticated PUT (no --token/$SHOWMESH_CTL_TOKEN
-// set) still reaches the coordinator and gets back a real 401, exactly
-// like every other write path this program does not special-case.
-func (c *client) putJSON(ctx context.Context, apiPath string, body any, out any) error {
+// [handlers.writeGuard]'s bearer exemption already excuses from that
+// check by construction, since nothing attaches an Authorization header
+// automatically the way a browser attaches a cookie. An unauthenticated
+// write still reaches the coordinator and gets back a real 401, exactly
+// like every other path this program does not special-case.
+func (c *client) writeJSON(ctx context.Context, method, apiPath string, body, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return newCLIError(exitUsage, "encoding request body: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.endpoint(apiPath, nil), bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(apiPath, nil), bytes.NewReader(payload))
 	if err != nil {
 		return newCLIError(exitUsage, "building request: %v", err)
 	}
@@ -175,7 +180,7 @@ func (c *client) putJSON(ctx context.Context, apiPath string, body any, out any)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Bounded read, identical posture to getRaw — see that method's doc
+	// Bounded read, identical posture to getRaw, see that method's doc
 	// comment for why.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
@@ -198,6 +203,17 @@ func (c *client) putJSON(ctx context.Context, apiPath string, body any, out any)
 		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
 	}
 	return nil
+}
+
+// putJSON and postJSON name the two methods the API actually uses, so a
+// call site reads as the HTTP verb it issues rather than as a string
+// argument.
+func (c *client) putJSON(ctx context.Context, apiPath string, body, out any) error {
+	return c.writeJSON(ctx, http.MethodPut, apiPath, body, out)
+}
+
+func (c *client) postJSON(ctx context.Context, apiPath string, body, out any) error {
+	return c.writeJSON(ctx, http.MethodPost, apiPath, body, out)
 }
 
 // applyHeaders sets the headers common to every /api/v1 request: the

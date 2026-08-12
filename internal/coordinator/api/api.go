@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -52,7 +53,24 @@ type Dependencies struct {
 	// wired this in renders the honest "nothing configured yet" state
 	// rather than a 500.
 	Config ConfigStore
+
+	// Commands is Step 7 seam C's store dependency — see [CommandStore].
+	// A nil field is replaced by [noCommandStore], under which
+	// POST /api/v1/fpp/{instanceId}/commands always fails with a 500
+	// naming the missing wiring, matching every other write dependency's
+	// identical "refuse loudly, never fabricate success" posture under
+	// this default (noIdentityService.CreateSession and friends, auth.go).
+	Commands CommandStore
 }
+
+// storeSatisfiesCommandStore is a compile-time assertion that
+// *store.Store — the real production implementation wired in by
+// internal/coordinator/apiwiring.go — already satisfies [CommandStore]
+// with no adapter needed, the same property [NodeLister]'s doc comment
+// notes for *inventory.Manager.Snapshot. If store.Store's method set
+// drifts from this interface, this line fails to compile rather than the
+// drift surfacing only once someone tries to wire the two together.
+var _ CommandStore = (*store.Store)(nil)
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -77,6 +95,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Config == nil {
 		d.Config = noConfigStore{}
+	}
+	if d.Commands == nil {
+		d.Commands = noCommandStore{}
 	}
 	return d
 }
@@ -131,6 +152,26 @@ func (noConfigStore) GetConfigRevision(context.Context, string, string, int64) (
 
 func (noConfigStore) ListConfigRevisions(context.Context, string, string) ([]store.ConfigRevisionRecord, error) {
 	return nil, nil
+}
+
+// errCommandStoreNotConfigured is [noCommandStore]'s uniform failure,
+// matching [errIdentityNotConfigured]'s identical posture in auth.go: a
+// write dependency nobody has wired in refuses loudly rather than
+// fabricating a success no state change actually backs.
+var errCommandStoreNotConfigured = errors.New("api: no CommandStore was wired into this API's Dependencies")
+
+type noCommandStore struct{}
+
+func (noCommandStore) InsertCommand(context.Context, store.CommandRecord) (store.CommandRecord, error) {
+	return store.CommandRecord{}, errCommandStoreNotConfigured
+}
+
+func (noCommandStore) SetDesiredState(context.Context, store.DesiredStateRecord) (store.DesiredStateRecord, error) {
+	return store.DesiredStateRecord{}, errCommandStoreNotConfigured
+}
+
+func (noCommandStore) UpdateCommandOutcome(context.Context, string, store.CommandOutcomeUpdate) error {
+	return errCommandStoreNotConfigured
 }
 
 // Options configures [New]. The zero value is usable: auth and CORS are
@@ -224,6 +265,33 @@ type Options struct {
 	// tick without false-positive disconnects, not derived from a measured
 	// worst case. Defaults to 64.
 	StreamSubscriberBuffer int
+
+	// FPPCommandConfirmDeadline bounds how long
+	// POST /api/v1/fpp/{instanceId}/commands waits, after a successful
+	// dispatch to FPP, for the collector to report the observed state this
+	// command asked for before giving up and reporting the command
+	// unconfirmed (ADR-003). THIS IS A SHOWMESH HYPOTHESIS, NOT MEASURED —
+	// RES-009 owns real evidence; see this task's report. It is
+	// deliberately set well above the FPP REST collector's own
+	// DefaultPollInterval (internal/coordinator/collector/fpp, 15s, not
+	// imported here — see this package's doc comment on why this package
+	// does not import that one): confirmation is read entirely from
+	// whatever the collector's own background poll loop has most recently
+	// recorded (this handler triggers no poll of its own, per ADR-001 —
+	// see fppcommand_handler.go), so a deadline shorter than roughly one
+	// poll interval would report "unconfirmed" most of the time for a
+	// command that plainly worked, for no reason but bad luck in when the
+	// collector's own timer last fired. Defaults to 20 seconds.
+	FPPCommandConfirmDeadline time.Duration
+
+	// FPPCommandPollInterval is how often
+	// POST /api/v1/fpp/{instanceId}/commands re-checks the collector's
+	// current observations while waiting out FPPCommandConfirmDeadline. A
+	// SHOWMESH HYPOTHESIS: frequent enough that this handler's own polling
+	// does not meaningfully add to the wait once the collector's evidence
+	// actually changes, without hammering [ObservationLister] pointlessly
+	// often. Defaults to 500 milliseconds.
+	FPPCommandPollInterval time.Duration
 }
 
 const (
@@ -239,6 +307,12 @@ const (
 	defaultLoginQueueWait      = 2 * time.Second
 	defaultLoginPerSourceDelay = 250 * time.Millisecond
 	defaultLoginMaxDelay       = 5 * time.Second
+
+	// defaultFPPCommandConfirmDeadline and defaultFPPCommandPollInterval
+	// back [Options.FPPCommandConfirmDeadline]/[Options.FPPCommandPollInterval].
+	// See those fields' doc comments — both are SHOWMESH HYPOTHESES.
+	defaultFPPCommandConfirmDeadline = 20 * time.Second
+	defaultFPPCommandPollInterval    = 500 * time.Millisecond
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -310,6 +384,12 @@ func (o Options) withDefaults() Options {
 	if o.LoginMaxDelay <= 0 {
 		o.LoginMaxDelay = defaultLoginMaxDelay
 	}
+	if o.FPPCommandConfirmDeadline <= 0 {
+		o.FPPCommandConfirmDeadline = defaultFPPCommandConfirmDeadline
+	}
+	if o.FPPCommandPollInterval <= 0 {
+		o.FPPCommandPollInterval = defaultFPPCommandPollInterval
+	}
 	return o
 }
 
@@ -340,7 +420,9 @@ func New(deps Dependencies, opts Options) *API {
 	h := &handlers{
 		deps: deps, clock: opts.Clock, logger: opts.Logger,
 		closeReads: opts.CloseReads, secureCookie: opts.SecureCookie, trustClientAddr: opts.TrustClientAddr,
-		loginLimiter: newLoginLimiter(opts.LoginConcurrency, opts.LoginQueueWait, opts.LoginPerSourceDelay, opts.LoginMaxDelay, opts.Clock),
+		loginLimiter:              newLoginLimiter(opts.LoginConcurrency, opts.LoginQueueWait, opts.LoginPerSourceDelay, opts.LoginMaxDelay, opts.Clock),
+		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
+		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 	}
 	hub := newHub(deps, opts, opts.Logger)
 
@@ -365,6 +447,15 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))
 	mux.HandleFunc("GET /api/v1/fpp/{instanceId}", h.readGuard(identity.ScopeFPPRead, h.handleFPPInstance))
+
+	// POST /api/v1/fpp/{instanceId}/commands (Step 7 seam C): the first
+	// write endpoint this project has ever shipped, and the only one
+	// touching FPP. Behind fpp:command (ADR-024 decision 4, defined by
+	// Step 6 with no consumer until now) via writeGuard, which is what
+	// supplies decision 6's CSRF check on top of the scope check —
+	// fppcommand_handler.go owns everything past authorization.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
+
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
 	mux.HandleFunc("GET /api/v1/stream", h.readGuardAll(readAllScopes, hub.ServeHTTP))

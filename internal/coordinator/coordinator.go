@@ -205,6 +205,12 @@ func Run() int {
 		// api.ConfigStore directly (see that interface's doc comment), no
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
+		// Commands is Step 7 seam C's own dependency: *store.Store already
+		// satisfies api.CommandStore with no adapter (api.go's own
+		// compile-time assertion) — wiring it in is what makes
+		// POST /api/v1/fpp/{instanceId}/commands do anything other than
+		// always answer 500 against api.noCommandStore's no-op default.
+		Commands: st,
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		CloseReads:          cfg.CloseReads,

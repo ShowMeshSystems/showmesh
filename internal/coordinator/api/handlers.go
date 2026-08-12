@@ -61,6 +61,13 @@ type handlers struct {
 	secureCookie    bool
 	trustClientAddr bool
 	loginLimiter    *loginLimiter
+
+	// fppCommandConfirmDeadline and fppCommandPollInterval back Step 7
+	// seam C's fppcommand_handler.go — see
+	// [Options.FPPCommandConfirmDeadline]/[Options.FPPCommandPollInterval]'s
+	// doc comments in api.go.
+	fppCommandConfirmDeadline time.Duration
+	fppCommandPollInterval    time.Duration
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

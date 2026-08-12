@@ -1,0 +1,152 @@
+package command
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Target names what a command acts on: a resource kind ("fpp", "node",
+// ...) and an identifier within it, the same (kind, id) pair
+// pkg/observation.ResourceRef uses for what was OBSERVED, so a command's
+// target and an observation's subject are directly comparable. This
+// package does not import pkg/observation to enforce that as a shared
+// type — see [Envelope]'s doc comment for why this package stays
+// deliberately thin.
+type Target struct {
+	Kind string
+	ID   string
+}
+
+// Issuer records who asked, per ARCHITECTURE section 8.1's "issuer"
+// field. A command is always attributed to a principal, never to a bare
+// credential — matching ADR-024 decision 1's rule that authorization and
+// audit are both expressed against a principal.
+type Issuer struct {
+	PrincipalID   string
+	PrincipalName string
+}
+
+// ConfirmationMethod names how a dispatched command's effect is
+// confirmed, per ARCHITECTURE section 8.1. [ConfirmationEvidence] is the
+// only value any command in this codebase uses today — a command whose
+// effect nothing observes would ship the dispatch half of ADR-003 and
+// call it done, which BUILD-PLAN Step 7's own primitive-command choice
+// was made specifically to avoid. More values (e.g. a command with no
+// observable effect, whose confirmation is deliberately absent) are added
+// here when a real command needs one, not speculatively ahead of one.
+type ConfirmationMethod string
+
+// ConfirmationEvidence means the issuer confirms the command's effect by
+// checking observed state against what was requested, per ADR-003 — the
+// only confirmation method this codebase implements.
+const ConfirmationEvidence ConfirmationMethod = "evidence"
+
+// Envelope is ARCHITECTURE section 8.1's command envelope: "every command
+// carries an identifier, target, parameters, idempotency key, deadline,
+// issuer, requested revision, confirmation method, and result."
+//
+// This type carries eight of those nine fields. The ninth, "result," is
+// deliberately absent: unlike every other field, a result does not exist
+// at the moment an Envelope is constructed — it exists only once dispatch
+// and confirmation have both happened, which is after the command this
+// Envelope describes has already been recorded. Modeling it here as a
+// field that starts nil and is mutated later would blur the one property
+// this type exists to keep clear: an Envelope is what was ASKED for,
+// fixed at construction. What actually happened is
+// internal/coordinator/store.CommandRecord's job (its
+// State/OutcomeState/OutcomeReason/ResultJSON columns), because that is
+// where a resolved command's outcome durably lives, correlated by command
+// ID rather than carried on a value that is discarded once the request
+// that built it returns.
+type Envelope struct {
+	// ID is this command's own identifier — ARCHITECTURE section 8.1's
+	// "identifier." Distinct from IdempotencyKey: ID names one row once
+	// it has been recorded; IdempotencyKey is what a replay of the SAME
+	// logical request is detected by. A caller mints ID itself (this
+	// package does not, unlike [NewIdempotencyKey] — an issuer needs
+	// exactly one idempotency key per invocation but may reasonably want
+	// its own convention for command IDs, e.g. reusing a value its
+	// storage layer already generates).
+	ID string
+
+	// IdempotencyKey is required on every command — see this package's
+	// doc comment. Validate with [ValidateIdempotencyKey] before using a
+	// caller-supplied value; mint a fresh one with [NewIdempotencyKey]
+	// when the issuer is generating it itself rather than accepting one
+	// from a further-upstream caller.
+	IdempotencyKey string
+
+	// Action identifies what this command does, e.g. "fpp.stop_playlist".
+	// This package defines no action vocabulary of its own — see this
+	// package's doc comment: "no FPP knowledge" — an action string is
+	// coined by whichever package owns the command it names.
+	Action string
+
+	Target Target
+	Params map[string]any
+	Issuer Issuer
+
+	// RequestedRevision is ARCHITECTURE section 8.1's "requested
+	// revision": the configuration revision this command was issued
+	// against, when the command is revision-sensitive. Empty for a
+	// command with no revision to be sensitive to, e.g. a lifecycle
+	// primitive like Stop Playlist that touches no configuration object.
+	RequestedRevision string
+
+	ConfirmationMethod ConfirmationMethod
+
+	// Deadline is the absolute time by which confirmation must succeed or
+	// the command is reported unconfirmed. Nil means no deadline was set
+	// — never a zero time standing in for "none," matching every other
+	// nullable evidence timestamp this codebase uses.
+	Deadline *time.Time
+}
+
+// ErrEmptyIdempotencyKey is returned by [ValidateIdempotencyKey] for an
+// empty key. ARCHITECTURE section 8.1 requires an idempotency key on
+// every command, not on some of them, so an empty one is always a caller
+// error, never a value this package tolerates as "not provided."
+var ErrEmptyIdempotencyKey = errors.New("command: idempotency key is empty")
+
+// ErrIdempotencyKeyTooLong is returned by [ValidateIdempotencyKey] for a
+// key longer than [MaxIdempotencyKeyLength].
+var ErrIdempotencyKeyTooLong = errors.New("command: idempotency key exceeds the maximum length")
+
+// MaxIdempotencyKeyLength bounds an idempotency key accepted from a
+// caller (an HTTP request body, in practice). SHOWMESH HYPOTHESIS, NOT
+// MEASURED: chosen only to be comfortably larger than any value this
+// codebase's own issuers ever mint (a UUID string, 36 bytes) while still
+// bounding what an API request body may make the coordinator store in its
+// commands.idempotency_key column, which has no length constraint of its
+// own (schemaV6). RES-013 owns real storage-sizing evidence; nothing here
+// claims to be it.
+const MaxIdempotencyKeyLength = 200
+
+// ValidateIdempotencyKey rejects an empty key or one exceeding
+// [MaxIdempotencyKeyLength]. It does not otherwise constrain the key's
+// character set: an idempotency key is compared for exact equality
+// (schemaV6's UNIQUE constraint on commands.idempotency_key), never
+// parsed or interpreted, so nothing else about its shape matters.
+func ValidateIdempotencyKey(key string) error {
+	if key == "" {
+		return ErrEmptyIdempotencyKey
+	}
+	if len(key) > MaxIdempotencyKeyLength {
+		return fmt.Errorf("%w: got %d bytes, want at most %d", ErrIdempotencyKeyTooLong, len(key), MaxIdempotencyKeyLength)
+	}
+	return nil
+}
+
+// NewIdempotencyKey mints a fresh idempotency key: a random UUID (RFC
+// 4122 version 4, via github.com/google/uuid — already a dependency of
+// this module, used identically for principal, session, and command IDs
+// elsewhere). Called once per invocation by an issuer minting its own key
+// rather than accepting one from a further-upstream caller — see this
+// package's doc comment for why that is every issuer this codebase has
+// today (RES-015 section 7.3: FPP supplies nothing to derive one from).
+func NewIdempotencyKey() string {
+	return uuid.NewString()
+}

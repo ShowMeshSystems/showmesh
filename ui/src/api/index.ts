@@ -18,6 +18,7 @@ export type {
   Event,
   EventSeq,
   FPPEndpointsConfigResponse,
+  FPPCommandResult,
   FPPInstance,
   Model,
   Node,
@@ -38,6 +39,7 @@ export {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
+  stopFPPPlaylist,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

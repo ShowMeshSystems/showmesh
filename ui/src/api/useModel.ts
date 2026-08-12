@@ -24,6 +24,7 @@ import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
   ConfigRevisionsResponse,
+  FPPCommandResult,
   FPPEndpointsConfigResponse,
   Model,
 } from './domain'
@@ -76,4 +77,10 @@ export function putFPPEndpointsConfig(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// Step 7 seam C: the first write that leaves this machine. Same thin
+// pass-through pattern as the others above.
+export function stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+  return store.stopFPPPlaylist(instanceId)
 }

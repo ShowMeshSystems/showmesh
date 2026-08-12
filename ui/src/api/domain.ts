@@ -67,6 +67,9 @@ export type ConfigFPPEndpoint = components['schemas']['ConfigFPPEndpoint']
 export type ConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 export type ConfigRevisionMeta = components['schemas']['ConfigRevisionMeta']
 export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+// Step 7 seam C: the first write's own response shape, aliased for the
+// identical reason as every type above.
+export type FPPCommandResult = components['schemas']['FPPCommandResult']
 
 /**
  * One recorded event, as held in the model. Identical to the wire
