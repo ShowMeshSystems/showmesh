@@ -108,6 +108,15 @@ OPERATOR-UI §2.4 exists to prevent.
 
 ### 4. The browser holds the shared secret, in `sessionStorage`
 
+**Superseded by [ADR-024](ADR-024-identity-authorization-and-audit.md)
+decision 5, 2026-08-11.** The browser now holds a coordinator-minted HttpOnly
+session cookie, and the shared secret this decision stored is retired. As
+predicted below, the answer was small enough to delete. One part survives
+deliberately: the bearer-paste input affordance is kept as a break-glass path,
+so a machine token can act from a phone when the session path is broken. What
+was deleted is the shared-secret semantics, not the input box. Decisions 1, 2,
+3, and 5 of this record stand unchanged.
+
 When the coordinator has `SHOWMESH_API_TOKEN` set, the UI discovers this by
 receiving `401` with an RFC 9457 problem document. It then prompts the operator
 for the secret, keeps it in `sessionStorage`, and sends it as

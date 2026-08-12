@@ -253,11 +253,48 @@ Three narrowings, recorded rather than silently dropped: the change stream still
 
 **Out of scope:** every write operation; alerting and notification paths, metric history, and retention tiers (RES-013); the preview wall (RES-010); controlled devices (ADR-016, RES-014); projectors, UPS, and switch telemetry (RES-012); the house topology map; anything requiring the identity ADR.
 
+## Step 6: Identity, authorization, and audit
+
+Status: **specified, not started.** [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) was written and reviewed on 2026-08-11 as a design session with no implementation. This step builds it.
+
+**Goal:** the critical path out of Phase 0. Every remaining roadmap item that does something rather than shows something is a write operation, ADR-021 rule 5 barred the first write endpoint, and ADR-024 lifts that bar. Nothing in ARCHITECTURE Phase 1 can start until this ships. This step adds **no write endpoint of its own**: it builds the mechanism that permits one, and the first actual write operation is the step after.
+
+**Deliverables:**
+
+- **Principals, roles, and scopes.** SQLite-backed principals with argon2id passwords at the parameters ADR-024 decision 1 fixes, API tokens stored as SHA-256 digests with an identifiable prefix and one-time display, and the scope check at the API boundary. Kind does not restrict credential form and role is independent of kind, so a human can mint a token for `showmeshctl`.
+- **Sessions.** `POST /api/v1/session` minting an HttpOnly cookie, `GET /api/v1/session` returning principal, role, and effective scopes with a freshness, per-principal generation counter, device labels, and revocation. Sliding on any cookie-bearing request including reads.
+- **CSRF, methods, and the bearer exemption**, exactly as ADR-024 decision 6 specifies: no state change reachable by `GET` or `HEAD`, `Sec-Fetch-Site: same-origin` required and rejected when absent for cookie writes, no `Origin`-versus-`Host` comparison, and the exemption keyed on the credential that actually authenticated rather than on header presence.
+- **Login cost bounds**: a concurrency limit on argon2 verification and a per-source increasing delay. Never a per-principal lockout.
+- **Bootstrap and recovery**: a single-use code written only to a file in the data volume, invalidated and deleted on first admin creation, with a loud persistent unclaimed-bootstrap banner. A host-level recovery subcommand unreachable over the API.
+- **Audit.** Append-only, dispatch and outcome as separate correlated entries, replays recorded as replays, `/api/v1/audit` behind `audit:read`, retention bounded **in this step** rather than deferred to RES-013, and the blackout/stop/power-off safety class that proceeds with degraded attribution rather than being refused.
+- **MQTT authorization.** `allow_anonymous false`, per-agent credentials with `%u` pattern ACLs, a coordinator credential, an FPP publisher role, and a healthcheck principal with a `$SYS` grant. Credentials generated per deployment at first run, never shipped in `deploy/`. Agents distinguish CONNACK `0x87` from unreachability and continue on cached fallback.
+- **Fallback trigger.** ADR-024 decision 7: `401` and `403` are coordinator-unavailable-to-this-caller for fallback purposes, and distinguishable in evidence. This is the one deliverable with no code in the coordinator, and it must not be skipped for that reason.
+- **Documentation that becomes wrong on the day this ships**: `api/openapi.yaml`'s `bearerAuth` description, `SECURITY.md`, and `deploy/README.md`. All three are accurate today and describe the retired posture. Update them with the implementation, not before.
+
+**Acceptance criteria:**
+
+- A write endpoint added temporarily for the test is refused with `401` unauthenticated, refused with `403` naming the missing scope for a `viewer`, and accepted for an `operator`, verified against the running stack rather than in a handler test.
+- Revoking a session closes an open change stream and the client re-fetches a snapshot and surfaces an explicit authentication state. Verified in a real browser, which is the defect class Step 4 was burned by.
+- A stale or unavailable scope list renders controls as unknown, never as enabled.
+- `/healthz`, `/readyz`, and `/version` answer with reads closed and a container healthcheck stays green.
+- A coordinator started with `SHOWMESH_API_TOKEN` still set refuses to start and names the migration.
+- The full Compose bundle comes up with `allow_anonymous false`, including a green broker healthcheck and two real agent subprocesses, and an agent given a wrong credential reports evidence distinguishable from an unreachable broker.
+- Blackout succeeds with the audit store failing; `config:write` is refused under the same condition.
+- A cookie-authenticated write is rejected when `Sec-Fetch-Site` is absent, and a bearer-authenticated write from `curl` succeeds with no such header.
+
+**Bound by:** ADR-024 above all, plus ADR-001, ADR-004, ADR-008, ADR-009, ADR-011, ADR-012, ADR-014, ADR-016, ADR-020, ADR-022, ADR-023.
+
+**Two implementation notes surfaced by review, recorded so they are not rediscovered:** the API's CORS middleware advertises `GET, OPTIONS` and the catch-all route is registered as `GET`, so `POST /api/v1/session` answers `405` until both are changed. And `ui/nginx.conf` forwards `Cookie` and `Set-Cookie` correctly today and needs no change, but adding `proxy_cookie_path` or `proxy_cookie_domain` later breaks login in a way that presents as a session that does not stick.
+
+**What this step may not claim.** Nothing here verifies anything about a running show. ADR-024's survivability argument is an argument from requirements, and RES-009 is unresearched. The failure cases ADR-024's consequences list are RES-009's work, not this step's.
+
+**Out of scope:** every actual write endpoint; target-scoped authorization; message-level command authentication; OIDC and forward-authentication; node enrollment automation.
+
 ## Not yet sequenced
 
 These deliberately come later, and why:
 
-- **Operator UI write operations.** Controls, overrides, and macro invocation follow the read-only release, and the initial authentication mechanism must be decided before the API gains write endpoints (OPERATOR-UI §14).
+- **Operator UI write operations.** Controls, overrides, and macro invocation follow Step 6, which supplies the mechanism but deliberately adds no write endpoint of its own.
 - **Controlled devices and control providers.** [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md) settles the model; the metadata contract and the metadata-generated-surface hypothesis are unresearched in [RES-014](../research/RES-014-control-provider-model.md), and the first provider (projectors, `pkg/pjlink`) also depends on RES-012 bench work.
 - **Audio engine and audio node.** The architecture is decided ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md), [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md), [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md), [AUDIO-ENGINE.md](../architecture/AUDIO-ENGINE.md)) and entirely unverified. It is not sequenced because [RES-007](../research/RES-007-audio-node-architecture.md) is critical-risk at L0, the multichannel interface the design depends on has not been purchased, and nothing here can be raised above L0 by unit tests: whether GStreamer holds LTC sample-aligned to program, and what drift a free-running node accumulates over a show, are bench facts. The first task is the RES-007 prototype on the intended host and interface, and sequencing follows its result. ADR-018 is also a purchasing constraint — at least three output channels from one clock — and should inform the interface selection before it happens.
 - **Resolume adapter.** Blocked on RES-001 bench work (Resolume SMPTE and clip-launch behavior is still L0/L1).

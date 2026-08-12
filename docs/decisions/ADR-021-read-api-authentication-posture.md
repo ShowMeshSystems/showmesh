@@ -1,7 +1,19 @@
 # ADR-021: The Read API Ships With Optional Shared-Secret Authentication and No Authorization
 
-Status: Accepted  
+Status: Superseded by [ADR-024](ADR-024-identity-authorization-and-audit.md), 2026-08-11  
 Date: 2026-08-10
+
+**Superseded.** ADR-024 decides the identity, authorization, audit, MQTT
+authorization, and browser session model this record's supersession section
+demanded, and lifts rule 5's bar on the first write endpoint. `SHOWMESH_API_TOKEN`
+is retired; a coordinator that still sees it refuses to start.
+
+Three things here were carried forward rather than replaced, and ADR-024
+decision 3 restates them so they are not orphaned by this record's supersession:
+rule 3 (the health and version endpoints are never authenticated), rule 4
+(credentials are redacted by code, never appearing in a log line, error body, or
+problem detail), and the CORS allow-list posture in the consequences below,
+which ADR-024 additionally binds to its same-origin write requirement.
 
 ## Context
 

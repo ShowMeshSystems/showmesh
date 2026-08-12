@@ -26,9 +26,10 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-018](ADR-018-program-and-ltc-share-a-clock-domain.md) | Program audio and LTC share one clock domain | Accepted |
 | [ADR-019](ADR-019-audio-device-loss-fails-silent.md) | Audio device loss fails silent, no automatic FPP fallback | Accepted |
 | [ADR-020](ADR-020-control-api-shape-and-change-stream.md) | Control API is versioned REST with a Server-Sent Events change stream | Accepted |
-| [ADR-021](ADR-021-read-api-authentication-posture.md) | Read API ships optional shared-secret auth and no authorization | Accepted (expected to be superseded before any write endpoint) |
-| [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded with ADR-021) |
+| [ADR-021](ADR-021-read-api-authentication-posture.md) | Read API ships optional shared-secret auth and no authorization | Superseded by ADR-024 (rules 3, 4 and CORS carried forward) |
+| [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded by ADR-024) |
 | [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
+| [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted |
 
 ## Record template
 

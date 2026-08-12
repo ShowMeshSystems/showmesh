@@ -28,7 +28,9 @@ That gap is deliberate and documented, not a backlog that got away. The project 
 
 ### Why there is no write endpoint yet
 
-Every remaining roadmap item that *does* something rather than *shows* something is a write operation, and [ADR-021](docs/decisions/ADR-021-read-api-authentication-posture.md) bars the first one until a superseding decision record settles authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. The read API ships with optional shared-secret auth, off by default with a startup warning, and one shared secret is not an identity. So the identity-and-authorization ADR is the critical path out of Phase 0 — not a chore to fit in later.
+Every remaining roadmap item that *does* something rather than *shows* something is a write operation, and [ADR-021](docs/decisions/ADR-021-read-api-authentication-posture.md) barred the first one until a superseding record settled authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. That record is now [ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md), and implementing it is the next step. It lifts the bar and deliberately adds no write endpoint of its own.
+
+Two of its decisions say most of what the project is like. Writes always require an authenticated principal and **reads stay open by default**, because a credential problem must never cost an operator visibility of a running show: the failure is scoped to "you cannot act", not to a blank screen indistinguishable from a dead coordinator. And an authorization refusal is **not** treated as equivalent to coordinator loss. A coordinator outage is a transport failure, which is what fires a local fallback; a `403` is a successful conversation with a healthy coordinator, which fires nothing, so a stale token on a scheduler host would otherwise leave a macro's local steps unrun as well as its remote ones. Both corrections came from review, not from drafting.
 
 ---
 
@@ -153,7 +155,7 @@ These are the decisions that shape everything else. Each links to its ADR.
 
 **Audio deliberately does not follow the MultiSync slew/jump model** ([ADR-017](docs/decisions/ADR-017-showmesh-owns-audience-audio.md)–[ADR-019](docs/decisions/ADR-019-audio-device-loss-fails-silent.md)). Nodes play complete local files on their own audio clock, never a sample-position stream; drift is corrected discretely at track boundaries, never by continuous rate manipulation. Audio device loss fails *silent* — a recorded exception to the local-fallback rule, because uncontrolled routing and gain into an FM transmitter is worse than silence.
 
-Full set: [ADR-001 through ADR-022](docs/decisions/README.md), all Accepted. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
+Full set: [ADR-001 through ADR-024](docs/decisions/README.md), all Accepted except ADR-021, superseded by ADR-024. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
 
 ---
 
