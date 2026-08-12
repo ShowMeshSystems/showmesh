@@ -181,7 +181,7 @@ func TestIntegrationRunDeliversRetainedAndLiveMessages(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	var retainedObs observation.Observation
 	for time.Now().Before(deadline) {
-		obs := c.Poll(context.Background())
+		obs, _ := c.Poll(context.Background())
 		found := false
 		for _, o := range obs {
 			if o.Signal == SignalStatus && o.Absence == "" {
@@ -214,7 +214,7 @@ func TestIntegrationRunDeliversRetainedAndLiveMessages(t *testing.T) {
 	deadline = time.Now().Add(10 * time.Second)
 	var liveObs observation.Observation
 	for time.Now().Before(deadline) {
-		obs := c.Poll(context.Background())
+		obs, _ := c.Poll(context.Background())
 		found := false
 		for _, o := range obs {
 			if o.Signal == SignalReady && o.Absence == "" {
@@ -282,7 +282,8 @@ func TestIntegrationSubscriptionSurvivesUnrelatedHostPublish(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	var got observation.Observation
 	for time.Now().Before(deadline) {
-		for _, o := range c.Poll(context.Background()) {
+		polled, _ := c.Poll(context.Background())
+		for _, o := range polled {
 			if o.Signal == SignalStatus && o.Absence == "" {
 				got = o
 			}

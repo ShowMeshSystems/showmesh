@@ -143,16 +143,37 @@ func (s *Store) UpsertObservation(ctx context.Context, obs observation.Observati
 	if err := obs.Validate(); err != nil {
 		return fmt.Errorf("store: upsert observation: %w", err)
 	}
+	if err := upsertObservation(ctx, s.db, obs, timeToDB(s.now())); err != nil {
+		return fmt.Errorf("store: upsert observation %q for %s/%s: %w", obs.Signal, obs.Resource.Kind, obs.Resource.ID, err)
+	}
+	return nil
+}
 
+// upsertObservation is [Store.UpsertObservation]'s SQL, factored out so
+// [Store.ReplaceObservations] can run the identical upsert for every
+// observation it is given inside its own transaction (ex is a *sql.Tx
+// there) rather than duplicating this statement. now is the caller's
+// already-formatted [timeToDB] value, passed in rather than computed here,
+// so every observation upserted within one ReplaceObservations call shares
+// exactly the same updated_at, the same way a single UpsertObservation call
+// always did.
+//
+// Callers must validate obs (via [observation.Observation.Validate])
+// before calling this — it is not repeated here since ReplaceObservations
+// validates every observation up front, before opening its transaction,
+// and would rather fail the whole batch before touching the database than
+// leave a transaction partially applied by a validation failure partway
+// through.
+func upsertObservation(ctx context.Context, ex execer, obs observation.Observation, now string) error {
 	valueKind, valueText, err := encodeObservationValue(obs.Value)
 	if err != nil {
-		// Unreachable given the Validate call above, but handled rather
-		// than ignored: see encodeObservationValue's doc comment.
-		return fmt.Errorf("store: upsert observation: %w", err)
+		// Unreachable given Validate having already run (see callers), but
+		// handled rather than ignored: see encodeObservationValue's doc
+		// comment.
+		return err
 	}
 
-	now := timeToDB(s.now())
-	_, err = s.db.ExecContext(ctx, `
+	_, err = ex.ExecContext(ctx, `
 		INSERT INTO observations (
 			resource_kind, resource_id, signal,
 			value_kind, value_text, unit,
@@ -179,8 +200,106 @@ func (s *Store) UpsertObservation(ctx context.Context, obs observation.Observati
 		string(obs.Absence), obs.Reason,
 		now, now,
 	)
+	return err
+}
+
+// ReplaceObservations upserts every observation in observations (exactly as
+// repeated [Store.UpsertObservation] calls would, and within one
+// transaction so a caller never observes some of the batch applied and some
+// not), and then, for each distinct (resource_kind, resource_id, source)
+// triple actually present in observations, deletes any other stored row
+// for that same triple whose signal is NOT among the ones just upserted.
+//
+// This is the mechanism behind the collector/Sink completeness contract
+// (internal/coordinator/collector.Collector.Poll's complete return value,
+// internal/coordinator/collector.Sink.RecordObservations's complete
+// parameter): a caller must only pass this method a poll's FULL set of
+// observations for whatever (resource, source) pairs it mentions —
+// ReplaceObservations has no notion of "partial" and does not need one,
+// because pruning is scoped per (resource_kind, resource_id, source)
+// derived directly from what was actually delivered this call, never
+// inferred from what was NOT delivered. A (resource, source) pair this
+// call does not mention at all is left completely untouched: passing zero
+// observations is a no-op, never "delete everything, for every resource
+// and source, that this call did not re-assert" — a caller wanting a
+// specific (resource, source) pair pruned must include at least one
+// observation (an absence, if nothing else) naming it.
+//
+// This is what fixes the ghost-row defect a naive prune-on-absence would
+// not: a previous poll's 48 per-port signals, followed by a poll reporting
+// only 2 (the aggregate counts, ports now empty), leaves no per-port rows
+// behind — the 2 delivered signals survive (they are in this call's
+// upserted set) and the 46 undelivered ones are deleted, all inside one
+// transaction, so no reader ever observes a half-pruned state.
+//
+// obs.Validate() is checked for every observation before ANY database work
+// begins (see upsertObservation's doc comment for why): one invalid
+// observation in the batch fails the whole call with nothing written,
+// exactly as if UpsertObservation had been called for it directly.
+func (s *Store) ReplaceObservations(ctx context.Context, observations []observation.Observation) error {
+	for i := range observations {
+		if err := observations[i].Validate(); err != nil {
+			return fmt.Errorf("store: replace observations: %w", err)
+		}
+	}
+	if len(observations) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: upsert observation %q for %s/%s: %w", obs.Signal, obs.Resource.Kind, obs.Resource.ID, err)
+		return fmt.Errorf("store: replace observations: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
+
+	now := timeToDB(s.now())
+
+	type resourceSource struct {
+		kind, id, source string
+	}
+	// delivered tracks, per (resource_kind, resource_id, source), exactly
+	// the signals this call is upserting for it — the set ReplaceObservations
+	// then keeps, deleting everything else stored under that same triple.
+	delivered := make(map[resourceSource]map[string]struct{})
+
+	for _, obs := range observations {
+		if err := upsertObservation(ctx, tx, obs, now); err != nil {
+			return fmt.Errorf("store: replace observations: upsert %q for %s/%s: %w", obs.Signal, obs.Resource.Kind, obs.Resource.ID, err)
+		}
+
+		key := resourceSource{kind: string(obs.Resource.Kind), id: obs.Resource.ID, source: obs.Source}
+		if delivered[key] == nil {
+			delivered[key] = make(map[string]struct{})
+		}
+		delivered[key][string(obs.Signal)] = struct{}{}
+	}
+
+	for key, signals := range delivered {
+		placeholders := make([]string, 0, len(signals))
+		args := make([]any, 0, len(signals)+3)
+		args = append(args, key.kind, key.id, key.source)
+		for sig := range signals {
+			placeholders = append(placeholders, "?")
+			args = append(args, sig)
+		}
+		// signal NOT IN (...) over exactly the signals just upserted for
+		// this (resource_kind, resource_id, source): every row this same
+		// source previously stored for this resource that was NOT part of
+		// this delivery is gone — a removed port, a removed sensor, or (per
+		// the Step 5 review finding this fixes) an instance whose ports
+		// dropped from 48 elements to none.
+		query := fmt.Sprintf(`
+			DELETE FROM observations
+			WHERE resource_kind = ? AND resource_id = ? AND source = ?
+			AND signal NOT IN (%s)
+		`, strings.Join(placeholders, ","))
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("store: replace observations: prune %s/%s source %q: %w", key.kind, key.id, key.source, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: replace observations: commit: %w", err)
 	}
 	return nil
 }

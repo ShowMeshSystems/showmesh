@@ -28,6 +28,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-020](ADR-020-control-api-shape-and-change-stream.md) | Control API is versioned REST with a Server-Sent Events change stream | Accepted |
 | [ADR-021](ADR-021-read-api-authentication-posture.md) | Read API ships optional shared-secret auth and no authorization | Accepted (expected to be superseded before any write endpoint) |
 | [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded with ADR-021) |
+| [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
 
 ## Record template
 

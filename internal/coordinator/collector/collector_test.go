@@ -36,7 +36,7 @@ type countingCollector struct {
 
 func (c *countingCollector) ID() string { return c.id }
 
-func (c *countingCollector) Poll(ctx context.Context) []observation.Observation {
+func (c *countingCollector) Poll(ctx context.Context) ([]observation.Observation, bool) {
 	n := c.inFlight.Add(1)
 	defer c.inFlight.Add(-1)
 	for {
@@ -58,19 +58,23 @@ func (c *countingCollector) Poll(ctx context.Context) []observation.Observation 
 		case <-ctx.Done():
 		}
 	}
-	return nil
+	return nil, true
 }
 
 // fakeSink records every delivery it receives.
 type fakeSink struct {
 	mu   sync.Mutex
 	recs [][]observation.Observation
+	// completes parallels recs: completes[i] is the complete flag delivered
+	// alongside recs[i].
+	completes []bool
 }
 
-func (f *fakeSink) RecordObservations(ctx context.Context, obs []observation.Observation) {
+func (f *fakeSink) RecordObservations(ctx context.Context, obs []observation.Observation, complete bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recs = append(f.recs, obs)
+	f.completes = append(f.completes, complete)
 }
 
 func (f *fakeSink) count() int {
@@ -298,6 +302,6 @@ type staticCollector struct {
 }
 
 func (s *staticCollector) ID() string { return s.id }
-func (s *staticCollector) Poll(ctx context.Context) []observation.Observation {
-	return s.obs
+func (s *staticCollector) Poll(ctx context.Context) ([]observation.Observation, bool) {
+	return s.obs, true
 }

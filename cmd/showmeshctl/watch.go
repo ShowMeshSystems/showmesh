@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,6 +22,8 @@ import (
 // real Ctrl+C.
 func cmdWatch(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl watch", stderr)
+	var deltas bool
+	fs.BoolVar(&deltas, "deltas", false, "opt into observation-level delta frames (ADR-023): GET /api/v1/stream?deltas=1")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl watch [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nFetch the authoritative snapshot, then stream live changes from")
@@ -30,6 +33,13 @@ func cmdWatch(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		_, _ = fmt.Fprintln(stderr, "detected sequence gap. --timeout applies to the snapshot request and")
 		_, _ = fmt.Fprintln(stderr, "reconnect attempts, not to the open stream itself, which is long-lived")
 		_, _ = fmt.Fprintln(stderr, "by design.")
+		_, _ = fmt.Fprintln(stderr, "\nWith --deltas, this connection also receives fpp.observations.changed")
+		_, _ = fmt.Fprintln(stderr, "frames (ADR-023): an FPP instance's observation-level changes arrive")
+		_, _ = fmt.Fprintln(stderr, "as just the signals that moved, rather than repeating every one of that")
+		_, _ = fmt.Fprintln(stderr, "instance's observations inside fpp.changed. Without it (the default),")
+		_, _ = fmt.Fprintln(stderr, "this command behaves exactly as it always has: fpp.observations.changed")
+		_, _ = fmt.Fprintln(stderr, "never appears, and this is what proves the flag is additive rather than")
+		_, _ = fmt.Fprintln(stderr, "a silent behavior change for a script that never passes it.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -60,7 +70,7 @@ func cmdWatch(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return runWatch(ctx, streamClient, snapshotClient, g, stdout, stderr, clock)
+	return runWatch(ctx, streamClient, snapshotClient, g, deltas, stdout, stderr, clock)
 }
 
 // watchBackoff is bounded exponential backoff for the reconnect loop. The
@@ -97,15 +107,18 @@ func (b *watchBackoff) Next() time.Duration {
 // drops or resets unrecoverably, back off, reconnect. It returns exitOK
 // when ctx is cancelled (the normal, expected shutdown path for an
 // interactive `watch`), and a non-zero code for a failure this program
-// judges not worth retrying (unauthorized, version-incompatible).
-func runWatch(ctx context.Context, streamClient, snapshotClient *client, g *globalFlags, stdout, stderr io.Writer, clock func() time.Time) int {
+// judges not worth retrying (unauthorized, version-incompatible). deltas
+// is fixed for the whole run (from --deltas) and is applied to every
+// (re)connection attempt identically — a client does not flip between
+// delta and full-frame mid-session.
+func runWatch(ctx context.Context, streamClient, snapshotClient *client, g *globalFlags, deltas bool, stdout, stderr io.Writer, clock func() time.Time) int {
 	bo := newWatchBackoff()
 	for {
 		if ctx.Err() != nil {
 			return exitOK
 		}
 
-		err := watchOnce(ctx, streamClient, snapshotClient, g, stdout, stderr, clock, bo)
+		err := watchOnce(ctx, streamClient, snapshotClient, g, deltas, stdout, stderr, clock, bo)
 		if err == nil {
 			continue
 		}
@@ -136,8 +149,19 @@ func runWatch(ctx context.Context, streamClient, snapshotClient *client, g *glob
 // connection ends. A returned error always means the connection is gone
 // (or unusable) and the caller should back off and retry, except for the
 // two exit-worthy classes runWatch itself checks for.
-func watchOnce(ctx context.Context, streamClient, snapshotClient *client, g *globalFlags, stdout, stderr io.Writer, clock func() time.Time, bo *watchBackoff) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamClient.endpoint("/api/v1/stream", nil), nil)
+//
+// deltas, when true, requests observation-level delta frames per ADR-023
+// by adding EXACTLY the query value the coordinator's own contract
+// requires — "deltas=1" — never a looser truthy spelling: the coordinator
+// side treats anything else as equivalent to omitting the parameter (see
+// internal/coordinator/api's Hub.ServeHTTP doc comment), so this client
+// side must send precisely what actually opts in.
+func watchOnce(ctx context.Context, streamClient, snapshotClient *client, g *globalFlags, deltas bool, stdout, stderr io.Writer, clock func() time.Time, bo *watchBackoff) error {
+	var query url.Values
+	if deltas {
+		query = url.Values{"deltas": {"1"}}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamClient.endpoint("/api/v1/stream", query), nil)
 	if err != nil {
 		return newCLIError(exitUsage, "building stream request: %v", err)
 	}
@@ -226,6 +250,26 @@ func watchOnce(ctx context.Context, streamClient, snapshotClient *client, g *glo
 			}
 			printStreamEvent(stdout, g, "fpp.changed", ev, func() {
 				_, _ = fmt.Fprintf(stdout, "[fpp.changed] %s health=%s\n", ev.Instance.InstanceID, healthGlyph(ev.Instance.Health))
+			})
+		case "fpp.observations.changed":
+			// Only ever arrives on a connection opened with --deltas
+			// (ADR-023); reached here regardless of that flag, in the same
+			// additive-tolerant spirit as the "default" branch below, since
+			// this program's own request is what actually controls whether
+			// the coordinator ever sends one.
+			var ev streamFPPObservationsChanged
+			if err := json.Unmarshal([]byte(frame.data), &ev); err != nil {
+				_, _ = fmt.Fprintf(stderr, "showmeshctl watch: decoding fpp.observations.changed: %v\n", err)
+				continue
+			}
+			if seqState.observe(ev.Seq) {
+				if err := onSeqGap(ctx, snapshotClient, g, stdout, stderr, clock); err != nil {
+					return err
+				}
+				continue
+			}
+			printStreamEvent(stdout, g, "fpp.observations.changed", ev, func() {
+				printFPPObservationsChangedLine(stdout, ev)
 			})
 		case "event.recorded":
 			var ev streamEventRecorded

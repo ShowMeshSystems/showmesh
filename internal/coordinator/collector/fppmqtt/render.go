@@ -24,7 +24,26 @@ func (c *Collector) ID() string { return sourceName }
 // independent of when or how often Poll is called (contract section 4.1's
 // push-to-poll shape). ctx is accepted to satisfy collector.Collector but
 // is not used for any I/O here — there is none to bound.
-func (c *Collector) Poll(_ context.Context) []observation.Observation {
+//
+// Poll always returns complete=true, including before this collector's
+// first message ever arrives and while the broker connection is down. This
+// is not an optimistic default; it is what this method's own shape
+// guarantees: every call iterates every configured host (c.hosts, fixed at
+// construction — see New) and, for a connected host, every statically-known
+// topicSpec (topics.go), producing SOME observation for every signal this
+// collector is capable of ever reporting — a measured value, a retained-
+// unknown-age value, or an absence (StateNotCollected when a topic's
+// message has simply never arrived yet, StateCollectionFailed when the
+// broker connection itself is down or a message failed to decode). There is
+// no partial-render path here the way fpp.Collector's backoff-skip is: this
+// package has nothing to back off from (Poll is a local, non-blocking
+// render of a cache; see the doc comment above), so it never has a reason
+// to omit a signal it knows how to report on. A signal this collector has
+// no static knowledge of at all (it declares no dynamic per-element signal
+// family the way fpp.Collector's ports/sensors do — see topics.go) is
+// simply never in its vocabulary to begin with, which is a different
+// question from completeness and is unaffected by this claim.
+func (c *Collector) Poll(_ context.Context) ([]observation.Observation, bool) {
 	now := c.now()
 	connected, connReason := c.connectionState()
 
@@ -36,7 +55,7 @@ func (c *Collector) Poll(_ context.Context) []observation.Observation {
 		}
 		obs = append(obs, c.instanceObservations(instanceID, now)...)
 	}
-	return obs
+	return obs, true
 }
 
 // connectionDownObservations builds a StateCollectionFailed observation,

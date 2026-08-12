@@ -124,7 +124,7 @@ func TestIntegrationLivePollMatchesRealDaemon(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	reachable := mustFindSignal(t, obs, SignalReachable)
 	if reachable.Value != true {
@@ -251,7 +251,7 @@ func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabrica
 	// Baseline: prove the collector sees this instance as healthy before
 	// touching the container, so a failure below is attributable to the
 	// stop, not to some pre-existing problem.
-	before := c.Poll(context.Background())
+	before, _ := c.Poll(context.Background())
 	if got := mustFindSignal(t, before, SignalReachable); got.Value != true {
 		t.Fatalf("baseline fpp.reachable = %v, want true before stopping the container", got.Value)
 	}
@@ -284,7 +284,7 @@ func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabrica
 		t.Fatalf("bench container did not become unreachable within 20s of `docker compose stop`")
 	}
 
-	after := c.Poll(context.Background())
+	after, _ := c.Poll(context.Background())
 
 	reachable := mustFindSignal(t, after, SignalReachable)
 	if reachable.Absence != observation.StateCollectionFailed {

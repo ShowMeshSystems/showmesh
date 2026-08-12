@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -113,6 +114,32 @@ type Hub struct {
 	lastRendered map[string][]byte
 	lastEventSeq uint64
 
+	// lastRenderedInstanceOnly and lastObservationsBySignal are ADR-023's
+	// second and third change-detection caches, alongside lastRendered
+	// (which continues to gate the full-frame fpp.changed send exactly as
+	// it did before deltas existed — see [Hub.updateRendered]). Both are
+	// keyed by the same "fpp:"+instanceID strings lastRendered uses, and
+	// both are evicted alongside it in [Hub.evictRendered] whenever an
+	// instance disappears from a render pass, so the three caches can never
+	// drift out of sync with each other about which instances currently
+	// exist.
+	//
+	// lastRenderedInstanceOnly holds the masked, Observations-stripped
+	// projection [instanceOnlyForDelta] produces — see
+	// [Hub.updateInstanceOnlyRendered] — used only to decide whether a
+	// delta-subscribed connection receives fpp.changed at all (ADR-023
+	// decision 3: a change confined to Observations must not trigger it).
+	//
+	// lastObservationsBySignal holds, per instance, the masked-for-diff
+	// bytes of the most recently rendered [v1.Evidence] for every signal
+	// this hub has ever reported for it — see
+	// [Hub.updateObservationDeltas], which is also what removes a signal's
+	// entry the render pass after it stops appearing, which is exactly what
+	// lets that same removal be reported to a delta client via
+	// fpp.observations.changed's "removed" list.
+	lastRenderedInstanceOnly map[string][]byte
+	lastObservationsBySignal map[string]map[string][]byte
+
 	notifyCh chan struct{}
 	done     chan struct{}
 }
@@ -121,10 +148,46 @@ type Hub struct {
 // buffer [Hub.broadcast] delivers pending changes into; reset is a
 // capacity-1 channel used exactly once, to hand the overflow reason to
 // [Hub.ServeHTTP]'s own goroutine when frames is full — see
-// [Hub.broadcast].
+// [Hub.broadcast]. deltas is fixed for the connection's whole lifetime,
+// set once from the ?deltas=1 query parameter at [Hub.ServeHTTP]'s own
+// subscribe call — ADR-023 decision 1: a connection that did not ask for
+// deltas gets exactly what it got before deltas existed, so this field is
+// never mutated after [Hub.subscribe] constructs it.
 type subscriber struct {
 	frames chan pendingFrame
 	reset  chan string
+	deltas bool
+}
+
+// frameAudience narrows which subscribers a [pendingFrame] is delivered to,
+// per ADR-023 decision 1 (a connection that never asked for deltas must
+// never receive an fpp.observations.changed frame, full stop) and decision
+// 3 (a delta-subscribed connection receives fpp.changed only for a
+// structural, non-observation change — see [Hub.render]'s fpp instance
+// loop, the only place a non-default audience is ever constructed).
+// audienceAll is the zero value deliberately: every pendingFrame literal
+// this file built before ADR-023 (node.changed, event.recorded) never sets
+// this field at all, and must keep reaching every subscriber exactly as it
+// did before this field existed.
+type frameAudience int
+
+const (
+	audienceAll frameAudience = iota
+	audienceNonDeltaOnly
+	audienceDeltaOnly
+)
+
+// includes reports whether a subscriber whose own deltas flag is deltas
+// should receive a frame carrying this audience.
+func (a frameAudience) includes(deltas bool) bool {
+	switch a {
+	case audienceDeltaOnly:
+		return deltas
+	case audienceNonDeltaOnly:
+		return !deltas
+	default:
+		return true
+	}
 }
 
 // pendingFrame is one change the hub has decided, at a particular render
@@ -138,9 +201,24 @@ type pendingFrame struct {
 	event      string
 	serverTime string
 
+	// audience defaults to audienceAll (the zero value) for every kind this
+	// file constructed before ADR-023: node.changed and event.recorded
+	// reach every subscriber regardless of its deltas flag. fpp.changed and
+	// fpp.observations.changed are the only kinds [Hub.render] ever
+	// constructs with a narrower audience — see its fpp instance loop.
+	audience frameAudience
+
 	node     *v1.Node
 	instance *v1.FPPInstance
 	ev       *v1.Event
+
+	// instanceID, changedObs, and removedSignals are set only for an
+	// "fpp.observations.changed" pendingFrame (ADR-023); every other kind
+	// leaves them at their zero value and materialize never reads them for
+	// those kinds.
+	instanceID     string
+	changedObs     []v1.Evidence
+	removedSignals []string
 }
 
 // materialize assigns seq to pf and returns the SSE event name and the
@@ -151,11 +229,16 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		return "node.changed", v1.NodeChangedEvent{Seq: seq, ServerTime: pf.serverTime, Node: *pf.node}
 	case "fpp.changed":
 		return "fpp.changed", v1.FPPChangedEvent{Seq: seq, ServerTime: pf.serverTime, Instance: *pf.instance}
+	case "fpp.observations.changed":
+		return "fpp.observations.changed", v1.FPPObservationsChangedEvent{
+			Seq: seq, ServerTime: pf.serverTime, InstanceID: pf.instanceID,
+			Changed: nonNilEvidenceSlice(pf.changedObs), Removed: nonNilStringSlice(pf.removedSignals),
+		}
 	case "event.recorded":
 		return "event.recorded", v1.EventRecordedEvent{Seq: seq, ServerTime: pf.serverTime, Event: *pf.ev}
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
-		// to one of the three cases above. A panic here is an internal
+		// to one of the four cases above. A panic here is an internal
 		// invariant violation in this package, not a runtime condition a
 		// caller can trigger — see mapping.go's mustObservation for the
 		// same posture.
@@ -163,20 +246,42 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 	}
 }
 
+// nonNilEvidenceSlice and nonNilStringSlice guarantee an
+// fpp.observations.changed frame's "changed"/"removed" arrays render as `[]`
+// rather than `null` when empty, matching this API's standing "absent
+// evidence is stated, never omitted" rule applied to a collection rather
+// than a scalar field (the same reasoning [v1.Node.Capabilities]'s own doc
+// comment gives).
+func nonNilEvidenceSlice(v []v1.Evidence) []v1.Evidence {
+	if v == nil {
+		return []v1.Evidence{}
+	}
+	return v
+}
+
+func nonNilStringSlice(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
 // newHub builds a Hub. Unexported: [New] is the only supported
 // constructor, so Options' defaults are always applied first.
 func newHub(deps Dependencies, opts Options, logger *slog.Logger) *Hub {
 	return &Hub{
-		deps:              deps,
-		clock:             opts.Clock,
-		logger:            logger,
-		tickInterval:      opts.StreamTickInterval,
-		keepaliveInterval: opts.StreamKeepaliveInterval,
-		bufSize:           opts.StreamSubscriberBuffer,
-		subscribers:       make(map[uint64]*subscriber),
-		lastRendered:      make(map[string][]byte),
-		notifyCh:          make(chan struct{}, 1),
-		done:              make(chan struct{}),
+		deps:                     deps,
+		clock:                    opts.Clock,
+		logger:                   logger,
+		tickInterval:             opts.StreamTickInterval,
+		keepaliveInterval:        opts.StreamKeepaliveInterval,
+		bufSize:                  opts.StreamSubscriberBuffer,
+		subscribers:              make(map[uint64]*subscriber),
+		lastRendered:             make(map[string][]byte),
+		lastRenderedInstanceOnly: make(map[string][]byte),
+		lastObservationsBySignal: make(map[string]map[string][]byte),
+		notifyCh:                 make(chan struct{}, 1),
+		done:                     make(chan struct{}),
 	}
 }
 
@@ -246,9 +351,55 @@ func (h *Hub) render(ctx context.Context) {
 			key := "fpp:" + fv.InstanceID
 			present[key] = struct{}{}
 			inst := mapFPPInstance(fv, now)
-			if h.updateRendered(key, fppInstanceDiffProjection(inst)) {
+			proj := fppInstanceDiffProjection(inst)
+
+			// fullChanged is EXACTLY the pre-ADR-023 gate, unmodified: it
+			// alone decides whether a non-delta-subscribed connection ever
+			// sees fpp.changed, which is the entire additive-compatibility
+			// argument (ADR-023 decision 1) — a connection that never asks
+			// for deltas must observe no difference from before this
+			// feature existed.
+			fullChanged := h.updateRendered(key, proj)
+			// instChanged narrows that same signal to STRUCTURAL fields only
+			// (health, endpoint, lastPollError — lastPollAt is already
+			// excluded from proj itself, see fppInstanceDiffProjection), per
+			// ADR-023 decision 3. Because proj's non-Observations fields are
+			// a strict subset of what fullChanged already diffs, instChanged
+			// can only be true when fullChanged is also true — so a
+			// delta-subscribed connection audienceAll-widened below never
+			// receives an fpp.changed the non-delta gate itself did not
+			// license.
+			instChanged := h.updateInstanceOnlyRendered(key, instanceOnlyForDelta(proj))
+			changedObs, removedSignals := h.updateObservationDeltas(key, inst.Observations)
+
+			if fullChanged {
+				aud := audienceNonDeltaOnly
+				if instChanged {
+					aud = audienceAll
+				}
 				i := inst
-				pending = append(pending, pendingFrame{event: "fpp.changed", serverTime: formatTime(now), instance: &i})
+				pending = append(pending, pendingFrame{event: "fpp.changed", serverTime: formatTime(now), instance: &i, audience: aud})
+			}
+			// fpp.observations.changed is skipped whenever instChanged is
+			// true, even if changedObs/removedSignals is also non-empty:
+			// instChanged true means the fpp.changed frame just appended
+			// above ALREADY went to every delta-subscribed connection too
+			// (audienceAll), carrying this exact instance's full, current
+			// Observations — including whatever just changed or was
+			// removed. Sending fpp.observations.changed in the same pass
+			// would be pure duplication of information a delta client
+			// already just received, never new information (this is also
+			// what keeps a genuinely brand-new instance — where EVERY
+			// signal is, trivially, "different from nothing" — from
+			// producing both its first fpp.changed AND a redundant
+			// fpp.observations.changed repeating every signal it just
+			// carried).
+			if !instChanged && (len(changedObs) > 0 || len(removedSignals) > 0) {
+				pending = append(pending, pendingFrame{
+					event: "fpp.observations.changed", serverTime: formatTime(now),
+					instanceID: fv.InstanceID, changedObs: changedObs, removedSignals: removedSignals,
+					audience: audienceDeltaOnly,
+				})
 			}
 		}
 		h.evictRendered("fpp:", present)
@@ -304,8 +455,24 @@ func (h *Hub) render(ctx context.Context) {
 // already establishes: which source most recently confirmed a value, and
 // exactly when, is provenance and freshness bookkeeping about how the
 // value was obtained, not itself part of what the value or its state ARE.
+// ValidForSeconds is cleared under the same condition, and leaving it in
+// was a real defect measured against the live fleet rather than a
+// hypothetical. It is a per-collector constant — 45s for fpp-rest, 30s
+// for fpp-mqtt — so it flips for exactly the same reason Source does and
+// at exactly the same moment. Masking Source while keeping ValidForSeconds
+// is internally inconsistent, and the cost was not subtle: with both
+// collectors reporting the ~151 overlapping signals of one instance, every
+// precedence flip made all 151 look changed. Delta frames on the real
+// fleet carried 67 to 76 signals each instead of the four to nine that had
+// actually moved, including signals that cannot change at all
+// (fpp.host_name, fpp.mode, fpp.mqtt.configured). Quality is deliberately
+// NOT masked: it describes how a value was determined (direct, derived,
+// inferred, operator) rather than which collector won the race, and it does
+// not currently differ between the two sources for the same signal. If a
+// future source makes it flip the same way, it belongs here too.
+//
 // What remains in the projection after that — Signal, Value, Unit, State,
-// Reason, Quality, ValidForSeconds — is exactly "if value, unit, reason
+// Reason, Quality — is exactly "if value, unit, reason
 // and state are all unchanged AND the state is still current, nothing an
 // operator can act on has changed" (Step 5 review finding 3's own words),
 // so a byte-identical projection on the next render correctly produces no
@@ -329,14 +496,147 @@ func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	proj.LastPollAt = nil
 	proj.Observations = make([]v1.Evidence, len(inst.Observations))
 	for i, o := range inst.Observations {
-		o.CollectedAt = nil
-		if o.State == string(observation.StateCurrent) {
-			o.ObservedAt = nil
-			o.Source = ""
-		}
-		proj.Observations[i] = o
+		// Delegated, never repeated: see maskEvidenceForDiff's doc comment
+		// for what happened the one time these were two implementations.
+		proj.Observations[i] = maskEvidenceForDiff(o)
 	}
 	return proj
+}
+
+// instanceOnlyForDelta takes an ALREADY-masked projection (a
+// [fppInstanceDiffProjection] result) and clears its Observations entirely,
+// leaving only the instance-level fields ADR-023 decision 3 names as
+// "structural": health, endpoint, and lastPollError (lastPollAt is already
+// nil in proj — see [fppInstanceDiffProjection] — for the same
+// collection-bookkeeping-churn reason it is excluded from the full-frame
+// gate too, so it is excluded from this narrower one for free rather than
+// by a second, separate rule). [Hub.updateInstanceOnlyRendered] diffs the
+// result of this function against its own cache, entirely independent of
+// [Hub.updateRendered]'s full-projection cache, so a change confined to
+// Observations never trips it — which is exactly what decides whether a
+// delta-subscribed connection receives fpp.changed at all for a given
+// render pass.
+func instanceOnlyForDelta(proj v1.FPPInstance) v1.FPPInstance {
+	proj.Observations = nil
+	return proj
+}
+
+// updateInstanceOnlyRendered mirrors [Hub.updateRendered] exactly, against
+// the separate lastRenderedInstanceOnly cache: it reports whether v's JSON
+// rendering differs from what was last stored under key in THAT cache,
+// updating it unconditionally either way. Kept as a distinct method (rather
+// than parameterizing updateRendered over which map to use) so each cache's
+// own doc comment on the [Hub] struct can name exactly what it is for
+// without a caller having to thread that context through an extra
+// parameter.
+func (h *Hub) updateInstanceOnlyRendered(key string, v any) bool {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Unreachable for a v1.FPPInstance built by this package's own
+		// mapping functions; see [Hub.updateRendered]'s identical posture.
+		h.logger.Warn("stream hub: failed to render instance-only projection for change detection", "key", key, "error", err)
+		return false
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.lastRenderedInstanceOnly[key]
+	if ok && bytes.Equal(prev, b) {
+		return false
+	}
+	h.lastRenderedInstanceOnly[key] = b
+	return true
+}
+
+// maskEvidenceForDiff is THE masking rule for change detection, and the only
+// copy of it: [fppInstanceDiffProjection] calls this function rather than
+// repeating its body. That is not tidiness. The two started as separate
+// implementations whose comments each asserted they applied "EXACTLY" the
+// same rule, and they silently stopped agreeing the moment ValidForSeconds
+// was added to one of them, which cost a measured live re-run to find. A rule
+// duplicated in two places with a comment claiming equivalence is worse than
+// a rule duplicated in two places, because the comment stops anyone checking.
+// See TestDiffMaskingRuleHasExactlyOneImplementation.
+//
+// The rule: CollectedAt is always cleared. When State is "current" —
+// meaning a real value with a known ObservedAt that has not aged out —
+// ObservedAt, Source and ValidForSeconds are cleared too, because all three
+// describe how and when the value was obtained rather than what it is, and
+// all three change together when contract section 5.2's precedence rule flips
+// which collector most recently confirmed an unchanged reading.
+//
+// Used ONLY for change detection, never for what is placed on the wire: a
+// delta frame's "changed" list always carries the caller's UNMASKED Evidence,
+// exactly as fpp.changed always broadcasts the unmasked instance even though a
+// masked copy decided whether to send it at all.
+func maskEvidenceForDiff(o v1.Evidence) v1.Evidence {
+	o.CollectedAt = nil
+	if o.State == string(observation.StateCurrent) {
+		o.ObservedAt = nil
+		o.Source = ""
+		o.ValidForSeconds = nil
+	}
+	return o
+}
+
+// updateObservationDeltas compares obs (an FPP instance's resolved,
+// already-sorted [v1.Evidence] list, exactly as [mapFPPInstance] produces
+// it) against what this hub last recorded for key in
+// lastObservationsBySignal, using [maskEvidenceForDiff] for the comparison
+// so a mere re-poll of an unchanged value is never reported as "changed"
+// here — reproducing that exact volume problem one layer down from
+// fpp.changed is precisely what ADR-023 exists to avoid. It always replaces
+// the cached set with obs's current signals, unconditionally, mirroring
+// [Hub.updateRendered]'s own "always advance the cache, report whether it
+// moved" contract.
+//
+// changed carries every signal's full, UNMASKED [v1.Evidence] — never the
+// masked copy used only to decide whether it counts as changed — for every
+// signal that is new or whose masked rendering differs from last time,
+// in the same order obs was given in (already sorted, per
+// [mapFPPInstance]/[sortObservations]). removed carries the signal ID,
+// sorted for a deterministic wire order despite iterating a Go map, of
+// every signal this hub previously held for key that is no longer present
+// in obs at all — the "cape swapped for a smaller one" case ADR-023's
+// Context section names.
+func (h *Hub) updateObservationDeltas(key string, obs []v1.Evidence) (changed []v1.Evidence, removed []string) {
+	current := make(map[string][]byte, len(obs))
+	for _, o := range obs {
+		b, err := json.Marshal(maskEvidenceForDiff(o))
+		if err != nil {
+			// Unreachable for a v1.Evidence built by mapEvidence; see
+			// [Hub.updateRendered]'s identical posture for a marshal
+			// failure. Skipping this signal for this pass (rather than
+			// treating it as changed, or crashing) is the same
+			// fail-safe-to-"no frame" posture the rest of this file takes
+			// for a rendering error.
+			h.logger.Warn("stream hub: failed to render evidence for delta change detection", "key", key, "signal", o.Signal, "error", err)
+			continue
+		}
+		current[o.Signal] = b
+	}
+
+	h.mu.Lock()
+	prev := h.lastObservationsBySignal[key]
+	h.lastObservationsBySignal[key] = current
+	h.mu.Unlock()
+
+	for _, o := range obs {
+		b, ok := current[o.Signal]
+		if !ok {
+			continue // marshal failed above; already logged, already skipped
+		}
+		if pb, ok2 := prev[o.Signal]; !ok2 || !bytes.Equal(pb, b) {
+			changed = append(changed, o)
+		}
+	}
+	for sig := range prev {
+		if _, ok := current[sig]; !ok {
+			removed = append(removed, sig)
+		}
+	}
+	sort.Strings(removed)
+	return changed, removed
 }
 
 // evictRendered removes every key with the given prefix from
@@ -360,6 +660,15 @@ func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 // the same resource ID legitimately reappears later it is treated as new
 // (correctly re-announced) rather than compared against a stale rendering
 // from before it vanished.
+//
+// ADR-023 adds two sibling caches keyed by the exact same strings —
+// lastRenderedInstanceOnly and lastObservationsBySignal, both described on
+// the [Hub] struct — and this method evicts a departed key from both of
+// them too, in the same pass, so all three caches can never disagree about
+// which instances currently exist. A node: key never appears in either
+// (they exist only for "fpp:" keys — see [Hub.render]'s fpp instance loop,
+// the only caller that ever writes to them), so deleting a node: key from
+// either is always a harmless no-op.
 func (h *Hub) evictRendered(prefix string, present map[string]struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -369,6 +678,8 @@ func (h *Hub) evictRendered(prefix string, present map[string]struct{}) {
 		}
 		if _, ok := present[key]; !ok {
 			delete(h.lastRendered, key)
+			delete(h.lastRenderedInstanceOnly, key)
+			delete(h.lastObservationsBySignal, key)
 		}
 	}
 }
@@ -491,19 +802,25 @@ func (h *Hub) renderNewEvents(ctx context.Context, now time.Time) []pendingFrame
 	return frames
 }
 
-// broadcast delivers pf to every current subscriber, non-blocking. A
-// subscriber whose frames buffer is full has clearly fallen behind (its
-// own ServeHTTP goroutine is not draining fast enough — a slow client, a
-// stalled network write); rather than block this call (which would stall
-// every other subscriber's delivery, and eventually the render loop
-// itself) or silently drop the frame, it is handed a stream.reset reason
-// through its capacity-1 reset channel, which ServeHTTP's loop picks up on
-// its next iteration and uses to close that one connection. Every other
-// subscriber is unaffected.
+// broadcast delivers pf to every current subscriber WHOSE audience it
+// matches (see [frameAudience.includes] — ADR-023's per-subscriber filter,
+// checked here rather than by never queuing the frame for an excluded
+// subscriber in the first place, since one pf can match some subscribers
+// and not others), non-blocking. A subscriber whose frames buffer is full
+// has clearly fallen behind (its own ServeHTTP goroutine is not draining
+// fast enough — a slow client, a stalled network write); rather than block
+// this call (which would stall every other subscriber's delivery, and
+// eventually the render loop itself) or silently drop the frame, it is
+// handed a stream.reset reason through its capacity-1 reset channel, which
+// ServeHTTP's loop picks up on its next iteration and uses to close that
+// one connection. Every other subscriber is unaffected.
 func (h *Hub) broadcast(pf pendingFrame) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, sub := range h.subscribers {
+		if !pf.audience.includes(sub.deltas) {
+			continue
+		}
 		select {
 		case sub.frames <- pf:
 		default:
@@ -527,7 +844,10 @@ func (h *Hub) broadcast(pf pendingFrame) {
 	}
 }
 
-func (h *Hub) subscribe() (id uint64, sub *subscriber) {
+// subscribe registers a new subscriber, fixing its deltas flag (ADR-023
+// decision 1) for the connection's whole lifetime — see [subscriber]'s doc
+// comment.
+func (h *Hub) subscribe(deltas bool) (id uint64, sub *subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	id = h.nextID
@@ -535,6 +855,7 @@ func (h *Hub) subscribe() (id uint64, sub *subscriber) {
 	sub = &subscriber{
 		frames: make(chan pendingFrame, h.bufSize),
 		reset:  make(chan string, 1),
+		deltas: deltas,
 	}
 	h.subscribers[id] = sub
 	return id, sub
@@ -560,7 +881,23 @@ func (h *Hub) unsubscribe(id uint64) {
 //     [EventRecord.Seq]'s durable history cursor.
 //   - A keepalive comment is written on a fixed interval so an idle stream
 //     still traverses intermediaries and a dead peer is detectable.
+//
+// ADR-023: a request whose query carries exactly "?deltas=1" opts this ONE
+// connection into delta frames (fpp.observations.changed, plus a narrower
+// fpp.changed — see [Hub.render]'s fpp instance loop and [frameAudience]).
+// Any other value — absent, empty, "0", "true", anything but the literal
+// string "1" — leaves the connection on the pre-ADR-023 full-frame path
+// with no behavioral difference whatsoever from a coordinator that has
+// never heard of deltas; this is deliberately the strictest possible
+// reading of the query parameter, not a lenient truthy check, because
+// decision 1's entire additive-compatibility argument rests on "a
+// connection that does not ask [for deltas] receives exactly what it
+// receives today" — a parameter this handler interpreted loosely could
+// silently flip an existing client's behavior the moment it added an
+// unrelated "deltas=..." query parameter of its own for some other reason.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	deltas := r.URL.Query().Get("deltas") == "1"
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -593,7 +930,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// closing finding 1.1 (see [streamWriteTimeout]'s doc comment for the
 	// failure that fix closes).
 
-	id, sub := h.subscribe()
+	id, sub := h.subscribe(deltas)
 	defer h.unsubscribe(id)
 
 	start := v1.StreamStart{

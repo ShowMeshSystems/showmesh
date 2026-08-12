@@ -365,22 +365,54 @@ paths:
         response body here. Every SSE `event:` name this coordinator emits,
         and the schema of the JSON on its `data:` line, is:
 
-          | SSE `event:` name | `data:` schema |
-          |---|---|
-          | `stream.start` | `StreamStart` |
-          | `node.changed` | `NodeChangedEvent` |
-          | `fpp.changed` | `FPPChangedEvent` |
-          | `event.recorded` | `EventRecordedEvent` |
-          | `stream.reset` | `StreamReset` |
+          | SSE `event:` name | `data:` schema | delivered to |
+          |---|---|---|
+          | `stream.start` | `StreamStart` | every connection |
+          | `node.changed` | `NodeChangedEvent` | every connection |
+          | `fpp.changed` | `FPPChangedEvent` | every connection |
+          | `fpp.observations.changed` | `FPPObservationsChangedEvent` | `?deltas=1` connections only |
+          | `event.recorded` | `EventRecordedEvent` | every connection |
+          | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
         newlines) JSON — never pretty-printed, never split across
         multiple `data:` lines. No other SSE field (`event:`, `data:`) is
-        ever emitted for these five types, and no other event type is
+        ever emitted for these six types, and no other event type is
         defined; a client encountering an `event:` name not in this table
         should ignore that frame rather than fail, in the same
         unknown-field-tolerant spirit as contract section 6.2's
         additive-only rule for JSON fields.
+
+
+        **Delta frames are opt-in per connection (ADR-023).** A request to
+        this exact path with no query string, or with any `deltas` value
+        other than the literal `1`, gets precisely what this endpoint
+        produced before `fpp.observations.changed` existed — byte for
+        byte, with no `fpp.observations.changed` event ever appearing on
+        that connection. This is what makes the addition additive rather
+        than a silent break under ADR-020's own additive-only rule
+        (contract section 6.2, "within a major version the contract is
+        additive-only... clients must ignore unknown fields"): no existing
+        client's behavior changes, and a client that has never heard of
+        deltas cannot be affected by them.
+
+          `GET /stream?deltas=1`
+
+        On a delta-subscribed connection, an observation-level change to
+        an FPP instance (a signal's resolved value, unit, state, reason,
+        or quality differs from what this connection was last told, or a
+        signal stops being reported entirely) arrives as
+        `fpp.observations.changed` instead of repeating that instance's
+        entire `observations` array inside `fpp.changed`. A change to the
+        instance's own structural fields — `health`, `endpoint`,
+        `lastPollAt`, `lastPollError` — still arrives as `fpp.changed`,
+        carrying the instance's full current representation exactly as it
+        always has, on a delta-subscribed connection too; such a
+        connection therefore receives BOTH event kinds and must apply
+        both. `fpp.observations.changed` is never sent in the same render
+        pass as an `fpp.changed` for the same instance that already
+        widened to include this connection, since that `fpp.changed`
+        already carries the current, complete observation set.
 
 
         On a fixed interval (a ShowMesh-chosen hypothesis, not a measured
@@ -407,13 +439,18 @@ paths:
         which is.
 
 
-        **The stream carries no deletions in v1.** Nothing on this
-        connection tells a client that a node or FPP instance has been
-        removed from this coordinator's configuration or inventory; a
-        client applying deltas on top of a snapshot has no signal that a
-        resource present in that snapshot is now gone. This is a real gap,
-        stated here so a client does not assume otherwise, not a promise
-        that it will never happen.
+        **The stream carries no RESOURCE deletions in v1.** Nothing on
+        this connection tells a client that an entire node or FPP instance
+        has been removed from this coordinator's configuration or
+        inventory; a client applying deltas on top of a snapshot has no
+        signal that a node or FPP instance present in that snapshot is now
+        gone entirely. This is a real gap, stated here so a client does
+        not assume otherwise, not a promise that it will never happen.
+        `fpp.observations.changed`'s `removed` list (ADR-023) is narrower
+        and does not close this gap: it reports a single OBSERVATION
+        disappearing from a still-present FPP instance — a cape swapped
+        for a smaller one, a sensor that stopped reporting — never the
+        instance itself disappearing.
 
 
         **A stream closes with a clean end-of-response and no terminating
@@ -427,6 +464,21 @@ paths:
         cleanly" from "a proxy in between timed the connection out" from
         the stream alone, and is not meant to try; it should simply
         reconnect and re-snapshot either way.
+      parameters:
+        - name: deltas
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Opt this connection into `fpp.observations.changed` frames
+            (ADR-023). Only the exact literal value `1` enables it; any
+            other value — absent, empty, `0`, `true`, anything else —
+            behaves identically to omitting this parameter entirely, which
+            is deliberately the strictest possible reading rather than a
+            lenient truthy check (see this operation's own description
+            above for why: additive compatibility for every connection
+            that has never heard of this parameter depends on it).
       responses:
         "200":
           description: >-
@@ -1113,3 +1165,49 @@ components:
           format: date-time
         event:
           $ref: "#/components/schemas/Event"
+    FPPObservationsChangedEvent:
+      type: object
+      description: >-
+        The payload of an `fpp.observations.changed` event (ADR-023),
+        delivered only to a connection that opted into delta frames via
+        `GET /stream?deltas=1`. `changed` is never null and carries the
+        full `Evidence` envelope — exactly the shape an element of
+        `FPPInstance.observations` would have — for every signal on this
+        instance whose resolved evidence differs from what this connection
+        has already been told; it never repeats a signal whose resolved
+        evidence is unchanged from last time. `removed` is never null and
+        carries the signal IDs (bare strings, not `Evidence` envelopes) of
+        every observation this connection has previously been told about
+        for this instance that no longer exists at all — a cape swapped
+        for a smaller one, a renamed port, a sensor that stopped being
+        reported. A client applying `removed` MUST delete those signals
+        from its own merged baseline; without that, the baseline
+        accumulates observations the coordinator no longer has. At least
+        one of `changed`/`removed` is always non-empty: an instance with
+        nothing to report this render pass produces no
+        `fpp.observations.changed` event at all. This event is always
+        paired with `instanceId`, unlike `FPPChangedEvent`, which nests
+        its instance identity inside `instance` — an observations-only
+        delta has no full instance object to carry it in otherwise.
+        Structural, non-observation changes to an instance (health,
+        endpoint, lastPollAt, lastPollError) continue to arrive as
+        `fpp.changed` for a delta-subscribed connection too — this event
+        exists only for a change confined to `observations`.
+      required: [seq, serverTime, instanceId, changed, removed]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        instanceId:
+          type: string
+        changed:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evidence"
+        removed:
+          type: array
+          items:
+            type: string

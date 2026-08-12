@@ -225,7 +225,7 @@ func TestPollNeverDuplicatesAnExcludedSignalAcrossTopics(t *testing.T) {
 	deliver(c, "falcon/player/FPP-Main/playlist/position/status", []byte("2"), false)
 	deliver(c, "falcon/player/FPP-Main/warnings", []byte(`[{"id":1,"message":"A Log Level is set to Debug"}]`), false)
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	for _, sig := range []observation.SignalID{
 		SignalVersion, SignalBranch, SignalStatus,

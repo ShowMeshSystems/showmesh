@@ -493,11 +493,29 @@ type fppSink struct {
 	logger *slog.Logger
 }
 
-func (s *fppSink) RecordObservations(ctx context.Context, observations []observation.Observation) {
-	for _, obs := range observations {
-		if err := s.st.UpsertObservation(ctx, obs); err != nil {
-			s.logger.Error("coordinator: failed to store fpp observation",
-				"resource_kind", obs.Resource.Kind, "resource_id", obs.Resource.ID, "signal", obs.Signal, "error", err)
+// RecordObservations persists one Poll call's delivery. complete (see
+// collector.Collector.Poll's doc comment) selects which store method
+// applies it: complete=true routes through [store.Store.ReplaceObservations],
+// which additionally prunes any previously-stored row for a
+// (resource_kind, resource_id, source) this call mentions whose signal is
+// NOT among what was just delivered — this is what stops a shrunk port
+// list, a removed sensor, or a reconfigured instance from leaving ghost
+// rows behind forever. complete=false (a skipped/backed-off poll) instead
+// upserts each observation individually via [store.Store.UpsertObservation],
+// exactly as before this completeness contract existed, so a skipped
+// cycle's near-always-empty delivery can never be read as "this source now
+// owns zero signals" and prune anything.
+func (s *fppSink) RecordObservations(ctx context.Context, observations []observation.Observation, complete bool) {
+	if complete {
+		if err := s.st.ReplaceObservations(ctx, observations); err != nil {
+			s.logger.Error("coordinator: failed to store fpp observations", "count", len(observations), "error", err)
+		}
+	} else {
+		for _, obs := range observations {
+			if err := s.st.UpsertObservation(ctx, obs); err != nil {
+				s.logger.Error("coordinator: failed to store fpp observation",
+					"resource_kind", obs.Resource.Kind, "resource_id", obs.Resource.ID, "signal", obs.Signal, "error", err)
+			}
 		}
 	}
 	if s.notify != nil {

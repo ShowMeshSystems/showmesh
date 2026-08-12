@@ -19,6 +19,13 @@ import {
   makeProblem,
   makeSnapshot,
 } from './test-support/fixtures'
+import {
+  makeRemote01Instance,
+  makeRemote04Instance,
+} from '../app/test-support/fppFleetFixtures'
+import type { components } from './generated/schema'
+
+type Evidence = components['schemas']['Evidence']
 
 // A fast backoff schedule for tests only (spec section 5.4 allows this:
 // it is a timing knob on our own client, not a mock of the transport —
@@ -76,7 +83,7 @@ describe('ApiStore: snapshot-before-delta ordering (case 1)', () => {
     // model mid-flight, while the /snapshot response is still
     // deliberately withheld, and requires "n-delta" to be absent there.
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -138,7 +145,7 @@ describe('ApiStore: interruption always re-snapshots (cases 2 and 3)', () => {
     let snapshotAttempt = 0
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         const thisAttempt = streamAttempt
         openSSE(res)
@@ -209,7 +216,7 @@ describe('ApiStore: interruption always re-snapshots (cases 2 and 3)', () => {
     let streamRes = null as import('node:http').ServerResponse | null
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRes = res
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -258,7 +265,7 @@ describe('ApiStore: interruption always re-snapshots (cases 2 and 3)', () => {
 describe('ApiStore: unknown frames and fields are ignored, not errors (case 4)', () => {
   it('ignores an unknown event: name and an unknown JSON field without crashing or corrupting the model', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -317,7 +324,7 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
   // no update from it. Narrowed name reflects that split of ownership.
   it('": keepalive" produces no model change and no listener notification at the store level', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -362,7 +369,7 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
 describe('ApiStore: a stream frame split across chunk boundaries (case 6)', () => {
   it('parses a node.changed frame written across three separate socket writes as exactly one update', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -415,7 +422,7 @@ describe('ApiStore: authentication (case 7)', () => {
     let currentToken: string | null = null
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRequests += 1
         const auth = req.headers.authorization
         if (currentToken === null) {
@@ -485,7 +492,7 @@ describe('ApiStore: incompatible API version is terminal (case 8)', () => {
   it('stops after the unsupported-api-version problem and issues no further requests', async () => {
     let streamRequests = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRequests += 1
         respondProblem(
           res,
@@ -561,7 +568,7 @@ describe('ApiStore: observedAt: null survives into the model (case 9)', () => {
     })
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -610,7 +617,7 @@ describe('ApiStore: supplementary coverage', () => {
     // only because it belongs in a bug tracker, not test code).
     let streamRes = null as import('node:http').ServerResponse | null
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRes = res
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -689,7 +696,7 @@ describe('ApiStore: supplementary coverage', () => {
     // exactly the defect this test is written to catch.
     let streamAttempt = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         const thisAttempt = streamAttempt
         openSSE(res)
@@ -746,7 +753,7 @@ describe('ApiStore: supplementary coverage', () => {
   it('computes clockSkewMs from serverTime rather than leaving it null once connected', async () => {
     const skewedServerTime = new Date(Date.now() + 60_000).toISOString() // 60s ahead
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -779,7 +786,7 @@ describe('ApiStore: supplementary coverage', () => {
   it('retryable failures (e.g. a 500) reconnect with backoff rather than failing terminally', async () => {
     let attempts = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         attempts += 1
         if (attempts === 1) {
           respondProblem(res, 500, makeProblem({ status: 500 }))
@@ -820,7 +827,7 @@ describe('ApiStore: supplementary coverage', () => {
   it('keeps the last known model visible (with its snapshotReceivedAt) while reconnecting, never clearing it', async () => {
     let streamAttempt = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -862,7 +869,7 @@ describe('ApiStore: supplementary coverage', () => {
 describe('ApiStore: initial /events fetch requests a recent window derived from latestEventSeq (D1)', () => {
   it('requests since = latestEventSeq - window, not the endpoint\'s bare default (since=0)', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -900,7 +907,7 @@ describe('ApiStore: initial /events fetch requests a recent window derived from 
 
   it('clamps since to 0 (never negative) when latestEventSeq is smaller than the window', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -934,7 +941,7 @@ describe('ApiStore: initial /events fetch requests a recent window derived from 
 describe('ApiStore: version header negotiation (acceptance criterion 5, no prior test)', () => {
   it('treats an otherwise-2xx response with no ShowMesh-API-Version header as incompatible', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         // Deliberately omit the ShowMesh-API-Version header on an
         // otherwise-OK response — client.ts's checkVersionHeader is the
         // only thing standing between this and a client that silently
@@ -957,7 +964,7 @@ describe('ApiStore: version header negotiation (acceptance criterion 5, no prior
 
   it('treats a mismatched ShowMesh-API-Version header as incompatible', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -991,7 +998,7 @@ describe('ApiStore: eventsGap is sticky across a reconnect (no prior test)', () 
     let streamRes = null as import('node:http').ServerResponse | null
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRes = res
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -1045,7 +1052,7 @@ describe('ApiStore: eventsGap is sticky across a reconnect (no prior test)', () 
 describe('ApiStore: fpp.changed updates model.fpp (no prior test)', () => {
   it('applies an fpp.changed frame to the model', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -1086,7 +1093,7 @@ describe('ApiStore: fpp.changed updates model.fpp (no prior test)', () => {
 describe('ApiStore: snapshot fpp.instances and collectors are not dropped (no prior test)', () => {
   it('carries snapshot.fpp.instances and snapshot.collectors into the model', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -1126,7 +1133,7 @@ describe('ApiStore: snapshot fpp.instances and collectors are not dropped (no pr
 describe('ApiStore: malformed JSON in a frame is tolerated, not fatal (no prior test)', () => {
   it('ignores a node.changed frame with a malformed data: JSON body, and still applies a later valid frame', async () => {
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -1185,7 +1192,7 @@ describe('ApiStore: malformed JSON in a frame is tolerated, not fatal (no prior 
     let streamRes = null as import('node:http').ServerResponse | null
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRes = res
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -1234,7 +1241,7 @@ describe('ApiStore: dispose() actually stops the loop (no prior test)', () => {
     let firstStreamReq = null as import('node:http').IncomingMessage | null
 
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamRequests += 1
         if (streamRequests === 1) firstStreamReq = req
         openSSE(res)
@@ -1288,7 +1295,7 @@ describe('ApiStore: stream idle timeout (D2)', () => {
   it('reconnects when the stream goes idle past the deadline, with no bytes at all — not even a keepalive', async () => {
     let streamAttempt = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
@@ -1341,7 +1348,7 @@ describe('ApiStore: stream idle timeout (D2)', () => {
     let streamAttempt = 0
     let streamRes = null as import('node:http').ServerResponse | null
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         streamRes = res
         openSSE(res)
@@ -1403,7 +1410,7 @@ describe('ApiClient: a request that never gets a response times out and is retri
   it('treats a request timeout as a normal retryable failure', async () => {
     let streamAttempt = 0
     const s = await server((req, res) => {
-      if (req.url === '/stream') {
+      if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
         if (streamAttempt === 1) {
           // Never respond at all — no headers, nothing. A store with no
@@ -1450,5 +1457,442 @@ describe('ApiClient: a request that never gets a response times out and is retri
     })
     await waitFor(() => store.getSnapshot().connection.kind === 'live')
     expect(streamAttempt).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('ApiStore: observation deltas (ADR-023)', () => {
+  function findInstance(store: ApiStore, instanceId: string) {
+    return store.getSnapshot().fpp.find((i) => i.instanceId === instanceId)
+  }
+
+  function findSignal(observations: readonly Evidence[], signal: string): Evidence | undefined {
+    return observations.find((o) => o.signal === signal)
+  }
+
+  it('always opts in: the /stream request carries the literal ?deltas=1 query, and nothing looser', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    const streamReq = s.requestsFor('/stream')[0]
+    // Positive assertion (the exact literal the wire contract requires),
+    // not merely "the request happened at all".
+    expect(streamReq?.url).toBe('/stream?deltas=1')
+  })
+
+  it('a delta frame MERGES rather than replaces: after a delta carrying 1 of many signals, every other signal is still present and byte-identical (THE TRAP)', async () => {
+    const baseInstance = makeRemote04Instance()
+    const totalSignals = baseInstance.observations.length
+    const uptimeBefore = findSignal(baseInstance.observations, 'fpp.uptime.seconds')
+    if (uptimeBefore === undefined) throw new Error('fixture missing fpp.uptime.seconds')
+
+    const updatedUptime: Evidence = { ...uptimeBefore, value: (uptimeBefore.value as number) + 1 }
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          // ONE signal out of `totalSignals`, exactly the volume ADR-023
+          // exists to shrink: a real coordinator would otherwise have
+          // repeated all of them inside fpp.changed.
+          writeSSEFrame(res, 'fpp.observations.changed', {
+            serverTime: new Date().toISOString(),
+            instanceId: baseInstance.instanceId,
+            changed: [updatedUptime],
+            removed: [],
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ fpp: { instances: [baseInstance] } }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await waitFor(
+      () => findSignal(findInstance(store, baseInstance.instanceId)?.observations ?? [], 'fpp.uptime.seconds')?.value === updatedUptime.value,
+      { message: 'the delta was never applied' },
+    )
+
+    const observations = findInstance(store, baseInstance.instanceId)?.observations ?? []
+
+    // Positive: the changed signal moved.
+    expect(findSignal(observations, 'fpp.uptime.seconds')?.value).toBe(updatedUptime.value)
+
+    // Positive: the count is UNCHANGED (a client that replaced on this
+    // frame would show 1, not `totalSignals`) -- this is the "renders 4
+    // signals out of 349 and looks perfectly healthy" failure mode from
+    // the ADR, caught structurally rather than by eyeballing a UI.
+    expect(observations.length).toBe(totalSignals)
+
+    // Positive, not just "does not appear missing": every OTHER signal
+    // from the base snapshot is still present and byte-for-byte identical
+    // to what the snapshot originally carried -- not merely "some 348
+    // signals exist", but exactly these ones, unchanged.
+    for (const original of baseInstance.observations) {
+      if (original.signal === 'fpp.uptime.seconds') continue
+      expect(findSignal(observations, original.signal)).toEqual(original)
+    }
+  })
+
+  it("'removed' actually deletes: a signal named there is GONE from the rendered view, not merely stale", async () => {
+    const baseInstance = makeRemote04Instance()
+    const totalSignals = baseInstance.observations.length
+    const removedSignal = 'fpp.port.port_5.current_ma'
+    if (findSignal(baseInstance.observations, removedSignal) === undefined) {
+      throw new Error(`fixture missing ${removedSignal}`)
+    }
+    // A neighboring signal that must survive, to prove this is a targeted
+    // deletion and not an accidental wipe of everything nearby.
+    const neighborSignal = 'fpp.port.port_5.enabled'
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.observations.changed', {
+            serverTime: new Date().toISOString(),
+            instanceId: baseInstance.instanceId,
+            changed: [],
+            removed: [removedSignal],
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ fpp: { instances: [baseInstance] } }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await waitFor(() => (findInstance(store, baseInstance.instanceId)?.observations.length ?? -1) < totalSignals, {
+      message: 'the removal was never applied',
+    })
+
+    const observations = findInstance(store, baseInstance.instanceId)?.observations ?? []
+
+    // Negative, paired with a positive: the removed signal is gone...
+    expect(findSignal(observations, removedSignal)).toBeUndefined()
+    // ...and the count dropped by EXACTLY one, not "gone but replaced by
+    // something else" and not "the whole array got smaller by accident".
+    expect(observations.length).toBe(totalSignals - 1)
+    // Positive: an untouched neighbor survived the removal, byte-identical.
+    expect(findSignal(observations, neighborSignal)).toEqual(findSignal(baseInstance.observations, neighborSignal))
+  })
+
+  it('a full fpp.changed frame still REPLACES: an observation absent from it is gone afterwards, even on a delta-subscribed connection', async () => {
+    const before = makeRemote04Instance({ health: 'healthy' })
+    // A full frame that genuinely omits a signal the previous one carried
+    // -- exactly the "cape swapped for a smaller one" shape, delivered via
+    // fpp.changed rather than a delta.
+    const droppedSignal = 'fpp.port.port_9.current_ma'
+    const after = {
+      ...before,
+      health: 'degraded' as const,
+      observations: before.observations.filter((o) => o.signal !== droppedSignal),
+    }
+    if (findSignal(before.observations, droppedSignal) === undefined) {
+      throw new Error(`fixture missing ${droppedSignal}`)
+    }
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.changed', {
+            serverTime: new Date().toISOString(),
+            instance: after,
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ fpp: { instances: [before] } }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    // Positive: the pre-frame baseline really did carry the signal that's
+    // about to disappear -- otherwise its later absence would prove nothing.
+    expect(findSignal(findInstance(store, before.instanceId)?.observations ?? [], droppedSignal)).toBeDefined()
+
+    await waitFor(() => findInstance(store, before.instanceId)?.health === 'degraded', {
+      message: 'the fpp.changed frame was never applied',
+    })
+
+    const observations = findInstance(store, before.instanceId)?.observations ?? []
+    // Negative, paired with the positive above: it is gone now.
+    expect(findSignal(observations, droppedSignal)).toBeUndefined()
+    // Positive: the replacement is exactly `after`'s own observation set,
+    // not a merge of `before` and `after` -- a merging client would still
+    // show `before.observations.length` entries; this one must show
+    // exactly `after.observations.length`.
+    expect(observations.length).toBe(after.observations.length)
+    expect(observations.map((o) => o.signal).sort()).toEqual(after.observations.map((o) => o.signal).sort())
+  })
+
+  it('equivalence: a real sequence of snapshot + mixed delta/full frames (including a removal) converges on exactly what a fresh snapshot would show at that point', async () => {
+    const base = makeRemote04Instance({ health: 'healthy' })
+    const uptimeSignal = 'fpp.uptime.seconds'
+    const removedSignal = 'fpp.port.port_12.current_ma'
+    const otherChangedSignal = 'fpp.port.port_12.enabled'
+
+    const uptimeAfterDelta1 = { ...findSignal(base.observations, uptimeSignal)!, value: 999999 }
+    const enabledAfterDelta3 = { ...findSignal(base.observations, otherChangedSignal)!, value: true }
+
+    // A full fpp.changed, as the coordinator would genuinely send it: the
+    // COMPLETE current observation set (already reflecting delta1's
+    // uptime change, per ADR-023's own "the full frame already carries
+    // the current set" reasoning), plus a structural change (health).
+    const structuralUpdate = {
+      ...base,
+      health: 'degraded' as const,
+      observations: base.observations.map((o) => (o.signal === uptimeSignal ? uptimeAfterDelta1 : o)),
+    }
+
+    // What a fresh GET /snapshot would show if fetched AFTER this entire
+    // sequence: the structural update's own observation set, with the
+    // later removal and the later unrelated change both applied on top.
+    // This is computed independently of the store's own merge function --
+    // it is built by hand here as the safety argument, not by calling
+    // production code a second time.
+    const expectedFinalObservations = structuralUpdate.observations
+      .filter((o) => o.signal !== removedSignal)
+      .map((o) => (o.signal === otherChangedSignal ? enabledAfterDelta3 : o))
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.observations.changed', {
+            serverTime: new Date().toISOString(),
+            instanceId: base.instanceId,
+            changed: [uptimeAfterDelta1],
+            removed: [],
+          })
+        }, 20)
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.changed', {
+            serverTime: new Date().toISOString(),
+            instance: structuralUpdate,
+          })
+        }, 40)
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.observations.changed', {
+            serverTime: new Date().toISOString(),
+            instanceId: base.instanceId,
+            changed: [],
+            removed: [removedSignal],
+          })
+        }, 60)
+        setTimeout(() => {
+          writeSSEFrame(res, 'fpp.observations.changed', {
+            serverTime: new Date().toISOString(),
+            instanceId: base.instanceId,
+            changed: [enabledAfterDelta3],
+            removed: [],
+          })
+        }, 80)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ fpp: { instances: [base] } }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    await waitFor(
+      () => findSignal(findInstance(store, base.instanceId)?.observations ?? [], otherChangedSignal)?.value === true,
+      { message: 'the full sequence never finished applying', timeoutMs: 3000 },
+    )
+    // Let the event loop settle so nothing from this sequence is still in flight.
+    await sleepMs(20)
+
+    const finalInstance = findInstance(store, base.instanceId)
+    expect(finalInstance).toBeDefined()
+    // Positive: structural field really did change.
+    expect(finalInstance?.health).toBe('degraded')
+    // Negative, paired with a positive: the removed signal is gone...
+    expect(findSignal(finalInstance?.observations ?? [], removedSignal)).toBeUndefined()
+    // ...while the total count matches the independently-computed expectation exactly.
+    expect(finalInstance?.observations.length).toBe(expectedFinalObservations.length)
+
+    // The actual equivalence check: every signal the hand-computed
+    // "fresh snapshot" would carry is present in the live model with the
+    // identical value, and nothing extra is present either (set equality
+    // via the sorted signal-name lists, followed by a per-signal deep
+    // comparison so a value mismatch is not hidden by the count matching).
+    const actualSignals = (finalInstance?.observations ?? []).map((o) => o.signal).sort()
+    const expectedSignals = expectedFinalObservations.map((o) => o.signal).sort()
+    expect(actualSignals).toEqual(expectedSignals)
+    for (const expected of expectedFinalObservations) {
+      expect(findSignal(finalInstance?.observations ?? [], expected.signal)).toEqual(expected)
+    }
+  })
+
+  it('a reconnect re-fetches an authoritative snapshot and does not carry a prior delta merge across the gap', async () => {
+    const before = makeRemote04Instance({ instanceId: 'fpp-fleet', health: 'healthy' })
+    const uptimeBefore = findSignal(before.observations, 'fpp.uptime.seconds')!
+    const deltaValueBeforeDrop = 424242
+
+    // A totally distinct instance snapshot for the SECOND connection --
+    // different fixture entirely (fewer, differently-named port signals),
+    // so "the delta's effect survived" and "the fresh snapshot's own data
+    // arrived" cannot be confused with each other by coincidence.
+    const after = makeRemote01Instance({ instanceId: 'fpp-fleet', health: 'healthy' })
+    const uptimeAfter = findSignal(after.observations, 'fpp.uptime.seconds')!
+    if (uptimeAfter.value === deltaValueBeforeDrop) {
+      throw new Error('fixture collision would make this test meaningless')
+    }
+
+    let streamAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamAttempt += 1
+        const thisAttempt = streamAttempt
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: `s${thisAttempt}`,
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        if (thisAttempt === 1) {
+          setTimeout(() => {
+            writeSSEFrame(res, 'fpp.observations.changed', {
+              serverTime: new Date().toISOString(),
+              instanceId: 'fpp-fleet',
+              changed: [{ ...uptimeBefore, value: deltaValueBeforeDrop }],
+              removed: [],
+            })
+          }, 20)
+          setTimeout(() => {
+            // No closing frame at all -- an ordinary interruption per
+            // api/openapi.yaml's /stream description.
+            req.socket.destroy()
+          }, 50)
+        }
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ fpp: { instances: [streamAttempt === 1 ? before : after] } }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(
+      () => findSignal(findInstance(store, 'fpp-fleet')?.observations ?? [], 'fpp.uptime.seconds')?.value === deltaValueBeforeDrop,
+      { message: 'the pre-drop delta was never applied' },
+    )
+
+    await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected' })
+    await waitFor(() => store.getSnapshot().connection.kind === 'live', {
+      message: 'store never returned to live after reconnect',
+    })
+
+    const finalInstance = findInstance(store, 'fpp-fleet')
+    // Positive: the fresh snapshot's own uptime value is what's showing now.
+    expect(findSignal(finalInstance?.observations ?? [], 'fpp.uptime.seconds')?.value).toBe(uptimeAfter.value)
+    // Negative, paired with the positive above: the pre-drop delta's value
+    // did not survive the reconnect merged on top of the new snapshot --
+    // if it had, the store would be attempting to reconcile across a gap,
+    // which ADR-020/ADR-023 both forbid.
+    expect(findSignal(finalInstance?.observations ?? [], 'fpp.uptime.seconds')?.value).not.toBe(deltaValueBeforeDrop)
+    // Positive: the entire observation SET is `after`'s own, not a merge
+    // of `before` and `after` -- signal-for-signal, not just the one value
+    // checked above.
+    expect((finalInstance?.observations ?? []).map((o) => o.signal).sort()).toEqual(
+      after.observations.map((o) => o.signal).sort(),
+    )
   })
 })

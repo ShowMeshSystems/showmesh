@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -432,7 +433,7 @@ func TestHubBroadcastSignalsResetOnOverflow(t *testing.T) {
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 	}, Options{StreamSubscriberBuffer: 1}.withDefaults(), testLogger())
 
-	id, sub := hub.subscribe()
+	id, sub := hub.subscribe(false)
 	defer hub.unsubscribe(id)
 
 	frame := pendingFrame{event: "node.changed", serverTime: formatTime(testNow), node: &v1.Node{}}
@@ -1049,6 +1050,128 @@ func TestFPPInstanceDiffProjectionSuppressesChurnFromTimestampOnlyChanges(t *tes
 // TestFPPInstanceDiffProjectionStillFiresOnRealValueChange is finding 3's
 // companion positive case: masking observedAt/source for a current-state
 // observation must never suppress an actual value change.
+// TestFPPInstanceDiffProjectionSuppressesChurnFromAPrecedenceFlip covers the
+// half of the churn problem that the timestamp test above does not, and that
+// shipped broken: a precedence flip between the two collectors on an
+// UNCHANGED value.
+//
+// contract section 5.2 lets fpp-rest and fpp-mqtt leapfrog for the ~151
+// signals both report, because whichever observed most recently wins and they
+// poll at different cadences. That flip rewrites Source (already masked) and
+// ValidForSeconds (which was not), and ValidForSeconds is a per-collector
+// constant: 45s for fpp-rest, 30s for fpp-mqtt. So an instance whose values
+// were all completely static still produced a frame carrying every overlapping
+// signal, twice per 15s.
+//
+// Measured on the live fleet before the fix: delta frames carried 67 to 76
+// signals each rather than the four to nine that had actually moved, and the
+// list included signals that cannot change at all — fpp.host_name, fpp.mode,
+// fpp.mqtt.configured. The value here is byte-identical across both renders;
+// only the winning source and its validity window differ.
+func TestFPPInstanceDiffProjectionSuppressesChurnFromAPrecedenceFlip(t *testing.T) {
+	t.Helper()
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+
+	obsFrom := func(source string, validFor time.Duration, observedAt time.Time) observation.Observation {
+		o, err := observation.Measured(res, "fpp.host_name", "FPP-remote-04", observedAt,
+			observation.WithSource(source), observation.WithValidFor(validFor),
+			observation.WithCollectedAt(observedAt))
+		if err != nil {
+			t.Fatalf("building fixture observation: %v", err)
+		}
+		return o
+	}
+
+	// The real pairing: fpp-rest at 45s, fpp-mqtt at 30s, same value.
+	rest := obsFrom("fpp-rest", 45*time.Second, testNow)
+	mqtt := obsFrom("fpp-mqtt", 30*time.Second, testNow.Add(2*time.Second))
+
+	restProj := fppInstanceDiffProjection(v1.FPPInstance{
+		InstanceID: "player-01", Observations: []v1.Evidence{mapEvidence(rest, testNow.Add(3*time.Second))},
+	})
+	mqttProj := fppInstanceDiffProjection(v1.FPPInstance{
+		InstanceID: "player-01", Observations: []v1.Evidence{mapEvidence(mqtt, testNow.Add(3*time.Second))},
+	})
+
+	// Both must still be current, or this test would be proving something
+	// else entirely (a staleness transition legitimately produces a frame).
+	if got := restProj.Observations[0].State; got != string(observation.StateCurrent) {
+		t.Fatalf("rest projection state = %q, want current; fixture no longer exercises the intended case", got)
+	}
+	if got := mqttProj.Observations[0].State; got != string(observation.StateCurrent) {
+		t.Fatalf("mqtt projection state = %q, want current; fixture no longer exercises the intended case", got)
+	}
+
+	restJSON, err := json.Marshal(restProj)
+	if err != nil {
+		t.Fatalf("marshalling rest projection: %v", err)
+	}
+	mqttJSON, err := json.Marshal(mqttProj)
+	if err != nil {
+		t.Fatalf("marshalling mqtt projection: %v", err)
+	}
+
+	if !bytes.Equal(restJSON, mqttJSON) {
+		t.Errorf("a precedence flip on an unchanged value produced differing diff projections, so it will broadcast a frame:\n  fpp-rest: %s\n  fpp-mqtt: %s", restJSON, mqttJSON)
+	}
+
+	// Positive half, so this cannot pass by the projection having thrown
+	// everything away: the value an operator actually reads must survive.
+	if got := restProj.Observations[0].Value; got != "FPP-remote-04" {
+		t.Errorf("projection dropped the value itself: got %v, want %q", got, "FPP-remote-04")
+	}
+}
+
+// TestDiffMaskingRuleHasExactlyOneImplementation guards the structural
+// property, not just today's field list: whatever fppInstanceDiffProjection
+// does to an observation must be exactly what maskEvidenceForDiff does to it.
+//
+// These were two separate implementations whose comments each claimed to
+// apply "EXACTLY" the same rule. They stopped agreeing the moment
+// ValidForSeconds was added to one, and the symptom was not a test failure,
+// it was delta frames on the live fleet carrying 53 signals instead of the
+// handful that had moved. This test fails if they diverge again, for any
+// field, without anyone having to notice a comment went stale.
+func TestDiffMaskingRuleHasExactlyOneImplementation(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+	renderAt := testNow.Add(3 * time.Second)
+
+	current, err := observation.Measured(res, "fpp.host_name", "FPP-remote-04", testNow,
+		observation.WithSource("fpp-rest"), observation.WithValidFor(45*time.Second),
+		observation.WithCollectedAt(testNow))
+	if err != nil {
+		t.Fatalf("building current fixture: %v", err)
+	}
+	// A non-current one too, so the State-conditioned half of the rule is
+	// covered rather than only the branch that clears everything.
+	failed, err := observation.CollectionFailed(res, "fpp.reachable", "timeout",
+		observation.WithSource("fpp-rest"), observation.WithCollectedAt(testNow))
+	if err != nil {
+		t.Fatalf("building absence fixture: %v", err)
+	}
+
+	for _, o := range []observation.Observation{current, failed} {
+		ev := mapEvidence(o, renderAt)
+
+		viaProjection := fppInstanceDiffProjection(v1.FPPInstance{
+			InstanceID: "player-01", Observations: []v1.Evidence{ev},
+		}).Observations[0]
+		viaMask := maskEvidenceForDiff(ev)
+
+		got, err := json.Marshal(viaProjection)
+		if err != nil {
+			t.Fatalf("marshalling projection result: %v", err)
+		}
+		want, err := json.Marshal(viaMask)
+		if err != nil {
+			t.Fatalf("marshalling mask result: %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("the two masking paths disagree for signal %q, so the full-frame and delta paths will make different change decisions:\n  fppInstanceDiffProjection: %s\n  maskEvidenceForDiff:       %s", o.Signal, got, want)
+		}
+	}
+}
+
 func TestFPPInstanceDiffProjectionStillFiresOnRealValueChange(t *testing.T) {
 	fpp := &mutableFPPLister{}
 	pollAt := testNow

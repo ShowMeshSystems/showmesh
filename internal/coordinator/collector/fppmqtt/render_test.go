@@ -80,7 +80,7 @@ func TestPollRetainedDeliveryIsUnknownAge(t *testing.T) {
 
 	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), true)
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 	got := findObservation(t, obs, SignalStatus)
 
 	if got.ObservedAt != nil {
@@ -103,7 +103,7 @@ func TestPollLiveDeliveryUsesReceiptTime(t *testing.T) {
 
 	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 	got := findObservation(t, obs, SignalStatus)
 
 	if got.ObservedAt == nil {
@@ -131,7 +131,8 @@ func TestPollLiveValueAgesIntoStaleWithoutBeingRefreshedByPolling(t *testing.T) 
 
 	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
 
-	first := findObservation(t, c.Poll(context.Background()), SignalStatus)
+	firstObs, _ := c.Poll(context.Background())
+	first := findObservation(t, firstObs, SignalStatus)
 	if first.StateAt(now) != observation.StateCurrent {
 		t.Fatalf("first poll StateAt = %q, want current", first.StateAt(now))
 	}
@@ -140,7 +141,8 @@ func TestPollLiveValueAgesIntoStaleWithoutBeingRefreshedByPolling(t *testing.T) 
 	// new on this topic.
 	now = now.Add(DefaultValidFor * 2)
 
-	second := findObservation(t, c.Poll(context.Background()), SignalStatus)
+	secondObs, _ := c.Poll(context.Background())
+	second := findObservation(t, secondObs, SignalStatus)
 
 	if !second.ObservedAt.Equal(*first.ObservedAt) {
 		t.Errorf("second poll's ObservedAt = %v, want unchanged from first poll's %v (polling must not refresh it)", *second.ObservedAt, *first.ObservedAt)
@@ -164,11 +166,11 @@ func TestPollConnectionDownProducesCollectionFailedForEverySignal(t *testing.T) 
 	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
 	c.setConnected(true, "")
 	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
-	_ = c.Poll(context.Background()) // sanity: was healthy before the drop
+	_, _ = c.Poll(context.Background()) // sanity: was healthy before the drop
 
 	c.setConnected(false, "mqtt broker connect attempt failed: dial tcp: connection refused")
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 	if len(obs) != len(allStaticSignalIDs) {
 		t.Fatalf("Poll() returned %d observations while disconnected, want exactly %d (one per static signal)", len(obs), len(allStaticSignalIDs))
 	}
@@ -199,7 +201,7 @@ func TestPollNeverReceivedTopicIsNotCollected(t *testing.T) {
 	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
 	c.setConnected(true, "")
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 	got := findObservation(t, obs, SignalStatus)
 	if got.Absence != observation.StateNotCollected {
 		t.Errorf("fpp.status with no message ever received: Absence = %q, want %q", got.Absence, observation.StateNotCollected)
@@ -219,7 +221,7 @@ func TestPollDecodeFailureIsolatedToItsOwnTopic(t *testing.T) {
 	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
 	deliver(c, "falcon/player/FPP-Main/ready", []byte("not-a-valid-ready-value"), false)
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	status := findObservation(t, obs, SignalStatus)
 	if status.Absence != "" {
@@ -241,7 +243,7 @@ func TestPollUnmatchedHostNeverBecomesResource(t *testing.T) {
 
 	deliver(c, "falcon/player/FPP-Shed/status", []byte("idle"), false)
 
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 	for _, o := range obs {
 		if o.Resource.ID == "shed" || o.Resource.ID == "FPP-Shed" {
 			t.Fatalf("an unconfigured host produced an observation for resource %q; it must never become a resource", o.Resource.ID)
@@ -299,7 +301,7 @@ func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 	// consulted), which is exactly why "indefinitely" is checked
 	// separately, much later, below.
 	now = now.Add(5 * time.Second)
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	ghostObservations := 0
 	for _, o := range obs {
@@ -329,7 +331,7 @@ func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 	// A much later poll: the rule is "indefinitely", not "until the next
 	// poll happens to run".
 	now = now.Add(24 * time.Hour)
-	laterObs := c.Poll(context.Background())
+	laterObs, _ := c.Poll(context.Background())
 	for _, o := range laterObs {
 		if o.Resource.ID != "ghost" || o.Absence != "" {
 			continue

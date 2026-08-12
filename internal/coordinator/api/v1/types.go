@@ -421,3 +421,48 @@ type EventRecordedEvent struct {
 	ServerTime string `json:"serverTime"`
 	Event      Event  `json:"event"`
 }
+
+// FPPObservationsChangedEvent is the payload of an
+// "fpp.observations.changed" SSE event (ADR-023), delivered only to a
+// connection that opted into delta frames via
+// GET /api/v1/stream?deltas=1 — see [FPPChangedEvent], which continues to
+// carry an instance's full current representation for every connection,
+// delta-subscribed or not, whenever one of its STRUCTURAL fields (health,
+// endpoint, lastPollAt, lastPollError) changes; this event exists
+// specifically so an OBSERVATION-level change never has to repeat every
+// other observation on the same instance just to report the few that
+// actually moved.
+//
+// Changed carries the full [Evidence] envelope — exactly the shape an
+// element of [FPPInstance.Observations] would have — for every signal on
+// this instance whose resolved evidence differs from what this connection
+// has already been told; it never repeats a signal whose resolved evidence
+// is byte-identical to last time, using the same current-state
+// ObservedAt/Source/CollectedAt masking [FPPChangedEvent]'s own diff
+// detection already applies (see internal/coordinator/api's
+// fppInstanceDiffProjection and maskEvidenceForDiff), so a value merely
+// reconfirmed by a fresh poll is not "changed" here either.
+//
+// Removed carries the signal IDs — bare strings, not [Evidence] envelopes,
+// since there is no evidence left to report — of every observation this
+// hub has previously told this connection about for this instance that no
+// longer exists at all: a cape swapped for a smaller one, a renamed port, a
+// sensor that stopped being reported. This is required, not an
+// optimization: without it, a client merging Changed onto its own baseline
+// accumulates rows the coordinator no longer has, the same ghost-row
+// problem ADR-023's Context section describes moving from the store into
+// the browser.
+//
+// Both are never null — a slice with nothing to report renders as `[]`,
+// per this API's standing "absent evidence is stated, never omitted" rule —
+// and at least one of the two is always non-empty: an instance with
+// nothing to report this render pass produces no fpp.observations.changed
+// event at all (see internal/coordinator/api's Hub.render), so a client
+// that receives one always has something to apply.
+type FPPObservationsChangedEvent struct {
+	Seq        uint64     `json:"seq"`
+	ServerTime string     `json:"serverTime"`
+	InstanceID string     `json:"instanceId"`
+	Changed    []Evidence `json:"changed"`
+	Removed    []string   `json:"removed"`
+}

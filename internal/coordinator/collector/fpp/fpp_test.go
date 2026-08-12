@@ -64,7 +64,7 @@ func TestPollMultiSyncEnabledFromRealBody(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	got := findSignal(t, obs, SignalMultiSyncEnabled)
 	if got.Value != true {
@@ -90,7 +90,7 @@ func TestPollMultiSyncDisabledIsPositiveFactNotFailure(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	got := findSignal(t, obs, SignalMultiSyncEnabled)
 	if got.Value != false {
@@ -139,7 +139,7 @@ func TestMultiSyncEnabledNeverReadsTheSettingsEndpoint(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	// Pin the exact, complete set of endpoints one Poll call is allowed to
 	// touch — not merely that one forbidden path was avoided. Step 5 added
@@ -178,7 +178,7 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	wantValue := map[observation.SignalID]any{
 		SignalReachable:              true,
@@ -276,7 +276,10 @@ func TestPollUnreachableProducesCollectionFailedNeverFabricatedFalse(t *testing.
 		Now:            fixedClock(&now),
 		RequestTimeout: 2 * time.Second,
 	})
-	obs := c.Poll(context.Background())
+	obs, complete := c.Poll(context.Background())
+	if !complete {
+		t.Errorf("Poll complete = false for a totally-unreachable instance, want true: a real attempt that found every endpoint down is still the complete, honest answer for this cycle, never the same claim as a skipped/backed-off poll (see Poll's doc comment)")
+	}
 
 	reachable := findSignal(t, obs, SignalReachable)
 	if reachable.Absence != observation.StateCollectionFailed {
@@ -336,7 +339,7 @@ func TestPollHTTPErrorStatusProducesCollectionFailed(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	reachable := findSignal(t, obs, SignalReachable)
 	if reachable.Absence != observation.StateCollectionFailed {
@@ -366,7 +369,7 @@ func TestPollDecodeErrorDegradesOnlyAffectedSignal(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	broken := findSignal(t, obs, SignalSequenceName)
 	if broken.Absence != observation.StateCollectionFailed {
@@ -438,7 +441,7 @@ func TestPollEmptyPlaylistAndSequenceAreCurrentNotAbsent(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	for _, sig := range []observation.SignalID{SignalPlaylistName, SignalSequenceName} {
 		got := findSignal(t, obs, sig)
@@ -468,7 +471,7 @@ func TestFetchRejectsOversizedBody(t *testing.T) {
 		Now:              fixedClock(&now),
 		MaxResponseBytes: 16, // far smaller than oversized, deliberately
 	})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	reachable := findSignal(t, obs, SignalReachable)
 	if reachable.Absence != observation.StateCollectionFailed {
@@ -494,9 +497,12 @@ func TestBackoffSkipsRequestsUntilNextAttemptAt(t *testing.T) {
 		BackoffBase: time.Minute, // long enough that "no time has passed" definitely stays inside it
 	})
 
-	obs1 := c.Poll(context.Background())
+	obs1, complete1 := c.Poll(context.Background())
 	if len(obs1) == 0 {
 		t.Fatalf("first Poll returned no observations, want a real (failed) attempt")
+	}
+	if !complete1 {
+		t.Errorf("first Poll complete = false, want true: a real attempt (even a failed one) is complete")
 	}
 	hitsAfterFirst := srv.hitCount("/api/fppd/status")
 	if hitsAfterFirst != 1 {
@@ -504,9 +510,16 @@ func TestBackoffSkipsRequestsUntilNextAttemptAt(t *testing.T) {
 	}
 
 	// Same instant: the collector must be in backoff and skip entirely.
-	obs2 := c.Poll(context.Background())
+	// complete=false here is the property this collector's Sink depends on
+	// to never prune stale rows on a cycle that checked nothing (see
+	// Poll's doc comment and internal/coordinator/store's
+	// TestReplaceObservationsSkippedPollDeletesNothing).
+	obs2, complete2 := c.Poll(context.Background())
 	if len(obs2) != 0 {
 		t.Errorf("second Poll (still within backoff) returned %d observations, want 0 (skipped)", len(obs2))
+	}
+	if complete2 {
+		t.Errorf("second Poll (skipped under backoff) complete = true, want false: nothing was checked, so this must never be read as \"these are all the signals that exist\"")
 	}
 	if got := srv.hitCount("/api/fppd/status"); got != hitsAfterFirst {
 		t.Errorf("hits after second Poll = %d, want unchanged %d (request should have been skipped)", got, hitsAfterFirst)
@@ -515,9 +528,12 @@ func TestBackoffSkipsRequestsUntilNextAttemptAt(t *testing.T) {
 	// Advance well past any plausible backoff (base 1 minute, one failure)
 	// and confirm the collector tries again.
 	now = now.Add(10 * time.Minute)
-	obs3 := c.Poll(context.Background())
+	obs3, complete3 := c.Poll(context.Background())
 	if len(obs3) == 0 {
 		t.Fatalf("third Poll (after the backoff window) returned no observations, want a real attempt")
+	}
+	if !complete3 {
+		t.Errorf("third Poll complete = false, want true: this is a real attempt again, not a skip")
 	}
 	if got := srv.hitCount("/api/fppd/status"); got != hitsAfterFirst+1 {
 		t.Errorf("hits after third Poll = %d, want %d (one more real attempt)", got, hitsAfterFirst+1)
@@ -554,7 +570,7 @@ func TestBackoffResetsOnSuccess(t *testing.T) {
 	// would still be inside backoff if the reset had not happened) is not
 	// skipped.
 	now = now.Add(10 * time.Minute)
-	obsHealthy := c.Poll(context.Background())
+	obsHealthy, _ := c.Poll(context.Background())
 	if len(obsHealthy) == 0 {
 		t.Fatalf("recovery Poll returned no observations")
 	}
@@ -567,7 +583,7 @@ func TestBackoffResetsOnSuccess(t *testing.T) {
 	// Same instant as the successful poll: if backoff had NOT been reset,
 	// this would be skipped just like in
 	// TestBackoffSkipsRequestsUntilNextAttemptAt. It must not be.
-	obsNext := c.Poll(context.Background())
+	obsNext, _ := c.Poll(context.Background())
 	if len(obsNext) == 0 {
 		t.Errorf("Poll immediately after a success returned no observations, want a real attempt (backoff should have been reset)")
 	}
@@ -679,7 +695,7 @@ type recordingSink struct {
 	recs [][]observation.Observation
 }
 
-func (s *recordingSink) RecordObservations(ctx context.Context, obs []observation.Observation) {
+func (s *recordingSink) RecordObservations(ctx context.Context, obs []observation.Observation, complete bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recs = append(s.recs, obs)

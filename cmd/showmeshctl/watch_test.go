@@ -134,7 +134,7 @@ func TestWatchOnceResnapshotsOnConnectOnGapAndOnReset(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	g := &globalFlags{output: outputText, timeout: 5 * time.Second}
-	err = watchOnce(context.Background(), streamClient, snapshotClient, g, &stdout, &stderr, time.Now, newWatchBackoff())
+	err = watchOnce(context.Background(), streamClient, snapshotClient, g, false, &stdout, &stderr, time.Now, newWatchBackoff())
 
 	if err == nil {
 		t.Fatal("watchOnce returned nil, want an error once the coordinator closes the connection")
@@ -188,7 +188,7 @@ func TestWatchOnceRejectsNonStreamStartFirstEvent(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	g := &globalFlags{output: outputText, timeout: 5 * time.Second}
-	err := watchOnce(context.Background(), streamClient, snapshotClient, g, &stdout, &stderr, time.Now, newWatchBackoff())
+	err := watchOnce(context.Background(), streamClient, snapshotClient, g, false, &stdout, &stderr, time.Now, newWatchBackoff())
 	if err == nil {
 		t.Fatal("watchOnce returned nil, want an error")
 	}
@@ -215,5 +215,124 @@ func TestWatchBackoffGrowsThenCaps(t *testing.T) {
 	b.Reset()
 	if got := b.Next(); got != first {
 		t.Errorf("after Reset, first Next() = %v, want %v (the initial interval)", got, first)
+	}
+}
+
+// TestWatchOnceSendsDeltasQueryParamOnlyWhenRequested is this program's own
+// half of ADR-023's additive-compatibility argument: --deltas must add
+// EXACTLY "deltas=1" to the stream request, and its absence must add no
+// such parameter at all — matching what the coordinator side actually
+// requires (internal/coordinator/api's Hub.ServeHTTP treats anything other
+// than the literal "1" as equivalent to omitting the parameter), and
+// proving this client cannot accidentally send a spelling that fails to
+// opt in.
+func TestWatchOnceSendsDeltasQueryParamOnlyWhenRequested(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		deltas    bool
+		wantQuery string
+	}{
+		{"disabled", false, ""},
+		{"enabled", true, "deltas=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","latestEventSeq":0,"nodes":[],"fpp":{"instances":[]},"collectors":[]}`)
+			})
+			mux.HandleFunc("/api/v1/stream", func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.RawQuery
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				flusher, ok := w.(http.Flusher)
+				if !ok {
+					t.Fatal("ResponseWriter does not support Flusher")
+				}
+				_, _ = fmt.Fprint(w, "event: stream.start\ndata: {\"streamId\":\"s1\",\"apiVersion\":1,\"serverTime\":\"2026-08-10T21:00:00Z\",\"snapshotRequired\":true}\n\n")
+				flusher.Flush()
+				// Handler returns immediately after stream.start, closing
+				// the connection — this test only needs to observe the
+				// REQUEST, not drive any further frames.
+			})
+			ts := httptest.NewServer(mux)
+			t.Cleanup(ts.Close)
+
+			streamClient, err := newClient(ts.URL, "", &http.Client{})
+			if err != nil {
+				t.Fatalf("newClient: %v", err)
+			}
+			snapshotClient, err := newClient(ts.URL, "", &http.Client{Timeout: 5 * time.Second})
+			if err != nil {
+				t.Fatalf("newClient: %v", err)
+			}
+
+			var stdout, stderr bytes.Buffer
+			g := &globalFlags{output: outputText, timeout: 5 * time.Second}
+			// The connection closes right after stream.start, so
+			// watchOnce always returns an error here; this test only
+			// cares about the REQUEST it made, not that return value.
+			_ = watchOnce(context.Background(), streamClient, snapshotClient, g, tc.deltas, &stdout, &stderr, time.Now, newWatchBackoff())
+
+			if gotQuery != tc.wantQuery {
+				t.Errorf("--deltas=%v: stream request query = %q, want %q", tc.deltas, gotQuery, tc.wantQuery)
+			}
+		})
+	}
+}
+
+const fppObservationsChangedTmpl = `event: fpp.observations.changed
+data: {"seq":%d,"serverTime":"2026-08-10T21:00:0%dZ","instanceId":"player-01","changed":[{"signal":"fpp.uptime.seconds","value":42,"unit":null,"state":"current","reason":null,"observedAt":"2026-08-10T21:00:00Z","collectedAt":"2026-08-10T21:00:00Z","source":"fpp-rest","quality":"direct","validForSeconds":60}],"removed":["fpp.sensor.temp"]}
+
+`
+
+// TestWatchOnceDecodesAndPrintsFPPObservationsChangedFrame proves this
+// client can actually consume the frame ADR-023 adds, not merely request
+// it: a real fpp.observations.changed frame over a live
+// text/event-stream, decoded and rendered with both the signal that
+// changed AND the one reported removed — a positive assertion paired with
+// a positive assertion (BOTH must appear), not a bare "it did not crash".
+func TestWatchOnceDecodesAndPrintsFPPObservationsChangedFrame(t *testing.T) {
+	frames := []string{
+		"event: stream.start\ndata: {\"streamId\":\"s1\",\"apiVersion\":1,\"serverTime\":\"2026-08-10T21:00:00Z\",\"snapshotRequired\":true}\n\n",
+		fmt.Sprintf(fppObservationsChangedTmpl, 1, 1),
+	}
+	ts, snapshotHits := sseTestServer(t, frames)
+
+	streamClient, err := newClient(ts.URL, "", &http.Client{})
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	snapshotClient, err := newClient(ts.URL, "", &http.Client{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	g := &globalFlags{output: outputText, timeout: 5 * time.Second}
+	err = watchOnce(context.Background(), streamClient, snapshotClient, g, true, &stdout, &stderr, time.Now, newWatchBackoff())
+	if err == nil {
+		t.Fatal("watchOnce returned nil, want an error once the coordinator closes the connection")
+	}
+
+	// Exactly one snapshot fetch: the initial connect. seq 1 is the first
+	// event after stream.start, so it is in-sequence — no gap, no extra
+	// refetch — pinning that this new frame kind participates in gap
+	// detection identically to every other frame kind.
+	if got := atomic.LoadInt32(snapshotHits); got != 1 {
+		t.Errorf("snapshot fetch count = %d, want 1 (initial connect only); stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "[fpp.observations.changed] player-01") {
+		t.Errorf("stdout missing the fpp.observations.changed line:\n%s", out)
+	}
+	if !strings.Contains(out, "fpp.uptime.seconds") {
+		t.Errorf("stdout missing the changed signal fpp.uptime.seconds:\n%s", out)
+	}
+	if !strings.Contains(out, "fpp.sensor.temp") {
+		t.Errorf("stdout missing the removed signal fpp.sensor.temp:\n%s", out)
 	}
 }

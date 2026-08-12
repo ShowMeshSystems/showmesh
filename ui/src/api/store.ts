@@ -7,7 +7,11 @@
  *
  * Connection algorithm, in outline (ADR-020, spec section 5.1):
  *
- *   1. Open `GET /stream`. Read frames as they arrive.
+ *   1. Open `GET /stream?deltas=1` — this store always opts into
+ *      observation delta frames (ADR-023 decision 1). A coordinator that
+ *      has never heard of `?deltas=1` serves exactly what it always did;
+ *      only the literal query value `1` changes anything server-side, so
+ *      this is safe to send unconditionally. Read frames as they arrive.
  *   2. The first frame is always `stream.start`. On it — and on any
  *      later `stream.reset` — fetch `GET /snapshot` (then `GET /events`
  *      for initial history) and apply them, BEFORE processing any frame
@@ -19,22 +23,38 @@
  *      because nothing reads ahead while a snapshot fetch is in flight.
  *   3. `node.changed` / `fpp.changed` / `event.recorded` frames update
  *      the model in place once a snapshot has been applied.
+ *      `fpp.observations.changed` frames also update the model in place,
+ *      but with OPPOSITE merge semantics from `fpp.changed` — see
+ *      `applyFppChanged` (replace) versus `applyFppObservationsChanged`
+ *      (merge `changed`, delete `removed`) below, and ADR-023 decision 3a,
+ *      which names confusing the two as the entire failure mode this
+ *      feature can introduce that a full-frame-only client could not have.
  *   4. Any interruption — the stream closing, a network error, a
  *      `stream.reset` whose connection then closes — is handled the
  *      same way: reconnect (with backoff) and start over from step 1.
  *      Nothing here tries to distinguish a clean coordinator shutdown
  *      from a network fault, because the wire protocol does not let it
  *      (api/openapi.yaml's /stream description) and OPERATOR-UI section
- *      7 does not ask it to.
+ *      7 does not ask it to. This is also, structurally, why deltas
+ *      introduce no resume logic: ADR-023 decision 4 is that a delta
+ *      applies only to the baseline this store already holds, and step 2
+ *      already guarantees that baseline is re-fetched from scratch on
+ *      every reconnect — there is no cursor anywhere in this file, and
+ *      none should ever be added; a gap in the stream is handled by
+ *      re-snapshotting, never by reconciling.
  *
- * What this store deliberately does NOT do: apply a delete. The stream
- * carries no deletions in v1 (api/openapi.yaml's /stream description,
- * spec section 5.1) — a node or FPP instance dropped from the
- * coordinator's inventory produces no frame, so `model.nodes` and
- * `model.fpp` can only ever be replaced wholesale by the next snapshot,
- * never shrunk by a delta. If a future contributor is tempted to add a
- * `node.removed` handler here: don't, until the wire contract adds the
- * event that would drive it.
+ * What this store deliberately does NOT do: apply a whole-RESOURCE
+ * delete. The stream carries no node/FPP-instance deletions in v1
+ * (api/openapi.yaml's /stream description, spec section 5.1) — a node or
+ * FPP instance dropped from the coordinator's inventory produces no
+ * frame, so `model.nodes` and the membership of `model.fpp` can only ever
+ * be replaced wholesale by the next snapshot, never shrunk by a delta. If
+ * a future contributor is tempted to add a `node.removed` handler here:
+ * don't, until the wire contract adds the event that would drive it. This
+ * is distinct from `fpp.observations.changed`'s `removed` list, which
+ * this store DOES apply as a deletion — but only of individual
+ * observations within an FPP instance that remains present, never of the
+ * instance itself (ADR-023's own scoping of that field).
  */
 import { ApiClient, type FetchLike } from './client'
 import { computeBackoffMs, DEFAULT_BACKOFF, type BackoffConfig } from './backoff'
@@ -43,6 +63,7 @@ import {
   asEventSeq,
   initialModel,
   type ConnectionState,
+  type Evidence,
   type Event as ModelEvent,
   type EventSeq,
   type FPPInstance,
@@ -311,7 +332,13 @@ export class ApiStore {
   // -- one connection attempt -------------------------------------------
 
   private async runConnectionAttempt(gen: number, signal: AbortSignal): Promise<void> {
-    const response = await this.client.request('/stream', signal)
+    // ADR-023 decision 1: `?deltas=1` is the ONLY literal value that opts a
+    // connection into `fpp.observations.changed` frames; sent
+    // unconditionally here rather than behind a flag because a coordinator
+    // that predates ADR-023 (or any other value it might see) serves this
+    // connection exactly what it always served — additive by construction,
+    // nothing for this client to negotiate.
+    const response = await this.client.request('/stream?deltas=1', signal)
     if (response.body === null) {
       throw new Error('stream response had no body')
     }
@@ -401,6 +428,24 @@ export class ApiStore {
         const payload = tryParse<{ serverTime: string; instance: SchemaFPPInstance }>(frame.data)
         if (payload === null || gen !== this.generation) return
         this.applyFppChanged(payload.instance, payload.serverTime)
+        return
+      }
+      case 'fpp.observations.changed': {
+        // ADR-023 decision 3a: this frame's payload shape (a bag of
+        // `changed`/`removed`, no whole-`instance` field at all) is
+        // structurally incapable of being handed to applyFppChanged's
+        // replacement path — there is nothing here to replace WITH. That
+        // is deliberate: it is what stops this call site from being able
+        // to confuse the two merge semantics, not just a naming
+        // convention.
+        const payload = tryParse<{
+          serverTime: string
+          instanceId: string
+          changed: Evidence[]
+          removed: string[]
+        }>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyFppObservationsChanged(payload.instanceId, payload.changed, payload.removed, payload.serverTime)
         return
       }
       case 'event.recorded': {
@@ -535,6 +580,16 @@ export class ApiStore {
     })
   }
 
+  /**
+   * `fpp.changed` carries an FPP instance's COMPLETE current
+   * representation (ADR-023 decision 3a) and is therefore always a
+   * REPLACEMENT of whatever this store held for that instanceId — never a
+   * merge. This is the same posture this method has always had, since
+   * before deltas existed; it stays a plain whole-object replace so that a
+   * connection that never asked for deltas (and, per decision 3, a
+   * delta-subscribed connection's OWN structural-change frames) observes
+   * no difference from before ADR-023.
+   */
   private applyFppChanged(instance: SchemaFPPInstance, serverTime: string): void {
     const idx = this.model.fpp.findIndex((i) => i.instanceId === instance.instanceId)
     // FPPInstance ordering is "exactly as configured" (api/openapi.yaml
@@ -543,6 +598,58 @@ export class ApiStore {
     // that case, not a claim about configuration order.
     const fpp: FPPInstance[] =
       idx === -1 ? [...this.model.fpp, instance] : replaceAt(this.model.fpp, idx, instance)
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime,
+      clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      fpp,
+    })
+  }
+
+  /**
+   * `fpp.observations.changed` carries only what moved (ADR-023 decision
+   * 3a) and is therefore always a MERGE onto the instance's existing
+   * `observations` — `changed` entries are folded in by `Evidence.signal`
+   * (updating an existing signal in place or appending a genuinely new
+   * one) and every signal named in `removed` is deleted outright. This is
+   * the opposite operation from `applyFppChanged` immediately above, on
+   * purpose: see `mergeFppObservations`'s own doc comment for how the two
+   * are kept from being confused at a call site.
+   *
+   * If this connection has no existing instance for `instanceId` at all,
+   * the frame is dropped rather than synthesizing a partial instance from
+   * a delta alone: ADR-023 decision 4 says a delta applies to a baseline
+   * this client already has, and the snapshot-before-delta ordering this
+   * store enforces (see this file's header comment, step 2) is exactly
+   * what is supposed to guarantee that baseline exists before any delta
+   * for it can arrive. An unseen instanceId here would mean that
+   * guarantee was violated somewhere upstream, and the correct response to
+   * an unmergeable delta is to do nothing and wait for the next
+   * authoritative snapshot or fpp.changed to supply the instance in full —
+   * not to guess at a shape the wire contract never sent.
+   */
+  private applyFppObservationsChanged(
+    instanceId: string,
+    changed: readonly Evidence[],
+    removed: readonly string[],
+    serverTime: string,
+  ): void {
+    const idx = this.model.fpp.findIndex((i) => i.instanceId === instanceId)
+    if (idx === -1) return
+
+    const instance = this.model.fpp[idx]
+    // Unreachable: idx came from findIndex over this exact array two
+    // lines above, so the -1 branch already returned. noUncheckedIndexedAccess
+    // still types this access as possibly undefined; this guard satisfies
+    // the type checker rather than papering over a real gap.
+    if (instance === undefined) return
+    const nextInstance: FPPInstance = {
+      ...instance,
+      observations: mergeFppObservations(instance.observations, changed, removed),
+    }
+    const fpp = replaceAt(this.model.fpp, idx, nextInstance)
     const receivedAt = this.now()
     this.setModel({
       ...this.model,
@@ -605,6 +712,72 @@ function mergeEventsBySeq(existing: readonly ModelEvent[], incoming: readonly Mo
   for (const event of existing) bySeq.set(event.seq, event)
   for (const event of incoming) bySeq.set(event.seq, event)
   return [...bySeq.values()].sort((a, b) => b.seq - a.seq).slice(0, MAX_RETAINED_EVENTS)
+}
+
+/**
+ * Applies ADR-023's delta merge semantics: `changed` is folded onto
+ * `existing` by `Evidence.signal` (an existing signal is updated in
+ * place, preserving `existing`'s relative order; a signal `existing`
+ * never had is appended, in `changed`'s own order — already sorted
+ * server-side, see internal/coordinator/api's sortObservations), and every
+ * signal named in `removed` is deleted from the result outright.
+ *
+ * This function's signature is the actual mechanism that keeps this merge
+ * from ever being confused with `applyFppChanged`'s replacement at a call
+ * site: it takes an observations ARRAY plus a small delta, never a whole
+ * `FPPInstance` to replace one with, so there is no value of this
+ * function's parameters that could accidentally perform a replace, and no
+ * caller can pass this function's result where a full instance is
+ * expected — the return type is `Evidence[]`, not `FPPInstance`.
+ */
+function mergeFppObservations(
+  existing: readonly Evidence[],
+  changed: readonly Evidence[],
+  removed: readonly string[],
+): Evidence[] {
+  const removedSignals = new Set(removed)
+  const bySignal = new Map<string, Evidence>()
+  for (const o of existing) {
+    if (!removedSignals.has(o.signal)) bySignal.set(o.signal, o)
+  }
+  for (const o of changed) {
+    bySignal.set(o.signal, o)
+  }
+
+  // Preserve `existing`'s own relative order for every signal that
+  // survives (untouched or updated in place), then append any genuinely
+  // new signal `changed` introduced, in the order `changed` listed it.
+  const order: string[] = []
+  const seen = new Set<string>()
+  for (const o of existing) {
+    if (bySignal.has(o.signal) && !seen.has(o.signal)) {
+      order.push(o.signal)
+      seen.add(o.signal)
+    }
+  }
+  for (const o of changed) {
+    if (!seen.has(o.signal)) {
+      order.push(o.signal)
+      seen.add(o.signal)
+    }
+  }
+
+  return order.map((signal) => {
+    const evidence = bySignal.get(signal)
+    if (evidence === undefined) {
+      // Unreachable: `order` is built exclusively from signals already
+      // confirmed present in `bySignal` above (either by the `bySignal.has`
+      // guard in the first loop, or by construction in the second, since
+      // every `changed` entry is unconditionally written into `bySignal`
+      // before this point). A non-null assertion would silence the same
+      // guarantee less legibly; this throws instead, matching this
+      // package's existing posture (see stream.go's mustObservation and
+      // its "internal invariant violation" panics) of preferring a loud
+      // failure over trusting an assertion nothing here re-checks.
+      throw new Error(`mergeFppObservations: internal invariant violated for signal "${signal}"`)
+    }
+    return evidence
+  })
 }
 
 function tryParse<T>(data: string): T | null {

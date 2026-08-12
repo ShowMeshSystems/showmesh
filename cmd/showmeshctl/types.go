@@ -270,3 +270,20 @@ type streamReset struct {
 	Reason           string    `json:"reason"`
 	SnapshotRequired bool      `json:"snapshotRequired"`
 }
+
+// streamFPPObservationsChanged is the payload of an
+// "fpp.observations.changed" frame (ADR-023), delivered only to a stream
+// connection opened with --deltas (GET /api/v1/stream?deltas=1 — see
+// cmdWatch). Changed and Removed are decoded exactly as documented rather
+// than treated as optional: contract convention for this API is that a
+// collection field is never omitted, only empty (an absent-vs-empty
+// distinction this program does not need to make for a bare string slice
+// or an evidence slice the way it does for a genuinely optional pointer
+// field elsewhere in this file).
+type streamFPPObservationsChanged struct {
+	Seq        uint64     `json:"seq"`
+	ServerTime time.Time  `json:"serverTime"`
+	InstanceID string     `json:"instanceId"`
+	Changed    []evidence `json:"changed"`
+	Removed    []string   `json:"removed"`
+}

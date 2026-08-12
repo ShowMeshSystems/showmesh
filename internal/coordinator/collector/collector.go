@@ -44,10 +44,34 @@ type Collector interface {
 	ID() string
 
 	// Poll performs one collection cycle and returns the observations
-	// produced. It may return an empty slice (for example, a Collector
-	// deliberately skipping this cycle under backoff) without that being
-	// an error.
-	Poll(ctx context.Context) []observation.Observation
+	// produced, plus a completeness claim about them.
+	//
+	// observations may be empty (for example, a Collector deliberately
+	// skipping this cycle under backoff) without that being an error.
+	//
+	// complete answers a question distinct from "did anything fail":
+	// is observations the FULL current set of every signal this Collector
+	// owns for the resource(s) it is reporting on this cycle, such that any
+	// previously-stored signal for the same (resource, source) NOT present
+	// in observations is known to no longer exist (a removed sensor, a
+	// port that dropped out of a reconfigured cape, an instance that now
+	// reports nothing where it once reported many) — as opposed to simply
+	// "not (re-)checked this cycle" for a reason that says nothing about
+	// whether it still exists.
+	//
+	// This is the distinction a Sink needs to prune stale rows safely: a
+	// skipped-under-backoff poll returning zero observations must NEVER be
+	// read as "this source now owns zero signals" (see the fpp package's
+	// backoff-skip path, which returns complete=false for exactly this
+	// reason), while a poll that reports collection_failed for every signal
+	// it knows about — a real attempt that found the instance unreachable —
+	// legitimately IS the complete current answer and may replace whatever
+	// was stored before. A Collector that has no notion of a partial or
+	// skipped cycle at all (see the fppmqtt package, which always renders
+	// every statically-known signal for every configured host, using an
+	// absence state rather than omission when nothing has arrived yet) may
+	// always return complete=true.
+	Poll(ctx context.Context) (observations []observation.Observation, complete bool)
 }
 
 // Sink is where a Runner delivers each poll's observations. Declared here,
@@ -59,10 +83,16 @@ type Collector interface {
 // together (Task F, in internal/coordinator/coordinator.go) supplies an
 // adapter that satisfies this interface.
 type Sink interface {
-	// RecordObservations delivers the observations from one Poll call.
+	// RecordObservations delivers the observations from one Poll call,
+	// along with that call's completeness claim (see [Collector.Poll]).
 	// Implementations must not block indefinitely: a slow or wedged sink
 	// would otherwise stall every collector sharing this Runner.
-	RecordObservations(ctx context.Context, observations []observation.Observation)
+	//
+	// A Sink that prunes stale rows using complete must scope that pruning
+	// to exactly the (resource, source) pairs present in observations this
+	// call — complete says nothing about a resource this Collector has
+	// never mentioned at all.
+	RecordObservations(ctx context.Context, observations []observation.Observation, complete bool)
 }
 
 // entry pairs one Collector with its own poll interval, so different
@@ -146,14 +176,14 @@ func (r *Runner) Run(ctx context.Context) {
 // necessary.
 func (r *Runner) loop(ctx context.Context, c Collector, interval time.Duration) {
 	for {
-		obs := c.Poll(ctx)
+		obs, complete := c.Poll(ctx)
 		if ctx.Err() != nil {
 			// Cancelled during (or exactly at the end of) this Poll call:
 			// do not deliver a possibly-partial result from a shutdown in
 			// progress. The sink itself may already be tearing down.
 			return
 		}
-		r.sink.RecordObservations(ctx, obs)
+		r.sink.RecordObservations(ctx, obs, complete)
 
 		timer := time.NewTimer(interval)
 		select {

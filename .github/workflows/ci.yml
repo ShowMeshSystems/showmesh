@@ -100,6 +100,41 @@ jobs:
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration
 
+  integration-fppmqtt:
+    runs-on: ubuntu-latest
+    # This is the only place the retained-versus-live observation-time rule
+    # (contract section 4.2) is exercised against a real broker connection
+    # rather than a directly-injected publish handler call, and that rule
+    # has been the source of three separate defects in this project's
+    # history — see scripts/test-integration-fppmqtt.sh's own comments. A
+    # separate job from `integration` above for the same reason that job is
+    # split from `test`: a broker or wiring problem here should be
+    # distinguishable from the ADR-008 control-plane suite at a glance.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ubuntu-latest ships Docker already, usable without sudo.
+      # `make test-integration-fppmqtt` starts its own pinned eclipse-mosquitto
+      # broker (scripts/test-integration-fppmqtt.sh), from the exact shipped
+      # deploy/mosquitto/mosquitto.conf, rather than a GitHub Actions
+      # `services:` container, for the same reason `test-integration` above
+      # does: a bespoke services-container broker would need its own
+      # bind-address/anonymous-access config to avoid the image's own
+      # deny-by-default behavior, duplicating what the script already does
+      # against the real shipped config — and testing that config, not a
+      # stand-in for it, is the point of this job. It runs on its own
+      # container name and port so it never collides with the `integration`
+      # job's broker if GitHub Actions were ever to run them on the same
+      # runner.
+      - name: Integration tests (FPP MQTT collector against a real broker)
+        run: make test-integration-fppmqtt
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10

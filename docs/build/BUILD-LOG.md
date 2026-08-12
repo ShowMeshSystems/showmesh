@@ -44,7 +44,9 @@ There are now two collectors behind one interface. `internal/coordinator/collect
 
 **Health had to change before these signals could land, and it hid a fault while it was at it.** Every observation was a critical member of the instance verdict, so the many legitimately `unsupported` signals this step adds would have pinned all three real hosts at `unknown` forever. Worse, the mapper never looked at a value, only at whether the state was `current`, so `fpp.power.bad == true` contributed *healthy*. Now `unsupported` contributes nothing, only `fpp.reachable`, `fpp.fppd.state` and `fpp.power.bad` are health-critical, and a `healthy` verdict additionally requires `fpp.fppd.state` to be present and reading `running`, because "the HTTP server answered" is not evidence that the player is well.
 
-**The change stream re-sends an entire instance to report a four-field delta, and that is not fixed.** Measured against the live fleet at roughly 57 KB/s for three hosts. See the Step 5 entry; it is recorded as measured, unresolved, and deliberately out of scope.
+**The change stream carried an entire instance to report a four-field delta, and that is now fixed** by [ADR-023](../decisions/ADR-023-change-stream-observation-deltas.md), measured on the live fleet at **46.3 KB/s down to 1.0 KB/s, a 44x reduction**. Deltas are opt-in per connection (`?deltas=1`) so the change is additive under ADR-020; the UI opts in and `showmeshctl` can exercise it. The two frame kinds have **opposite merge semantics**, which is the sharp edge: `fpp.changed` carries the complete observation set and is a replacement, `fpp.observations.changed` is a merge plus a `removed` list. Getting that backwards fails silently in both directions and is why ADR-023 decision 3a spells it out.
+
+**Observations are now pruned**, so a swapped cape no longer leaves ghost port rows. `Collector.Poll` returns `(observations, complete bool)` and only a complete delivery may prune; a backed-off poll claims nothing, because deleting a source's evidence the first time it backs off would be far worse than a stale ghost.
 
 Step 4 detail follows.
 
@@ -89,6 +91,39 @@ Beyond that the sequencing has one dominant feature worth stating plainly. **Eve
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-11 (Step 5 follow-through)
+
+**Goal:** close the loose ends Step 5 recorded rather than fixed, chosen by the owner over starting the identity ADR.
+
+**Completed:**
+
+- [ADR-023](../decisions/ADR-023-change-stream-observation-deltas.md), plus its implementation in the coordinator, `showmeshctl` and the UI.
+- Observation pruning, with a completeness flag on the collector boundary.
+- `make test-integration-fppmqtt` wired into CI, so the retained-versus-live rule finally has end-to-end coverage on every push. `make test-integration-fpp` stays out deliberately; its image is a multi-gigabyte FPP source build.
+
+**The measurement that mattered, and the two defects it found that tests did not.**
+
+The point of the ADR was payload size, and the honest way to check it was to run the real stack against the real fleet and count bytes. Three measurements, each one exposing something the suite was happy with:
+
+1. **43.2 KB/s full versus 10.3 KB/s delta, a 4.2x reduction.** Good, and wrong. Delta frames carried **67 to 76 signals each** where four to nine had actually moved, and the list included signals that cannot change: `fpp.host_name`, `fpp.mode`, `fpp.mqtt.configured`.
+2. The cause was `ValidForSeconds`, a **per-collector constant** (45s for `fpp-rest`, 30s for `fpp-mqtt`) left out of the diff mask. It flips for exactly the same reason `Source` does and at the same instant, so every precedence flip made all ~151 overlapping signals of an instance look changed. `fppInstanceDiffProjection`'s own doc comment named `ValidForSeconds` as deliberately remaining in the projection, which was internally inconsistent with the sentence above it deciding that provenance is not substance.
+3. Masking it moved the average from 67-76 to **53** signals per frame, with a max of 150. Still wrong, and the second measurement is what caught it: **the masking rule existed twice.** `fppInstanceDiffProjection` and `maskEvidenceForDiff` were separate implementations, each carrying a comment asserting it applied "EXACTLY" the rule the other applied. Fixing one did not fix the delta path. Final measurement after collapsing them into one function: **1.0 KB/s, averaging 4.7 signals per frame, min 2, max 9, a 44x reduction against the full stream.**
+
+That is the second time in one day this project shipped two implementations of one rule with a comment claiming they agreed, and the second time the duplication was found by behaviour rather than by review. The decoder case was caught during fold-in; this one survived a builder, a mutation-checked test suite, and my own first fix. `TestDiffMaskingRuleHasExactlyOneImplementation` now fails if they diverge again for any field, without anyone needing to notice a comment went stale.
+
+**Decisions made:**
+
+- **Delta frames are opt-in per connection, not the default** (ADR-023). Both alternatives fail silently: a client that replaces on a delta renders four signals out of 349 and looks healthy, and a client ignoring an unknown event kind stops updating on a connection that stays green. ADR-020's non-resumability rule exists because a gap is indistinguishable from a quiet system; defaulting to deltas would recreate that ambiguity at the client instead of the transport.
+- **The two frame kinds have opposite merge semantics, and that is now written down** (decision 3a) rather than left to be inferred from the coordinator's behaviour. It was added *after* the coordinator landed, because implementing it is what surfaced the ambiguity.
+- **Only a complete poll may prune.** A backed-off poll returns no observations deliberately, and treating that as "everything is gone" would erase an instance's entire evidence on its first backoff cycle.
+- **`Quality` is deliberately not masked** in the diff, unlike `Source` and `ValidForSeconds`. It describes how a value was determined rather than which collector won, and it does not currently vary between the two sources for one signal. If a future source makes it flip, it belongs with the others.
+
+**Verification gates:** `gofmt`, `go vet`, `make lint` at 0 issues, `go test -race -count=1 ./...` across all packages, `go test -count=20` on `internal/coordinator/api` for nondeterminism, `CGO_ENABLED=0 go build ./...`, UI typecheck, lint, 213 tests, and a production build. The UI's request-path change was verified in a real Chrome tab against the running Compose stack, which is the specific defect class Step 4 was burned by. Both the `ValidForSeconds` masking and the single-implementation guard were mutation-checked. Measured read-only against the live fleet through the shipped Compose bundle and its ADR-022 proxy, not a dev server.
+
+**Still open:** the phone check on a real device, which needs the owner; and everything Step 5 deferred to RES-013.
 
 ---
 

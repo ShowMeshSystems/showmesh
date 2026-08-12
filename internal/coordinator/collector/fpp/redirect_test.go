@@ -69,7 +69,7 @@ func TestRedirectsNeverFollowedOnAnyPolledEndpoint(t *testing.T) {
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	if got := recorder.hits.Load(); got != 0 {
 		t.Fatalf("redirect target was contacted %d time(s); this Collector must NEVER follow a redirect, to any host, for any endpoint", got)
@@ -133,7 +133,7 @@ func TestRedirectsNeverFollowedWithCallerSuppliedPermissiveClient(t *testing.T) 
 
 	now := time.Now()
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now), HTTPClient: permissive})
-	obs := c.Poll(context.Background())
+	obs, _ := c.Poll(context.Background())
 
 	if got := recorder.hits.Load(); got != 0 {
 		t.Fatalf("redirect target was contacted %d time(s) despite a caller-supplied client; this package's guarantee must hold regardless of what a caller's *http.Client was configured with", got)

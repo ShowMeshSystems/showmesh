@@ -152,6 +152,22 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 	}
 }
 
+// printFPPObservationsChangedLine renders one fpp.observations.changed
+// frame (ADR-023) for --output text: which instance, which signals moved
+// (with their new value/state, exactly like printObservations' columns),
+// and which signals stopped existing entirely. Only produced on a
+// connection opened with --deltas — see cmdWatch.
+func printFPPObservationsChangedLine(w io.Writer, ev streamFPPObservationsChanged) {
+	_, _ = fmt.Fprintf(w, "[fpp.observations.changed] %s\n", ev.InstanceID)
+	if len(ev.Changed) > 0 {
+		_, _ = fmt.Fprintln(w, "  changed:")
+		printObservations(w, ev.Changed, ev.ServerTime)
+	}
+	if len(ev.Removed) > 0 {
+		_, _ = fmt.Fprintf(w, "  removed: %v\n", ev.Removed)
+	}
+}
+
 func printObservations(w io.Writer, obs []evidence, serverTime time.Time) {
 	if len(obs) == 0 {
 		_, _ = fmt.Fprintln(w, "  (none)")

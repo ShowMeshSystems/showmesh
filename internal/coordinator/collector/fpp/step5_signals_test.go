@@ -550,7 +550,7 @@ func TestPollEndToEndAgainstEachRealHost(t *testing.T) {
 
 			now := time.Now()
 			c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
-			obs := c.Poll(t.Context())
+			obs, _ := c.Poll(t.Context())
 
 			reachable := findSignal(t, obs, SignalReachable)
 			if reachable.Value != true {

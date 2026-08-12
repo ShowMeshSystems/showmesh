@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file is the machine check Task D spec section 8 requires: a
@@ -196,6 +197,7 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"FPPInstanceResponse", "ObservationsResponse", "EventsResponse",
 		"Snapshot", "Problem", "StreamStart", "StreamReset",
 		"NodeChangedEvent", "FPPChangedEvent", "EventRecordedEvent",
+		"FPPObservationsChangedEvent",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -444,4 +446,69 @@ func TestOpenAPIStreamEventSchemasMatchRealFrames(t *testing.T) {
 		t.Fatalf("event = %q, want node.changed", event)
 	}
 	assertMatchesSchema(t, c, "NodeChangedEvent", []byte(data))
+}
+
+// TestOpenAPIFPPObservationsChangedEventSchemaMatchesRealFrame is
+// [TestOpenAPIStreamEventSchemasMatchRealFrames]'s ADR-023 sibling: a real
+// fpp.observations.changed frame — obtained over a live `?deltas=1`
+// connection, from a genuine observation-level value change — validated
+// against its own schema, so the conformance guarantee covers the new
+// frame kind in both directions exactly like every other event this
+// package emits.
+func TestOpenAPIFPPObservationsChangedEventSchemaMatchesRealFrame(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	fpp := &mutableFPPLister{}
+	pollAt := testNow
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{deltaObs(t, sigUptime, int64(1), pollAt, time.Minute)},
+		LastPollAt:   &pollAt,
+	}})
+
+	testAPI := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go testAPI.Hub.Run(ctx)
+
+	srv := httptest.NewServer(testAPI.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream?deltas=1")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream?deltas=1: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("event = %q, want stream.start", event)
+	}
+
+	testAPI.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "fpp.changed" {
+		t.Fatalf("first Notify: event = %q, want fpp.changed", event)
+	}
+
+	// A genuine observation-only value change — see this file's own
+	// deltas_test.go for why this is what produces
+	// fpp.observations.changed rather than fpp.changed on a
+	// delta-subscribed connection.
+	pollAt2 := pollAt.Add(15 * time.Second)
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{deltaObs(t, sigUptime, int64(2), pollAt2, time.Minute)},
+		LastPollAt:   &pollAt2,
+	}})
+	testAPI.Hub.Notify()
+
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "fpp.observations.changed" {
+		t.Fatalf("event = %q, want fpp.observations.changed", event)
+	}
+	assertMatchesSchema(t, c, "FPPObservationsChangedEvent", []byte(data))
 }

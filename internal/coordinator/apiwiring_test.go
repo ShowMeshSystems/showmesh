@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -413,3 +419,218 @@ func (failingCollectorStatusLister) CollectorStatuses(context.Context) ([]api.Co
 }
 
 var errFailingCollectorStatusLister = errors.New("failingCollectorStatusLister: deliberate test failure")
+
+// --- fppSink and the collector/Sink completeness contract ------------------
+//
+// These tests cover the observation-pruning fix: nothing previously deleted
+// a row from the observations table, so a signal that stopped being
+// reported (a port removed by a shrunk /api/fppd/ports response, a sensor
+// dropped from fppd's config) survived forever, aging to stale and
+// rendering in the UI's port grid as a ghost of hardware that no longer
+// exists. See internal/coordinator/collector.Collector.Poll's and
+// internal/coordinator/collector.Sink's doc comments for the completeness
+// contract this fixes it with, and internal/coordinator/store's
+// replace_observations_test.go for [store.Store.ReplaceObservations]'s own
+// unit coverage of the scoped-delete mechanism these tests exercise
+// end-to-end.
+
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestFPPSinkSkippedPollDeletesNothing is the single most important test in
+// this fix, named explicitly in the task that produced it: a skipped or
+// backed-off poll (complete=false, per fpp.Collector.Poll's doc comment for
+// exactly this case) must never be read as "this source now owns zero
+// signals" and prune anything, however tempting an implementation that
+// checked only "is observations empty" would be to write. Everything a
+// previous, real poll stored must survive completely untouched.
+//
+// The second call below delivers a NON-EMPTY observations slice alongside
+// complete=false (updating fpp.reachable, but omitting the two port
+// signals and the count) rather than fpp.Collector's literal nil — this is
+// deliberate: [store.Store.ReplaceObservations] is already a no-op on a
+// zero-length batch by its own contract (see
+// TestReplaceObservationsEmptyBatchIsNoOp in internal/coordinator/store),
+// so calling this test's sink with nil observations would pass even if
+// RecordObservations ignored complete entirely and routed every call
+// through ReplaceObservations — it would just happen to route an empty
+// batch, which prunes nothing regardless. Using a real, partial delivery is
+// what actually exercises fppSink's own routing decision: complete=false
+// must go through per-observation upsert only, never
+// ReplaceObservations, however non-empty the batch is.
+//
+// Mutation-checked: temporarily forcing complete=true unconditionally at
+// the top of RecordObservations made this test fail — the two omitted port
+// signals were deleted — confirming it actually exercises the complete=false
+// routing decision and not merely "some rows exist somewhere."
+func TestFPPSinkSkippedPollDeletesNothing(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	// A real, complete poll's worth of evidence, exactly as
+	// fpp.Collector.Poll would deliver it on a healthy cycle.
+	seed := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+		mustMeasured(t, "remote-01", "fpp.port.16.current_ma", float64(0)),
+		mustMeasured(t, "remote-01", "fpp.port.17.current_ma", float64(0)),
+		mustMeasured(t, "remote-01", "fpp.ports.count", int64(2)),
+	}
+	sink.RecordObservations(ctx, seed, true)
+
+	before, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-01"})
+	if err != nil {
+		t.Fatalf("list observations (before): %v", err)
+	}
+	if len(before) != len(seed) {
+		t.Fatalf("seeded %d observations, store holds %d before the skipped poll", len(seed), len(before))
+	}
+
+	// The literal shape fpp.Collector.Poll's backoff skip actually returns:
+	// zero observations, complete=false. Covered first, cheaply, even
+	// though (see doc comment above) it cannot alone catch a routing bug.
+	sink.RecordObservations(ctx, nil, false)
+
+	// A non-empty, partial delivery under complete=false — the general
+	// Sink contract's shape, and the one that actually stresses the
+	// routing logic (see doc comment above). Only fpp.reachable is
+	// mentioned; the two port signals and the count are omitted.
+	partial := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+	}
+	sink.RecordObservations(ctx, partial, false)
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-01"})
+	if err != nil {
+		t.Fatalf("list observations (after): %v", err)
+	}
+	if len(after) != len(seed) {
+		t.Fatalf("after two skipped/partial polls (complete=false): %d observations remain, want unchanged %d — complete=false must delete NOTHING, however non-empty the delivery", len(after), len(seed))
+	}
+}
+
+// mustMeasured builds a StateCurrent [observation.Observation] with source
+// "fpp-rest", matching what fpp.Collector actually stamps (fpp.sourceName
+// is unexported, so this pins the literal the way
+// internal/coordinator/store's own tests do for the same reason).
+func mustMeasured(t *testing.T, resourceID string, sig observation.SignalID, value any) observation.Observation {
+	t.Helper()
+	obs, err := observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: resourceID},
+		sig, value, time.Now(),
+		observation.WithSource("fpp-rest"),
+	)
+	if err != nil {
+		t.Fatalf("build observation %q: %v", sig, err)
+	}
+	return obs
+}
+
+// fixedPortsHandler serves portsBody at /api/fppd/ports (swappable between
+// calls via the pointer, which is how one httptest.Server simulates the
+// fleet's port count changing between polls) and a fixed, real, successful
+// /api/fppd/status capture at that path — specifically so
+// /api/fppd/status never fails: fpp.Collector's backoff is keyed to that
+// one request alone (see Poll's recordAttempt doc comment), and a 404
+// there would risk the second Poll call in a test landing inside a
+// randomized backoff window and being skipped, which has nothing to do
+// with what this test is proving. /api/fppd/multiSyncSystems and
+// /api/system/info are left unhandled (404, its own independent
+// collection_failed) since neither affects backoff or the ports family
+// this test actually asserts on.
+func fixedPortsHandler(statusBody []byte, portsBody *[]byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/fppd/ports":
+			_, _ = w.Write(*portsBody)
+		case "/api/fppd/status":
+			_, _ = w.Write(statusBody)
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// loadFixture reads a real fleet capture from
+// internal/coordinator/collector/fpp/testdata, the same files that
+// package's own tests load, via a relative path (go test's working
+// directory is always the package directory, internal/coordinator here).
+func loadFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile("collector/fpp/testdata/" + name)
+	if err != nil {
+		t.Fatalf("read fixture %q: %v", name, err)
+	}
+	return b
+}
+
+// TestFPPSinkRealPortFixturesPruneGhostRowsOnEmptyDelivery is the task's
+// named reproduction, driven end to end through a real fpp.Collector (not
+// hand-built observations) against the exact fleet captures that exposed
+// the defect: FPP-remote-04 reporting 48 port elements
+// (live_remote04_fppd_ports.json), then FPP-Main reporting none
+// (live_main_fppd_ports.json, a real "[]" from a Pi with no output cape —
+// see fpp/doc.go). Before this fix, the second poll's fpp.port.<key>.*
+// rows from the first poll would still be sitting in the store, aging
+// toward stale forever and rendering in the UI's port grid as ports of a
+// cape that is no longer installed.
+func TestFPPSinkRealPortFixturesPruneGhostRowsOnEmptyDelivery(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	statusBody := loadFixture(t, "live_remote04_fppd_status.json")
+	portsBody := loadFixture(t, "live_remote04_fppd_ports.json")
+	srv := httptest.NewServer(fixedPortsHandler(statusBody, &portsBody))
+	defer srv.Close()
+
+	c, err := fpp.New("remote-04", srv.URL, fpp.Options{})
+	if err != nil {
+		t.Fatalf("fpp.New: %v", err)
+	}
+
+	obs1, complete1 := c.Poll(ctx)
+	if !complete1 {
+		t.Fatalf("first Poll complete = false, want true (a real, non-backed-off attempt)")
+	}
+	sink.RecordObservations(ctx, obs1, complete1)
+
+	afterFirst, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-04"})
+	if err != nil {
+		t.Fatalf("list observations (after first poll): %v", err)
+	}
+	portRows := countPortRows(afterFirst)
+	if portRows == 0 {
+		t.Fatalf("after polling the 48-element fixture: 0 fpp.port.* rows stored, want many (48 elements' worth of per-port signals)")
+	}
+
+	// The same instance now reports an empty ports array — a real capture
+	// from a Pi with no output cape, not a failure (see fpp/doc.go).
+	portsBody = loadFixture(t, "live_main_fppd_ports.json")
+
+	obs2, complete2 := c.Poll(ctx)
+	if !complete2 {
+		t.Fatalf("second Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs2, complete2)
+
+	afterSecond, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-04"})
+	if err != nil {
+		t.Fatalf("list observations (after second poll): %v", err)
+	}
+	if got := countPortRows(afterSecond); got != 0 {
+		t.Errorf("after the ports response dropped to [] : %d fpp.port.* ghost rows remain, want 0", got)
+	}
+}
+
+func countPortRows(obs []observation.Observation) int {
+	n := 0
+	for _, o := range obs {
+		if strings.HasPrefix(string(o.Signal), "fpp.port.") {
+			n++
+		}
+	}
+	return n
+}

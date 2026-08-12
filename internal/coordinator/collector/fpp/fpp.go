@@ -487,19 +487,38 @@ func (c *Collector) ID() string { return c.id }
 //
 // If this instance is currently backed off following consecutive failures
 // (see recordAttempt), Poll makes no request at all this cycle and returns
-// an empty slice: the store's last-recorded observations (already a
-// collection_failed absence, from the failure that triggered the backoff)
-// remain the coordinator's answer until the next real attempt, which is
-// honest — nothing changed because nothing was checked — rather than
-// re-asserting the same failure on a timer for no evidentiary reason.
-func (c *Collector) Poll(ctx context.Context) []observation.Observation {
+// an empty slice with complete=false: the store's last-recorded
+// observations (already a collection_failed absence, from the failure that
+// triggered the backoff) remain the coordinator's answer until the next
+// real attempt, which is honest — nothing changed because nothing was
+// checked — rather than re-asserting the same failure on a timer for no
+// evidentiary reason. complete=false here is load-bearing, not incidental:
+// a Sink that prunes stale rows on complete=true must never read a
+// backed-off cycle's empty slice as "this instance now owns zero signals"
+// (see collector.Collector.Poll's doc comment).
+//
+// Every other path returns complete=true, including a poll where every one
+// of the four requests below fails: each endpoint independently reports
+// collection_failed for every signal it owns when its own request fails
+// (see allStatusSignals/portsFailureSignals/systemInfoStaticSignals below),
+// so a totally-unreachable instance's Poll result is still the complete,
+// honest answer for this cycle — "unreachable" is itself a real attempt's
+// outcome, not a skipped one. One consequence worth stating plainly: this
+// means a dynamic per-port or per-sensor signal from a PRIOR successful
+// poll is not re-asserted by a failed one (the failed ports/status fetch
+// cannot know whether that port or sensor still exists), so a Sink pruning
+// on complete=true will remove it rather than leave it stale forever —
+// exactly the behavior this collector's Step 5 successor was built to fix
+// for the common case (a port count dropping between polls) and not a
+// special case carved out only for a totally-unreachable instance.
+func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) {
 	now := c.now()
 
 	c.mu.Lock()
 	skip := now.Before(c.nextAttemptAt)
 	c.mu.Unlock()
 	if skip {
-		return nil
+		return nil, false
 	}
 
 	statusBody, statusErr := c.fetch(ctx, "/api/fppd/status")
@@ -569,7 +588,7 @@ func (c *Collector) Poll(ctx context.Context) []observation.Observation {
 		}
 	}
 
-	return obs
+	return obs, true
 }
 
 // toObservation stamps sv (a clock-free fact from signals.go's decode
