@@ -79,6 +79,18 @@ const (
 	exitAPIError            = 6
 	exitForbidden           = 7
 	exitRateLimited         = 8
+
+	// exitCommandUnconfirmed is Step 7 seam C's own addition: "fpp
+	// stop-playlist" completed a full, successful HTTP round trip (the
+	// coordinator answered 200 with a real command result), but that
+	// result's own outcome was "unconfirmed" — ADR-003, ADR-020: a `200`
+	// is never conflated with the command actually having taken effect.
+	// Distinct from exitAPIError (6, the coordinator itself failed or
+	// returned something this program could not even parse): a script
+	// checking $? needs to tell "the request failed" apart from "the
+	// request succeeded and told you, honestly, that the command's effect
+	// was not confirmed."
+	exitCommandUnconfirmed = 9
 )
 
 // cliError carries an exit code alongside a human-readable message, so

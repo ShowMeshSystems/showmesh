@@ -58,6 +58,10 @@ export type SessionResponse = components['schemas']['SessionResponse']
 export type PrincipalSummary = components['schemas']['PrincipalSummary']
 export type SessionInfo = components['schemas']['SessionInfo']
 
+// Step 7 seam C: the first write's own response shape, aliased for the
+// identical reason as every type above.
+export type FPPCommandResult = components['schemas']['FPPCommandResult']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

@@ -21,7 +21,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
-import type { Model } from './domain'
+import type { FPPCommandResult, Model } from './domain'
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -53,4 +53,10 @@ export function claimBootstrap(
   deviceLabel: string,
 ): Promise<void> {
   return store.claimBootstrap(code, name, password, deviceLabel)
+}
+
+// Step 7 seam C: this application's first write. Same thin-passthrough
+// pattern as login/logout/claimBootstrap above.
+export function stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+  return store.stopFPPPlaylist(instanceId)
 }

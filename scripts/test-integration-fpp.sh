@@ -81,7 +81,7 @@ echo "test-integration-fpp: running against $FPP_URL (container $CONTAINER_NAME)
 if [ -n "${SHOWMESH_TEST_FPP_URL:-}" ]; then
   export SHOWMESH_TEST_FPP_URL="$FPP_URL"
 fi
-go test -tags=integration -race -timeout=5m -v ./internal/coordinator/collector/fpp/...
+go test -tags=integration -race -count=1 -timeout=5m -v ./internal/coordinator/collector/fpp/...
 
 # --- test/integration's FPP-through-the-coordinator test -----------------
 #
@@ -105,11 +105,45 @@ trap cleanup_fpp_mosquitto EXIT
 # cleanup ran.
 cleanup_fpp_mosquitto
 
+# ADR-024 decision 10 (Step 6): the shipped mosquitto.conf sets
+# allow_anonymous false and requires both password_file and acl_file to
+# exist before it will even start — mosquitto refuses to start at all
+# without them (see test-integration.sh's own comment on the identical
+# requirement, and deploy/README.md's "generate-credentials.sh is not
+# optional" note). This script's own broker predates that decision (it
+# was added under Step 3, before Step 6 landed) and was never updated to
+# seed either file, which this seam found by actually running this
+# script rather than by reading it: the container exited immediately on
+# every run ("Unable to open pwfile"), the wait loop below silently timed
+# out, and TestFPPSuccessPathThroughRealCoordinator skipped itself via its
+# own "no MQTT broker reachable" guard — never failing, so nothing before
+# this fix ever reported the gap. Fixed the same way test-integration.sh
+# already does it: create (not run) the container, seed password_file
+# with the coordinator credential test/integration/harness_test.go reads
+# (envTestMQTTCoordinatorUsername/Password) and acl_file from the
+# committed deploy/mosquitto/acl.conf verbatim (this script needs no
+# per-node or burst-publisher credential: the FPP e2e test launches only
+# a coordinator subprocess, never an agent), then start it.
+random_password() {
+  head -c 24 /dev/urandom | base64 | tr -d '\n' | tr '+/' '-_'
+}
+export SHOWMESH_TEST_MQTT_COORDINATOR_USERNAME="coordinator"
+export SHOWMESH_TEST_MQTT_COORDINATOR_PASSWORD="$(random_password)"
+
 echo "test-integration-fpp: starting $MOSQUITTO_IMAGE as $FPP_MOSQUITTO_CONTAINER on port $FPP_MOSQUITTO_PORT (for TestFPPSuccessPathThroughRealCoordinator's coordinator subprocess)"
-docker run -d --name "$FPP_MOSQUITTO_CONTAINER" \
+docker create --name "$FPP_MOSQUITTO_CONTAINER" \
   -p "${FPP_MOSQUITTO_PORT}:1883" \
   -v "$ROOT_DIR/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
   "$MOSQUITTO_IMAGE" >/dev/null
+
+TMP_FPP_SEED_PASSWD="$(mktemp)"
+docker run --rm -v "$TMP_FPP_SEED_PASSWD:/out/passwd" "$MOSQUITTO_IMAGE" \
+  mosquitto_passwd -b -c /out/passwd "$SHOWMESH_TEST_MQTT_COORDINATOR_USERNAME" "$SHOWMESH_TEST_MQTT_COORDINATOR_PASSWORD" >/dev/null
+docker cp "$TMP_FPP_SEED_PASSWD" "$FPP_MOSQUITTO_CONTAINER:/mosquitto/config/passwd"
+rm -f "$TMP_FPP_SEED_PASSWD"
+docker cp "$ROOT_DIR/deploy/mosquitto/acl.conf" "$FPP_MOSQUITTO_CONTAINER:/mosquitto/config/acl.generated.conf"
+
+docker start "$FPP_MOSQUITTO_CONTAINER" >/dev/null
 
 echo "test-integration-fpp: waiting for the broker to accept connections"
 broker_ready=0
@@ -129,4 +163,4 @@ fi
 
 echo "test-integration-fpp: running TestFPPSuccessPathThroughRealCoordinator against $FPP_URL and tcp://localhost:${FPP_MOSQUITTO_PORT}"
 SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${FPP_MOSQUITTO_PORT}" \
-  go test -tags=integration -race -timeout=5m -v ./test/integration/... -run '^TestFPPSuccessPathThroughRealCoordinator$'
+  go test -tags=integration -race -count=1 -timeout=5m -v ./test/integration/... -run '^TestFPPSuccessPathThroughRealCoordinator$'

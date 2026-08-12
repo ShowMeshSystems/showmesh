@@ -66,6 +66,7 @@ import {
   type Evidence,
   type Event as ModelEvent,
   type EventSeq,
+  type FPPCommandResult,
   type FPPInstance,
   type Model,
 } from './domain'
@@ -81,6 +82,7 @@ type SchemaNode = components['schemas']['Node']
 type SchemaFPPInstance = components['schemas']['FPPInstance']
 type SchemaEvent = components['schemas']['Event']
 type SchemaSessionResponse = components['schemas']['SessionResponse']
+type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -355,6 +357,37 @@ export class ApiStore {
       this.applySessionResponse(resp)
       this.clearShadowingToken()
       this.wakeReadLoop()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/fpp/{instanceId}/commands` with `{"action":"stopPlaylist"}`
+   * (Step 7 seam C, ADR-001/ADR-003) — this application's first write.
+   * Mints a fresh idempotency key per call via `crypto.randomUUID()`
+   * (RES-015 section 7.3: FPP supplies nothing a coordinator could derive
+   * one from, so the CALLER mints it — the same rule showmeshctl's own
+   * `stop-playlist` subcommand follows independently). Returns the
+   * decoded `command` object as-is — including its own `outcome` field,
+   * which is "confirmed" or "unconfirmed", NEVER inferred from this
+   * call's own success: a resolved `Promise` here means the HTTP round
+   * trip succeeded, not that the command's effect was confirmed. The
+   * caller (FPPDetail.tsx) is responsible for rendering outcome
+   * honestly, matching ADR-003 exactly the way the CLI's own
+   * `reportFPPCommandResult` does. Unlike login/logout/claimBootstrap,
+   * this does NOT call `wakeReadLoop()` — a command dispatch is not a
+   * credential change, and has no reason to interrupt the SSE connection.
+   */
+  async stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaFPPCommandResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/commands`,
+        { action: 'stopPlaylist', idempotencyKey: crypto.randomUUID() },
+        controller.signal,
+      )
+      return resp.command
     } finally {
       this.endSideCall(controller)
     }

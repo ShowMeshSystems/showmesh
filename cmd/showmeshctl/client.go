@@ -140,6 +140,55 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 	return body, nil
 }
 
+// postJSON issues an authenticated POST with a JSON body against apiPath
+// and decodes a successful JSON response into out — this program's first
+// write (Step 7 seam C). Unlike [client.getJSON], a bearer token is not
+// merely convenient here: ADR-024 decision 6's CSRF rule exempts a
+// bearer-authenticated write from the Sec-Fetch-Site check entirely
+// (nothing attaches an Authorization header to a request automatically
+// the way a browser attaches a cookie), so this program never needs to
+// set that header — see cmd_fpp.go's own report note on this.
+func (c *client) postJSON(ctx context.Context, apiPath string, reqBody, out any) error {
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return newCLIError(exitUsage, "encoding request body: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(apiPath, nil), strings.NewReader(string(body)))
+	if err != nil {
+		return newCLIError(exitUsage, "building request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.applyHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return classifyRequestError(c.baseURL.String(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return newCLIError(exitUnreachable, "reading response body: %v", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return newCLIError(exitAPIError, "%v (from %s)", errResponseTooLarge, c.endpoint(apiPath, nil))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return decodeProblemError(resp, respBody)
+	}
+	if err := c.checkAPIVersionHeader(resp); err != nil {
+		return err
+	}
+	if out != nil {
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
+		}
+	}
+	return nil
+}
+
 // applyHeaders sets the headers common to every /api/v1 request: the
 // bearer token (contract §6.8) when configured, and the API version this
 // build speaks (contract §6.6).

@@ -19,6 +19,21 @@ var forbiddenImports = []string{
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory",
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector",
 	"github.com/showmeshsystems/showmesh/pkg/observation",
+
+	// internal/coordinator/fppcommand (Step 7 seam C) is the coordinator's
+	// own FPP command dispatch client — obviously a coordinator package
+	// (CLAUDE.md: "showmeshctl ... must never import a coordinator
+	// package"), named here explicitly rather than left to the general
+	// rule alone. pkg/command is not itself a coordinator package (it is
+	// the shared envelope model), but this CLI mints its own idempotency
+	// key independently (cmd_fpp_stop_playlist.go's newIdempotencyKey)
+	// rather than calling pkg/command.NewIdempotencyKey, for the identical
+	// reason it decodes every wire type independently rather than
+	// importing pkg/observation for one: a future change to that
+	// package's minting logic must not be able to silently change what
+	// this CLI sends without a reviewer noticing the coupling.
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand",
+	"github.com/showmeshsystems/showmesh/pkg/command",
 }
 
 func TestNoForbiddenImports(t *testing.T) {

@@ -164,6 +164,12 @@ func Run() int {
 		// GET /api/v1/audit do anything other than always answer 401/403
 		// against api.noIdentityService's no-op default.
 		Identity: identitySvc,
+		// Commands is Step 7 seam C's own dependency: *store.Store already
+		// satisfies api.CommandStore with no adapter (api.go's own
+		// compile-time assertion) — wiring it in is what makes
+		// POST /api/v1/fpp/{instanceId}/commands do anything other than
+		// always answer 500 against api.noCommandStore's no-op default.
+		Commands: st,
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		CloseReads:          cfg.CloseReads,

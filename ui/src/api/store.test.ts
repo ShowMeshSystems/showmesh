@@ -2482,3 +2482,96 @@ describe('ApiStore: ADR-024 sessions', () => {
     expect(store.getSnapshot().session?.serverTime).toBe(newer)
   })
 })
+
+describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first write)', () => {
+  it('POSTs the exact request shape (action, a minted idempotencyKey) and returns command as-is, never inferring success from the HTTP round trip alone', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody: { action?: string; idempotencyKey?: string } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
+        gotMethod = req.method
+        gotPath = req.url
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, {
+            serverTime: '2026-08-12T22:00:00Z',
+            command: {
+              id: 'cmd-1', idempotencyKey: gotBody.idempotencyKey, action: 'fpp.stop_playlist',
+              instanceId: 'bench-fpp', replay: false, outcome: 'unconfirmed', outcomeState: 'current',
+              outcomeReason: 'observed fpp.status = "playing", want "idle"', attributionDegraded: false,
+              dispatchedAt: '2026-08-12T22:00:00Z', resolvedAt: '2026-08-12T22:00:20Z',
+            },
+          })
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    const result = await store.stopFPPPlaylist('bench-fpp')
+
+    expect(gotMethod).toBe('POST')
+    expect(gotPath).toBe('/fpp/bench-fpp/commands')
+    expect(gotBody.action).toBe('stopPlaylist')
+    expect(typeof gotBody.idempotencyKey).toBe('string')
+    expect(gotBody.idempotencyKey).not.toBe('')
+
+    // The load-bearing property (ADR-003): a resolved Promise here is
+    // NOT success — it is a successful HTTP round trip carrying whatever
+    // outcome the coordinator actually reported, unconfirmed included.
+    expect(result.outcome).toBe('unconfirmed')
+    expect(result.outcomeReason).toContain('playing')
+  })
+
+  it('mints a distinct idempotencyKey on each call, never reusing one across two genuinely separate invocations', async () => {
+    const seenKeys: string[] = []
+    const s = await server((req, res) => {
+      if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { idempotencyKey: string }
+          seenKeys.push(body.idempotencyKey)
+          respondJson(res, 200, {
+            serverTime: '2026-08-12T22:00:00Z',
+            command: {
+              id: 'cmd-1', idempotencyKey: body.idempotencyKey, action: 'fpp.stop_playlist',
+              instanceId: 'bench-fpp', replay: false, outcome: 'confirmed', outcomeState: 'current',
+              outcomeReason: '', attributionDegraded: false,
+              dispatchedAt: '2026-08-12T22:00:00Z', resolvedAt: '2026-08-12T22:00:00Z',
+            },
+          })
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.stopFPPPlaylist('bench-fpp')
+    await store.stopFPPPlaylist('bench-fpp')
+
+    expect(seenKeys).toHaveLength(2)
+    expect(seenKeys[0]).not.toBe(seenKeys[1])
+  })
+
+  it('rejects on a 403 (missing fpp:command) rather than resolving with a fabricated result', async () => {
+    const s = await server((req, res) => {
+      if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
+        respondProblem(res, 403, {
+          type: 'https://showmesh.dev/problems/forbidden', title: 'Forbidden', status: 403,
+          detail: 'this action requires the fpp:command scope', serverTime: '2026-08-12T22:00:00Z',
+        })
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await expect(store.stopFPPPlaylist('bench-fpp')).rejects.toThrow(/fpp:command/)
+  })
+})

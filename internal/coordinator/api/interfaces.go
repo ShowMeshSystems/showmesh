@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -180,4 +181,45 @@ type CollectorState struct {
 // (not the resources they observe) for GET /api/v1/snapshot.
 type CollectorStatusLister interface {
 	CollectorStatuses(ctx context.Context) ([]CollectorState, error)
+}
+
+// CommandStore is what Step 7 seam C's FPP command endpoint needs from
+// the coordinator's store: insert a new command row (with idempotency-key
+// replay detection — [store.DuplicateCommandError]), read one back, record
+// the desired state a command is asking for, and update a command's own
+// dispatch/outcome lifecycle bookkeeping.
+//
+// Unlike every other producer-side interface in this file, this one is
+// declared directly in terms of internal/coordinator/store's own record
+// types ([store.CommandRecord], [store.DesiredStateRecord],
+// [store.CommandOutcomeUpdate]) rather than a shadow type local to this
+// package. That is a deliberate departure from [FPPInstanceView]'s and
+// [EventRecord]'s own doc comments, which decouple this package from a
+// producer "being built in parallel by other Step 3 tasks" — store's
+// schemaV6 commands/desired_state tables are fixed by ARCHITECTURE
+// section 8.1's envelope and by this same task, not by an independent
+// parallel effort this package must avoid coupling to prematurely, and
+// this package already imports internal/coordinator/store directly for
+// [store.Tx] (identity.Service.AuditedWrite's signature, auth.go) and for
+// store.DefaultEventsPageSize/MaxEventsPageSize (api.go) — so redeclaring
+// three more record shapes here would be duplication with no
+// decoupling benefit behind it.
+type CommandStore interface {
+	// InsertCommand records a new command, or — on a replayed idempotency
+	// key — returns *store.DuplicateCommandError wrapping
+	// store.ErrCommandIdempotencyKeyExists, carrying the pre-existing row.
+	InsertCommand(ctx context.Context, rec store.CommandRecord) (store.CommandRecord, error)
+
+	// SetDesiredState records ADR-003's desired half of the split for one
+	// (resourceKind, resourceID, signal) triple — this endpoint's proof
+	// that a dispatched command has a recorded target to confirm against,
+	// never itself reconciled (store's own standing rule: nothing loops
+	// over this table re-issuing commands).
+	SetDesiredState(ctx context.Context, rec store.DesiredStateRecord) (store.DesiredStateRecord, error)
+
+	// UpdateCommandOutcome applies a partial update to an existing
+	// command row's own lifecycle bookkeeping (dispatched_at, resolved_at,
+	// state, result, outcome) — never the audit trail, which is a
+	// separate, append-only concern (identity.Service.WriteAudit).
+	UpdateCommandOutcome(ctx context.Context, id string, upd store.CommandOutcomeUpdate) error
 }

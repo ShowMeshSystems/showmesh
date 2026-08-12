@@ -117,6 +117,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch a primitive FPP lifecycle command (Step 7 seam C)
+         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over GET at its own /api/command/... endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt. A replayed `idempotencyKey` dispatches nothing and returns the original command's result, flagged `replay: true`.
+         */
+        post: operations["dispatchFPPCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/observations": {
         parameters: {
             query?: never;
@@ -436,6 +456,40 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
+        };
+        /** @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, ADR-001, ADR-003). action is checked against a fixed vocabulary at the handler; "stopPlaylist" is the only member today, and dispatches FPP's own native "Stop Now" command. idempotencyKey is required on every request (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. */
+        FPPCommandRequest: {
+            /** @enum {string} */
+            action: "stopPlaylist";
+            idempotencyKey: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
+        FPPCommandResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["FPPCommandResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) command. outcome is never "successful" merely because FPP answered 200 (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved, decided by confirming observed state against the collector's own evidence, or empty in the one accepted race a replay response can observe (see outcome's own description). outcomeState carries pkg/observation's six-value evidence-state vocabulary, the state of the evidence the outcome was actually decided from — the same vocabulary AuditEntry.outcomeState already uses, not a second one invented for this endpoint. */
+        FPPCommandResult: {
+            id: string;
+            idempotencyKey: string;
+            action: string;
+            instanceId: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result, returned per ADR-024 decision 11 ("a replay is precisely the case an investigator wants to see, because it means the operator did not get their response"). */
+            replay: boolean;
+            /**
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — a real, honest value (ADR-020's absence-is-stated rule), not an omission.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "";
+            outcomeState: string;
+            outcomeReason: string;
+            /** @description True when this command's dispatch or outcome audit entry could not be written. Stop Playlist is a member of ADR-024 decision 11's blackout/stop/power-off safety class, so the command proceeds regardless, with a degraded attribution record written to the coordinator's stderr instead of the audit log. */
+            attributionDegraded: boolean;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
         };
         ObservationsResponse: {
             /** Format: date-time */
@@ -875,6 +929,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FPPInstanceResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchFPPCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPCommandResponse"];
                 };
             };
             400: components["responses"]["InvalidParameter"];

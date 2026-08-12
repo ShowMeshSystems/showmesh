@@ -25,6 +25,7 @@ export type {
   Evidence,
   EvidenceState,
   EventSeq,
+  FPPCommandResult,
   FPPInstance,
   Model,
   Node,

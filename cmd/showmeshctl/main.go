@@ -63,25 +63,29 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 // help` alone is enough to use this tool without reading source.
 func printTopLevelUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `showmeshctl is the non-UI client for a ShowMesh coordinator's public
-control API (ADR-014). It is read-only: there is no write or command
-subcommand, matching the API it talks to. Since ADR-024, reads and the
-audit log are gated by an authenticated principal's scopes rather than by
-one shared secret — see --token below and "showmeshctl session --help".
+control API (ADR-014). Since ADR-024, reads and the audit log are gated
+by an authenticated principal's scopes rather than by one shared secret —
+see --token below and "showmeshctl session --help". Every subcommand
+below is a read except "fpp stop-playlist" (Step 7, ADR-001/ADR-003): the
+first write and the first command this project has ever shipped, gated by
+the fpp:command scope, and it never reports success on an HTTP 200 alone
+— see "showmeshctl fpp stop-playlist --help".
 
 Usage:
   showmeshctl <command> [flags] [args]
 
 Commands:
-  nodes             list the node inventory
-  node <id>         show one node in detail
-  fpp [id]          list configured FPP instances (or show one, if id given)
-  events            show event history
-  snapshot          show the authoritative snapshot
-  watch             fetch the snapshot, then stream live changes
-  session           show the current principal, role, and effective scopes
-  audit             show the audit log (requires the audit:read scope)
-  version           show this CLI's and the coordinator's version and API negotiation
-  help              show this help
+  nodes                        list the node inventory
+  node <id>                    show one node in detail
+  fpp [id]                     list configured FPP instances (or show one, if id given)
+  fpp stop-playlist <id>       dispatch FPP's Stop Now command and confirm by evidence (write)
+  events                       show event history
+  snapshot                     show the authoritative snapshot
+  watch                        fetch the snapshot, then stream live changes
+  session                      show the current principal, role, and effective scopes
+  audit                        show the audit log (requires the audit:read scope)
+  version                      show this CLI's and the coordinator's version and API negotiation
+  help                         show this help
 
 Global flags (place before any positional arguments):
   --server <url>    coordinator base URL (default http://localhost:8080,
@@ -136,6 +140,10 @@ Exit codes:
      authenticated at all)
   8  rate limited (429: the login concurrency bound was exceeded — see
      stderr for how long to wait before retrying)
+  9  command unconfirmed ("fpp stop-playlist" only, ADR-003: the request
+     itself succeeded and the coordinator answered honestly that the
+     command's effect was not confirmed by evidence — never conflated
+     with exit 6, which means the request itself failed)
 `)
 }
 

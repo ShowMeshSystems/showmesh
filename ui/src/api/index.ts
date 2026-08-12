@@ -13,6 +13,7 @@ export type {
   EvidenceState,
   Event,
   EventSeq,
+  FPPCommandResult,
   FPPInstance,
   Model,
   Node,
@@ -30,6 +31,7 @@ export {
   login,
   logout,
   claimBootstrap,
+  stopFPPPlaylist,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

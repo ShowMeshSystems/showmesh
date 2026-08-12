@@ -368,3 +368,45 @@ type streamFPPObservationsChanged struct {
 	Changed    []evidence `json:"changed"`
 	Removed    []string   `json:"removed"`
 }
+
+// fppCommandRequest is the body of POST /api/v1/fpp/{instanceId}/commands
+// (Step 7 seam C). IdempotencyKey is minted by this program, once per
+// invocation, never by the coordinator — RES-015 section 7.3: FPP
+// supplies nothing to derive one from, so the caller mints it. This
+// program does not import pkg/command.NewIdempotencyKey for the identical
+// reason it decodes every wire type independently rather than sharing
+// pkg/observation's: see importgraph_test.go and doc.go — this CLI's
+// whole point is to keep the coordinator's own JSON tag renames from
+// silently renaming both sides of a shared struct. Minting its own random
+// value here (see cmd_fpp.go's newIdempotencyKey) costs nothing and keeps
+// that independence real for a value this program SENDS, not merely one
+// it decodes.
+type fppCommandRequest struct {
+	Action         string `json:"action"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// fppCommandResponse is the body of a successful response from
+// POST /api/v1/fpp/{instanceId}/commands.
+type fppCommandResponse struct {
+	ServerTime time.Time        `json:"serverTime"`
+	Command    fppCommandResult `json:"command"`
+}
+
+// fppCommandResult mirrors v1.FPPCommandResult field for field — see that
+// type's doc comment in internal/coordinator/api/v1/commands.go for what
+// each field means; this is this program's own independent transcription
+// of it, per this file's own doc comment.
+type fppCommandResult struct {
+	ID                  string     `json:"id"`
+	IdempotencyKey      string     `json:"idempotencyKey"`
+	Action              string     `json:"action"`
+	InstanceID          string     `json:"instanceId"`
+	Replay              bool       `json:"replay"`
+	Outcome             string     `json:"outcome"`
+	OutcomeState        string     `json:"outcomeState"`
+	OutcomeReason       string     `json:"outcomeReason"`
+	AttributionDegraded bool       `json:"attributionDegraded"`
+	DispatchedAt        *time.Time `json:"dispatchedAt"`
+	ResolvedAt          *time.Time `json:"resolvedAt"`
+}
