@@ -333,19 +333,41 @@ The no-macro line is what keeps the step bounded, and it is worth stating why ra
 
 ### The target problem, which shapes how this step is verified
 
-Every previous FPP step was verified against the deployed fleet because reads are safe there. **This step may never be pointed at it.** The Step 5 rule stands unchanged: no write, no command, no restart, no settings change, and no MQTT publish against any live host, because `falcon/player/<host>/command/run` is a topic FPP acts on. The first write path is therefore developed and demonstrated against `bench/fpp-multisync/`'s containerized `fppd`, which makes `make test-integration-fpp` load-bearing for the first time. It is deliberately out of default CI because its image is a full FPP source build.
+Every previous FPP step was verified against the deployed fleet because reads are safe there. **This step may never be pointed at it.** The Step 5 rule stands unchanged: no write, no command, no restart, no settings change, and no MQTT publish against any live host, because `falcon/player/<host>/command/run` is a topic FPP acts on. The first write path is therefore developed and demonstrated against `bench/fpp-multisync/`'s containerized `fppd`, which makes `make test-integration-fpp` load-bearing for the first time. It is deliberately out of the per-push path because its image is a full FPP source build; see the CI decision below.
 
-### Decisions this step must make
+### Decisions settled before the step starts
 
-- **Which primitive command.** The constraint is that its effect must be observable through a signal Step 5 already collects, so that confirmation by evidence is real rather than deferred. A command whose effect nothing observes would ship the dispatch half of ADR-003 and call it done.
-- **Whether `make test-integration-fpp` enters CI**, becomes a gated or nightly job, or stays a documented manual gate. The answer changes what "verified" means for every write step after this one, so it is decided here rather than inherited.
-- **Login CSRF**, per the obligation above.
-**Decided ahead of the step and no longer open:** the agent fallback cache's trust model, now [ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md). The cache is signed rather than checksummed, the keypair is per deployment, and the verifying key is pinned at enrollment and never fetched at boot, which is what keeps the mechanism working during the outage it exists for. **This step implements nothing of it**; there is no cache yet and no ADR-008 topic that carries configuration. It is listed here because ADR-025 came out of this step's planning, and because its decision 4, that a verifying key the agent could rewrite is checksum-level protection wearing a signature's clothes, is the kind of thing that gets implemented the easy way by someone who never read the record.
+- **The primitive command is `Stop Playlist`**, decided 2026-08-12. Its effect is observable through signals Step 5 already collects (`fpp.status.player_state`, `fpp.playlist.name`, `fpp.fppd.state`), so confirmation by evidence is real rather than deferred; a command whose effect nothing observes would ship the dispatch half of ADR-003 and call it done. It needs no target parameter, which keeps it clear of ADR-024 decision 4's deliberate absence of target scoping. It is the safe direction, which is the right posture for the first write this project has ever shipped. And because it is a member of ADR-024 decision 11's blackout, stop and power-off safety class, **it exercises the audit exemption while the configuration and discovery writes exercise fail-closed**, so decision 11 gets both halves covered by one step instead of one.
+
+  Rejected: `Volume Set`, despite `fpp.volume` being collected and giving an exact expected value rather than a state transition, because ADR-017 retires FPP's own audio output and a control for it would be built to be deleted. `Start Playlist`, because it needs a target, it is the higher-consequence direction, and it sits nearest the ADR-001 line about never becoming a second scheduler.
+
+- **`make test-integration-fpp` does not enter the per-push path**, decided 2026-08-12. It becomes its own workflow, triggered on changes to the collector and command packages plus a nightly run. Its image is a full FPP source build, and on every push it would either slow the fast path or teach people to skip it. This step is the first work that genuinely depends on it, so the decision is made here rather than deferred again.
+
+- **The agent fallback cache's trust model** is [ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md): signed rather than checksummed, keypair per deployment, verifying key pinned at enrollment and never fetched at boot, which is what keeps the mechanism working during the outage it exists for. **This step implements nothing of it**; there is no cache yet and no ADR-008 topic that carries configuration. It is named here because ADR-025 came out of this step's planning, and because its decision 4, that a verifying key the agent could rewrite is checksum-level protection wearing a signature's clothes, is the kind of thing implemented the easy way by someone who never read the record.
+
+**Still open and owned by seam 0:** login CSRF at `POST /api/v1/session`, per the obligation above.
+
+### Build ordering
+
+**These three writes are not as disjoint as they look, and treating them as parallel would collide.** All three add tables to schema v6, which is one append-only file. All three register routes in `internal/coordinator/api`. All three add UI. Step 6 ran five parallel seams successfully because they were genuinely disjoint; these are not, so the shape is one foundation seam alone, then three that are actually parallel.
+
+**Seam 0, alone, blocking everything.** The `identity.Service` atomic audit variant, and the whole of schema v6 in one pass: configuration tables, the declared-versus-observed split on `nodes`, the command journal, and desired state. One builder owns the migration file and lands every table the other seams need; nobody else touches it. The atomicity fix belongs here rather than in a seam because two of the three writes fail closed on it, which makes it a prerequisite rather than a peer. Login CSRF lands here too.
+
+Then, in parallel:
+
+- **Seam A, configuration write surface.** `config:write` endpoints over seam 0's tables, `SHOWMESH_FPP_ENDPOINTS` migrated out of `.env` with a path for deployments that already have it set, and the UI. **This seam proves decision 11's same-transaction rule.**
+- **Seam B, node discovery and declaration.** The discover action, promotion of observed nodes to declared, the flag-never-delete rendering, and deletion as a separate confirmed operator action.
+- **Seam C, the command path.** `pkg/command`'s envelope, the FPP command client in its own package with its own HTTP posture, the `Stop Playlist` endpoint behind `fpp:command`, confirmation by evidence against the collector, the `showmeshctl` subcommand, and the UI control. The only seam touching FPP, and the only one needing the bench container.
+
+Review then runs as it did for Step 6: a constraint review and a test-honesty review on the stronger model, given the diff and the named ADRs, instructed to break the work rather than read it.
+
+**The failure mode to watch for is Step 6's, which it produced three times: a capability that compiles, tests green, and has no caller.** Each of these three writes needs its end-to-end invocation path exercised by hand before the step is called done, and for seam C that means against the bench `fppd` and never the live fleet.
 
 ### Acceptance criteria
 
 - The endpoint is refused `401` unauthenticated, refused `403` naming the missing scope for a `viewer`, and accepted for an `operator`, verified against the running stack rather than in a handler test. Step 6 proved this with a temporary endpoint; this one is real.
-- A command whose FPP request succeeds while observed state does not move is reported as unconfirmed with a reason, never as successful. Verified by making the bench `fppd` accept the command without changing state.
+- A `Stop Playlist` whose FPP request succeeds while observed state does not move is reported as unconfirmed with a reason, never as successful. Verified by issuing it against a bench `fppd` that accepts the command without changing state.
+- `Stop Playlist` succeeds with the audit store failing, per ADR-024 decision 11's safety class, while a `config:write` under the same condition is refused. Both halves in one step.
 - A replayed idempotency key dispatches nothing, returns the original result, and writes an audit entry marked as a replay.
 - The state change and its audit entry fail together: with the audit store failing, a **configuration or discovery** write is refused and its state change is absent afterwards. This is decision 11's same-transaction rule, and it must be proven on a coordinator-local write, because that is the only shape that reaches it.
 - **A discovery run that does not see a previously declared node leaves it declared**, flags it in the UI, and deletes nothing. Verified by declaring a node, stopping its agent, and re-running discovery.
