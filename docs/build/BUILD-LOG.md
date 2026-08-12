@@ -84,6 +84,8 @@ The repository is pushed to `github.com/ShowMeshSystems/showmesh`, currently pri
 
 No audio code exists. The Audio Engine was specified in the same session (ADR-017..019, `docs/architecture/AUDIO-ENGINE.md`, RES-007 rewritten) and deliberately left unsequenced: RES-007 is critical-risk at L0, the multichannel interface has not been purchased, and every load-bearing claim is a bench fact. The next audio action is the RES-007 prototype, not implementation.
 
+The operator surface has now been checked on a real phone and a real desktop browser: the pixel-current blind-spot distinction holds, and the Step 4 sidebar defect is gone. Two things are deliberately deferred rather than forgotten: **the whole-UI styling pass**, still parked at the end by the owner's Step 4 decision, and **the observation list's readability**, which was raised by that phone check and filed with the styling work rather than patched.
+
 **The next action is the identity and authorization ADR.** Nothing else of consequence can start without it, and the reason is structural rather than a matter of preference.
 
 Beyond that the sequencing has one dominant feature worth stating plainly. **Every remaining roadmap item that does something rather than shows something is a write operation, and ADR-021 rule 5 bars the first write endpoint** until a superseding record decides authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. ARCHITECTURE Phase 1 is entirely write work. So the identity and authorization ADR is the critical path out of Phase 0, not a chore to fit in later. Other work available without it: RES-008's configuration model, and `pkg/pjlink` as a protocol library at L1.
@@ -123,7 +125,11 @@ That is the second time in one day this project shipped two implementations of o
 
 **Verification gates:** `gofmt`, `go vet`, `make lint` at 0 issues, `go test -race -count=1 ./...` across all packages, `go test -count=20` on `internal/coordinator/api` for nondeterminism, `CGO_ENABLED=0 go build ./...`, UI typecheck, lint, 213 tests, and a production build. The UI's request-path change was verified in a real Chrome tab against the running Compose stack, which is the specific defect class Step 4 was burned by. Both the `ValidForSeconds` masking and the single-implementation guard were mutation-checked. Measured read-only against the live fleet through the shipped Compose bundle and its ADR-022 proxy, not a dev server.
 
-**Still open:** the phone check on a real device, which needs the owner; and everything Step 5 deferred to RES-013.
+**Verified on a real phone by the owner, which closes the gap Step 4 taught this project to distrust.** The port grid reads correctly on a real device: a smart-receiver blind spot is obviously distinct from a measured zero, which is the single guarantee Step 5 exists to provide and the one that had only ever been checked in jsdom and a 390px iframe. The desktop sidebar, broken since Step 4 and fixed in Step 5, is also confirmed good on a real browser.
+
+**One finding from that check, filed rather than fixed: the observation list is hard to read.** The owner's assessment is that this is a design problem rather than a functional one, and it joins the deferred styling pass rather than being patched now. Recording it here because "hard to read" on an operator surface stops being cosmetic at some volume, and 351 observations on one instance is already past what the Step 4 layout was designed for. The whole-UI styling pass remains deliberately deferred to the end, per the Step 4 decision.
+
+**Still open:** everything Step 5 deferred to RES-013 (metric history, retention tiers, and the write amplification of re-upserting every signal each poll).
 
 ---
 
