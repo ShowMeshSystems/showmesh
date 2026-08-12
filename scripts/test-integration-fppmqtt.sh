@@ -45,8 +45,30 @@ HOST_PORT="${SHOWMESH_TEST_FPPMQTT_MQTT_PORT:-11894}"
 
 export SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${HOST_PORT}"
 
+# Keep the disposable ACL seed aligned with the exact shipped config. The
+# deploy credential tooling may render its effective ACL under a different
+# filename than the committed base (currently acl.generated.conf).
+ACL_CONTAINER_PATH="$(awk '$1 == "acl_file" { print $2; exit }' "$ROOT_DIR/deploy/mosquitto/mosquitto.conf")"
+if [ -z "$ACL_CONTAINER_PATH" ]; then
+  echo "test-integration-fppmqtt: deploy/mosquitto/mosquitto.conf has no acl_file" >&2
+  exit 1
+fi
+
+# The FPP collector and the simulated FPP publisher deliberately use
+# different principals. The publisher can write only the FPP telemetry topic
+# suffixes the collector models; the collector can read only those suffixes.
+# Neither gets access to any showmesh/ topic or to FPP command topics.
+random_password() {
+  head -c 24 /dev/urandom | base64 | tr -d '\n' | tr '+/' '-_'
+}
+export SHOWMESH_TEST_FPPMQTT_COLLECTOR_USERNAME="fppmqtt-test-collector"
+export SHOWMESH_TEST_FPPMQTT_COLLECTOR_PASSWORD="$(random_password)"
+export SHOWMESH_TEST_FPPMQTT_PUBLISHER_USERNAME="fppmqtt-test-publisher"
+export SHOWMESH_TEST_FPPMQTT_PUBLISHER_PASSWORD="$(random_password)"
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  rm -f "${TMP_SEED_PASSWD:-}" "${TMP_SEED_ACL:-}"
 }
 trap cleanup EXIT
 
@@ -54,12 +76,59 @@ trap cleanup EXIT
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
 echo "test-integration-fppmqtt: starting $MOSQUITTO_IMAGE as $CONTAINER_NAME on port $HOST_PORT"
-# The shipped config is mounted read-only, unmodified — see
-# test-integration.sh's identical line for why no adaptation is needed.
-docker run -d --name "$CONTAINER_NAME" \
+# The shipped mosquitto.conf is mounted read-only and unmodified. Its
+# password_file and acl_file are required because allow_anonymous is false,
+# so create the container first, copy disposable seed files into its writable
+# config directory, then start it. This mirrors test-integration.sh without
+# borrowing any production credentials or modifying deploy files.
+docker create --name "$CONTAINER_NAME" \
   -p "${HOST_PORT}:1883" \
   -v "$ROOT_DIR/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
   "$MOSQUITTO_IMAGE" >/dev/null
+
+TMP_SEED_PASSWD="$(mktemp)"
+docker run --rm -v "$TMP_SEED_PASSWD:/out/passwd" "$MOSQUITTO_IMAGE" \
+  mosquitto_passwd -b -c /out/passwd "$SHOWMESH_TEST_FPPMQTT_COLLECTOR_USERNAME" "$SHOWMESH_TEST_FPPMQTT_COLLECTOR_PASSWORD" >/dev/null
+docker run --rm -v "$TMP_SEED_PASSWD:/out/passwd" "$MOSQUITTO_IMAGE" \
+  mosquitto_passwd -b /out/passwd "$SHOWMESH_TEST_FPPMQTT_PUBLISHER_USERNAME" "$SHOWMESH_TEST_FPPMQTT_PUBLISHER_PASSWORD" >/dev/null
+docker cp "$TMP_SEED_PASSWD" "$CONTAINER_NAME:/mosquitto/config/passwd"
+rm -f "$TMP_SEED_PASSWD"
+unset TMP_SEED_PASSWD
+
+TMP_SEED_ACL="$(mktemp)"
+cp "$ROOT_DIR/deploy/mosquitto/acl.conf" "$TMP_SEED_ACL"
+cat >> "$TMP_SEED_ACL" <<EOF
+
+# --- TEST-ONLY FPP MQTT integration principals ---------------------------
+# Appended to a disposable copy only. These are intentionally separate:
+# one read-only collector and one write-only simulated FPP publisher.
+user $SHOWMESH_TEST_FPPMQTT_COLLECTOR_USERNAME
+topic read falcon/player/+/fppd_status
+topic read falcon/player/+/port_status
+topic read falcon/player/+/warnings
+topic read falcon/player/+/version
+topic read falcon/player/+/branch
+topic read falcon/player/+/status
+topic read falcon/player/+/ready
+topic read falcon/player/+/playlist/repeat/status
+topic read falcon/player/+/playlist/position/status
+
+user $SHOWMESH_TEST_FPPMQTT_PUBLISHER_USERNAME
+topic write falcon/player/+/fppd_status
+topic write falcon/player/+/port_status
+topic write falcon/player/+/warnings
+topic write falcon/player/+/version
+topic write falcon/player/+/branch
+topic write falcon/player/+/status
+topic write falcon/player/+/ready
+topic write falcon/player/+/playlist/repeat/status
+topic write falcon/player/+/playlist/position/status
+EOF
+docker cp "$TMP_SEED_ACL" "$CONTAINER_NAME:$ACL_CONTAINER_PATH"
+rm -f "$TMP_SEED_ACL"
+unset TMP_SEED_ACL
+
+docker start "$CONTAINER_NAME" >/dev/null
 
 echo "test-integration-fppmqtt: waiting for the broker to accept connections"
 ready=0
@@ -77,8 +146,27 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
+# A listening TCP port is not readiness for an authenticated broker. Prove
+# both test principals can perform their only permitted operation before Go
+# starts: publisher writes a retained FPP status value and collector reads it.
+ready_topic="falcon/player/FPP-AuthReady/status"
+if ! docker exec "$CONTAINER_NAME" mosquitto_pub -h 127.0.0.1 -p 1883 \
+  -u "$SHOWMESH_TEST_FPPMQTT_PUBLISHER_USERNAME" -P "$SHOWMESH_TEST_FPPMQTT_PUBLISHER_PASSWORD" \
+  -t "$ready_topic" -m ready -r; then
+  echo "test-integration-fppmqtt: authenticated publisher readiness probe failed" >&2
+  docker logs "$CONTAINER_NAME" >&2 || true
+  exit 1
+fi
+if ! docker exec "$CONTAINER_NAME" mosquitto_sub -h 127.0.0.1 -p 1883 \
+  -u "$SHOWMESH_TEST_FPPMQTT_COLLECTOR_USERNAME" -P "$SHOWMESH_TEST_FPPMQTT_COLLECTOR_PASSWORD" \
+  -t "$ready_topic" -C 1 -W 5 >/dev/null; then
+  echo "test-integration-fppmqtt: authenticated collector readiness probe failed" >&2
+  docker logs "$CONTAINER_NAME" >&2 || true
+  exit 1
+fi
+
 echo "test-integration-fppmqtt: running against $SHOWMESH_TEST_MQTT_BROKER (container $CONTAINER_NAME)"
-if ! go test -tags=integration -race -timeout=5m -v ./internal/coordinator/collector/fppmqtt/...; then
+if ! go test -tags=integration -race -count=1 -timeout=5m -v ./internal/coordinator/collector/fppmqtt/...; then
   echo "test-integration-fppmqtt: go test failed; dumping $CONTAINER_NAME logs before teardown" >&2
   docker logs "$CONTAINER_NAME" >&2 || true
   exit 1

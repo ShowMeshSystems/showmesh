@@ -101,6 +101,33 @@ func defaultCLIDeps() *cliDeps {
 	}
 }
 
+// writeCLIError reports a command error on stderr. The command already has
+// a nonzero outcome when this is called, so a failed diagnostic write is
+// recorded in the logger rather than masking that outcome or being silently
+// discarded.
+func writeCLIError(deps *cliDeps, format string, args ...any) {
+	if _, err := fmt.Fprintf(deps.stderr, format, args...); err != nil && deps.logger != nil {
+		deps.logger.Warn("failed to write coordinator subcommand diagnostic", "error", err)
+	}
+}
+
+func writeCLIErrorln(deps *cliDeps, args ...any) {
+	if _, err := fmt.Fprintln(deps.stderr, args...); err != nil && deps.logger != nil {
+		deps.logger.Warn("failed to write coordinator subcommand diagnostic", "error", err)
+	}
+}
+
+// writeCLIOutput writes normal command output. Callers must return a
+// nonzero status when it fails: reporting success after the operator never
+// received the output (in particular, a newly issued token) is misleading.
+func writeCLIOutput(deps *cliDeps, format string, args ...any) error {
+	_, err := fmt.Fprintf(deps.stdout, format, args...)
+	if err != nil && deps.logger != nil {
+		deps.logger.Warn("failed to write coordinator subcommand output", "error", err)
+	}
+	return err
+}
+
 // openIdentityService opens the coordinator's real SQLite store and a real
 // identity.Service over it, against deps.dataDir and deps.now. The caller
 // must Close the returned *store.Store.
@@ -155,9 +182,13 @@ func auditCLIAction(ctx context.Context, deps *cliDeps, svc identity.Service, ac
 // refactor.
 func readPassword(prompt string, stdin io.Reader, stderr io.Writer) (string, error) {
 	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		fmt.Fprint(stderr, prompt)
+		if _, err := fmt.Fprint(stderr, prompt); err != nil {
+			return "", fmt.Errorf("write password prompt: %w", err)
+		}
 		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(stderr)
+		if _, writeErr := fmt.Fprintln(stderr); writeErr != nil {
+			return "", fmt.Errorf("write password prompt newline: %w", writeErr)
+		}
 		if err != nil {
 			return "", fmt.Errorf("read password: %w", err)
 		}
@@ -288,21 +319,21 @@ func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	trimmedRef := strings.TrimSpace(*principalRef)
 	if trimmedRef == "" {
-		fmt.Fprintln(deps.stderr, "issue-token: -principal is required")
+		writeCLIErrorln(deps, "issue-token: -principal is required")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		writeCLIError(deps, "issue-token: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		writeCLIError(deps, "issue-token: %v\n", err)
 		return 1
 	}
 
@@ -310,7 +341,7 @@ func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 	if trimmedExpires := strings.TrimSpace(*expires); trimmedExpires != "" {
 		t, err := parseExpiry(trimmedExpires, deps.now())
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "issue-token: -expires: %v\n", err)
+			writeCLIError(deps, "issue-token: -expires: %v\n", err)
 			return 2
 		}
 		expiresAt = &t
@@ -318,20 +349,26 @@ func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	tok, err := svc.IssueToken(ctx, principal.ID, strings.TrimSpace(*label), expiresAt)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "issue-token: %v\n", err)
+		writeCLIError(deps, "issue-token: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "token.issue", principal)
 
-	fmt.Fprintf(deps.stdout, "Issued a token for %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role)
-	if expiresAt != nil {
-		fmt.Fprintf(deps.stdout, "Expires: %s\n", expiresAt.Format(time.RFC3339))
-	} else {
-		fmt.Fprintln(deps.stdout, "Expires: never (ADR-024 decision 1's default — pass -expires to set one; revoke-token is the control)")
+	if err := writeCLIOutput(deps, "Issued a token for %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role); err != nil {
+		return 1
 	}
-	fmt.Fprintln(deps.stdout)
-	fmt.Fprintln(deps.stdout, "This token is displayed exactly once and cannot be retrieved again — store it now:")
-	fmt.Fprintln(deps.stdout, tok.Value)
+	if expiresAt != nil {
+		if err := writeCLIOutput(deps, "Expires: %s\n", expiresAt.Format(time.RFC3339)); err != nil {
+			return 1
+		}
+	} else {
+		if err := writeCLIOutput(deps, "Expires: never (ADR-024 decision 1's default — pass -expires to set one; revoke-token is the control)\n"); err != nil {
+			return 1
+		}
+	}
+	if err := writeCLIOutput(deps, "\nThis token is displayed exactly once and cannot be retrieved again — store it now:\n%s\n", tok.Value); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -352,32 +389,33 @@ func runListTokensSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	trimmedRef := strings.TrimSpace(*principalRef)
 	if trimmedRef == "" {
-		fmt.Fprintln(deps.stderr, "list-tokens: -principal is required")
+		writeCLIErrorln(deps, "list-tokens: -principal is required")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		writeCLIError(deps, "list-tokens: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		writeCLIError(deps, "list-tokens: %v\n", err)
 		return 1
 	}
 
 	tokens, err := svc.ListTokens(ctx, principal.ID)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "list-tokens: %v\n", err)
+		writeCLIError(deps, "list-tokens: %v\n", err)
 		return 1
 	}
 
-	fmt.Fprintf(deps.stdout, "Tokens for %q (id %s):\n", principal.Name, principal.ID)
-	fmt.Fprintf(deps.stdout, "%-36s  %-8s  %-24s  %-24s  %-24s  %s\n", "ID", "HINT", "LABEL", "CREATED", "EXPIRES", "LAST USED")
+	if err := writeCLIOutput(deps, "Tokens for %q (id %s):\n%-36s  %-8s  %-24s  %-24s  %-24s  %s\n", principal.Name, principal.ID, "ID", "HINT", "LABEL", "CREATED", "EXPIRES", "LAST USED"); err != nil {
+		return 1
+	}
 	for _, t := range tokens {
 		label := t.Label
 		if label == "" {
@@ -391,8 +429,10 @@ func runListTokensSubcommandWithDeps(deps *cliDeps, args []string) int {
 		if t.LastUsedAt != nil {
 			lastUsed = t.LastUsedAt.Format(time.RFC3339)
 		}
-		fmt.Fprintf(deps.stdout, "%-36s  %-8s  %-24s  %-24s  %-24s  %s\n",
-			t.ID, t.Hint, label, t.CreatedAt.Format(time.RFC3339), expires, lastUsed)
+		if err := writeCLIOutput(deps, "%-36s  %-8s  %-24s  %-24s  %-24s  %s\n",
+			t.ID, t.Hint, label, t.CreatedAt.Format(time.RFC3339), expires, lastUsed); err != nil {
+			return 1
+		}
 	}
 	return 0
 }
@@ -418,27 +458,27 @@ func runRevokeTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 	trimmedRef := strings.TrimSpace(*principalRef)
 	trimmedID := strings.TrimSpace(*tokenID)
 	if trimmedRef == "" || trimmedID == "" {
-		fmt.Fprintln(deps.stderr, "revoke-token: -principal and -id are both required")
+		writeCLIErrorln(deps, "revoke-token: -principal and -id are both required")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		writeCLIError(deps, "revoke-token: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principal, err := resolvePrincipal(ctx, svc, trimmedRef)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		writeCLIError(deps, "revoke-token: %v\n", err)
 		return 1
 	}
 
 	tokens, err := svc.ListTokens(ctx, principal.ID)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		writeCLIError(deps, "revoke-token: %v\n", err)
 		return 1
 	}
 	owned := false
@@ -449,17 +489,19 @@ func runRevokeTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 		}
 	}
 	if !owned {
-		fmt.Fprintf(deps.stderr, "revoke-token: no token %q belongs to %q (id %s)\n", trimmedID, principal.Name, principal.ID)
+		writeCLIError(deps, "revoke-token: no token %q belongs to %q (id %s)\n", trimmedID, principal.Name, principal.ID)
 		return 1
 	}
 
 	if err := svc.RevokeToken(ctx, trimmedID); err != nil {
-		fmt.Fprintf(deps.stderr, "revoke-token: %v\n", err)
+		writeCLIError(deps, "revoke-token: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "token.revoke", principal)
 
-	fmt.Fprintf(deps.stdout, "Revoked token %s for %q (id %s).\n", trimmedID, principal.Name, principal.ID)
+	if err := writeCLIOutput(deps, "Revoked token %s for %q (id %s).\n", trimmedID, principal.Name, principal.ID); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -480,7 +522,7 @@ func runBootstrapSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	trimmedName := strings.TrimSpace(*name)
 	if trimmedName == "" {
-		fmt.Fprintln(deps.stderr, "bootstrap: -name is required")
+		writeCLIErrorln(deps, "bootstrap: -name is required")
 		return 2
 	}
 
@@ -491,37 +533,39 @@ func runBootstrapSubcommandWithDeps(deps *cliDeps, args []string) int {
 		var err error
 		trimmedCode, err = readBootstrapCodeFromFile(deps.dataDir)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "bootstrap: -code was not given and could not be read from the data volume: %v\n", err)
+			writeCLIError(deps, "bootstrap: -code was not given and could not be read from the data volume: %v\n", err)
 			return 1
 		}
 	}
 
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "bootstrap: %v\n", err)
+		writeCLIError(deps, "bootstrap: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	password, err := readPassword("New administrator password: ", deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "bootstrap: %v\n", err)
+		writeCLIError(deps, "bootstrap: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(deps.stderr, "bootstrap: password must not be empty")
+		writeCLIErrorln(deps, "bootstrap: password must not be empty")
 		return 1
 	}
 
 	principal, err := svc.ClaimBootstrap(ctx, trimmedCode, trimmedName, password, deps.now())
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "bootstrap: claim failed: %v\n", err)
+		writeCLIError(deps, "bootstrap: claim failed: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "bootstrap.claim", principal)
 
-	fmt.Fprintf(deps.stdout, "Created administrator %q (id %s, device label %q). "+
-		"The bootstrap code has been invalidated and its file deleted.\n", principal.Name, principal.ID, *deviceLabel)
+	if err := writeCLIOutput(deps, "Created administrator %q (id %s, device label %q). "+
+		"The bootstrap code has been invalidated and its file deleted.\n", principal.Name, principal.ID, *deviceLabel); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -543,36 +587,38 @@ func runCreateAdminSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	trimmedName := strings.TrimSpace(*name)
 	if trimmedName == "" {
-		fmt.Fprintln(deps.stderr, "create-admin: -name is required")
+		writeCLIErrorln(deps, "create-admin: -name is required")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
+		writeCLIError(deps, "create-admin: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	password, err := readPassword(fmt.Sprintf("Password for new administrator %q: ", trimmedName), deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
+		writeCLIError(deps, "create-admin: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(deps.stderr, "create-admin: password must not be empty")
+		writeCLIErrorln(deps, "create-admin: password must not be empty")
 		return 1
 	}
 
 	principal, err := svc.CreatePrincipal(ctx, trimmedName, identity.KindHuman, identity.RoleAdmin, password)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-admin: %v\n", err)
+		writeCLIError(deps, "create-admin: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "principal.create", principal)
 
-	fmt.Fprintf(deps.stdout, "Created administrator %q (id %s).\n", principal.Name, principal.ID)
+	if err := writeCLIOutput(deps, "Created administrator %q (id %s).\n", principal.Name, principal.ID); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -611,13 +657,13 @@ func runCreatePrincipalSubcommandWithDeps(deps *cliDeps, args []string) int {
 
 	trimmedName := strings.TrimSpace(*name)
 	if trimmedName == "" {
-		fmt.Fprintln(deps.stderr, "create-principal: -name is required")
+		writeCLIErrorln(deps, "create-principal: -name is required")
 		return 2
 	}
 
 	role, err := identity.ParseRole(strings.TrimSpace(*roleFlag))
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-principal: -role: %v\n", err)
+		writeCLIError(deps, "create-principal: -role: %v\n", err)
 		return 2
 	}
 
@@ -628,14 +674,14 @@ func runCreatePrincipalSubcommandWithDeps(deps *cliDeps, args []string) int {
 	case string(identity.KindMachine):
 		kind = identity.KindMachine
 	default:
-		fmt.Fprintf(deps.stderr, "create-principal: -kind must be %q or %q\n", identity.KindHuman, identity.KindMachine)
+		writeCLIError(deps, "create-principal: -kind must be %q or %q\n", identity.KindHuman, identity.KindMachine)
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		writeCLIError(deps, "create-principal: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
@@ -652,18 +698,20 @@ func runCreatePrincipalSubcommandWithDeps(deps *cliDeps, args []string) int {
 		fmt.Sprintf("Password for new %s principal %q (leave empty for a machine principal that will only ever use a token): ", kind, trimmedName),
 		deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		writeCLIError(deps, "create-principal: %v\n", err)
 		return 1
 	}
 
 	principal, err := svc.CreatePrincipal(ctx, trimmedName, kind, role, password)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "create-principal: %v\n", err)
+		writeCLIError(deps, "create-principal: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "principal.create", principal)
 
-	fmt.Fprintf(deps.stdout, "Created principal %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role)
+	if err := writeCLIOutput(deps, "Created principal %q (id %s, kind %s, role %s).\n", principal.Name, principal.ID, principal.Kind, principal.Role); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -698,26 +746,26 @@ func runInvalidateAllSessionsSubcommandWithDeps(deps *cliDeps, args []string) in
 	_ = fs.Parse(args)
 
 	if !*confirm {
-		fmt.Fprintln(deps.stderr, "invalidate-all-sessions: refusing to run without -yes — this signs out EVERY principal's EVERY session and open stream on this coordinator, unconditionally")
+		writeCLIErrorln(deps, "invalidate-all-sessions: refusing to run without -yes — this signs out EVERY principal's EVERY session and open stream on this coordinator, unconditionally")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		writeCLIError(deps, "invalidate-all-sessions: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principals, err := svc.ListPrincipals(ctx)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		writeCLIError(deps, "invalidate-all-sessions: %v\n", err)
 		return 1
 	}
 
 	if err := svc.InvalidateAllSessions(ctx); err != nil {
-		fmt.Fprintf(deps.stderr, "invalidate-all-sessions: %v\n", err)
+		writeCLIError(deps, "invalidate-all-sessions: %v\n", err)
 		return 1
 	}
 
@@ -731,7 +779,9 @@ func runInvalidateAllSessionsSubcommandWithDeps(deps *cliDeps, args []string) in
 		auditCLIAction(ctx, deps, svc, "session.invalidate_all", p)
 	}
 
-	fmt.Fprintf(deps.stdout, "Invalidated every session and open stream for %d principal(s).\n", len(principals))
+	if err := writeCLIOutput(deps, "Invalidated every session and open stream for %d principal(s).\n", len(principals)); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -758,42 +808,44 @@ func runResetPasswordSubcommandWithDeps(deps *cliDeps, args []string) int {
 	trimmedName := strings.TrimSpace(*name)
 	trimmedID := strings.TrimSpace(*id)
 	if (trimmedName == "" && trimmedID == "") || (trimmedName != "" && trimmedID != "") {
-		fmt.Fprintln(deps.stderr, "reset-password: exactly one of -name or -id is required")
+		writeCLIErrorln(deps, "reset-password: exactly one of -name or -id is required")
 		return 2
 	}
 
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
+		writeCLIError(deps, "reset-password: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principal, err := findPrincipal(ctx, svc, trimmedID, trimmedName)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
+		writeCLIError(deps, "reset-password: %v\n", err)
 		return 1
 	}
 
 	password, err := readPassword(fmt.Sprintf("New password for %q: ", principal.Name), deps.stdin, deps.stderr)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
+		writeCLIError(deps, "reset-password: %v\n", err)
 		return 1
 	}
 	if password == "" {
-		fmt.Fprintln(deps.stderr, "reset-password: password must not be empty")
+		writeCLIErrorln(deps, "reset-password: password must not be empty")
 		return 1
 	}
 
 	if _, err := svc.SetPassword(ctx, principal.ID, password); err != nil {
-		fmt.Fprintf(deps.stderr, "reset-password: %v\n", err)
+		writeCLIError(deps, "reset-password: %v\n", err)
 		return 1
 	}
 	auditCLIAction(ctx, deps, svc, "principal.reset_password", principal)
 
-	fmt.Fprintf(deps.stdout, "Password reset for %q (id %s). Every existing session and open stream for this principal is now invalid.\n",
-		principal.Name, principal.ID)
+	if err := writeCLIOutput(deps, "Password reset for %q (id %s). Every existing session and open stream for this principal is now invalid.\n",
+		principal.Name, principal.ID); err != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -816,21 +868,25 @@ func runListPrincipalsSubcommandWithDeps(deps *cliDeps, args []string) int {
 	ctx := context.Background()
 	st, svc, err := openIdentityService(ctx, deps)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "list-principals: %v\n", err)
+		writeCLIError(deps, "list-principals: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	principals, err := svc.ListPrincipals(ctx)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "list-principals: %v\n", err)
+		writeCLIError(deps, "list-principals: %v\n", err)
 		return 1
 	}
 
-	fmt.Fprintf(deps.stdout, "%-36s  %-24s  %-8s  %-10s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "CREATED")
+	if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "CREATED"); err != nil {
+		return 1
+	}
 	for _, p := range principals {
-		fmt.Fprintf(deps.stdout, "%-36s  %-24s  %-8s  %-10s  %-8v  %s\n",
-			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.CreatedAt.Format(time.RFC3339))
+		if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8v  %s\n",
+			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.CreatedAt.Format(time.RFC3339)); err != nil {
+			return 1
+		}
 	}
 	return 0
 }

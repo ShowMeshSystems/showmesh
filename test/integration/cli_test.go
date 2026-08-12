@@ -5,6 +5,7 @@ package integration
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -415,22 +416,38 @@ func TestWatchResnapshotsAfterCoordinatorRestart(t *testing.T) {
 // one shape that does NOT require the connection to fail at the transport
 // level at all; the server itself declares the client's local model unsafe
 // to keep applying deltas to, over the still-open connection, then closes
-// it. Built the same deterministic way as
-// TestSlowSSEConsumerGetsResetAndDisconnected: a tiny configured buffer and
-// a real burst of change, this time observed through the real showmeshctl
-// binary's own stdout instead of a raw response read.
+// it. Its overflow is structural rather than a race: phase one seeds a
+// database through the real broker; phase two starts a fresh hub over that
+// database with no broker, so its first scheduled render carries the entire
+// inventory into the deliberately tiny subscriber buffer. This is the same
+// construction TestSlowSSEConsumerGetsResetAndDisconnected uses, observed
+// here through the real showmeshctl binary's stdout.
 func TestWatchResnapshotsAfterStreamReset(t *testing.T) {
 	requireBroker(t)
+	const burst = 200
+
+	// Phase one needs the real broker only to populate a reusable SQLite
+	// database. No stream behavior is asserted from this coordinator.
+	dataDir := t.TempDir()
+	seed := startCoordinatorWithConfig(t, coordinatorConfig{
+		dataDir: dataDir, clientID: "coord-seed-" + uniqueSuffix(),
+	})
+	publishHelloBurst(t, burst)
+	waitForNodeCount(t, seed, burst)
+	seed.shutdown()
+
+	// Phase two has no broker. That prevents retained traffic or reconnects
+	// from triggering an early render before the watch subscribes; its first
+	// render is therefore the 5-second stream tick, where a new hub compares
+	// every seeded node with its empty last-rendered state in one pass.
 	coord := startCoordinatorWithConfig(t, coordinatorConfig{
-		dataDir: t.TempDir(), clientID: "coord-" + uniqueSuffix(),
+		dataDir: dataDir, clientID: "coord-" + uniqueSuffix(),
+		brokerURL:              fmt.Sprintf("tcp://127.0.0.1:%d", closedPort(t)),
 		streamSubscriberBuffer: 2,
 	})
 
 	wp := startWatch(t, "http://"+coord.httpAddr, "")
 	wp.waitForLine(t, "--- snapshot (initial connect)", 10*time.Second)
-
-	const burst = 200
-	publishHelloBurst(t, burst)
 
 	// "stream reset (reason=...)" is logged to stderr (watch.go's
 	// watchOnce), not stdout; wait for the stdout snapshot line the reset

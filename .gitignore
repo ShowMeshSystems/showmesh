@@ -27,6 +27,12 @@ coverage.out
 # rejected a mandatory shared secret with no distribution mechanism.
 deploy/mosquitto/passwd
 
+# Effective MQTT ACL generated from acl.conf and the non-fixed usernames in
+# passwd. Kept out of version control so agents can be provisioned and
+# retired without making the deployment checkout dirty.
+deploy/mosquitto/acl.generated.conf
+deploy/mosquitto/.acl-explicit-agents-v1
+
 # Editor / IDE
 .idea/
 .vscode/

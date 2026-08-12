@@ -94,6 +94,10 @@ func withStdin(deps *cliDeps, line string) *cliDeps {
 	return &cp
 }
 
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 // setupPrincipal opens deps' store directly (bypassing every
 // run*Subcommand) and creates one principal, closing the store before
 // returning so a subsequent subcommand invocation against the same
@@ -226,6 +230,19 @@ func TestIssueTokenPrintsRawTokenExactlyOnceAndListTokensNeverRepeatsIt(t *testi
 	}
 	if strings.Contains(listing, digest) {
 		t.Errorf("list-tokens printed the token's digest: %q", listing)
+	}
+}
+
+func TestIssueTokenFailsWhenItsOutputCannotBeWritten(t *testing.T) {
+	deps, _, _, logbuf, _ := newTestDeps(t)
+	principal := setupPrincipal(t, deps, "fpp-scheduler", identity.KindMachine, identity.RoleScheduler, "")
+	deps.stdout = failingWriter{err: errors.New("broken pipe")}
+
+	if code := runIssueTokenSubcommandWithDeps(deps, []string{"-principal=" + principal.ID}); code != 1 {
+		t.Fatalf("issue-token exit code with failed stdout = %d, want 1", code)
+	}
+	if !strings.Contains(logbuf.String(), "failed to write coordinator subcommand output") {
+		t.Errorf("output failure was not logged: %q", logbuf.String())
 	}
 }
 

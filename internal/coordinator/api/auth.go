@@ -206,28 +206,36 @@ func withAuthContext(ctx context.Context, ac authContext) context.Context {
 // this function, so [identity.Service.AuthenticateSession]'s sliding
 // write agrees with the rest of this request's own notion of "now" —
 // matching that method's own doc comment on its now parameter.
-func resolveCredential(ctx context.Context, svc identity.Service, r *http.Request, now time.Time) authContext {
+type credentialFailure struct {
+	form   identity.CredentialForm
+	reason string
+}
+
+func resolveCredential(ctx context.Context, svc identity.Service, r *http.Request, now time.Time) (authContext, *credentialFailure) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		tok, ok := bearerToken(h)
 		if !ok {
-			return authContext{}
+			return authContext{}, &credentialFailure{form: identity.FormToken, reason: "malformed_authorization"}
 		}
 		auth, err := svc.AuthenticateToken(ctx, tok)
 		if err != nil {
-			return authContext{}
+			return authContext{}, &credentialFailure{form: identity.FormToken, reason: "invalid_token"}
 		}
-		return authContext{result: auth, ok: true, raw: tok}
+		return authContext{result: auth, ok: true, raw: tok}, nil
 	}
 
 	c, err := r.Cookie(sessionCookieName)
+	if errors.Is(err, http.ErrNoCookie) {
+		return authContext{}, nil
+	}
 	if err != nil || c.Value == "" {
-		return authContext{}
+		return authContext{}, &credentialFailure{form: identity.FormSession, reason: "malformed_session_cookie"}
 	}
 	auth, aerr := svc.AuthenticateSession(ctx, c.Value, now)
 	if aerr != nil {
-		return authContext{}
+		return authContext{}, &credentialFailure{form: identity.FormSession, reason: "invalid_session"}
 	}
-	return authContext{result: auth, ok: true, raw: c.Value}
+	return authContext{result: auth, ok: true, raw: c.Value}, nil
 }
 
 // withIdentity is this API's replacement for the retired
@@ -269,7 +277,7 @@ func resolveCredential(ctx context.Context, svc identity.Service, r *http.Reques
 // each observe a low delay before any of their own recordFailure calls
 // have landed, so a sufficiently parallel burst is throttled less than a
 // sequential one — see this task's report.
-func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *slog.Logger, clock func() time.Time) func(http.Handler) http.Handler {
+func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *slog.Logger, clock func() time.Time, trustClientAddr bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			now := clock()
@@ -299,7 +307,23 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 				return
 			}
 
-			ac := resolveCredential(r.Context(), identitySvc, r, now)
+			ac, failure := resolveCredential(r.Context(), identitySvc, r, now)
+			if failure != nil {
+				entry := identity.AuditEntry{
+					Timestamp: now,
+					Form:      failure.form,
+					Action:    "credential.resolve",
+					Target:    r.URL.Path,
+					Params:    map[string]any{"reason": failure.reason},
+					Kind:      identity.AuditAuthFail,
+				}
+				if trustClientAddr {
+					entry.ClientAddr = r.RemoteAddr
+				}
+				if err := identitySvc.WriteAudit(r.Context(), entry); err != nil && logger != nil {
+					logger.Warn("api: failed to audit credential resolution failure", "form", failure.form, "reason", failure.reason, "error", err)
+				}
+			}
 			next.ServeHTTP(w, r.WithContext(withAuthContext(r.Context(), ac)))
 		})
 	}

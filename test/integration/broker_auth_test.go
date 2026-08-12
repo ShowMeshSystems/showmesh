@@ -96,6 +96,22 @@ func rawPublishReasonCode(t *testing.T, cli *paho.Client, topic string) byte {
 	return 0
 }
 
+func rawPublishRetainedReasonCode(t *testing.T, cli *paho.Client, topic string) byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := cli.Publish(ctx, &paho.Publish{QoS: 1, Retain: true, Topic: topic, Payload: []byte("acl-regression")})
+	if resp != nil {
+		return resp.ReasonCode
+	}
+	if err != nil {
+		t.Fatalf("retained PUBLISH %q: no PUBACK received at all (transport-level failure, not an ACL result): %v", topic, err)
+	}
+	t.Fatalf("retained PUBLISH %q: nil response and nil error, want one or the other", topic)
+	return 0
+}
+
 // rawSubscribeReasonCode subscribes cli to topic and returns the SUBACK
 // reason code (0-2 == accepted at that QoS; >= 0x80 == rejected).
 func rawSubscribeReasonCode(t *testing.T, cli *paho.Client, topic string) byte {
@@ -112,6 +128,35 @@ func rawSubscribeReasonCode(t *testing.T, cli *paho.Client, topic string) byte {
 	}
 	t.Fatalf("SUBSCRIBE %q: no reason code in response", topic)
 	return 0
+}
+
+// rawSubscribeReceives subscribes to topic and reports whether one publish
+// arrives within timeout. Mosquitto may accept a broad subscription filter
+// and suppress individual deliveries that ACL disallows, so an accepted
+// SUBACK alone is not evidence that the caller can read the topic.
+func rawSubscribeReceives(t *testing.T, cli *paho.Client, topic string, timeout time.Duration) bool {
+	t.Helper()
+	received := make(chan struct{}, 1)
+	remove := cli.AddOnPublishReceived(func(pr paho.PublishReceived) (bool, error) {
+		if pr.Packet != nil && pr.Packet.Topic == topic {
+			select {
+			case received <- struct{}{}:
+			default:
+			}
+		}
+		return true, nil
+	})
+	t.Cleanup(remove)
+
+	if rc := rawSubscribeReasonCode(t, cli, topic); rc >= 0x80 {
+		return false
+	}
+	select {
+	case <-received:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // TestCoordinatorSurvivesBrokerRejectionAndReportsDistinctReadiness is
@@ -350,6 +395,70 @@ func TestCoordinatorCredentialCanPublishToAnyCmdTopicAndOnlyCoordinatorCan(t *te
 	otherCli := rawConnect(t, otherUsername, otherPassword)
 	if rc := rawPublishReasonCode(t, otherCli, "showmesh/nodes/"+someNode+"/cmd"); rc < 0x80 {
 		t.Errorf("non-coordinator PUBLISH to another node's cmd topic: reason code %d, want >= 0x80 (rejected)", rc)
+	}
+}
+
+// TestFixedRolesDoNotInheritAgentTopicAccess is the regression for
+// Mosquitto's global `pattern` behavior. A `pattern ... %u ...` grant applies
+// to coordinator, fpp, and healthcheck too; the effective ACL must instead
+// contain explicit user blocks for agents only. The paths deliberately use
+// the fixed usernames themselves, which would have passed under the former
+// global pattern rules and therefore prove the boundary directly.
+func TestFixedRolesDoNotInheritAgentTopicAccess(t *testing.T) {
+	requireBroker(t)
+	if mosquittoContainer == "" {
+		t.Skipf("%s is not set; this test needs the real shipped ACL from `make test-integration`", envMosquittoContainer)
+	}
+	if testMQTTCoordinatorUsername == "" {
+		t.Skipf("%s is not set", envTestMQTTCoordinatorUsername)
+	}
+
+	fppUsername, fppPassword := provisionBrokerCredential(t, "fpp")
+	healthcheckUsername, healthcheckPassword := provisionBrokerCredential(t, "healthcheck")
+	roles := []struct {
+		username string
+		password string
+	}{
+		{testMQTTCoordinatorUsername, testMQTTCoordinatorPassword},
+		{fppUsername, fppPassword},
+		{healthcheckUsername, healthcheckPassword},
+	}
+
+	for _, role := range roles {
+		role := role
+		t.Run(role.username, func(t *testing.T) {
+			cli := rawConnect(t, role.username, role.password)
+			lwtTopic := "showmesh/nodes/" + role.username + "/lwt"
+			if rc := rawPublishReasonCode(t, cli, lwtTopic); rc < 0x80 {
+				t.Errorf("%s PUBLISH to %q: reason code %d, want >= 0x80 (rejected): a fixed role must not inherit the agent lwt write grant", role.username, lwtTopic, rc)
+			}
+
+			// Mosquitto can return a successful SUBACK for a filter but omit
+			// deliveries it is not authorized to read. Publish a retained,
+			// unique command through the coordinator (the sole authorized
+			// writer) and prove this fixed-role subscriber never receives it.
+			cmdTopic := "showmesh/nodes/" + role.username + "/cmd"
+			publisher := rawConnect(t, testMQTTCoordinatorUsername, testMQTTCoordinatorPassword)
+			if rc := rawPublishRetainedReasonCode(t, publisher, cmdTopic); rc >= 0x80 {
+				t.Fatalf("coordinator PUBLISH to %q: reason code %d, want < 0x80 to set up fixed-role read denial check", cmdTopic, rc)
+			}
+			if rawSubscribeReceives(t, cli, cmdTopic, 300*time.Millisecond) {
+				t.Errorf("%s received a command published to %q: a fixed role must not inherit the agent cmd read grant", role.username, cmdTopic)
+			}
+		})
+	}
+
+	// Control the observation mechanism itself: a provisioned agent must
+	// receive the same retained command on its own permitted cmd topic.
+	agentID := "acl-read-control-" + uniqueSuffix()
+	agentUsername, agentPassword := provisionBrokerCredential(t, agentID)
+	publisher := rawConnect(t, testMQTTCoordinatorUsername, testMQTTCoordinatorPassword)
+	controlTopic := "showmesh/nodes/" + agentID + "/cmd"
+	if rc := rawPublishRetainedReasonCode(t, publisher, controlTopic); rc >= 0x80 {
+		t.Fatalf("coordinator retained PUBLISH to %q: reason code %d, want < 0x80", controlTopic, rc)
+	}
+	if !rawSubscribeReceives(t, rawConnect(t, agentUsername, agentPassword), controlTopic, 2*time.Second) {
+		t.Fatalf("provisioned agent did not receive retained command on %q; the fixed-role no-delivery checks above are not meaningful", controlTopic)
 	}
 }
 

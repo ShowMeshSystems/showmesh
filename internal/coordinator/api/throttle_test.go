@@ -30,7 +30,7 @@ func TestWithIdentityThrottlesCredentialInURLPerSource(t *testing.T) {
 	limiter, rec := newTestLoginLimiter(clock, 4, time.Second, 50*time.Millisecond, time.Second)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mw := withIdentity(svc, limiter, testLogger(), fixedClock(testNow))(inner)
+	mw := withIdentity(svc, limiter, testLogger(), fixedClock(testNow), false)(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?tok="+identity.TokenPrefix+"leaked", nil)
 	req.RemoteAddr = "198.51.100.10:1234"
@@ -65,7 +65,7 @@ func TestWithIdentityThrottlesCredentialInURLPerSource(t *testing.T) {
 func TestWithIdentityNilLimiterDoesNotPanic(t *testing.T) {
 	svc := newTestIdentityService(t, fixedClock(testNow))
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mw := withIdentity(svc, nil, testLogger(), fixedClock(testNow))(inner)
+	mw := withIdentity(svc, nil, testLogger(), fixedClock(testNow), false)(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?tok="+identity.TokenPrefix+"leaked", nil)
 	rr := httptest.NewRecorder()

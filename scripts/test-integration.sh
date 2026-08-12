@@ -61,14 +61,14 @@ export SHOWMESH_TEST_MQTT_COORDINATOR_PASSWORD="$(random_password)"
 # synthetic hello messages for distinct, never-before-seen node IDs from
 # ONE connection, to stress the coordinator's render path without spinning
 # up hundreds of real agent subprocesses. Under allow_anonymous=false plus
-# acl.conf's per-agent %u pattern rules, that is structurally impossible
+# per-agent explicit ACL blocks, that is structurally impossible
 # for any single real per-node credential — deliberately: "one client
 # publishing hello for arbitrary node IDs" is exactly the deferred item
 # ADR-024 decision 10's ACL exists to close (see that decision's context
 # section). So this one dedicated, CLEARLY test-only credential exists
-# (see the acl.conf-plus-one-stanza construction below) rather than
+# (see the generated-ACL-plus-one-stanza construction below) rather than
 # weakening any of the four real principal classes to accommodate it; a
-# production deployment's acl.conf never contains it.
+# production deployment's ACL base never contains it.
 export SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME="test-burst-publisher"
 export SHOWMESH_TEST_MQTT_BURST_PUBLISHER_PASSWORD="$(random_password)"
 
@@ -89,7 +89,7 @@ echo "test-integration: starting $MOSQUITTO_IMAGE as $CONTAINER_NAME on port $HO
 # image already ships writable /mosquitto/data and /mosquitto/log
 # directories, so no adaptation is needed for it either.
 #
-# acl.conf is NOT bind-mounted from the repo directly — see the
+# acl.generated.conf is NOT bind-mounted from the repo directly — see the
 # SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME comment above for why one
 # extra, clearly-labeled test-only stanza is appended to a COPY of it
 # below, the same "seed via docker cp before start" technique passwd
@@ -138,7 +138,7 @@ cat >> "$TMP_SEED_ACL" <<EOF
 user $SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME
 topic write showmesh/nodes/+/hello
 EOF
-docker cp "$TMP_SEED_ACL" "$CONTAINER_NAME:/mosquitto/config/acl.conf"
+docker cp "$TMP_SEED_ACL" "$CONTAINER_NAME:/mosquitto/config/acl.generated.conf"
 rm -f "$TMP_SEED_ACL"
 
 docker start "$CONTAINER_NAME" >/dev/null

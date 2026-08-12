@@ -1002,9 +1002,9 @@ var provisionMu sync.Mutex
 
 // provisionAgentCredential is provisionBrokerCredential for the common
 // case: a credential whose username equals the agent's own node id,
-// matching mosquitto/acl.conf's %u pattern rules (see that file's header
-// comment in the deploy/ bundle) — which is what makes an agent's own
-// credential authorize it for its own node's topics and nothing else.
+// matching an explicit generated ACL block for that node — which is what
+// makes an agent's own credential authorize it for its own node's topics
+// and nothing else.
 func provisionAgentCredential(t *testing.T, nodeID string) (username, password string) {
 	t.Helper()
 	return provisionBrokerCredential(t, nodeID)
@@ -1050,6 +1050,31 @@ func provisionBrokerCredential(t *testing.T, username string) (gotUsername, pass
 		"mosquitto_passwd", "-b", "/mosquitto/config/passwd", username, password)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("docker exec %s mosquitto_passwd -b ... %s: %v\n%s", mosquittoContainer, username, err, out)
+	}
+
+	// Fixed roles receive their complete ACL only from the committed base.
+	// Every other credential receives a narrow, explicit agent block. Global
+	// Mosquitto `pattern` rules would also apply these grants to fixed roles.
+	switch username {
+	case "coordinator", "fpp", "healthcheck":
+		// No agent ACL block for a fixed role.
+	default:
+		acl := fmt.Sprintf(`
+
+# Provisioned ShowMesh agent: %s
+user %s
+topic write showmesh/nodes/%s/hello
+topic write showmesh/nodes/%s/lwt
+topic write showmesh/nodes/%s/observed/#
+topic write showmesh/nodes/%s/result/+
+topic read  showmesh/nodes/%s/cmd
+`, username, username, username, username, username, username, username)
+		appendACL := exec.Command("docker", "exec", "-i", mosquittoContainer,
+			"sh", "-ec", "cat >> /mosquitto/config/acl.generated.conf")
+		appendACL.Stdin = strings.NewReader(acl)
+		if out, err := appendACL.CombinedOutput(); err != nil {
+			t.Fatalf("docker exec %s append explicit agent ACL for %q: %v\n%s", mosquittoContainer, username, err, out)
+		}
 	}
 
 	reload := exec.Command("docker", "kill", "--signal=HUP", mosquittoContainer)

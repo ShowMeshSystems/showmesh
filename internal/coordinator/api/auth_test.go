@@ -105,20 +105,6 @@ func loginAndGetCookie(t *testing.T, h http.Handler, name, password string) stri
 	return ""
 }
 
-// fastLoginOptions holds every ADR-024 login-cost knob at values a test
-// can afford to wait out for real (this package's testing standard
-// otherwise forbids a real sleep in an assertion — these are short enough
-// that they are not one): a tiny per-source delay/cap so
-// [TestLoginConcurrencyLimitRejectsWithRetryAfter] and any per-source
-// delay test complete in milliseconds, not [defaultLoginPerSourceDelay]'s
-// production 250ms-per-failure.
-func fastLoginOptions(o *Options) {
-	o.LoginConcurrency = 1
-	o.LoginQueueWait = 20 * time.Millisecond
-	o.LoginPerSourceDelay = time.Millisecond
-	o.LoginMaxDelay = 5 * time.Millisecond
-}
-
 // TestWriteGuardCSRFKeyedOnAuthenticatedFormNotHeaderPresence closes
 // review finding 12's "the CSRF keying property is untested in isolation":
 // every existing CSRF test in this package (session_test.go,

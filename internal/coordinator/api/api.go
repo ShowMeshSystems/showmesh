@@ -393,7 +393,7 @@ func New(deps Dependencies, opts Options) *API {
 		withAPIVersionHeader,
 		withCORS(opts.AllowedOrigins),
 		withVersionNegotiation(opts.Logger, opts.Clock),
-		withIdentity(deps.Identity, h.loginLimiter, opts.Logger, opts.Clock),
+		withIdentity(deps.Identity, h.loginLimiter, opts.Logger, opts.Clock, opts.TrustClientAddr),
 	)
 
 	return &API{Handler: handler, Hub: hub}

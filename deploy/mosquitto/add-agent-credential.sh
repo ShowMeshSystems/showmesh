@@ -12,10 +12,9 @@
 # deploy/README.md).
 #
 # WHY THE USERNAME MUST EQUAL THE NODE ID, ENFORCED HERE:
-# acl.conf's per-agent rules are `pattern` rules keyed on %u (the
-# broker-authenticated username) standing in for the node's own id in
-# showmesh/nodes/<node-id>/... topic paths. That substitution is safe only
-# because a broker username is constrained to the same character class
+# The generated ACL gives every agent an explicit `user <node-id>` block.
+# That block is safe only because a broker username is constrained to the
+# same character class
 # pkg/mqttproto validates a ShowMesh node id against before an agent will
 # even start — see ValidateNodeID / nodeIDPattern in
 # pkg/mqttproto/topic.go:
@@ -25,9 +24,7 @@
 # AGENT loads its own SHOWMESH_NODE_ID; it does NOT run against a broker
 # username typed by hand into mosquitto/passwd. This script is what closes
 # that gap for the broker side: it enforces the identical pattern below
-# BEFORE ever calling mosquitto_passwd, so a broker username that would
-# corrupt or widen acl.conf's pattern rules is rejected here instead of
-# silently accepted.
+# before it writes a credential or generated ACL entry.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,6 +50,13 @@ if ! [[ "$NODE_ID" =~ ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$ ]]; then
   exit 1
 fi
 
+case "$NODE_ID" in
+  coordinator|fpp|healthcheck)
+    echo "add-agent-credential: '$NODE_ID' is reserved for a fixed broker role and cannot be used as an agent node id." >&2
+    exit 1
+    ;;
+esac
+
 if [ ! -f "$PASSWD_FILE" ]; then
   echo "add-agent-credential: $PASSWD_FILE does not exist yet; run ./mosquitto/generate-credentials.sh first (it creates the file and the fixed broker-role credentials this bundle itself needs)." >&2
   exit 1
@@ -68,6 +72,12 @@ echo "add-agent-credential: adding/updating credential for node id '$NODE_ID' in
 docker run --rm -v "$SCRIPT_DIR:/out" "$MOSQUITTO_IMAGE" \
   mosquitto_passwd -b /out/passwd "$NODE_ID" "$PASSWORD" >/dev/null
 
+# Rebuild first, then reload. The renderer writes the effective ACL via an
+# atomic rename and only HUPs a Compose broker that is known to load it.
+# If a legacy container is still mounted on the old ACL path, it prints the
+# one-time recreate command instead of claiming the new credential is live.
+"$SCRIPT_DIR/generate-credentials.sh" --render-acl
+
 cat >&2 <<EOF
 
 add-agent-credential: done. Set on the '$NODE_ID' node itself (not in this
@@ -76,14 +86,12 @@ deploy/ bundle):
   SHOWMESH_MQTT_USERNAME=$NODE_ID
   SHOWMESH_MQTT_PASSWORD=$PASSWORD
 
-add-agent-credential: this file was updated on disk, but Mosquitto only
-re-reads passwd/acl.conf on SIGHUP, and does NOT re-authenticate clients
-already connected (ADR-024 decision 10) — a credential you are rotating
-for an agent that is currently connected stays valid under its old
-password until that agent's connection drops and it reconnects, or until
-the broker restarts. If the bundled broker is running via this Compose
-project, reload it now with:
+add-agent-credential: the generated ACL was rebuilt. When the current
+Compose configuration is running, the script reloaded Mosquitto for you.
+Mosquitto does NOT re-authenticate clients already connected: a credential
+you rotate remains valid until that agent reconnects, or until the broker
+restarts. A one-time upgrade from the old configuration requires:
 
-  docker compose kill -s HUP mosquitto
+  docker compose up -d --force-recreate mosquitto
 
 EOF

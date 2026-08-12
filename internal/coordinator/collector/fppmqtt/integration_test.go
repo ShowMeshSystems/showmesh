@@ -11,19 +11,13 @@
 // call.
 //
 // It never fails for want of the dependency: it skips cleanly, with a
-// clear message, unless SHOWMESH_TEST_MQTT_BROKER is set — see
-// requireTestBroker. `make test-integration-fppmqtt`
-// (scripts/test-integration-fppmqtt.sh) starts a throwaway Mosquitto and
-// sets that variable for you; that is the normal way to run this suite. To
-// run it by hand against your own broker instead:
-//
-//	docker run -d --rm --name showmesh-fppmqtt-test-mosquitto \
-//	  -p 11884:1883 \
-//	  -v "$PWD/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
-//	  eclipse-mosquitto:2.0.22
-//	SHOWMESH_TEST_MQTT_BROKER=tcp://localhost:11884 \
-//	  go test -tags=integration -race -v ./internal/coordinator/collector/fppmqtt/...
-//	docker rm -f showmesh-fppmqtt-test-mosquitto
+// clear message, unless SHOWMESH_TEST_MQTT_BROKER and the separate collector
+// and publisher credentials are set — see requireTestBroker.
+// `make test-integration-fppmqtt`
+// (scripts/test-integration-fppmqtt.sh) provisions an authenticated
+// throwaway Mosquitto and exports those variables; that is the normal way
+// to run this suite. A manual run must likewise use only a disposable broker
+// and supply distinct collector-read/publisher-write credentials.
 //
 // Per the Step 5 spec section 0's absolute rule, this suite must NEVER be
 // pointed at the reference installation's broker, or any other live broker, — only a
@@ -47,19 +41,46 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-const envTestMQTTBroker = "SHOWMESH_TEST_MQTT_BROKER"
+const (
+	envTestMQTTBroker        = "SHOWMESH_TEST_MQTT_BROKER"
+	envTestCollectorUsername = "SHOWMESH_TEST_FPPMQTT_COLLECTOR_USERNAME"
+	envTestCollectorPassword = "SHOWMESH_TEST_FPPMQTT_COLLECTOR_PASSWORD"
+	envTestPublisherUsername = "SHOWMESH_TEST_FPPMQTT_PUBLISHER_USERNAME"
+	envTestPublisherPassword = "SHOWMESH_TEST_FPPMQTT_PUBLISHER_PASSWORD"
+)
+
+type testBroker struct {
+	url string
+
+	collectorUsername string
+	collectorPassword string
+	publisherUsername string
+	publisherPassword string
+}
 
 // requireTestBroker skips t (with an explicit message, per the Step 5
 // contract section 9 and this repo's established "say so explicitly"
 // convention — see scripts/test-integration.sh) unless
-// SHOWMESH_TEST_MQTT_BROKER names a throwaway local broker to run against.
-func requireTestBroker(t *testing.T) string {
+// SHOWMESH_TEST_MQTT_BROKER names a throwaway local broker to run against;
+// the distinct credentials prove the collector's read-only role against a
+// publisher that can write only FPP telemetry.
+func requireTestBroker(t *testing.T) testBroker {
 	t.Helper()
 	broker := os.Getenv(envTestMQTTBroker)
 	if broker == "" {
 		t.Skipf("%s not set; skipping this package's real-broker integration suite (see this file's doc comment for how to run it)", envTestMQTTBroker)
 	}
-	return broker
+	credentials := testBroker{
+		url:               broker,
+		collectorUsername: os.Getenv(envTestCollectorUsername),
+		collectorPassword: os.Getenv(envTestCollectorPassword),
+		publisherUsername: os.Getenv(envTestPublisherUsername),
+		publisherPassword: os.Getenv(envTestPublisherPassword),
+	}
+	if credentials.collectorUsername == "" || credentials.collectorPassword == "" || credentials.publisherUsername == "" || credentials.publisherPassword == "" {
+		t.Skipf("authenticated FPP MQTT test credentials are incomplete; run scripts/test-integration-fppmqtt.sh (or set %s, %s, %s, and %s)", envTestCollectorUsername, envTestCollectorPassword, envTestPublisherUsername, envTestPublisherPassword)
+	}
+	return credentials
 }
 
 // testPublisher is a throwaway MQTT client this suite uses to play the
@@ -81,20 +102,22 @@ type testPublisher struct {
 // follow) — an early version of this helper used one short-lived context
 // for both and found the connection torn down immediately after
 // construction, before a single Publish could succeed.
-func newTestPublisher(t *testing.T, broker string) *testPublisher {
+func newTestPublisher(t *testing.T, broker testBroker) *testPublisher {
 	t.Helper()
-	serverURL, err := url.Parse(broker)
+	serverURL, err := url.Parse(broker.url)
 	if err != nil {
-		t.Fatalf("parsing broker url %q: %v", broker, err)
+		t.Fatalf("parsing broker url %q: %v", broker.url, err)
 	}
 
 	connCtx, cancel := context.WithCancel(context.Background())
 
 	connected := make(chan struct{}, 1)
 	cfg := autopaho.ClientConfig{
-		ServerUrls:     []*url.URL{serverURL},
-		KeepAlive:      30,
-		ConnectTimeout: 10 * time.Second,
+		ServerUrls:      []*url.URL{serverURL},
+		KeepAlive:       30,
+		ConnectTimeout:  10 * time.Second,
+		ConnectUsername: broker.publisherUsername,
+		ConnectPassword: []byte(broker.publisherPassword),
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) {
 			select {
 			case connected <- struct{}{}:
@@ -164,7 +187,9 @@ func TestIntegrationRunDeliversRetainedAndLiveMessages(t *testing.T) {
 
 	now := time.Now()
 	c, err := New(Options{
-		BrokerURL: broker,
+		BrokerURL: broker.url,
+		Username:  broker.collectorUsername,
+		Password:  broker.collectorPassword,
 		Hosts:     map[string]string{"it": "FPP-IT"},
 		Now:       func() time.Time { return now },
 	})
@@ -262,7 +287,9 @@ func TestIntegrationSubscriptionSurvivesUnrelatedHostPublish(t *testing.T) {
 	defer pub.disconnect(t)
 
 	c, err := New(Options{
-		BrokerURL: broker,
+		BrokerURL: broker.url,
+		Username:  broker.collectorUsername,
+		Password:  broker.collectorPassword,
 		Hosts:     map[string]string{"it2": "FPP-IT2"},
 	})
 	if err != nil {
