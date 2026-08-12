@@ -22,12 +22,15 @@ export type {
   CollectorStatus,
   ConnectionState,
   ControlPlane,
+  DiscoveryProposal,
+  DiscoveryRun,
   Evidence,
   EvidenceState,
   EventSeq,
   FPPInstance,
   Model,
   Node,
+  NodeDeclaration,
   NodeEvidence,
   PrincipalSummary,
   ResourceRef,
@@ -45,6 +48,7 @@ import type {
   Evidence as EvidenceType,
   Event as EventType,
   FPPInstance as FPPInstanceType,
+  NodeDeclaration as NodeDeclarationType,
   ResourceRef as ResourceRefType,
 } from '../api'
 
@@ -57,3 +61,5 @@ export type FPPHealth = FPPInstanceType['health']
 export type EventSeverity = EventType['severity']
 export type ResourceKind = ResourceRefType['kind']
 export type EvidenceQuality = EvidenceType['quality']
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
+export type DiscoveryState = NodeDeclarationType['discoveryState']

@@ -60,6 +60,18 @@
           "quality": "direct",
           "validForSeconds": null
         }
+      },
+      "declaration": {
+        "declared": false,
+        "label": null,
+        "notes": null,
+        "declaredAt": null,
+        "declaredByPrincipalId": null,
+        "declaredByPrincipalName": null,
+        "discoveryState": "not_applicable",
+        "discoveryReason": null,
+        "lastDiscoveryRunId": null,
+        "lastDiscoveredAt": null
       }
     },
     {
@@ -113,6 +125,18 @@
           "quality": "direct",
           "validForSeconds": null
         }
+      },
+      "declaration": {
+        "declared": false,
+        "label": null,
+        "notes": null,
+        "declaredAt": null,
+        "declaredByPrincipalId": null,
+        "declaredByPrincipalName": null,
+        "discoveryState": "not_applicable",
+        "discoveryReason": null,
+        "lastDiscoveryRunId": null,
+        "lastDiscoveredAt": null
       }
     }
   ]

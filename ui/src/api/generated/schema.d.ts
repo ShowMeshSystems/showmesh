@@ -76,7 +76,35 @@ export interface paths {
         /** One node */
         get: operations["getNode"];
         put?: never;
-        post?: never;
+        /**
+         * Promote a node to declared, or update its label/notes (RES-008 D2, BUILD-PLAN Step 7 seam B)
+         * @description A coordinator-local state change behind `config:write`. Declaring what hardware exists is configuration — ADR-024 decision 4 defines no narrower scope. Idempotent: promoting an already-declared node updates its label/notes without disturbing who first declared it or when. ADR-024 decision 11's same-transaction rule applies in full: the declaration write and its audit entry land in one transaction, or neither does — with the audit store failing, this operation is refused and the declaration is absent afterwards.
+         */
+        post: operations["declareNode"];
+        /**
+         * Remove a node's declaration (RES-008 D6, BUILD-PLAN Step 7 seam B)
+         * @description A coordinator-local state change behind `config:write`, audited the same atomic way as `POST` above. Requires an explicit `{"confirm":true}` body, so a mis-issued call cannot quietly remove inventory — a UI client's own confirmation dialog is in addition to this, never instead of it. This is the ONLY path that removes a declaration: a discovery run never deletes one (RES-008 D6) — see `POST /discovery/runs`.
+         */
+        delete: operations["deleteNodeDeclaration"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/discovery/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run discovery and propose undeclared nodes (RES-008 D2/D6, BUILD-PLAN Step 7 seam B)
+         * @description Behind `config:write`. Reads what this coordinator already observes — agent hellos already in inventory, and configured FPP instances — and PROPOSES what is not currently declared; it never creates, modifies, or deletes a declaration's own identity (ADR-003: discovery proposes, an operator action promotes). Performs NO active probing of its own: no mDNS, no subnet sweep, no MultiSync discover ping, so it cannot find equipment that has never talked to ShowMesh. A run that fails partway is reported as a `500` and is recorded with `complete: false` and a reason — never a missing row and never a silent partial success.
+         */
+        post: operations["startDiscoveryRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -342,6 +370,66 @@ export interface components {
             capabilities: components["schemas"]["Capability"][];
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
+            declaration: components["schemas"]["NodeDeclaration"];
+        };
+        /**
+         * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run — never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
+         *     `discoveryState` is one of four values: `present` (the most recent discovery run was complete and saw this node), `not_seen` (the most recent discovery run was complete and did NOT see this node — `discoveryReason`/`lastDiscoveryRunId`/`lastDiscoveredAt` describe THAT run, not this declaration's own possibly-older bookkeeping), `unknown` (either the most recent run did not complete — an incomplete run is never evidence of absence, so this is never `not_seen` — or no discovery run history is available at all, which covers both "never run" and "history pruned" identically since this API cannot and must not guess which), or `not_applicable` (`declared` is false).
+         *     `lastDiscoveryRunId` may name a run id that no longer resolves to any `DiscoveryRun` — `discovery_runs` is pruned by retention and a declaration's own last-seen pointer is not, so a dangling id is expected, not a bug, and it renders as `unknown` with a reason, never as blank.
+         */
+        NodeDeclaration: {
+            declared: boolean;
+            label: string | null;
+            notes: string | null;
+            /** Format: date-time */
+            declaredAt: string | null;
+            declaredByPrincipalId: string | null;
+            declaredByPrincipalName: string | null;
+            /** @enum {string} */
+            discoveryState: "present" | "not_seen" | "unknown" | "not_applicable";
+            discoveryReason: string | null;
+            lastDiscoveryRunId: string | null;
+            /** Format: date-time */
+            lastDiscoveredAt: string | null;
+        };
+        /** @description One discovery run's wire representation (RES-008 D6, BUILD-PLAN Step 7 seam B). `finishedAt` and `reason` are null while a run is still in progress; `reason` is also null for a run that completed successfully (`complete: true`) — it is populated only when `complete` is false and the run has finished (failed partway), never a missing row and never a silent partial success. */
+        DiscoveryRun: {
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            complete: boolean;
+            reason: string | null;
+            foundCount: number;
+            initiatedByPrincipalId: string;
+            initiatedByPrincipalName: string;
+        };
+        /** @description One entity a discovery run observed that is not currently declared (computed at read time by diffing what is observed against what is declared — no proposals table exists). `source` is `node` (an agent hello already in inventory) or `fpp` (a configured FPP instance), the only two sources discovery reads: it performs no active probing of its own. A run never creates a declaration from a proposal by itself — POST /nodes/{nodeId}/declaration is the separate operator action that promotes one. */
+        DiscoveryProposal: {
+            nodeId: string;
+            /** @enum {string} */
+            source: "node" | "fpp";
+        };
+        DiscoveryRunResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            run: components["schemas"]["DiscoveryRun"];
+            proposals: components["schemas"]["DiscoveryProposal"][];
+        };
+        /** @description Body of POST /nodes/{nodeId}/declaration. Both fields are optional and default to empty — a bare `{}` promotes the named node to declared with no label or notes. Idempotent: re-declaring an already-declared node updates its label/notes without disturbing who first declared it or when. */
+        DeclareNodeRequest: {
+            label?: string;
+            notes?: string;
+        };
+        NodeDeclarationResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            declaration: components["schemas"]["NodeDeclaration"];
+        };
+        /** @description Required body of DELETE /nodes/{nodeId}/declaration. `confirm` must be `true`, so a mis-issued call cannot quietly remove inventory — in addition to, never instead of, any confirmation dialog a UI client shows. */
+        DeleteNodeDeclarationRequest: {
+            confirm: boolean;
         };
         /** @description One configured FPP instance's current representation. `endpoint` never includes userinfo (credentials are stripped before this is ever rendered). */
         FPPInstance: {
@@ -825,6 +913,117 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    declareNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeclareNodeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDeclarationResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteNodeDeclaration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteNodeDeclarationRequest"];
+            };
+        };
+        responses: {
+            /** @description The declaration was deleted. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startDiscoveryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveryRunResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };

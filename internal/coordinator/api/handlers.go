@@ -89,9 +89,17 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list nodes", err)
 		return
 	}
+	// BUILD-PLAN Step 7 seam B: fetched once for this whole response, not
+	// once per node — see fetchDeclarationContext's own doc comment
+	// (discovery.go).
+	declByNodeID, latestRun, err := fetchDeclarationContext(r.Context(), h.deps.Discovery)
+	if err != nil {
+		h.writeInternalError(w, now, "fetch node declarations", err)
+		return
+	}
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -117,7 +125,12 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now)})
+			declByNodeID, latestRun, err := fetchDeclarationContext(r.Context(), h.deps.Discovery)
+			if err != nil {
+				h.writeInternalError(w, now, "fetch node declarations", err)
+				return
+			}
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun)})
 			return
 		}
 	}
@@ -391,9 +404,14 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list nodes", err)
 		return
 	}
+	declByNodeID, latestRun, err := fetchDeclarationContext(ctx, h.deps.Discovery)
+	if err != nil {
+		h.writeInternalError(w, now, "fetch node declarations", err)
+		return
+	}
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)

@@ -545,8 +545,16 @@ const validEvidenceJSON = `{"signal":"node.hello","value":null,"unit":null,"stat
 // [TestStrictSchemaOverlayLeavesPublishedDocumentPermissive], which
 // validate this same instance against the strict overlay and the
 // published document respectively and must see opposite outcomes.
+// validDeclarationJSON is a minimal, but fully schema-valid,
+// NodeDeclaration envelope literal for an undeclared node ("declared":
+// false, every other field null, "discoveryState": "not_applicable" —
+// see mapNodeDeclaration's own doc comment in discovery.go for why this is
+// exactly what an undeclared node renders), used the same way
+// validEvidenceJSON is: hand-built, not server output.
+const validDeclarationJSON = `{"declared":false,"label":null,"notes":null,"declaredAt":null,"declaredByPrincipalId":null,"declaredByPrincipalName":null,"discoveryState":"not_applicable","discoveryReason":null,"lastDiscoveryRunId":null,"lastDiscoveredAt":null}`
+
 var nodeResponseJSONWithExtraField = `{"serverTime":"2026-01-01T00:00:00Z","node":{"nodeId":"x","label":null,"platform":null,"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},"evidence":{"hello":` +
-	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `}},"unexpectedField":"surprise"}`
+	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `},"unexpectedField":"surprise"}`
 
 // TestOpenAPIStreamEventSchemasMatchRealFrames validates one real
 // stream.start frame's JSON payload — obtained the same way

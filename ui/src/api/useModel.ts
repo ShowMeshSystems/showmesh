@@ -22,6 +22,10 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type { Model } from './domain'
+import type { components } from './generated/schema'
+
+type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
+type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -53,4 +57,20 @@ export function claimBootstrap(
   deviceLabel: string,
 ): Promise<void> {
   return store.claimBootstrap(code, name, password, deviceLabel)
+}
+
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
+// declaration. Same thin-pass-through pattern as login/logout/
+// claimBootstrap above.
+
+export function runDiscovery(): Promise<SchemaDiscoveryRunResponse> {
+  return store.runDiscovery()
+}
+
+export function declareNode(nodeId: string, label: string, notes: string): Promise<SchemaNodeDeclarationResponse> {
+  return store.declareNode(nodeId, label, notes)
+}
+
+export function deleteNodeDeclaration(nodeId: string): Promise<void> {
+  return store.deleteNodeDeclaration(nodeId)
 }

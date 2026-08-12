@@ -9,6 +9,8 @@ export type {
   CollectorStatus,
   ConnectionState,
   ControlPlane,
+  DiscoveryProposal,
+  DiscoveryRun,
   Evidence,
   EvidenceState,
   Event,
@@ -16,6 +18,7 @@ export type {
   FPPInstance,
   Model,
   Node,
+  NodeDeclaration,
   NodeEvidence,
   PrincipalSummary,
   ResourceRef,
@@ -30,6 +33,9 @@ export {
   login,
   logout,
   claimBootstrap,
+  runDiscovery,
+  declareNode,
+  deleteNodeDeclaration,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

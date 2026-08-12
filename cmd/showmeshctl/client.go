@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -138,6 +139,98 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 		return nil, err
 	}
 	return body, nil
+}
+
+// postJSON issues an authenticated POST against apiPath with body encoded
+// as the request body (nil for no body at all — POST /api/v1/discovery/runs
+// takes none), and decodes a successful JSON response into out. Reuses
+// getRaw's exact success/problem-classification split via doWithBody, so a
+// write endpoint's error handling never drifts from a read endpoint's.
+//
+// BUILD-PLAN Step 7 seam B (node discovery/declaration) is this method's
+// first caller. showmeshctl is bearer-token-only (see doc.go) — ADR-024
+// decision 6's CSRF check is keyed on the credential that authenticated
+// the request, and a bearer token is exempt by construction, so this
+// method never needs to set Sec-Fetch-Site the way a browser's
+// cookie-authenticated write must.
+func (c *client) postJSON(ctx context.Context, apiPath string, body any, out any) error {
+	respBody, err := c.doWithBody(ctx, http.MethodPost, apiPath, body)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
+	}
+	return nil
+}
+
+// deleteJSON is [client.postJSON]'s DELETE form — DELETE
+// /api/v1/nodes/{nodeId}/declaration's required {"confirm":true} body.
+// Returns nil, nil for a 204 No Content success (this endpoint's only
+// success response) rather than attempting to decode an empty body.
+func (c *client) deleteJSON(ctx context.Context, apiPath string, body any, out any) error {
+	respBody, err := c.doWithBody(ctx, http.MethodDelete, apiPath, body)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
+	}
+	return nil
+}
+
+// doWithBody is [client.getRaw]'s POST/DELETE sibling: identical request
+// construction, header application, bounded read, and success/problem
+// split, plus a JSON-encoded request body when body is non-nil. Returns an
+// empty (not nil) slice, no error, for a success response with an empty
+// body (e.g. this contract's 204s), matching getRaw's own posture of
+// returning exactly what the server sent on success.
+func (c *client) doWithBody(ctx context.Context, method, apiPath string, body any) ([]byte, error) {
+	var reqBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, newCLIError(exitUsage, "encoding request body: %v", err)
+		}
+		reqBody = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(apiPath, nil), reqBody)
+	if err != nil {
+		return nil, newCLIError(exitUsage, "building request: %v", err)
+	}
+	c.applyHeaders(req)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, classifyRequestError(c.baseURL.String(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, newCLIError(exitUnreachable, "reading response body: %v", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return nil, newCLIError(exitAPIError, "%v (from %s)", errResponseTooLarge, c.endpoint(apiPath, nil))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, decodeProblemError(resp, respBody)
+	}
+	if err := c.checkAPIVersionHeader(resp); err != nil {
+		return nil, err
+	}
+	return respBody, nil
 }
 
 // applyHeaders sets the headers common to every /api/v1 request: the

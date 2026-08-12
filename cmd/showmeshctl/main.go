@@ -48,6 +48,12 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSession(rest, stdout, stderr, clock)
 	case "audit":
 		return cmdAudit(rest, stdout, stderr, clock)
+	case "discover":
+		return cmdDiscover(rest, stdout, stderr, clock)
+	case "declare":
+		return cmdDeclare(rest, stdout, stderr, clock)
+	case "undeclare":
+		return cmdUndeclare(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -63,10 +69,11 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 // help` alone is enough to use this tool without reading source.
 func printTopLevelUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `showmeshctl is the non-UI client for a ShowMesh coordinator's public
-control API (ADR-014). It is read-only: there is no write or command
-subcommand, matching the API it talks to. Since ADR-024, reads and the
-audit log are gated by an authenticated principal's scopes rather than by
-one shared secret — see --token below and "showmeshctl session --help".
+control API (ADR-014). Since ADR-024, reads and the audit log are gated by
+an authenticated principal's scopes rather than by one shared secret — see
+--token below and "showmeshctl session --help". BUILD-PLAN Step 7 seam B
+added this program's first write subcommands (discover/declare/undeclare,
+gated by config:write) — every other subcommand remains read-only.
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -80,6 +87,9 @@ Commands:
   watch             fetch the snapshot, then stream live changes
   session           show the current principal, role, and effective scopes
   audit             show the audit log (requires the audit:read scope)
+  discover          run discovery and print proposals (requires config:write)
+  declare <id>      promote a node to declared, or update its label/notes (requires config:write)
+  undeclare <id>    remove a node's declaration, requires --confirm (requires config:write)
   version           show this CLI's and the coordinator's version and API negotiation
   help              show this help
 

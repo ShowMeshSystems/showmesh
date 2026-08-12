@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -40,6 +42,18 @@ type Dependencies struct {
 	// GET /api/v1/audit do anything other than always answer 401/403 —
 	// see auth.go's noIdentityService doc comment.
 	Identity identity.Service
+
+	// Discovery is BUILD-PLAN Step 7 seam B's node-declaration surface
+	// (RES-008 D2/D6) — see [DeclarationStore]'s doc comment. In practice
+	// the real argument to [New] is *store.Store itself, whose
+	// StartDiscoveryRun/FinishDiscoveryRun/ListDiscoveryRuns/
+	// ListNodeDeclarations/RecordNodeDiscoverySeen methods already satisfy
+	// this interface with no adapter, exactly like [Dependencies.Nodes].
+	// A nil field is replaced by [noDeclarationStore]: every read returns
+	// an empty, successful result and every write refuses with an
+	// internal error, matching this package's standing "an unwired
+	// dependency is not this API failing" posture.
+	Discovery DeclarationStore
 }
 
 // withDefaults returns d with every nil field replaced by a no-op
@@ -62,6 +76,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
+	}
+	if d.Discovery == nil {
+		d.Discovery = noDeclarationStore{}
 	}
 	return d
 }
@@ -97,6 +114,43 @@ type noCollectorStatusLister struct{}
 func (noCollectorStatusLister) CollectorStatuses(context.Context) ([]CollectorState, error) {
 	return nil, nil
 }
+
+// noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads
+// answer empty and successful (matching every other no-op lister in this
+// file); a write refuses with errDeclarationStoreNotConfigured rather than
+// fabricating a row that was never persisted — the same posture
+// [noIdentityService]'s write methods take for an unwired identity
+// dependency.
+type noDeclarationStore struct{}
+
+var errDeclarationStoreNotConfigured = errors.New("api: no DeclarationStore was wired into this API's Dependencies")
+
+func (noDeclarationStore) StartDiscoveryRun(context.Context, store.DiscoveryRunRecord) (store.DiscoveryRunRecord, error) {
+	return store.DiscoveryRunRecord{}, errDeclarationStoreNotConfigured
+}
+
+func (noDeclarationStore) FinishDiscoveryRun(context.Context, string, bool, string, int64) error {
+	return errDeclarationStoreNotConfigured
+}
+
+func (noDeclarationStore) ListDiscoveryRuns(context.Context, int) ([]store.DiscoveryRunRecord, error) {
+	return nil, nil
+}
+
+func (noDeclarationStore) ListNodeDeclarations(context.Context) ([]store.NodeDeclarationRecord, error) {
+	return nil, nil
+}
+
+func (noDeclarationStore) RecordNodeDiscoverySeen(context.Context, string, string, time.Time) error {
+	return errDeclarationStoreNotConfigured
+}
+
+// scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
+// package-level var, purely so [handlers.writeGuard]'s *identity.Scope
+// parameter (nil means "any authenticated principal, no specific scope" —
+// see that method's doc comment) can take its address: a Go constant is
+// not addressable, and identity.ScopeConfigWrite is declared const.
+var scopeConfigWrite = identity.ScopeConfigWrite
 
 // Options configures [New]. The zero value is usable: auth and CORS are
 // disabled (contract section 6.8's documented default posture), the clock
@@ -368,6 +422,18 @@ func New(deps Dependencies, opts Options) *API {
 	// resources [Options.CloseReads] toggles, and ADR-024 decision 4
 	// grants audit:read to admin only.
 	mux.HandleFunc("GET /api/v1/audit", h.requireScope(identity.ScopeAuditRead, h.handleAudit))
+
+	// BUILD-PLAN Step 7 seam B: node discovery and declaration (RES-008
+	// D2/D6). All three are behind config:write — declaring what hardware
+	// exists is configuration, and ADR-024 decision 4 defines no narrower
+	// scope, so this is a deliberate choice recorded here rather than a
+	// default; see discovery.go's own doc comments on each handler. All
+	// three go through writeGuard, so decision 6's CSRF check (with the
+	// bearer exemption) applies exactly as it does to every other write in
+	// this package.
+	mux.HandleFunc("POST /api/v1/discovery/runs", h.writeGuard(&scopeConfigWrite, h.handleStartDiscoveryRun))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handlePromoteNode))
+	mux.HandleFunc("DELETE /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handleDeleteNodeDeclaration))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

@@ -363,7 +363,15 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // snapshot's nodes list, or a node.changed stream event — contract section
 // 6.4's "each *.changed event carries the resource's full current
 // representation, identical in shape to its element in the snapshot".
-func mapNode(nv inventory.NodeView, now time.Time) v1.Node {
+//
+// decl and latestRun are BUILD-PLAN Step 7 seam B's declaration context
+// (RES-008 D2/D6): decl is nv's own node_declarations row, or nil for a
+// node nobody has ever declared; latestRun is the single most recent
+// [store.DiscoveryRunRecord] across the whole coordinator (or nil if none
+// exists), the same value for every node rendered in one pass — see
+// discovery.go's fetchDeclarationContext, which every caller of mapNode
+// fetches exactly once per render/response rather than once per node.
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord) v1.Node {
 	n := v1.Node{
 		NodeID:       nv.NodeID,
 		FirstSeenAt:  formatTime(nv.FirstSeenAt),
@@ -375,6 +383,7 @@ func mapNode(nv inventory.NodeView, now time.Time) v1.Node {
 			LastWill:  mapEvidence(lastWillObservation(nv.NodeID, nv.LWT, nv.UpdatedAt), now),
 			Heartbeat: mapEvidence(heartbeatObservation(nv.NodeID, nv.Health, nv.UpdatedAt), now),
 		},
+		Declaration: mapNodeDeclaration(decl, latestRun),
 	}
 
 	if nv.Hello != nil {

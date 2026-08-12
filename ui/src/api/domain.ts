@@ -58,6 +58,14 @@ export type SessionResponse = components['schemas']['SessionResponse']
 export type PrincipalSummary = components['schemas']['PrincipalSummary']
 export type SessionInfo = components['schemas']['SessionInfo']
 
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
+// declaration. NodeDeclaration is also reachable as Node['declaration'],
+// aliased here separately for call sites (DomainBadges.tsx,
+// NodesList.tsx) that only ever need the declaration block on its own.
+export type NodeDeclaration = components['schemas']['NodeDeclaration']
+export type DiscoveryRun = components['schemas']['DiscoveryRun']
+export type DiscoveryProposal = components['schemas']['DiscoveryProposal']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare
