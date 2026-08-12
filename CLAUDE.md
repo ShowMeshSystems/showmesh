@@ -113,16 +113,19 @@ Repo layout (now in place, do not reorganize without reason):
 - `pkg/capability/`, `pkg/command/`, `pkg/mqttproto/` — shared models matching ARCHITECTURE §6–8 and ADR-008 topic conventions.
 - `pkg/observation/` — the OBSERVABILITY §4.1 observation model: provenance, freshness, the six-state evidence vocabulary, and the health states. `ObservedAt` is a pointer and `nil` means the time is genuinely unknown. Never default it to the collection time; that is the ADR-011 defect this project has now caught three times in different disguises.
 
-Build order (walking skeleton first). `docs/build/BUILD-PLAN.md` is the authoritative, status-tracked version of this list:
+Build order (walking skeleton first). `docs/build/BUILD-PLAN.md` is the authoritative, status-tracked version of this list.
 
-1. Foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary. **Done 2026-08-10.**
-2. `pkg/multisync` listener parsing START/STOP/SYNC/OPEN + ping/discover, with unit tests against hand-built packets from the RES-002 byte layout. Bench-verify against the real FPP player (RES-002 open items).
-3. Agent: capability advertisement over MQTT (retained hello, LWT), health heartbeat; coordinator inventory + desired/observed state in SQLite.
-4. Read-only FPP observability: collector, observation model with provenance and freshness, event history, plus the versioned public read API and change stream that ADR-014 requires. **Done 2026-08-11.** The API was designed and shipped before any UI existed, which is what keeps ADR-014 real.
-5. Read-only Operator UI: TypeScript SPA in its own container, dashboard, node and capability views, desired vs. observed, disconnect/staleness handling, responsive down to a phone. **Done 2026-08-11.** Two defects survived 99 unit tests and three reviews and were found only by loading the page in a real browser: `fetch` called with the wrong receiver (fatal in a browser, invisible to Node), and evidence ages frozen at the last response's `serverTime` so a disconnected panel read "observed just now" indefinitely. The phone layout is implemented and unit-tested but **not visually verified**.
-6. Identity, authorization, and audit (ADR-024). Principals, roles as scope bundles, sessions, audit, MQTT authorization with `allow_anonymous false`. **Specified 2026-08-11, not started.** Adds no write endpoint; builds the mechanism that permits one.
-7. The first write endpoints, and Operator UI controls over them.
-8. Agent: GStreamer pipeline supervision for a test pattern → NDI sink into Resolume (RES-004/006 bench).
+**Step numbers are 0-indexed and match BUILD-PLAN exactly.** They are written out below rather than left to an ordered list, because this list previously started at 1 while BUILD-PLAN started at 0, so every step had two different numbers and "Step 5" meant two different things depending on which file you were reading. If a step number here ever disagrees with BUILD-PLAN, BUILD-PLAN is right.
+
+- **Step 0.** Foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary. **Done 2026-08-10.**
+- **Step 1.** `pkg/multisync` listener parsing START/STOP/SYNC/OPEN + ping/discover, with unit tests against hand-built packets from the RES-002 byte layout. **Done 2026-08-10.** Bench-verify against the real FPP player is still outstanding and is what moves RES-002 off L1 (RES-002 open items).
+- **Step 2.** Agent: capability advertisement over MQTT (retained hello, LWT), health heartbeat; coordinator inventory + desired/observed state in SQLite. **Done 2026-08-10.**
+- **Step 3.** Read-only FPP observability: collector, observation model with provenance and freshness, event history, plus the versioned public read API and change stream that ADR-014 requires. **Done 2026-08-11.** The API was designed and shipped before any UI existed, which is what keeps ADR-014 real.
+- **Step 4.** Read-only Operator UI: TypeScript SPA in its own container, dashboard, node and capability views, desired vs. observed, disconnect/staleness handling, responsive down to a phone. **Done 2026-08-11.** Two defects survived 99 unit tests and three reviews and were found only by loading the page in a real browser: `fetch` called with the wrong receiver (fatal in a browser, invisible to Node), and evidence ages frozen at the last response's `serverTime` so a disconnected panel read "observed just now" indefinitely.
+- **Step 5.** Real FPP signals on the dashboard: pixel current, playback state, controller and network health, and FPP MQTT ingestion as a second collector behind one interface. **Done 2026-08-11**, and the first work in this project exercised against real show hardware, read-only against all three deployed FPP hosts and the operator's live broker. The phone layout was verified on a real device in the follow-through.
+- **Step 6.** Identity, authorization, and audit (ADR-024). Principals, roles as scope bundles, sessions, audit, MQTT authorization with `allow_anonymous false`. **Specified 2026-08-11, not started.** Adds no write endpoint; builds the mechanism that permits one.
+- **Step 7.** The first write endpoints, and Operator UI controls over them. Not yet specified.
+- **Step 8.** Agent: GStreamer pipeline supervision for a test pattern → NDI sink into Resolume (RES-004/006 bench). Not yet specified.
 
 Standing rules while building: unit tests never raise a research record above L1, only a bench capture against real hardware does. Never write a doc comment, log line, or document that claims verification that has not happened.
 
