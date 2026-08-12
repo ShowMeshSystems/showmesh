@@ -111,14 +111,29 @@ func decodeObservationValue(kind, text string) (any, error) {
 }
 
 // UpsertObservation stores obs as the current evidence for its
-// (Resource.Kind, Resource.ID, Signal), replacing whatever was previously
-// stored for that same triple. obs must satisfy
-// [observation.Observation.Validate]; UpsertObservation calls Validate
-// itself and returns its error, unwritten, rather than storing a
+// (Resource.Kind, Resource.ID, Signal, Source) — schemaV4's primary key,
+// widened from schemaV3's (Resource.Kind, Resource.ID, Signal) specifically
+// so two different collector sources reporting the same signal for the same
+// resource coexist as two rows rather than one overwriting the other; see
+// schemaV4's doc comment in migrations.go. A second UpsertObservation for
+// the SAME source and the same (Resource.Kind, Resource.ID, Signal)
+// replaces whatever that source previously stored, exactly as before —
+// this is still an upsert target, never a history, per source. obs must
+// satisfy [observation.Observation.Validate]; UpsertObservation calls
+// Validate itself and returns its error, unwritten, rather than storing a
 // caller-built Observation that violates the invariants pkg/observation
 // exists to enforce — an invalid Observation reaching this method is
 // always a caller bug (a collector that skipped the constructors and hand-
 // built one wrong), never a condition this package should paper over.
+//
+// This method deliberately does not choose which source's row "wins" for a
+// given (Resource.Kind, Resource.ID, Signal) — that resolution happens
+// once, at read, via a documented pure function
+// (internal/coordinator/api.ResolveObservations) over everything
+// [Store.ListObservations] returns, per the Step 5 contract section 5.2.
+// Discarding a losing source's evidence here, at write time, would destroy
+// its provenance permanently and make that resolution rule untestable from
+// outside the process — exactly what ADR-011 exists to prevent.
 //
 // obs.ObservedAt is stored exactly as given, including nil — see
 // schemaV3's doc comment in migrations.go and contract section 3.3. Never
@@ -146,13 +161,12 @@ func (s *Store) UpsertObservation(ctx context.Context, obs observation.Observati
 			first_seen_at, updated_at
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(resource_kind, resource_id, signal) DO UPDATE SET
+		ON CONFLICT(resource_kind, resource_id, signal, source) DO UPDATE SET
 			value_kind   = excluded.value_kind,
 			value_text   = excluded.value_text,
 			unit         = excluded.unit,
 			observed_at  = excluded.observed_at,
 			collected_at = excluded.collected_at,
-			source       = excluded.source,
 			quality      = excluded.quality,
 			valid_for_ns = excluded.valid_for_ns,
 			absence      = excluded.absence,

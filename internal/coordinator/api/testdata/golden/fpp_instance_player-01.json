@@ -34,7 +34,7 @@
         "value": 120,
         "unit": null,
         "state": "stale",
-        "reason": "value is 14m22s old, past its 30s validity window",
+        "reason": "value has not been reconfirmed within its 30s validity window",
         "observedAt": "2026-08-10T21:00:00-05:00",
         "collectedAt": "2026-08-10T21:14:22.6-05:00",
         "source": "fpp-rest",

@@ -32,6 +32,7 @@ var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
 	{version: 3, sql: schemaV3},
+	{version: 4, sql: schemaV4},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -206,6 +207,76 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_recorded_at ON events(recorded_at);
+`
+
+// schemaV4 adds source to observations' primary key, so two collector
+// sources recording the same (resource_kind, resource_id, signal) coexist as
+// two rows instead of silently overwriting one another at whichever
+// collector's poll/publish cadence happens to write last.
+//
+// Step 5 is what makes this a live defect rather than a theoretical one:
+// internal/coordinator/collector/fpp (source "fpp-rest") and
+// internal/coordinator/collector/fppmqtt (source "fpp-mqtt") both produce
+// the identically-named signal for the same FPP instance — see the Step 5
+// contract section 4.3's "signal IDs are deliberately identical" — so under
+// schemaV3's (resource_kind, resource_id, signal) key, whichever source
+// upserted most recently would silently erase the other's evidence, and an
+// operator watching health flicker between a 1s MQTT value and a 15s REST
+// value would have no way to tell the two apart, because only one row could
+// ever exist. Provenance destroyed at write time this way is also
+// impossible to recover: the Step 5 contract's precedence rule (resolving
+// which source wins, once, at read) is meaningless if there is only ever
+// one row to resolve from — see ResolveObservations in
+// internal/coordinator/api for that rule; this migration is what makes both
+// candidates available for it to choose between in the first place.
+//
+// Follows the same SQLite "12 steps to altering a table" pattern schemaV2
+// already established (SQLite's ALTER TABLE cannot add a column to an
+// existing composite PRIMARY KEY in place): create the new table shape,
+// copy every existing row across unchanged, drop the old table, rename the
+// new one into its place. Every column keeps its exact schemaV3 name, type,
+// and default; only the PRIMARY KEY clause changes, so the copy can never
+// violate the new (strictly wider) key — a row that was unique under
+// (resource_kind, resource_id, signal) is trivially still unique once
+// source is appended to that same tuple.
+const schemaV4 = `
+CREATE TABLE observations_v4 (
+	resource_kind TEXT NOT NULL,
+	resource_id   TEXT NOT NULL,
+	signal        TEXT NOT NULL,
+	value_kind    TEXT NOT NULL DEFAULT '',
+	value_text    TEXT NOT NULL DEFAULT '',
+	unit          TEXT NOT NULL DEFAULT '',
+	observed_at   TEXT,
+	collected_at  TEXT NOT NULL,
+	source        TEXT NOT NULL DEFAULT '',
+	quality       TEXT NOT NULL DEFAULT '',
+	valid_for_ns  INTEGER NOT NULL DEFAULT 0,
+	absence       TEXT NOT NULL DEFAULT '',
+	reason        TEXT NOT NULL DEFAULT '',
+	first_seen_at TEXT NOT NULL,
+	updated_at    TEXT NOT NULL,
+	PRIMARY KEY (resource_kind, resource_id, signal, source)
+);
+
+INSERT INTO observations_v4 (
+	resource_kind, resource_id, signal,
+	value_kind, value_text, unit,
+	observed_at, collected_at, source, quality, valid_for_ns,
+	absence, reason,
+	first_seen_at, updated_at
+)
+SELECT
+	resource_kind, resource_id, signal,
+	value_kind, value_text, unit,
+	observed_at, collected_at, source, quality, valid_for_ns,
+	absence, reason,
+	first_seen_at, updated_at
+FROM observations;
+
+DROP TABLE observations;
+
+ALTER TABLE observations_v4 RENAME TO observations;
 `
 
 // migrate applies every pending migration inside one transaction and

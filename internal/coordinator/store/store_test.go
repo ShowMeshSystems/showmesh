@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/capability"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // fakeClock lets tests drive Store's own bookkeeping timestamps
@@ -251,6 +252,102 @@ func TestMigrationV2MakesLWTObservedAtNullableAndPreservesData(t *testing.T) {
 		Online: true, ObservedAt: nil, Provenance: ProvenanceRetainedBrokerState, Retained: true,
 	}); err != nil {
 		t.Fatalf("record lwt with nil ObservedAt after migration: %v", err)
+	}
+}
+
+// TestMigrationV4WidensObservationsPrimaryKeyAndPreservesData simulates a
+// database written by an older binary that only knew schemaV3 (where
+// observations' primary key was (resource_kind, resource_id, signal), with
+// no room for two sources to coexist), then reopens it through the normal
+// [open] path and checks migration 4 both widens the key to include source
+// and preserves the row that was already there — the same append-only
+// migration pattern [TestMigrationV2MakesLWTObservedAtNullableAndPreservesData]
+// exercises for schemaV2, applied here to schemaV4.
+func TestMigrationV4WidensObservationsPrimaryKeyAndPreservesData(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, dbFileName)
+
+	// Build a v3-only database directly, bypassing open/migrate (which
+	// always brings a database to the newest known version).
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	for _, s := range []string{schemaV1, schemaV2, schemaV3} {
+		if _, err := db.ExecContext(context.Background(), s); err != nil {
+			t.Fatalf("apply schema: %v", err)
+		}
+	}
+	if _, err := db.ExecContext(context.Background(), `PRAGMA user_version = 3`); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+
+	now := timeToDB(time.Now())
+	// A pre-migration row exactly as a v3 binary would have written it: no
+	// row for this (resource_kind, resource_id, signal) could ever have had
+	// a sibling from a second source under the old key.
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO observations (
+			resource_kind, resource_id, signal,
+			value_kind, value_text, unit,
+			observed_at, collected_at, source, quality, valid_for_ns,
+			absence, reason, first_seen_at, updated_at
+		) VALUES ('fpp', 'player-01', 'fpp.multisync.enabled', 'bool', 'true', '', ?, ?, 'fpp-rest', 'direct', 0, '', '', ?, ?)
+	`, now, now, now, now); err != nil {
+		t.Fatalf("insert v3 observation row: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	st, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("open (should apply migration 4): %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	var version int
+	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	}
+
+	got, err := st.ListObservations(context.Background(), ObservationFilter{})
+	if err != nil {
+		t.Fatalf("list observations after migration: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1: the pre-migration row must survive migration 4 without loss", len(got))
+	}
+	if got[0].Source != "fpp-rest" || got[0].Value != true {
+		t.Errorf("migrated row = %+v, want the original fpp-rest/true data preserved", got[0])
+	}
+
+	// Prove the widened key is not just reported but enforced: a second
+	// source can now write the identical (resource_kind, resource_id,
+	// signal) without displacing the first — impossible under schemaV3's
+	// key, where this second upsert would have silently overwritten the row
+	// just verified above.
+	second, err := observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"},
+		"fpp.multisync.enabled", false, time.Now(),
+		observation.WithSource("fpp-mqtt"),
+	)
+	if err != nil {
+		t.Fatalf("build second-source observation: %v", err)
+	}
+	if err := st.UpsertObservation(context.Background(), second); err != nil {
+		t.Fatalf("upsert second-source observation: %v", err)
+	}
+
+	got, err = st.ListObservations(context.Background(), ObservationFilter{})
+	if err != nil {
+		t.Fatalf("list observations after second-source upsert: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2: fpp-rest's pre-migration row and fpp-mqtt's new row must coexist", len(got))
 	}
 }
 

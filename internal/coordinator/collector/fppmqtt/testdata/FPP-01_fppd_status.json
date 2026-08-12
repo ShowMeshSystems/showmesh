@@ -1,0 +1,139 @@
+{
+	"MQTT" : 
+	{
+		"configured" : true,
+		"connected" : true
+	},
+	"branch" : "v9.2",
+	"bridging" : false,
+	"channelInputsEnabled" : true,
+	"channelOutputsEnabled" : false,
+	"current_playlist" : 
+	{
+		"count" : "0",
+		"description" : "",
+		"index" : "0",
+		"playlist" : "",
+		"type" : ""
+	},
+	"current_sequence" : "",
+	"current_song" : "",
+	"dateStr" : "Wed Oct 22",
+	"fppd" : "running",
+	"host_description" : "FPP",
+	"host_name" : "FPP-01",
+	"mode" : 2,
+	"mode_name" : "player",
+	"multisync" : true,
+	"next_playlist" : 
+	{
+		"playlist" : "Halloween Tease",
+		"start_time" : "Wed Oct 22 @ 05:30 PM - (Everyday)"
+	},
+	"platform" : "BeagleBone Black",
+	"powerBad" : false,
+	"repeat_mode" : "0",
+	"scheduler" : 
+	{
+		"enabled" : 1,
+		"nextPlaylist" : 
+		{
+			"playlistName" : "Halloween Tease",
+			"scheduledStartTime" : 1761172200,
+			"scheduledStartTimeStr" : "Wed Oct 22 @ 05:30 PM - (Everyday)"
+		},
+		"status" : "idle"
+	},
+	"seconds_played" : "0",
+	"seconds_remaining" : "0",
+	"sensors" : 
+	[
+		{
+			"formatted" : "31.5",
+			"label" : "Temp1: ",
+			"postfix" : "",
+			"prefix" : "",
+			"value" : 31.5,
+			"valueType" : "Temperature"
+		},
+		{
+			"formatted" : "61.7",
+			"label" : "Temp2: ",
+			"postfix" : "",
+			"prefix" : "",
+			"value" : 61.7294921875,
+			"valueType" : "Temperature"
+		},
+		{
+			"formatted" : "12.3V",
+			"label" : "VIN1: ",
+			"postfix" : "V",
+			"prefix" : "",
+			"value" : 12.34775390625,
+			"valueType" : "Voltage"
+		},
+		{
+			"formatted" : "12.3V",
+			"label" : "VIN2: ",
+			"postfix" : "V",
+			"prefix" : "",
+			"value" : 12.33544921875,
+			"valueType" : "Voltage"
+		},
+		{
+			"formatted" : "12.4V",
+			"label" : "VIN3: ",
+			"postfix" : "V",
+			"prefix" : "",
+			"value" : 12.372363281249999,
+			"valueType" : "Voltage"
+		},
+		{
+			"formatted" : "12.4V",
+			"label" : "VIN4: ",
+			"postfix" : "V",
+			"prefix" : "",
+			"value" : 12.372363281249999,
+			"valueType" : "Voltage"
+		}
+	],
+	"status" : 0,
+	"status_name" : "idle",
+	"time" : "Wed Oct 22 00:37:22 CDT 2025",
+	"timeStr" : "12:37 AM",
+	"timeStrFull" : "12:37:22 AM",
+	"time_elapsed" : "00:00",
+	"time_remaining" : "00:00",
+	"uptime" : "00:38",
+	"uptimeDays" : 0.00043981481481481481,
+	"uptimeHours" : 0.010555555555555556,
+	"uptimeMinutes" : 0.6333333333333333,
+	"uptimeSeconds" : 38,
+	"uptimeStr" : "0 days, 0 hours, 0 minutes, 38 seconds",
+	"uptimeTotalSeconds" : 38,
+	"uuid" : "M1-3818BBBK1706",
+	"version" : "9.2-2-g71597563",
+	"volume" : 70,
+	"warningInfo" : 
+	[
+		{
+			"id" : 0,
+			"message" : "Scheduled Playlist 'Halloween 2025' does not exist"
+		},
+		{
+			"id" : 0,
+			"message" : "UDP Output set to send data to myself.  Disabling 192.168.133.70"
+		},
+		{
+			"id" : 0,
+			"message" : "Cannot Ping ArtNet Channel Data Target 192.168.131.99 Ethernet_"
+		}
+	],
+	"warnings" : 
+	[
+		"Scheduled Playlist 'Halloween 2025' does not exist",
+		"UDP Output set to send data to myself.  Disabling 192.168.133.70",
+		"Cannot Ping ArtNet Channel Data Target 192.168.131.99 Ethernet_"
+	]
+}
+

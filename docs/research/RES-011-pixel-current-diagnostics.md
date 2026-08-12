@@ -62,6 +62,13 @@ Read-only `GET /api/fppd/ports` against both deployed Kulp boards, off-season, d
 
 **What this does and does not license.** It licenses building the collector against the real schema, including the heterogeneous-array handling, rather than against the documented one. It licenses nothing about eFuse behaviour, trip reporting, current accuracy, or per-branch blind spots.
 
+### Two additions from the Step 5 probe (2026-08-11, same session, still L1)
+
+- **A third array shape exists: the empty one.** `GET /api/fppd/ports` on the FPP player (a Pi 3 B+ with no output cape) returns `[]`. That is a true statement about the host and must be modelled as a measured count of zero, never as a failure, an absence, or an empty panel. Any decoder or surface that treats "no elements" as "something went wrong" is wrong about a host that is working correctly.
+- **The same document is also published over MQTT**, on `falcon/player/<HostName>/port_status`, at roughly 1 Hz on both remotes against a 15 s REST poll. It is published **retained**, so a subscriber's first delivery carries no valid observation time and must never be stamped with receipt time. This makes the port document reachable by any client with publish rights on that broker, which is what turns the `ma`-shaped hazard above from a decoding concern into a trust one: a crafted `{"name":"Port 1","smartReceivers":true,"ma":null}` decoded a fabricated `0 mA` on a blind position until Step 5 closed it.
+
+**Implementation status (does not change this record's level).** Step 5 built the collector against these shapes, in both the REST and MQTT paths, through one shared decoder. A smart-receiver position reports `unsupported` with a reason and is structurally incapable of carrying a number; the operator surface renders it distinctly from a measured zero. None of that is evidence about current telemetry. **RES-011 remains L1 and its status remains `planned`.** Raising it still requires readings from an energized display under known load, and the acceptance criteria above are unchanged.
+
 ### Smart receivers
 
 - FPP implements the **Falcon V5 smart-receiver query protocol** (PRU-assisted): sub-receivers A–F per port report `ma`, `pixelCount`, enabled/tripped upstream over the differential pair, surfaced in the same `/api/fppd/ports` payload; remote fuse reset supported. Falcon V4-protocol receivers are send-only (no telemetry). [src: `src/non-gpl/FalconV5Support/`]

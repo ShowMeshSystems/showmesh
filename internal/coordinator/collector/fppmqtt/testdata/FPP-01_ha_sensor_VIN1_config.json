@@ -1,0 +1,1 @@
+{"device":{"configuration_url":"http://FPP-01/plugin.php?_menu=content&plugin=fpp-HomeAssistant&page=plugin_setup.php","identifiers":["FPP-01"],"manufacturer":"Falcon Player","name":"FPP-01","sw_version":"9.2-2-g71597563"},"device_class":"voltage","name":"FPP-01 VIN1","state_topic":"falcon/player/FPP-01/ha/sensor/VIN1/state","unique_id":"FPP-01_VIN1","unit_of_measurement":"V"}

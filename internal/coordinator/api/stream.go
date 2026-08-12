@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // hubEventsBatchLimit bounds how many events [Hub.renderNewEvents] fetches
@@ -278,17 +279,61 @@ func (h *Hub) render(ctx context.Context) {
 // a firehose); collectedAt/lastPollAt are the same pathology one layer
 // down, in the hub's OWN bookkeeping rather than in what it renders.
 //
-// observedAt is deliberately left untouched: per the observation model
-// (contract section 4), it is genuine evidence — "when the measured
-// condition was true" — not bookkeeping, and a client relying on it to
-// judge freshness must see it move when a poll genuinely reconfirms a
-// value at a new time.
+// Step 5 review finding 3 adds a second source of the identical pathology,
+// one layer up from CollectedAt, measured against the real fleet at ~43
+// KB/s per connected browser on an otherwise IDLE system (860 KB in 20s):
+// with finding 2 fixed (evidenceReason no longer embeds a computed age),
+// two causes remained, both entirely legitimate collector/precedence
+// behavior that this projection — not the collectors, and not
+// [ResolveObservations] — is the correct place to absorb:
+//
+//   - internal/coordinator/collector/fpp re-stamps ObservedAt on every poll
+//     (every ~15s) even when the decoded value is byte-identical to the
+//     last poll's.
+//   - [ResolveObservations]' tier-1 "later ObservedAt wins" rule
+//     legitimately flips which SOURCE wins for a signal both fpp-rest and
+//     fpp-mqtt report, roughly twice per REST poll interval, whenever an
+//     MQTT delivery lands one nanosecond newer — correct precedence
+//     behavior (contract section 5.2), but it changes the rendered
+//     `source` field with nothing an operator can act on having changed.
+//
+// For a resolved observation whose rendered State is "current" — a real
+// value with a real known ObservedAt, current as of the render's own clock
+// — ObservedAt and Source are ALSO cleared from the projection, alongside
+// CollectedAt, on the reasoning contract section 5.2's own precedence rule
+// already establishes: which source most recently confirmed a value, and
+// exactly when, is provenance and freshness bookkeeping about how the
+// value was obtained, not itself part of what the value or its state ARE.
+// What remains in the projection after that — Signal, Value, Unit, State,
+// Reason, Quality, ValidForSeconds — is exactly "if value, unit, reason
+// and state are all unchanged AND the state is still current, nothing an
+// operator can act on has changed" (Step 5 review finding 3's own words),
+// so a byte-identical projection on the next render correctly produces no
+// frame even though the real, broadcast inst (never mutated here) legitimately
+// carries a fresher observedAt or a flipped source underneath.
+//
+// This masking is deliberately conditioned on State == "current", never
+// unconditional, which is the ADR-011 safety property that makes it
+// correct rather than the exact defect this project keeps re-catching: a
+// value that STOPS being reconfirmed does not stay "current" — it ages
+// into "stale" (or the source that was answering it starts reporting an
+// absence), and State itself then differs in the projection, still
+// producing a frame. Masking ObservedAt/Source unconditionally, across
+// every state, would instead make a value that silently stopped updating
+// look byte-identical to one still being actively reconfirmed, which is
+// precisely the "stale reads as healthy" shape ADR-011 exists to forbid —
+// see TestFPPInstanceDiffProjectionAgingToStaleStillProducesAFrame in
+// stream_test.go for the regression guard.
 func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	proj := inst
 	proj.LastPollAt = nil
 	proj.Observations = make([]v1.Evidence, len(inst.Observations))
 	for i, o := range inst.Observations {
 		o.CollectedAt = nil
+		if o.State == string(observation.StateCurrent) {
+			o.ObservedAt = nil
+			o.Source = ""
+		}
 		proj.Observations[i] = o
 	}
 	return proj

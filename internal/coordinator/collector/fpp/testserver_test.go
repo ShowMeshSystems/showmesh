@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -46,6 +47,17 @@ type fppServer struct {
 	// trapPrefixes are path prefixes that panic the server the instant any
 	// request path starts with one — see trapPrefix's doc comment.
 	trapPrefixes []string
+
+	// trapFired and trapDetail record a trapped request independently of
+	// the panic below. Step 5 review finding 7: the panic happens inside
+	// an http.Handler goroutine, and net/http's own per-connection
+	// recovery catches it and merely logs to stderr — it never reaches the
+	// test goroutine's stack, so go test reports the test as passing even
+	// though the forbidden path was hit. trapFired is what start's
+	// t.Cleanup actually asserts on; the panic is kept only as a loud,
+	// immediate signal for a human running the suite with -v.
+	trapFired  atomic.Bool
+	trapDetail atomic.Value // string, set at most once, first trap wins
 }
 
 func newFPPServer() *fppServer {
@@ -91,6 +103,19 @@ func (s *fppServer) serveStatus(path string, status int) {
 	}
 }
 
+// serveRedirect registers path to respond 302 Found with a Location header
+// pointing at location — simulating an FPP whose response is (accidentally
+// misconfigured, or maliciously) a redirect to an entirely different host
+// and path. Step 5 review finding 1's exact reproduction: a real FPP
+// answering /api/fppd/status with a 302 to another host's
+// /api/command/Start%20Playlist/... .
+func (s *fppServer) serveRedirect(path, location string) {
+	s.route[path] = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", location)
+		w.WriteHeader(http.StatusFound)
+	}
+}
+
 func (s *fppServer) start(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -108,7 +133,10 @@ func (s *fppServer) start(t *testing.T) *httptest.Server {
 		s.mu.Unlock()
 
 		if trapped != "" {
-			panic("fppServer: request to " + r.URL.Path + " trapped under forbidden prefix " + trapped + " — see doc.go for why")
+			detail := "request to " + r.URL.Path + " trapped under forbidden prefix " + trapped
+			s.trapDetail.CompareAndSwap(nil, detail)
+			s.trapFired.Store(true)
+			panic("fppServer: " + detail + " — see doc.go for why")
 		}
 		if !ok {
 			http.NotFound(w, r)
@@ -118,7 +146,13 @@ func (s *fppServer) start(t *testing.T) *httptest.Server {
 	})
 
 	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	t.Cleanup(func() {
+		srv.Close()
+		if s.trapFired.Load() {
+			detail, _ := s.trapDetail.Load().(string)
+			t.Errorf("fppServer: %s. net/http recovers a handler panic per connection, so it never reaches this test's own goroutine — this assertion, not the panic, is what actually fails the test. See trapPrefix's doc comment.", detail)
+		}
+	})
 	return srv
 }
 

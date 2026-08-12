@@ -30,7 +30,23 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), 3 (read-only FPP observability plus the versioned public API), and 4 (the read-only Operator UI) are complete. Nothing has been exercised against real show hardware.
+Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), 3 (read-only FPP observability plus the versioned public API), 4 (the read-only Operator UI), and 5 (real FPP signals on the dashboard) are complete.
+
+**Step 5 is the first work in this project exercised against real show hardware.** The coordinator was run read-only against all three deployed FPP hosts and the operator's live MQTT broker, and every acceptance criterion was demonstrated there rather than only in a fixture. What that does and does not license is in the Step 5 entry below; the short version is that it proves shape, type and modelling against *these* versions, and proves nothing about a running show. RES-002 stays L2 for protocol semantics and L1 for anything hardware-dependent, unchanged. **RES-011 is not raised**: every `ma` on the fleet reads 0 because the display is de-energized.
+
+There are now two collectors behind one interface. `internal/coordinator/collector/fpp` polls the REST API of each configured instance; `internal/coordinator/collector/fppmqtt` subscribes read-only to FPP's own MQTT status topics on the operator's existing broker. They report overlapping signals on purpose, and `internal/coordinator/api/precedence.go` resolves them by a documented rule at read time. Storage is schema v4, whose primary key gained `source` so neither collector can silently overwrite the other's evidence.
+
+**Four things a future session should know before touching this code.**
+
+**GET-only is not read-only.** The collector never issues a non-GET, and that guarantee turned out to be nearly worthless on its own: FPP invokes commands over GET at `/api/command/...`, and neither HTTP client set `CheckRedirect`, so a 302 from a spoofed or compromised FPP would have walked the coordinator's own GET onto another host's command endpoint. Reproduced against a recorder before it was fixed. `CheckRedirect` is now forced onto a defensive copy of whatever client is in play, including a caller-supplied one, and a 3xx surfaces as `collection_failed`.
+
+**A JSON `null` is not an absent key, and every extractor treated it as one.** `encoding/json` unmarshals `null` as a no-op returning no error, so `"ma": null` produced a measured `0 milliamps` on a smart-receiver position, `"powerBad": null` produced `false` and contributed *healthy*, and `"warnings": null` fabricated "no warnings". The blind-spot rule had been implemented for a missing key and not for a key present as null. Every extractor now rejects an explicit null.
+
+**Health had to change before these signals could land, and it hid a fault while it was at it.** Every observation was a critical member of the instance verdict, so the many legitimately `unsupported` signals this step adds would have pinned all three real hosts at `unknown` forever. Worse, the mapper never looked at a value, only at whether the state was `current`, so `fpp.power.bad == true` contributed *healthy*. Now `unsupported` contributes nothing, only `fpp.reachable`, `fpp.fppd.state` and `fpp.power.bad` are health-critical, and a `healthy` verdict additionally requires `fpp.fppd.state` to be present and reading `running`, because "the HTTP server answered" is not evidence that the player is well.
+
+**The change stream re-sends an entire instance to report a four-field delta, and that is not fixed.** Measured against the live fleet at roughly 57 KB/s for three hosts. See the Step 5 entry; it is recorded as measured, unresolved, and deliberately out of scope.
+
+Step 4 detail follows.
 
 There is now an operator-facing surface. `ui/` is a React and Vite TypeScript SPA served from its own `nginx:alpine` container, which also forwards `/api/*` to the coordinator so the browser sees one origin ([ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md)). It renders the dashboard, node and capability views, FPP instances, and event history, all composed from advertised capabilities rather than fixed node classes. Its API types are generated from `api/openapi.yaml` and CI fails on any diff, which makes ADR-015's "generated from or verified against the Go types" a gate rather than an intention: the OpenAPI document is already conformance-tested against real handler responses in both directions.
 
@@ -66,13 +82,97 @@ The repository is pushed to `github.com/ShowMeshSystems/showmesh`, currently pri
 
 No audio code exists. The Audio Engine was specified in the same session (ADR-017..019, `docs/architecture/AUDIO-ENGINE.md`, RES-007 rewritten) and deliberately left unsequenced: RES-007 is critical-risk at L0, the multichannel interface has not been purchased, and every load-bearing claim is a bench fact. The next audio action is the RES-007 prototype, not implementation.
 
-**The next action is Step 5, specified in BUILD-PLAN and not started:** real FPP signals on the dashboard, collected read-only from the deployed fleet. Step 4 built a surface with almost nothing to display; Step 5 fills it.
+**The next action is the identity and authorization ADR.** Nothing else of consequence can start without it, and the reason is structural rather than a matter of preference.
 
 Beyond that the sequencing has one dominant feature worth stating plainly. **Every remaining roadmap item that does something rather than shows something is a write operation, and ADR-021 rule 5 bars the first write endpoint** until a superseding record decides authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. ARCHITECTURE Phase 1 is entirely write work. So the identity and authorization ADR is the critical path out of Phase 0, not a chore to fit in later. Other work available without it: RES-008's configuration model, and `pkg/pjlink` as a protocol library at L1.
 
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-11 (Step 5)
+
+**Goal:** fill the Step 4 surface with the four signal groups an operator actually looks at, collected read-only from the deployed fleet rather than from a container. Still read-only; ADR-021 rule 5 continues to bar every write endpoint.
+
+**Completed:**
+
+- `internal/coordinator/collector/fpp` extended to `/api/fppd/ports` and `/api/system/info`, with the full playback, controller-health, platform and per-port signal vocabulary. Its decoders are exported as pure `SignalValue` functions that know no clock.
+- `internal/coordinator/collector/fppmqtt`: a second collector behind the same interface, subscribing read-only to FPP's own MQTT status topics on the operator's existing broker. Push-to-poll: a subscription callback keeps the latest message per topic with its retain flag, and `Poll` renders it.
+- Store schema v4: `source` added to the observations primary key.
+- `internal/coordinator/api/precedence.go`: read-time resolution of multi-source evidence.
+- `deriveInstanceHealth` rewritten; see the decisions below.
+- `ui/`: signal grouping, a port grid distinguishing measured current from a smart-receiver blind spot from a collection failure, warnings, version skew, and four new dashboard panels.
+- `make test-integration-fppmqtt` against a throwaway local broker.
+
+**The live probe came first, and it corrected the specification before any code was written.** BUILD-PLAN's Step 5 was written from an earlier partial probe. A fresh read-only pass over all three hosts found five things it did not have, each of which changed the work:
+
+- **Three different `/api/fppd/ports` shapes on one fleet.** FPP-Main returns `[]`, FPP-remote-01 returns 32 elements (16 with `ma`, 16 smart-receiver), FPP-remote-04 returns 48 (16 and 32). An empty array is a Pi with no output cape and is a measured zero, not a failure and not an absence.
+- **Player and remote report structurally different status documents.** `current_playlist`, `next_playlist`, `scheduler` and `repeat_mode` are absent on both remotes, replaced by `playlist`, `sequence_filename`, `media_filename`, `seconds_elapsed`. The collector had been reporting those absences as `collection_failed`, which is false: nothing failed.
+- **The fleet was already on a broker, and not ours.** All three report `MQTT: {configured: true, connected: true}` against the operator's existing home-automation broker. BUILD-PLAN recorded `connected: false`. Repointing them is a settings write to a live show host, so the collector subscribes to the foreign broker instead.
+- **A fourth FPP exists only as retained state.** `FPP-01`, branch v9.2, is not in the reference installation. Every one of its topics arrived retained and it published nothing live in a 60-second capture: a complete, plausible, healthy-looking status document of entirely unknown age. It became this step's best acceptance test.
+- **`GET /api/settings/MQTTPrefix` returns a schema with no `value` key at all**, while `MQTTHost` and `MQTTUsername` have one. The RES-002 trap, live, on two more settings.
+
+**Decisions made:**
+
+- **The FPP MQTT collector subscribes to the operator's existing broker** rather than requiring FPP to be repointed at ShowMesh's. Chosen because the alternative is a settings write to a live display. It is a collector source and must never be merged with the ADR-008 control plane, which is stated in the package doc comment because merging them later would look like a tidy-up.
+- **The connection is subscribe-only by construction**, not by convention: the client sits behind an interface with no publish method, no Last Will is registered, and the subscription filters are an explicit per-suffix list rather than a host-scoped `#`. That last one was a builder's deliberate deviation from the specification and it was right: `falcon/player/<host>/#` would still have matched `command/run`, which FPP acts on.
+- **Both sources emit the same `SignalID` for the same fact, and the store keeps both rows.** Resolution happens once, at read: a value with a known observation time beats a value of unknown age, which beats an absence; within the first tier the later observation wins; ties break toward `fpp-rest`, because a REST value came from a round trip this coordinator initiated while an untimed MQTT value is a replay. Adding `source` to the primary key rather than arbitrating at write time is an ADR-011 consequence: discarding evidence on the way in destroys provenance and makes the rule untestable from outside the process.
+- **Only three signals are health-critical**, and `fpp.warnings.*` is deliberately not among them. FPP's own list mixes "A Log Level is set to Debug" with "Cannot Ping ArtNet Channel Data Target"; classifying those strings would be ShowMesh inventing a verdict from text it does not understand. Warnings are surfaced prominently and never colour the badge.
+- **A `healthy` verdict requires `fpp.fppd.state` to be present and running.** `fpp.reachable` alone was sufficient, which means an instance could report healthy on the strength of its HTTP server answering. Not reachable in today's code, but one modelling decision away, and this step made exactly that kind of decision five times.
+- **An unreachable instance reports `unknown`, never `failed`.** The Step 5 specification's own table said `failed`; the code was right and the table was wrong, because Step 3 decided this deliberately and nothing here supplies the lifecycle context that would justify a more confident verdict.
+- **Observation changes still produce no `/api/v1/events` entries.** Which transitions deserve durable history is an OBSERVABILITY question this step did not answer, and inventing one here would fill the event log with playlist churn.
+
+**One piece of L1 verification, because absence and emptiness are different claims.** FPP-remote-04 omits `warnings` from its REST status while its MQTT topic publishes `[]`. Rather than guess which FPP means, the builder read `src/httpAPI.cpp` at commit `7e3c6acb0`, which is the `RemoteGitVersion` FPP-Main itself reports, and found the field built only inside `for (auto& warn : WarningHolder::GetWarnings())`. The key is never created when the list is empty. Independently re-verified from the FPP repository during fold-in, at lines 120-124 of that file. Recorded in RES-002's evidence section.
+
+**What the live read-only run actually produced**, against three hosts and the broker:
+
+| Instance | Health | Observations | Note |
+|---|---|---|---|
+| `fpp-main` | healthy | 51 | `fpp.ports.count` = 0, measured |
+| `fpp-remote-01` | healthy | 253 | 32 port elements |
+| `fpp-remote-04` | healthy | 351 | 48 port elements |
+| `fpp-01` | unknown | 61 | retained-only ghost, every signal `unknown_age`, none with a non-null `observedAt` |
+
+On FPP-remote-04 all 48 `current_ma` signals resolved correctly: 16 `current` at 0 mA with unit `milliamps`, and 32 `unsupported` carrying no value at all. Precedence ran live and mixed per signal: MQTT won `fpp.power.bad`, `fpp.fppd.state` and `fpp.ports.count` on freshness at roughly 1 Hz against a 15 s REST poll, while REST won `fpp.reachable` because MQTT has no such signal.
+
+**Findings from review that mattered.** Two Opus reviews ran, on constraints and on test honesty, both instructed to break the code rather than read it. Both independently found the same top defect.
+
+- **GET-only is not read-only.** Neither HTTP client set `CheckRedirect`, so Go's default followed up to ten hops to any host and any path. A server answering `/api/fppd/status` with a 302 to another host's `/api/command/Start%20Playlist/Christmas?repeat=1` had all four of the collector's requests land there, reproduced against a recorder. Since FPP invokes commands over GET, the "never a non-GET" guarantee this step was built around protected nothing on its own. The fix must live inside the package because `Options.HTTPClient` lets a caller supply the transport; a reviewer proved a custom `RoundTripper` could rewrite the method to POST.
+- **A JSON `null` fabricated a measured value**, including 0 mA on a blind port and `powerBad: false` contributing healthy. The realistic trigger is not FPP but the broker, since any publisher there can put that payload on a `port_status` topic.
+- **The precedence rule was never proven to be applied.** Deleting `ResolveObservations` from `mapFPPInstance` left the entire Go suite green, and so did deleting it from `handleObservations`. The function was tested exhaustively in isolation and the store was tested for coexistence; nothing tested the layer where resolution has to happen. That is acceptance criterion 4, tested one layer away from where it holds, which is the Step 3 and Step 4 shape exactly.
+- **A tier of the precedence rule could be deleted with no test failing.** Making `absenceRank` a constant, removing "unsupported beats collection_failed beats not_collected" entirely, left the package green: all three cases for that tier put the winner on `fpp-rest`, so the static source tie-break alone produced the right answer and the named rule was never the deciding factor.
+- **`TestSubscriptionFiltersNeverIncludeCommandTopics` could not fail.** It substring-matched filter strings, so `falcon/player/FPP-Main/#` passed while subscribing to the live command topic. It now resolves each filter against concrete forbidden topics using real MQTT wildcard semantics.
+- **`RetainAsPublished: false` was load-bearing and untested.** Flipping it green-lit the suite. Since this fleet publishes every topic retained, `true` would set the retain flag on live forwards too and every signal on every healthy host would read `unknown_age` forever: the ghost rule applied to the whole fleet, on one boolean.
+- **A present-but-undecodable field on a remote-mode host reported `unsupported`** with the reason "host is in remote mode; FPP does not report a repeat mode", when FPP did report it. Criterion 3 failing in the honest-looking direction.
+- **The MQTT password leaked when supplied inside the broker URL.** `SHOWMESH_FPP_MQTT_PASSWORD` was redacted; the same secret by another door was echoed into three validation errors and logged verbatim at startup. The ordering of the fix is load-bearing: a value that is both malformed and credentialed reaches `url.Parse`, whose `*url.Error` embeds the URL in its own message, so the userinfo check must run before the parse. Mutating the fix printed the full password back out, which is how that was confirmed.
+- **The UI rendered the ghost's version as a confident bare string**, ignoring its `unknown_age` state, in three places that reached for `.value` without `.state`.
+- **`trapPrefix` could never fail a test.** Its panic fires inside an `http.Handler`, which `net/http` recovers, so a regression into `/api/settings` would have surfaced only as `collection_failed`, looking exactly like an unreachable FPP.
+
+**What the reviews tried hardest to break and could not:** the retained-versus-live rule. Verified against a real broker that a retained replay yields `unknown_age`, that a retained publish arriving while subscribed correctly yields `current`, and that polling again does not move `observedAt`. The fourth attempt at this project's three-times-caught defect did not land. The precedence resolver is also order-independent across 20,000 random groups in six permutations each, the schema v4 migration genuinely builds a v3 database and proves preservation, and the OpenAPI change is additive.
+
+**Duplication found the bug in the code that replaced it.** The MQTT collector was built in parallel with the REST collector and, not yet having its decoders, wrote its own. Unifying them was ordered as a defect fix, and the throwaway copy turned out to be the correct one: `fpp.PortSignals` leaked a duplicate-key port element's signals before detecting the collision, violating its own doc comment, while the copy had independently got it right. A quieter divergence surfaced too, `fpp.position.*` typed `float64` on one path and `int64` on the other.
+
+**The SSE finding, measured twice and deliberately not closed.** A first live run showed 860 KB in 20 seconds, about 43 KB/s per connected browser, on an idle system with the display de-energized. The obvious hypothesis, that timestamp refreshes were firing the hub, was **refuted** by measurement: an MQTT poll with no new message produces byte-identical JSON. Three real causes were found instead. One is an ADR-020 violation dating to Step 3: the stale-evidence reason was built with `fmt.Sprintf("value is %s old, ...")`, a precomputed age inside a payload, which re-renders differently every tick and defeats the diff outright. That is fixed, and the diff key is now state-aware. A second live run then confirmed the suppression works perfectly, **zero no-op frames in 17 frame-pairs**, and that stream volume did not improve, at roughly 57 KB/s for three hosts.
+
+The reason is the part worth carrying forward. Every frame was triggered by a genuine value change, always from the same few signals: `fpp.uptime.seconds` increments every second by definition, and the K16 voltage and temperature sensors jitter continuously. So four to nine signals genuinely change and the coordinator re-sends all 349 observations, about 90 KB for FPP-remote-04, to report it. **The problem is not churn, it is that the change stream has no delta granularity.** Fixing it means per-observation delta frames, which changes the SSE contract and belongs to ADR-020 rather than to a patch at the end of a step. Measured consequence, from Step 4's back-pressure numbers: a phone with roughly 20 KB/s of usable wifi falls the 64-frame buffer behind in about five minutes, is reset, re-fetches a snapshot, and repeats.
+
+**Questions raised with the owner:** how to ingest FPP MQTT given the fleet is on a foreign broker (answer: subscribe to it read-only, since repointing FPP is a write to a live display); how to structure the live fleet run (answer: a one-off recorded manual run, so no committed test can ever be pointed at the display by accident); and how the collector should get broker credentials (answer: reuse the existing account, with the shared-credential exposure noted).
+
+**Deferred, with reasons:**
+
+- **Per-observation delta frames on the change stream.** Measured above. Needs an ADR-020 decision, not a patch.
+- **Observation rows are never pruned.** A 48-element `port_status` followed by `[]` leaves 288 per-port rows behind forever, aging to `stale` and rendering as ghost ports of a cape that is no longer installed. Same for a renamed port, a removed sensor, or an instance dropped from configuration. RES-013 owns retention and the fix has real semantic content, since absence from one poll is not deletion.
+- **Write amplification.** Each MQTT poll re-upserts every signal, roughly 140 SQLite writes per second across the fleet at idle, almost all unchanged. Same owner.
+- **`SHOWMESH_MQTT_BROKER` is redacted in logs but not rejected for carrying userinfo**, unlike the FPP MQTT one, because it is the ADR-008 control-plane broker and an existing deployment may legitimately be configured that way.
+- Alerting, metric history, the preview wall, controlled devices, and every write operation.
+
+**Verification gates:** `gofmt` clean; `go vet ./...` clean; `make lint` at 0 issues; `go test -race -count=1 ./...` passing across all 19 packages; `CGO_ENABLED=0 go build ./...` clean; UI typecheck, lint, and 207 tests passing; a production UI build. Go test functions now total 552. The test-honesty review ran the Go suite at `-count=20`, then `-count=30` at two CPU counts under deliberate load, and the UI suite five times, finding no nondeterminism; no new test uses a real sleep, timer, or wall clock for an assertion. `make test-integration` passing against real Mosquitto; `make test-integration-fppmqtt` passing against a throwaway broker.
+
+Verified against the real fleet, read-only: all three hosts plus the broker, with every acceptance criterion demonstrated on live data rather than a fixture. **Not verified:** anything about a running show, anything about the reference switch, and anything requiring an energized display. No non-GET request and no MQTT publish was issued to any live host or the operator's broker at any point in this session.
+
+**What this step does not claim.** Every `ma` on the fleet reads 0 because the display is de-energized. That confirms shape and type and proves nothing about whether current telemetry works. RES-011 is not raised. Everything here is verified against FPP 9.4, `9.x-master-822-g56515e4d`, and these OS builds only; the intended fleet-wide move to a 9.x release or the FPP 10 beta is a material environment change that will make these conclusions stale.
 
 ---
 

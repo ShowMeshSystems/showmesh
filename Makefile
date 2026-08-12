@@ -54,6 +54,24 @@ test-integration:
 test-integration-fpp:
 	./scripts/test-integration-fpp.sh
 
+# test-integration-fppmqtt proves the FPP MQTT collector's claims that can
+# only be proven against a real broker connection: that Collector.Run's
+# actual autopaho wiring (connect, subscribeAll, the OnPublishReceived
+# handler) delivers messages into Collector.Poll's output end to end, and
+# that the retained/live evidence-age distinction (contract section 4.2)
+# holds over a real connection, not just against a directly-injected
+# handler call. Behind the `integration` build tag, so it is never part of
+# `test`/`check`. Unlike test-integration-fpp, this needs nothing but a
+# throwaway broker: internal/coordinator/collector/fppmqtt is a pure MQTT
+# client, never an HTTP one. See scripts/test-integration-fppmqtt.sh (which
+# starts and tears down a throwaway Mosquitto, exactly like
+# test-integration.sh's own) and
+# internal/coordinator/collector/fppmqtt/integration_test.go's package doc
+# comment.
+.PHONY: test-integration-fppmqtt
+test-integration-fppmqtt:
+	./scripts/test-integration-fppmqtt.sh
+
 GOLANGCI_LINT_VERSION := v2.6.2
 
 .PHONY: lint

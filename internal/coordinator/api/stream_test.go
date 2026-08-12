@@ -908,6 +908,385 @@ func TestStreamFPPChangedNotResentWhenOnlyCollectionBookkeepingMoves(t *testing.
 	}
 }
 
+// syncClock is a mutex-guarded advancing clock for the fppInstanceDiffProjection
+// churn tests below, which — unlike TestStreamNodeChangedNotResentWhenNothingChangedAsClockAdvances's
+// single advance-then-synchronously-read pattern — advance the clock
+// several times across a tight Notify() loop with no intervening frame
+// read to synchronize on. An unguarded `clockTime time.Time; func()
+// time.Time { return clockTime }` closure (this file's other advancing-clock
+// tests' pattern) races the test goroutine's writes against
+// [Hub.render]'s concurrent reads via h.clock() the moment there is no
+// such synchronizing read between two advances — caught by `go test
+// -race` on exactly this test during this task's own verification.
+type syncClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *syncClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *syncClock) advance(d time.Duration) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+	return c.t
+}
+
+// streamObs is a small helper shared by the fppInstanceDiffProjection churn
+// tests below: builds a tier-1 Measured observation for "fpp.status" on
+// player-01, sourced fpp-rest, with the given value/observedAt/validFor.
+func streamObs(t *testing.T, value any, observedAt time.Time, validFor time.Duration) observation.Observation {
+	t.Helper()
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+	o, err := observation.Measured(res, "fpp.status", value, observedAt,
+		observation.WithSource("fpp-rest"), observation.WithValidFor(validFor), observation.WithCollectedAt(observedAt))
+	if err != nil {
+		t.Fatalf("building fixture observation: %v", err)
+	}
+	return o
+}
+
+// TestFPPInstanceDiffProjectionSuppressesChurnFromTimestampOnlyChanges is
+// Step 5 review finding 3's headline case, measured against the real fleet
+// at roughly 43 KB/s per connected browser on an otherwise IDLE system
+// (860 KB over 20s): internal/coordinator/collector/fpp re-stamps
+// ObservedAt on every ~15s poll even when the decoded value is
+// byte-identical to the last poll's, and — with finding 2 fixed —
+// [ResolveObservations]' precedence rule also legitimately flips which
+// SOURCE wins a signal roughly twice per poll interval with nothing an
+// operator can act on having changed. Five simulated poll cycles with an
+// unchanged value, only ObservedAt (and LastPollAt) advancing each time,
+// must produce exactly one fpp.changed frame total — the first, genuinely
+// new appearance — never a second.
+func TestFPPInstanceDiffProjectionSuppressesChurnFromTimestampOnlyChanges(t *testing.T) {
+	fpp := &mutableFPPLister{}
+	clock := &syncClock{t: testNow}
+
+	pollAt := testNow
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{streamObs(t, "idle", pollAt, time.Minute)},
+		LastPollAt:   &pollAt,
+	}})
+
+	api := New(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	}, Options{
+		Clock: clock.now, Logger: testLogger(),
+		StreamTickInterval: time.Hour, StreamKeepaliveInterval: time.Hour,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "fpp.changed" {
+		t.Fatalf("first Notify: event = %q, want fpp.changed", event)
+	}
+
+	// Five further poll cycles: identical value, clock and ObservedAt
+	// advance together by 15s each time (a real REST poll interval), well
+	// within the 1-minute ValidFor throughout — this is exactly "the
+	// collector re-stamped ObservedAt on an unchanged reading", never a
+	// staleness transition.
+	for i := 0; i < 5; i++ {
+		// A fresh local var per iteration, deliberately NOT reassigning the
+		// outer pollAt: FPPInstanceView.LastPollAt is a *time.Time, and
+		// [mutableFPPLister.ListInstances] returns its views by value but
+		// that pointer's POINTED-TO memory is shared with whatever the test
+		// goroutine touches next. Reassigning one shared `pollAt` variable
+		// in place here raced the hub's own render goroutine dereferencing
+		// an OLDER call's pointer (mapping.go's formatTimePtr) against this
+		// loop's next write to that same address — caught by `go test
+		// -race`, intermittently, during this task's own verification.
+		nextPollAt := clock.advance(15 * time.Second)
+		fpp.setViews([]FPPInstanceView{{
+			InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+			Observations: []observation.Observation{streamObs(t, "idle", nextPollAt, time.Minute)},
+			LastPollAt:   &nextPollAt,
+		}})
+		api.Hub.Notify()
+	}
+
+	select {
+	case ev := <-func() chan string {
+		ch := make(chan string, 1)
+		go func() {
+			event, _, err := nextRealEvent(r)
+			if err == nil {
+				ch <- event
+			}
+		}()
+		return ch
+	}():
+		t.Fatalf("five further polls with only ObservedAt/LastPollAt advancing on an unchanged value produced a spurious %q event; fppInstanceDiffProjection is not suppressing current-state observedAt/source churn", ev)
+	case <-time.After(1 * time.Second):
+		// Correct: StreamTickInterval is an hour, so nothing else could
+		// legitimately produce a frame in this window.
+	}
+}
+
+// TestFPPInstanceDiffProjectionStillFiresOnRealValueChange is finding 3's
+// companion positive case: masking observedAt/source for a current-state
+// observation must never suppress an actual value change.
+func TestFPPInstanceDiffProjectionStillFiresOnRealValueChange(t *testing.T) {
+	fpp := &mutableFPPLister{}
+	pollAt := testNow
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{streamObs(t, "idle", pollAt, time.Minute)},
+		LastPollAt:   &pollAt,
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "fpp.changed" {
+		t.Fatalf("first Notify: event = %q, want fpp.changed", event)
+	}
+
+	pollAt2 := pollAt.Add(15 * time.Second)
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{streamObs(t, "playing", pollAt2, time.Minute)},
+		LastPollAt:   &pollAt2,
+	}})
+	api.Hub.Notify()
+
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "fpp.changed" {
+		t.Fatalf("second Notify with a real value change (idle -> playing) produced %q, want fpp.changed", event)
+	}
+	if !strings.Contains(data, `"value":"playing"`) {
+		t.Errorf("fpp.changed frame does not carry the new value: %s", data)
+	}
+}
+
+// TestFPPInstanceDiffProjectionStillFiresOnStateChange proves masking is
+// scoped to State == "current" only: a recovery from an absence
+// (collection_failed) to a real, current value changes the projected
+// State field itself, which must still produce a frame.
+func TestFPPInstanceDiffProjectionStillFiresOnStateChange(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+	failed, err := observation.CollectionFailed(res, "fpp.status", "connection refused",
+		observation.WithSource("fpp-rest"), observation.WithCollectedAt(testNow))
+	if err != nil {
+		t.Fatalf("building fixture observation: %v", err)
+	}
+
+	fpp := &mutableFPPLister{}
+	pollAt := testNow
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{failed},
+		LastPollAt:   &pollAt,
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "fpp.changed" {
+		t.Fatalf("first Notify: event = %q, want fpp.changed", event)
+	}
+
+	pollAt2 := pollAt.Add(15 * time.Second)
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{streamObs(t, "idle", pollAt2, time.Minute)},
+		LastPollAt:   &pollAt2,
+	}})
+	api.Hub.Notify()
+
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "fpp.changed" {
+		t.Fatalf("second Notify recovering from collection_failed to current produced %q, want fpp.changed", event)
+	}
+	if !strings.Contains(data, `"state":"current"`) {
+		t.Errorf("fpp.changed frame does not carry the recovered current state: %s", data)
+	}
+}
+
+// TestFPPInstanceDiffProjectionAgingToStaleStillProducesAFrame proves the
+// ADR-011 safety property fppInstanceDiffProjection's own doc comment
+// names directly: masking observedAt/source is conditioned on State ==
+// "current", so a value that stops being reconfirmed still ages into
+// "stale" (a State-field change) and still produces a frame, purely from
+// the render clock advancing with no new poll at all. Masking
+// unconditionally, across every state, would instead make a value that
+// silently stopped updating look byte-identical to one still being
+// actively reconfirmed — exactly the "stale reads as healthy" shape
+// ADR-011 forbids.
+func TestFPPInstanceDiffProjectionAgingToStaleStillProducesAFrame(t *testing.T) {
+	fpp := &mutableFPPLister{}
+	clock := &syncClock{t: testNow}
+
+	pollAt := testNow
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "player-01", Endpoint: "http://10.0.1.20",
+		Observations: []observation.Observation{streamObs(t, "idle", pollAt, 30*time.Second)},
+		LastPollAt:   &pollAt,
+	}})
+
+	api := New(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	}, Options{
+		Clock: clock.now, Logger: testLogger(),
+		StreamTickInterval: time.Hour, StreamKeepaliveInterval: time.Hour,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "fpp.changed" {
+		t.Fatalf("first Notify: event = %q, want fpp.changed", event)
+	}
+
+	// No new poll at all: the FPP lister's view is untouched. Only the
+	// render clock advances, past the observation's 30s ValidFor.
+	clock.advance(45 * time.Second)
+	api.Hub.Notify()
+
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "fpp.changed" {
+		t.Fatalf("aging past ValidFor with nothing else changed produced %q, want fpp.changed", event)
+	}
+	if !strings.Contains(data, `"state":"stale"`) {
+		t.Errorf("fpp.changed frame does not carry the aged-to-stale state: %s", data)
+	}
+}
+
+// TestStreamFPPChangedResolvesMultiSourceDuplicates is Step 5 review
+// finding 1's SSE coverage: mapFPPInstance's own resolution (proved
+// directly in mapping_test.go's TestMapFPPInstanceResolvesMultiSourceObservations)
+// must also hold on the stream path, since every fpp.changed frame is
+// built from that exact same mapFPPInstance call inside [Hub.render].
+func TestStreamFPPChangedResolvesMultiSourceDuplicates(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "dup-01"}
+	rest, err := observation.Measured(res, "fpp.status", "idle", testNow, observation.WithSource("fpp-rest"))
+	if err != nil {
+		t.Fatalf("building fixture observation: %v", err)
+	}
+	mqtt, err := observation.Measured(res, "fpp.status", "idle", testNow.Add(-time.Second), observation.WithSource("fpp-mqtt"))
+	if err != nil {
+		t.Fatalf("building fixture observation: %v", err)
+	}
+
+	fpp := &fakeFPPLister{views: []FPPInstanceView{{
+		InstanceID:   "dup-01",
+		Endpoint:     "http://10.0.1.30",
+		Observations: []observation.Observation{rest, mqtt},
+	}}}
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	api.Hub.Notify()
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "fpp.changed" {
+		t.Fatalf("event = %q, want fpp.changed; data: %s", event, data)
+	}
+
+	if n := strings.Count(data, `"signal":"fpp.status"`); n != 1 {
+		t.Fatalf("fpp.changed frame carries %d fpp.status entries for dup-01, want 1 — mapFPPInstance must resolve multi-source duplicates before the hub renders (Step 5 review finding 1); data: %s", n, data)
+	}
+}
+
 // TestStreamLastRenderedEvictsResourcesNoLongerPresent is finding 1.6's
 // regression guard: a resource that disappears from a render pass (its
 // node deleted from inventory, its FPP instance removed from

@@ -1,0 +1,89 @@
+{
+	"MQTT" : 
+	{
+		"configured" : true,
+		"connected" : true
+	},
+	"branch" : "v9.4",
+	"bridging" : false,
+	"channelInputsEnabled" : false,
+	"channelOutputsEnabled" : false,
+	"current_playlist" : 
+	{
+		"count" : "0",
+		"description" : "",
+		"index" : "0",
+		"playlist" : "",
+		"type" : ""
+	},
+	"current_sequence" : "",
+	"current_song" : "",
+	"dateStr" : "Tue Aug 11",
+	"fppd" : "running",
+	"host_description" : "FPP",
+	"host_name" : "FPP-Main",
+	"mode" : 2,
+	"mode_name" : "player",
+	"multisync" : true,
+	"next_playlist" : 
+	{
+		"playlist" : "No playlist scheduled.",
+		"start_time" : ""
+	},
+	"platform" : "Raspberry Pi",
+	"powerBad" : false,
+	"repeat_mode" : "0",
+	"scheduler" : 
+	{
+		"enabled" : 1,
+		"nextPlaylist" : 
+		{
+			"playlistName" : "No playlist scheduled.",
+			"scheduledStartTime" : 0,
+			"scheduledStartTimeStr" : ""
+		},
+		"status" : "idle"
+	},
+	"seconds_played" : "0",
+	"seconds_remaining" : "0",
+	"sensors" : 
+	[
+		{
+			"formatted" : "53.2",
+			"label" : "CPU: ",
+			"postfix" : "",
+			"prefix" : "",
+			"value" : 53.154000000000003,
+			"valueType" : "Temperature"
+		}
+	],
+	"status" : 0,
+	"status_name" : "idle",
+	"time" : "Tue Aug 11 17:28:59 CDT 2026",
+	"timeStr" : "05:28 PM",
+	"timeStrFull" : "05:28:59 PM",
+	"time_elapsed" : "00:00",
+	"time_remaining" : "00:00",
+	"uptime" : "04:39:35",
+	"uptimeDays" : 0.19415509259259259,
+	"uptimeHours" : 4.6597222222222223,
+	"uptimeMinutes" : 39.583333333333336,
+	"uptimeSeconds" : 35,
+	"uptimeStr" : "0 days, 4 hours, 39 minutes, 35 seconds",
+	"uptimeTotalSeconds" : 16775,
+	"uuid" : "M1-00000000c8398879",
+	"version" : "9.4",
+	"volume" : 80,
+	"warningInfo" : 
+	[
+		{
+			"id" : 3,
+			"message" : "A Log Level is set to Debug"
+		}
+	],
+	"warnings" : 
+	[
+		"A Log Level is set to Debug"
+	]
+}
+

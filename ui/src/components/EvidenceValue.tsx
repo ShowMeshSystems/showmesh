@@ -1,13 +1,17 @@
-import type { Evidence, EvidenceState } from '../app/types'
+import type { Evidence } from '../app/types'
 import { ageMs, effectiveServerTimeIso, formatAge } from '../app/time'
-import { StatusBadge, type StatusTone } from './StatusBadge'
+import { STATE_ICON, STATE_LABEL, STATE_TONE, formatValue } from '../app/evidenceState'
+import { StatusBadge } from './StatusBadge'
 
 // The one shared evidence renderer (spec section 6.2): "if evidence
 // rendering exists in more than one place, the two will diverge and one
 // of them will be wrong." Every place in this UI that shows an Evidence
 // envelope -- a node's hello/lastWill/heartbeat, an FPP instance's
 // observations, a flat /observations entry -- renders it through this
-// component and nothing else.
+// component and nothing else. Its state->icon/tone/label mapping and
+// value formatter live in app/evidenceState.ts (not here) so PortGrid's
+// and FleetSignalBadge's more compact renderings can reuse exactly the
+// same mapping instead of a second copy that drifts.
 //
 // The rule this component exists to enforce (api/openapi.yaml's Evidence
 // schema prose, spec section 6.2): `value` is non-null for `current`,
@@ -18,38 +22,6 @@ import { StatusBadge, type StatusTone } from './StatusBadge'
 // this component branches on `evidence.value === null`, never on
 // `evidence.state !== 'current'`, to decide whether there is a value to
 // show.
-
-const STATE_LABEL: Record<EvidenceState, string> = {
-  current: 'current',
-  stale: 'stale',
-  unknown_age: 'age unknown',
-  not_collected: 'not collected',
-  collection_failed: 'collection failed',
-  unsupported: 'not supported',
-}
-
-const STATE_ICON: Record<EvidenceState, string> = {
-  current: '●', // filled circle
-  stale: '⚠', // warning triangle
-  unknown_age: '?',
-  not_collected: '–', // en dash
-  collection_failed: '✕', // heavy X
-  unsupported: '∅', // empty set
-}
-
-const STATE_TONE: Record<EvidenceState, StatusTone> = {
-  current: 'good',
-  stale: 'warn',
-  unknown_age: 'unknown',
-  not_collected: 'unknown',
-  collection_failed: 'bad',
-  unsupported: 'unknown',
-}
-
-function formatValue(value: boolean | string | number, unit: string | null): string {
-  const text = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
-  return unit ? `${text} ${unit}` : text
-}
 
 export interface EvidenceValueProps {
   evidence: Evidence

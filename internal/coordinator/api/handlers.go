@@ -220,8 +220,21 @@ func (h *handlers) handleObservations(w http.ResponseWriter, r *http.Request) {
 		sortObservations(obs)
 	}
 
-	entries := make([]v1.ObservationEntry, 0, len(obs))
-	for _, o := range obs {
+	// obs may carry more than one collector source's row for the same
+	// (resourceKind, resourceId, signal) — see schemaV4's doc comment in
+	// internal/coordinator/store/migrations.go — and this endpoint's own
+	// doc comment (and its "ordered by resourceKind, then resourceId, then
+	// signal" contract) already implies one entry per that triple, exactly
+	// like mapFPPInstance's Observations does. ResolveObservations is the
+	// same single, documented precedence function that call site uses (see
+	// precedence.go); resolving here is what keeps a client of this flat
+	// endpoint from ever having to notice, or implement, that precedence
+	// rule itself.
+	resolved := ResolveObservations(obs)
+	sortObservations(resolved)
+
+	entries := make([]v1.ObservationEntry, 0, len(resolved))
+	for _, o := range resolved {
 		entries = append(entries, mapObservationEntry(o, now))
 	}
 	jsonWrite(w, v1.ObservationsResponse{ServerTime: formatTime(now), Observations: entries})

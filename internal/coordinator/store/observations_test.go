@@ -274,6 +274,88 @@ func TestObservationRoundTripsAbsence(t *testing.T) {
 	}
 }
 
+// TestUpsertObservationDifferentSourcesCoexist is schemaV4's own regression
+// guard, at the API this package exposes rather than raw SQL: two different
+// [observation.Observation.Source] values for the identical
+// (Resource.Kind, Resource.ID, Signal) must both survive as independent
+// rows — this is the whole point of widening the primary key (see
+// schemaV4's doc comment in migrations.go) — while a THIRD upsert from one
+// of those same two sources still replaces only that source's own row,
+// never the other source's.
+func TestUpsertObservationDifferentSourcesCoexist(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	ref := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+
+	rest, err := observation.Measured(ref, "fpp.fppd.state", "running", mustTime(t, "2026-08-11T12:00:00Z"),
+		observation.WithSource("fpp-rest"))
+	if err != nil {
+		t.Fatalf("build fpp-rest observation: %v", err)
+	}
+	if err := st.UpsertObservation(ctx, rest); err != nil {
+		t.Fatalf("upsert fpp-rest: %v", err)
+	}
+
+	mqtt, err := observation.Measured(ref, "fpp.fppd.state", "running", mustTime(t, "2026-08-11T12:00:03Z"),
+		observation.WithSource("fpp-mqtt"))
+	if err != nil {
+		t.Fatalf("build fpp-mqtt observation: %v", err)
+	}
+	if err := st.UpsertObservation(ctx, mqtt); err != nil {
+		t.Fatalf("upsert fpp-mqtt: %v", err)
+	}
+
+	got, err := st.ListObservations(ctx, ObservationFilter{})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2: fpp-rest and fpp-mqtt must coexist as independent rows for the same signal", len(got))
+	}
+	bySource := map[string]observation.Observation{}
+	for _, o := range got {
+		bySource[o.Source] = o
+	}
+	if _, ok := bySource["fpp-rest"]; !ok {
+		t.Errorf("no fpp-rest row survived alongside fpp-mqtt's")
+	}
+	if _, ok := bySource["fpp-mqtt"]; !ok {
+		t.Errorf("no fpp-mqtt row survived alongside fpp-rest's")
+	}
+
+	// A second fpp-rest upsert replaces only fpp-rest's own row.
+	restAgain, err := observation.Measured(ref, "fpp.fppd.state", "updating", mustTime(t, "2026-08-11T12:00:10Z"),
+		observation.WithSource("fpp-rest"))
+	if err != nil {
+		t.Fatalf("build second fpp-rest observation: %v", err)
+	}
+	if err := st.UpsertObservation(ctx, restAgain); err != nil {
+		t.Fatalf("upsert second fpp-rest: %v", err)
+	}
+
+	got, err = st.ListObservations(ctx, ObservationFilter{})
+	if err != nil {
+		t.Fatalf("list observations after second fpp-rest upsert: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2: still one row per source, not a third", len(got))
+	}
+	for _, o := range got {
+		switch o.Source {
+		case "fpp-rest":
+			if o.Value != "updating" {
+				t.Errorf("fpp-rest row Value = %v, want the replaced value %q", o.Value, "updating")
+			}
+		case "fpp-mqtt":
+			if o.Value != "running" {
+				t.Errorf("fpp-mqtt row Value = %v, want its own, untouched value %q", o.Value, "running")
+			}
+		default:
+			t.Errorf("unexpected source %q", o.Source)
+		}
+	}
+}
+
 // TestListObservationsFilters proves ResourceKind/ResourceID/Signal filter
 // independently and in combination, and that an unfiltered call returns
 // everything.

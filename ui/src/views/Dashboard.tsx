@@ -5,6 +5,10 @@ import { ClockSkewWarning } from '../components/ClockSkewWarning'
 import { SeverityBadge, CollectorStatusBadge } from '../components/DomainBadges'
 import { StatusBadge, type StatusTone } from '../components/StatusBadge'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
+import { FleetSignalBadge } from '../components/FleetSignalBadge'
+import { findObservation } from '../app/fppSignals'
+import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard'
+import { STATE_ICON, STATE_TONE } from '../app/evidenceState'
 import type { FPPInstance, Node } from '../app/types'
 
 // The default view (spec section 6.4). OBSERVABILITY section 6.2's last
@@ -106,6 +110,12 @@ export function Dashboard() {
   const fppUnknownHealth = model.fpp.filter((instance) => instance.health === 'unknown').length
   const fppSuppressed = model.fpp.filter((instance) => instance.health === 'suppressed').length
 
+  // Fleet-wide counts for the four newly modeled signal groups (spec
+  // section 6 "Dashboard"). Counted, never verdict-ed: see
+  // fppDashboard.ts's header comment.
+  const warningsTotal = summarizeFleetWarnings(model.fpp)
+  const portsTotal = summarizeFleetPorts(model.fpp)
+
   const recentEvents = model.events.slice(0, 5)
 
   return (
@@ -156,6 +166,36 @@ export function Dashboard() {
             <dd>{fppUnknownHealth}</dd>
             <dt>FPP instances suppressed</dt>
             <dd>{fppSuppressed}</dd>
+            <dt>FPP warnings across fleet</dt>
+            <dd>
+              {warningsTotal.instancesReporting === 0 ? (
+                <span className="text-muted">not collected</span>
+              ) : (
+                <>
+                  {warningsTotal.total}
+                  {/* Step 5 review finding 6: a total built partly from
+                      stale/unknown_age evidence must say so -- it is still
+                      a legitimate value (EvidenceValue.tsx's contract), not
+                      folded into instancesUnknown, but it must not read as
+                      equally fresh as a total built entirely from current
+                      evidence. */}
+                  {warningsTotal.instancesStaleOrUnknownAge > 0 && (
+                    <span className="text-muted">
+                      {' '}
+                      ({warningsTotal.instancesStaleOrUnknownAge} instance
+                      {warningsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} stale or age unknown)
+                    </span>
+                  )}
+                  {warningsTotal.instancesUnknown > 0 && (
+                    <span className="text-muted">
+                      {' '}
+                      ({warningsTotal.instancesUnknown} instance
+                      {warningsTotal.instancesUnknown === 1 ? '' : 's'} not reporting)
+                    </span>
+                  )}
+                </>
+              )}
+            </dd>
             <dt>Collectors</dt>
             <dd>
               {/* D1: a collector's state and reason previously never reached
@@ -182,6 +222,169 @@ export function Dashboard() {
               )}
             </dd>
           </dl>
+        </section>
+      </PanelErrorBoundary>
+
+      {/* Step 5: four newly modeled signal groups each get a panel (spec
+          section 6 "Dashboard"). Every panel renders unconditionally when
+          FPP instances are configured -- ShowMesh models all four
+          subsystems now, so there is never a "this subsystem is not
+          modeled" reason to omit one -- and each instance row states an
+          absence via FleetSignalBadge rather than going blank when a
+          particular signal was never collected. None of these panels
+          colours or recomputes instance.health; they are the same
+          Evidence envelopes FPPDetail shows, just fleet-wide and compact. */}
+      <PanelErrorBoundary panelLabel="Playback state">
+        <section className="panel">
+          <h2 className="panel__title">Playback state</h2>
+          {model.fpp.length === 0 ? (
+            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+          ) : (
+            <ul className="list-plain">
+              {model.fpp.map((instance) => (
+                <li key={instance.instanceId}>
+                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                    <strong>{instance.instanceId}</strong>{' '}
+                    <FleetSignalBadge evidence={findObservation(instance.observations, 'fpp.status')} />
+                    <div className="text-muted">
+                      <FleetSignalBadge
+                        label="playlist"
+                        evidence={findObservation(instance.observations, 'fpp.playlist.name')}
+                      />
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary panelLabel="Controller health">
+        <section className="panel">
+          <h2 className="panel__title">Controller health</h2>
+          {model.fpp.length === 0 ? (
+            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+          ) : (
+            <ul className="list-plain">
+              {model.fpp.map((instance) => (
+                <li key={instance.instanceId}>
+                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                    <strong>{instance.instanceId}</strong>{' '}
+                    <FleetSignalBadge
+                      label="fppd"
+                      evidence={findObservation(instance.observations, 'fpp.fppd.state')}
+                    />{' '}
+                    <FleetSignalBadge
+                      label="power bad"
+                      evidence={findObservation(instance.observations, 'fpp.power.bad')}
+                    />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary panelLabel="Pixel current">
+        <section className="panel">
+          <h2 className="panel__title">Pixel current</h2>
+          {model.fpp.length === 0 ? (
+            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+          ) : (
+            <>
+              <p className="text-muted">
+                {portsTotal.instancesReporting === 0
+                  ? 'Port inventory not collected for any instance yet.'
+                  : `${portsTotal.totalPorts} port element(s) across ${portsTotal.instancesReporting} reporting instance(s), ${portsTotal.totalBlind} of which are smart-receiver blind spots.`}
+                {/* Step 5 review finding 6/7: both counts below are stated
+                    explicitly rather than silently folded into the numbers
+                    above -- a stale/unknown_age contribution is still a
+                    real value, and an unanswered blind_count means
+                    totalBlind is a partial sum, not a confirmed total. */}
+                {portsTotal.instancesStaleOrUnknownAge > 0 && (
+                  <>
+                    {' '}
+                    {portsTotal.instancesStaleOrUnknownAge} instance{portsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} contributing
+                    port counts that are stale or of unknown age.
+                  </>
+                )}
+                {portsTotal.instancesBlindCountUnknown > 0 && (
+                  <>
+                    {' '}
+                    Blind-spot count not reported by {portsTotal.instancesBlindCountUnknown} instance
+                    {portsTotal.instancesBlindCountUnknown === 1 ? '' : 's'}, so the blind-spot total above may be
+                    incomplete.
+                  </>
+                )}
+                {portsTotal.instancesUnknown > 0 && (
+                  <>
+                    {' '}
+                    {portsTotal.instancesUnknown} instance{portsTotal.instancesUnknown === 1 ? '' : 's'} not
+                    reporting port inventory.
+                  </>
+                )}
+              </p>
+              <ul className="list-plain">
+                {model.fpp.map((instance) => {
+                  const count = findObservation(instance.observations, 'fpp.ports.count')
+                  return (
+                    <li key={instance.instanceId}>
+                      <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                        <strong>{instance.instanceId}</strong>{' '}
+                        {typeof count?.value === 'number' && count.value === 0 ? (
+                          // Step 5 review finding 6: this used to be a bare
+                          // <span> with no state marker, so a zero-port
+                          // reading of unknown age (the FPP-01 ghost shape,
+                          // one modelling decision away from this exact
+                          // signal) rendered as confidently as a fresh one.
+                          // A StatusBadge carries count.state's icon/tone
+                          // alongside the same wording, matching
+                          // FleetSignalBadge/PortGrid's established pattern
+                          // for the same distinction.
+                          <StatusBadge
+                            tone={STATE_TONE[count.state]}
+                            icon={STATE_ICON[count.state]}
+                            label="reports no pixel output ports"
+                          />
+                        ) : (
+                          <FleetSignalBadge label="ports" evidence={count} />
+                        )}
+                      </Link>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          )}
+        </section>
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary panelLabel="Network and MQTT state">
+        <section className="panel">
+          <h2 className="panel__title">Network / MQTT state</h2>
+          {model.fpp.length === 0 ? (
+            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+          ) : (
+            <ul className="list-plain">
+              {model.fpp.map((instance) => (
+                <li key={instance.instanceId}>
+                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                    <strong>{instance.instanceId}</strong>{' '}
+                    <FleetSignalBadge
+                      label="MQTT configured"
+                      evidence={findObservation(instance.observations, 'fpp.mqtt.configured')}
+                    />{' '}
+                    <FleetSignalBadge
+                      label="MQTT connected"
+                      evidence={findObservation(instance.observations, 'fpp.mqtt.connected')}
+                    />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </PanelErrorBoundary>
 

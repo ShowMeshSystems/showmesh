@@ -571,6 +571,21 @@ components:
         `observedAt` is null whenever the observation time is unknown —
         most importantly for a retained MQTT delivery (`state:
         "unknown_age"`) — and MUST NEVER be treated as equivalent to "now".
+
+
+        **A signal can be reported by more than one collector source.**
+        FPP's own REST API and its MQTT status topics both describe the same
+        underlying facts (playback, controller/network health, pixel
+        current), under identically-named `signal` values, distinguished
+        only by `source` ("fpp-rest" vs "fpp-mqtt"). This API never renders
+        more than one `Evidence` for the same signal on the same resource:
+        when both sources have something to say, the coordinator resolves
+        to a single value by a fixed precedence (a source with a known
+        observation time beats one without, which beats an absence; a
+        later observation time beats an earlier one; a tie prefers
+        "fpp-rest" over "fpp-mqtt") before this envelope is ever built. A
+        client reading this API never has to implement that resolution
+        itself, and never sees two competing rows to reconcile.
       required:
         [signal, value, unit, state, reason, observedAt, collectedAt,
          source, quality, validForSeconds]
@@ -578,12 +593,34 @@ components:
         signal:
           type: string
           description: >-
-            Namespaced, dot-separated signal identifier, e.g.
-            "fpp.multisync.enabled", "node.heartbeat".
+            Namespaced, dot-separated signal identifier. Existing
+            namespaces include "fpp.playlist.*"/"fpp.sequence.*"/
+            "fpp.position.*"/"fpp.song.*"/"fpp.scheduler.*" (playback
+            state), "fpp.fppd.*"/"fpp.power.*"/"fpp.bridging"/
+            "fpp.channel_inputs.*"/"fpp.channel_outputs.*"/"fpp.mqtt.*"/
+            "fpp.warnings.*" (controller and network health),
+            "fpp.os.*"/"fpp.platform"/"fpp.variant"/"fpp.kernel"/
+            "fpp.utilization.*"/"fpp.disk.*" (platform), "fpp.port.<key>.*"
+            and "fpp.sensor.<key>.*" (per-port pixel current and per-sensor
+            readings, `<key>` derived from that port's or sensor's own
+            reported name — this set is dynamic and cannot be enumerated
+            ahead of a real poll; an instance with nothing to report there
+            simply has no such entries), "fpp.multisync.enabled",
+            "node.heartbeat". A client MUST NOT assume this is a closed
+            vocabulary: new signals and new namespaces are added
+            additively, and an unrecognized one should render generically
+            (e.g. under an "other" grouping) rather than being dropped.
         value:
           type: [boolean, string, integer, number, "null"]
         unit:
           type: [string, "null"]
+          description: >-
+            Never a claimed unit this API cannot actually verify — for
+            example, a "fpp.sensor.<key>.value" temperature reading's unit
+            is always null (Celsius vs. Fahrenheit is not stated by the
+            source and is not guessed); the reading's kind is instead
+            carried on a separate "fpp.sensor.<key>.type" signal
+            ("Temperature", "Voltage").
         state:
           type: string
           enum:
@@ -608,6 +645,13 @@ components:
             that.
         source:
           type: string
+          description: >-
+            Names the collector that produced this evidence, e.g.
+            "fpp-rest" (FPP's REST API), "fpp-mqtt" (FPP's own MQTT status
+            topics — a second, independent source for many of the same
+            facts "fpp-rest" reports), "mqtt-inventory" (node
+            advertisement/liveness). Not a closed enum: a client should not
+            special-case specific source values beyond display purposes.
         quality:
           type: string
           enum: [direct, derived, inferred, operator]

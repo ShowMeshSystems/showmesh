@@ -3,6 +3,8 @@ package coordinator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,13 +149,28 @@ func TestLivenessObservingNodeListerRecordsStalenessOnlyTransition(t *testing.T)
 }
 
 // TestFPPInstanceListerSynthesizesNotYetPolledObservations is Step 3
-// review finding 3.8's regression guard: a configured FPP instance the
-// store holds nothing for yet (no poll has ever completed) must render one
-// not_collected [observation.Observation] per signal the FPP collector can
-// produce — never a bare empty Observations list, which a UI would show as
-// a blank panel indistinguishable from "this instance supports nothing" —
-// and LastPollAt/LastPollError must still read as "no poll yet" (nil), not
-// be fooled by the synthesized placeholders' own CollectedAt.
+// review finding 3.8's regression guard, extended by Step 5 contract
+// section 5.4: a configured FPP instance the store holds nothing for yet
+// (no poll has ever completed, from either collector source) must render
+// one not_collected [observation.Observation] per STATIC signal the FPP
+// REST collector can produce — never a bare empty Observations list, which
+// a UI would show as a blank panel indistinguishable from "this instance
+// supports nothing" — and LastPollAt/LastPollError must still read as "no
+// poll yet" (nil), not be fooled by the synthesized placeholders' own
+// CollectedAt.
+//
+// The len(v.Observations) == len(fppSignals) assertion below is
+// necessarily tautological — notYetPolledObservations is defined as "one
+// placeholder per fppSignals entry", so this can never fail on its own —
+// and is kept anyway as a cheap regression guard against a future edit
+// that makes the two diverge (e.g. a filter added to one but not the
+// other). It must NOT be read as proving fppSignals contains "every
+// signal this instance will ever report": see
+// TestFPPSignalsExcludesDynamicSignalFamilies immediately below for the
+// property that actually matters after Step 5 — fppSignals (now
+// [fpp.AllSignals] itself) is deliberately restricted to the static
+// vocabulary, and per-port/per-sensor signals simply do not exist in the
+// API at all until a real poll observes them.
 func TestFPPInstanceListerSynthesizesNotYetPolledObservations(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
@@ -182,6 +199,25 @@ func TestFPPInstanceListerSynthesizesNotYetPolledObservations(t *testing.T) {
 		}
 		if o.Resource.Kind != observation.ResourceFPP || o.Resource.ID != "player-01" {
 			t.Errorf("observation %q Resource = %+v, want {fpp player-01}", o.Signal, o.Resource)
+		}
+	}
+}
+
+// TestFPPSignalsExcludesDynamicSignalFamilies is the Step 5 contract
+// section 5.4 property TestFPPInstanceListerSynthesizesNotYetPolledObservations's
+// tautological count cannot prove on its own: fppSignals ([fpp.AllSignals])
+// must never contain a per-port (fpp.port.<key>.*) or per-sensor
+// (fpp.sensor.<key>.*) signal name, because <key> is discovered only from a
+// real poll's response and a not-yet-polled placeholder for a key that
+// turns out not to exist on a given instance would be a fabricated signal
+// name no real poll could ever match. Breaking fppSignals' doc comment's
+// promise (e.g. by hand-adding a literal "fpp.port.port_1.kind" entry)
+// must fail this test.
+func TestFPPSignalsExcludesDynamicSignalFamilies(t *testing.T) {
+	for _, sig := range fppSignals {
+		s := string(sig)
+		if strings.HasPrefix(s, "fpp.port.") || strings.HasPrefix(s, "fpp.sensor.") {
+			t.Errorf("fppSignals contains %q, a dynamic per-port/per-sensor signal name — these cannot be known before a real poll and must never appear in the static not-yet-polled placeholder set", s)
 		}
 	}
 }
@@ -268,3 +304,112 @@ func TestFPPCollectorStatusListerHasStableID(t *testing.T) {
 		t.Errorf("Reason = %v, want nil while running", states[0].Reason)
 	}
 }
+
+// TestFPPMQTTCollectorStatusListerReflectsConfigured is
+// [fppMQTTCollectorStatusLister]'s own regression guard, mirroring
+// [TestFPPCollectorStatusListerHasStableID] for the second collector
+// source Step 5 adds: not_configured with a non-null reason when
+// configured is false, running with a nil reason when it is true, always
+// exactly one entry at the fixed id [fppMQTTCollectorSourceID].
+func TestFPPMQTTCollectorStatusListerReflectsConfigured(t *testing.T) {
+	unconfigured := fppMQTTCollectorStatusLister{configured: false}
+	states, err := unconfigured.CollectorStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("collector statuses (unconfigured): %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("len(states) = %d, want exactly 1", len(states))
+	}
+	if states[0].ID != fppMQTTCollectorSourceID {
+		t.Errorf("ID = %q, want %q", states[0].ID, fppMQTTCollectorSourceID)
+	}
+	if states[0].State != string(api.CollectorNotConfigured) {
+		t.Errorf("State = %q, want %q", states[0].State, api.CollectorNotConfigured)
+	}
+	if states[0].Reason == nil {
+		t.Errorf("Reason = nil, want a non-null reason naming why nothing is configured")
+	}
+
+	configured := fppMQTTCollectorStatusLister{configured: true}
+	states, err = configured.CollectorStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("collector statuses (configured): %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("len(states) = %d, want exactly 1", len(states))
+	}
+	if states[0].ID != fppMQTTCollectorSourceID {
+		t.Errorf("ID = %q, want %q", states[0].ID, fppMQTTCollectorSourceID)
+	}
+	if states[0].State != string(api.CollectorRunning) {
+		t.Errorf("State = %q, want %q", states[0].State, api.CollectorRunning)
+	}
+	if states[0].Reason != nil {
+		t.Errorf("Reason = %v, want nil while running", states[0].Reason)
+	}
+}
+
+// TestMultiCollectorStatusListerConcatenatesBothSources is contract section
+// 5.4's "generalize fppCollectorStatusLister... so both collectors appear"
+// acceptance criterion, exercised directly against the real type
+// coordinator.go wires into api.Dependencies.Collectors: both the REST and
+// MQTT collectors' own single-row statuses must appear together, in the
+// order they were given, with neither one able to suppress or overwrite
+// the other's entry.
+func TestMultiCollectorStatusListerConcatenatesBothSources(t *testing.T) {
+	lister := multiCollectorStatusLister{
+		fppCollectorStatusLister{endpoints: []config.FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}}},
+		fppMQTTCollectorStatusLister{configured: true},
+	}
+
+	states, err := lister.CollectorStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("collector statuses: %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("len(states) = %d, want 2 (both collector sources visible, per contract section 5.4)", len(states))
+	}
+
+	byID := make(map[string]api.CollectorState, len(states))
+	for _, s := range states {
+		byID[s.ID] = s
+	}
+	rest, ok := byID[fppCollectorSourceID]
+	if !ok {
+		t.Fatalf("no %q entry in the combined collector list", fppCollectorSourceID)
+	}
+	if rest.State != string(api.CollectorRunning) {
+		t.Errorf("%s State = %q, want %q", fppCollectorSourceID, rest.State, api.CollectorRunning)
+	}
+	mqtt, ok := byID[fppMQTTCollectorSourceID]
+	if !ok {
+		t.Fatalf("no %q entry in the combined collector list", fppMQTTCollectorSourceID)
+	}
+	if mqtt.State != string(api.CollectorRunning) {
+		t.Errorf("%s State = %q, want %q", fppMQTTCollectorSourceID, mqtt.State, api.CollectorRunning)
+	}
+}
+
+// TestMultiCollectorStatusListerPropagatesError proves a sub-lister's error
+// is not silently swallowed into an empty or partial list — a caller
+// (GET /api/v1/snapshot's handler) must be able to tell "a dependency
+// failed" apart from "no collectors are configured".
+func TestMultiCollectorStatusListerPropagatesError(t *testing.T) {
+	lister := multiCollectorStatusLister{
+		fppCollectorStatusLister{endpoints: nil},
+		failingCollectorStatusLister{},
+	}
+	if _, err := lister.CollectorStatuses(context.Background()); err == nil {
+		t.Fatalf("CollectorStatuses succeeded, want the sub-lister's error propagated")
+	}
+}
+
+// failingCollectorStatusLister always returns an error; used only by
+// TestMultiCollectorStatusListerPropagatesError above.
+type failingCollectorStatusLister struct{}
+
+func (failingCollectorStatusLister) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
+	return nil, errFailingCollectorStatusLister
+}
+
+var errFailingCollectorStatusLister = errors.New("failingCollectorStatusLister: deliberate test failure")

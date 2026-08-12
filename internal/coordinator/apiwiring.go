@@ -240,20 +240,28 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 	return views, nil
 }
 
-// fppSignals is every signal internal/coordinator/collector/fpp.Collector
-// can produce (that package's Signal* constants), used only to synthesize
-// [notYetPolledObservations]' placeholders. Deliberately not derived
-// reflectively or otherwise kept "automatically" in sync: fpp.Collector is
-// Task C's package, built and tested independently, and a plain listing
-// here that a future signal addition must remember to update is the same
-// trade-off internal/coordinator/collector/fpp/fpp.go's own allDataSignals
-// already makes for the identical reason.
-var fppSignals = []observation.SignalID{
-	fpp.SignalReachable, fpp.SignalVersion, fpp.SignalMode, fpp.SignalStatus,
-	fpp.SignalPlaylistName, fpp.SignalSequenceName, fpp.SignalPositionSeconds,
-	fpp.SignalPositionRemaining, fpp.SignalMultiSyncEnabled, fpp.SignalMultiSyncSystems,
-	fpp.SignalSchedulerStatus, fpp.SignalUptimeSeconds,
-}
+// fppSignals is the STATIC subset of signals
+// internal/coordinator/collector/fpp.Collector can produce, used only to
+// synthesize [notYetPolledObservations]' not-yet-polled placeholders for a
+// freshly configured instance. It is [fpp.AllSignals] verbatim — that
+// package's own exported, documented static vocabulary — rather than a
+// second, hand-maintained copy of it: contract section 5.4 asks for exactly
+// this ("derive the list from an exported symbol in the fpp package so it
+// cannot drift"), and fpp.AllSignals' own doc comment names this file as
+// its motivating caller. Static means "known to exist before the first
+// poll ever completes"; fpp.AllSignals itself excludes the two dynamic
+// signal families (fpp.port.<key>.* and fpp.sensor.<key>.*) whose exact
+// members cannot be known before a real poll observes what ports and
+// sensors a given instance actually has — a not-yet-polled placeholder for
+// a port or sensor key that turns out not to exist on this instance would
+// be a fabricated signal name no real poll could ever match cleanly, so
+// those signals simply do not exist in the API at all until the first real
+// poll observes them. This is a type alias in intent, not a copy: this var
+// exists at all only because [notYetPolledObservations] below was already
+// written against a package-local fppSignals name before fpp.AllSignals
+// existed to reuse directly, and renaming every call site to fpp.AllSignals
+// verbatim was not worth the diff over one assignment.
+var fppSignals = fpp.AllSignals
 
 // notYetPolledObservations synthesizes one [observation.StateNotCollected]
 // observation per [fppSignals] entry for instanceID. now only has to
@@ -285,17 +293,34 @@ func notYetPolledObservations(instanceID string, now time.Time) []observation.Ob
 	return out
 }
 
-// fppLastPollAt is the latest CollectedAt across obs, or nil if obs is
-// empty (no poll has completed for this instance yet — see
-// api.FPPInstanceView.LastPollAt's doc comment). Every observation a single
-// Poll call produces shares the same CollectedAt/observedAt "now" (see
-// fpp.Collector.measured/failed), so in practice this is simply "the most
-// recent poll's timestamp", computed as a max rather than assumed uniform
-// so it stays correct even if that internal detail ever changes.
+// fppLastPollAt is the latest CollectedAt across obs' fpp-rest-sourced rows
+// only, or nil if none exist (no REST poll has completed for this instance
+// yet — see api.FPPInstanceView.LastPollAt's doc comment). Scoped to
+// fpp-rest specifically, not every source obs might now carry: "poll" is
+// this coordinator's own word for the REST collector's request/response
+// cycle (internal/coordinator/collector.Runner's cadence), and does not
+// describe internal/coordinator/collector/fppmqtt's push-based delivery
+// model at all — mixing the two into one "last activity, from any source"
+// timestamp would make this field answer a different, muddier question
+// than its name says it does. Every configured FPP instance is guaranteed
+// an fpp-rest source (contract section 4.4 requires every
+// SHOWMESH_FPP_MQTT_HOSTS entry to already be a SHOWMESH_FPP_ENDPOINTS
+// entry, never the reverse), so this scoping never produces a false "no
+// poll yet" for an instance that is in fact being actively observed via
+// MQTT alone.
+//
+// Every observation a single fpp-rest Poll call produces shares the same
+// CollectedAt/observedAt "now" (see fpp.Collector.measured/failed), so in
+// practice this is simply "the most recent poll's timestamp", computed as
+// a max rather than assumed uniform so it stays correct even if that
+// internal detail ever changes.
 func fppLastPollAt(obs []observation.Observation) *time.Time {
 	var latest time.Time
 	found := false
 	for _, o := range obs {
+		if o.Source != fppCollectorSourceID {
+			continue
+		}
 		if !found || o.CollectedAt.After(latest) {
 			latest = o.CollectedAt
 			found = true
@@ -308,15 +333,27 @@ func fppLastPollAt(obs []observation.Observation) *time.Time {
 }
 
 // fppLastPollError reports fpp.SignalReachable's Reason when its most
-// recently stored observation is a collection_failed absence — the one
-// signal the FPP collector's own doc comment (fpp.go, multiSyncEnabledSignal)
-// designates as "is this instance up", independent of any individual data
-// field's own decode outcome. nil (no error) covers both a genuinely
-// reachable instance and one that has never been polled yet; a caller
-// distinguishes those two cases via LastPollAt, not this field.
+// recently stored fpp-rest observation is a collection_failed absence — the
+// one signal the FPP collector's own doc comment (fpp.go,
+// multiSyncEnabledSignal) designates as "is this instance up", independent
+// of any individual data field's own decode outcome. nil (no error) covers
+// both a genuinely reachable instance and one that has never been polled
+// yet; a caller distinguishes those two cases via LastPollAt, not this
+// field.
+//
+// The explicit o.Source == fppCollectorSourceID check is defensive rather
+// than load-bearing today: internal/coordinator/collector/fppmqtt never
+// produces fpp.SignalReachable at all (contract section 4.3's topic table
+// has no reachable-equivalent — MQTT connection loss instead fails every
+// signal it does produce, per that package's own contract), so in practice
+// no other source can ever satisfy the o.Signal == fpp.SignalReachable
+// half of this check. Checking Source anyway keeps this function correct
+// by construction rather than by "nothing else happens to write this
+// signal today" — a property Seam A/B's parallel build should not have to
+// preserve by convention.
 func fppLastPollError(obs []observation.Observation) *string {
 	for _, o := range obs {
-		if o.Signal == fpp.SignalReachable && o.Absence == observation.StateCollectionFailed {
+		if o.Source == fppCollectorSourceID && o.Signal == fpp.SignalReachable && o.Absence == observation.StateCollectionFailed {
 			reason := o.Reason
 			return &reason
 		}
@@ -365,6 +402,77 @@ func (l fppCollectorStatusLister) CollectorStatuses(context.Context) ([]api.Coll
 		return []api.CollectorState{{ID: fppCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: fppCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+}
+
+// fppMQTTCollectorSourceID is [observation.Observation.Source] for every
+// observation internal/coordinator/collector/fppmqtt produces, and this
+// collector's own id in GET /api/v1/snapshot's "collectors" list — the
+// literal string contract section 4.1 fixes ("Source name is fpp-mqtt"),
+// duplicated here as a Go constant rather than imported from package
+// fppmqtt for the identical reason internal/coordinator/api/mapping.go's
+// healthCriticalSignals inlines "fpp.reachable": this file already inlines
+// fppCollectorSourceID = "fpp-rest" the same way, and a Seam C file mixing
+// "the REST source name is a local constant" with "the MQTT source name is
+// imported from its producer package" would be an arbitrary inconsistency,
+// not a considered choice.
+const fppMQTTCollectorSourceID = "fpp-mqtt"
+
+// fppMQTTCollectorStatusLister reports the FPP MQTT collector's own run
+// state for GET /api/v1/snapshot's "collectors" list, mirroring
+// [fppCollectorStatusLister]'s shape for the second collector source Step 5
+// adds: always exactly one entry, id [fppMQTTCollectorSourceID],
+// [api.CollectorRunning] when SHOWMESH_FPP_MQTT_BROKER_URL is configured,
+// [api.CollectorNotConfigured] naming why when it is not. configured is
+// supplied by coordinator.go from the same condition that decides whether
+// to construct and register the *fppmqtt.Collector at all — this type
+// carries no reference to that collector itself (nor to
+// internal/coordinator/config), just the one boolean its status reporting
+// actually needs, since a collector that fails to construct never reaches
+// this far in Run's wiring in any case (see coordinator.go).
+type fppMQTTCollectorStatusLister struct {
+	configured bool
+}
+
+func (l fppMQTTCollectorStatusLister) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
+	if !l.configured {
+		reason := "no FPP MQTT broker configured (SHOWMESH_FPP_MQTT_BROKER_URL is unset)"
+		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
+	}
+	return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+}
+
+// multiCollectorStatusLister concatenates several [api.CollectorStatusLister]
+// values into one, so api.Dependencies' single Collectors field — an
+// interface, not a slice, per api/interfaces.go — can still report every
+// collector source this coordinator runs. Before Step 5 there was exactly
+// one collector ([fppCollectorStatusLister]) and no need for this type at
+// all; Step 5 adds a second, independent source
+// (internal/coordinator/collector/fppmqtt), and "generalize
+// fppCollectorStatusLister... so both collectors appear" (contract section
+// 5.4) is this type, not a change to fppCollectorStatusLister itself —
+// each collector's own status logic stays exactly as independent as the
+// two collectors themselves are (contract section 4.6: fppmqtt "must not
+// share a client, a topic namespace, or a code path" with anything else),
+// and this is only ever the seam that lists them side by side.
+//
+// A second collector source that is invisible in this list is a source an
+// operator cannot tell is broken — the exact reasoning
+// [fppCollectorStatusLister]'s own doc comment already gives for why the
+// REST collector has a stable id in the first place, now applied to
+// keeping a second source from disappearing into that same list's single
+// entry.
+type multiCollectorStatusLister []api.CollectorStatusLister
+
+func (l multiCollectorStatusLister) CollectorStatuses(ctx context.Context) ([]api.CollectorState, error) {
+	var out []api.CollectorState
+	for _, sub := range l {
+		states, err := sub.CollectorStatuses(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, states...)
+	}
+	return out, nil
 }
 
 // --- collector.Sink over *store.Store, poking the SSE hub ---

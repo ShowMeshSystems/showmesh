@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // buildTestAPI wires a full [API] over the fixtures in fixtures_test.go,
@@ -310,6 +311,98 @@ func TestObservationsFilterParsedAndForwarded(t *testing.T) {
 	}
 	if obsLister.gotFilter.Signal == nil || *obsLister.gotFilter.Signal != "fpp.multisync.enabled" {
 		t.Errorf("Signal filter = %v, want \"fpp.multisync.enabled\"", obsLister.gotFilter.Signal)
+	}
+}
+
+// TestObservationsResolvesMultiSourceDuplicates is Step 5 review finding
+// 1's handleObservations half: deleting `resolved :=
+// ResolveObservations(obs)` from handleObservations (handlers.go) left the
+// entire Go suite green, because nothing fed it two rows sharing one
+// (resource, signal) pair from two different collector sources. GET
+// /api/v1/observations must return exactly one entry for a (resource,
+// signal) two sources both reported, never two.
+func TestObservationsResolvesMultiSourceDuplicates(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
+	rest := mustObs(observation.Measured(res, "fpp.status", "idle", testNow, observation.WithSource("fpp-rest")))
+	mqtt := mustObs(observation.Measured(res, "fpp.status", "idle", testNow.Add(-time.Second), observation.WithSource("fpp-mqtt")))
+
+	obsLister := &fakeObservationLister{obs: []observation.Observation{rest, mqtt}}
+	deps := Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: obsLister,
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/observations?resourceKind=fpp&resourceId=player-01&signal=fpp.status", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	entries, ok := m["observations"].([]any)
+	if !ok {
+		t.Fatalf("observations is not an array; body: %s", body)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("GET /api/v1/observations returned %d entries for one (resource, signal) reported by two sources, want 1 — ResolveObservations must run in handleObservations (handlers.go); body: %s", len(entries), body)
+	}
+}
+
+// TestFPPListAndByIDResolveMultiSourceDuplicates is Step 5 review finding
+// 1's remaining two rendering paths named explicitly ("both FPP handlers"):
+// GET /api/v1/fpp and GET /api/v1/fpp/{instanceId} both go through
+// mapFPPInstance (proved directly against that function in
+// TestMapFPPInstanceResolvesMultiSourceObservations, mapping_test.go), so
+// this drives the same duplicate-source condition through each HTTP
+// handler and checks the actual wire body, not the intermediate Go value.
+func TestFPPListAndByIDResolveMultiSourceDuplicates(t *testing.T) {
+	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "dup-01"}
+	rest := mustObs(observation.Measured(res, "fpp.status", "idle", testNow, observation.WithSource("fpp-rest")))
+	mqtt := mustObs(observation.Measured(res, "fpp.status", "idle", testNow.Add(-time.Second), observation.WithSource("fpp-mqtt")))
+
+	deps := Dependencies{
+		Nodes: &fakeNodeLister{},
+		FPP: &fakeFPPLister{views: []FPPInstanceView{{
+			InstanceID:   "dup-01",
+			Endpoint:     "http://10.0.1.30",
+			Observations: []observation.Observation{rest, mqtt},
+		}}},
+		Observations: &fakeObservationLister{}, Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	countFPPStatusEntries := func(t *testing.T, body []byte) int {
+		t.Helper()
+		m := decodeMap(t, body)
+		var observations []any
+		if inst, ok := m["instance"].(map[string]any); ok {
+			observations, _ = inst["observations"].([]any)
+		} else if instances, ok := m["instances"].([]any); ok {
+			for _, raw := range instances {
+				inst, ok := raw.(map[string]any)
+				if !ok || inst["instanceId"] != "dup-01" {
+					continue
+				}
+				observations, _ = inst["observations"].([]any)
+			}
+		}
+		n := 0
+		for _, raw := range observations {
+			entry, ok := raw.(map[string]any)
+			if ok && entry["signal"] == "fpp.status" {
+				n++
+			}
+		}
+		return n
+	}
+
+	_, listBody := doRequest(t, api.Handler, "GET", "/api/v1/fpp", nil)
+	if n := countFPPStatusEntries(t, listBody); n != 1 {
+		t.Fatalf("GET /api/v1/fpp: %d fpp.status entries for dup-01, want 1 — ResolveObservations must run in mapFPPInstance; body: %s", n, listBody)
+	}
+
+	_, byIDBody := doRequest(t, api.Handler, "GET", "/api/v1/fpp/dup-01", nil)
+	if n := countFPPStatusEntries(t, byIDBody); n != 1 {
+		t.Fatalf("GET /api/v1/fpp/dup-01: %d fpp.status entries, want 1 — ResolveObservations must run in mapFPPInstance; body: %s", n, byIDBody)
 	}
 }
 

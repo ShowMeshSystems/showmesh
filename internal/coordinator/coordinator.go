@@ -19,6 +19,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -130,7 +131,18 @@ func Run() int {
 		FPP:          fppInstanceLister{st: st, endpoints: cfg.FPPEndpoints},
 		Observations: storeObservationLister{st: st},
 		Events:       storeEventReader{st: st},
-		Collectors:   fppCollectorStatusLister{endpoints: cfg.FPPEndpoints},
+		// Step 5 (contract section 5.4): both FPP collector sources must be
+		// visible in /api/v1/snapshot's collectors[] — a second source that
+		// is invisible there is a source an operator cannot tell is broken.
+		// multiCollectorStatusLister (apiwiring.go) concatenates the two;
+		// the MQTT half's "configured" bit is exactly the same condition
+		// that decides whether *fppmqtt.Collector is constructed and
+		// registered below, so this line and that one can never disagree
+		// about whether FPP MQTT collection is enabled.
+		Collectors: multiCollectorStatusLister{
+			fppCollectorStatusLister{endpoints: cfg.FPPEndpoints},
+			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
+		},
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		AuthToken:      cfg.APIToken,
@@ -165,6 +177,39 @@ func Run() int {
 			return 1
 		}
 		fppRunner.Add(fppCollector, fpp.DefaultPollInterval)
+	}
+
+	// Seam B's FPP MQTT collector (internal/coordinator/collector/fppmqtt),
+	// contract section 5.4: constructed and registered only when its broker
+	// URL is configured — unset SHOWMESH_FPP_MQTT_BROKER_URL means this
+	// collector does not exist at all for this process, no warning storm,
+	// no failed-connection signals for a feature the operator did not
+	// enable (contract section 4.4). cfg.Validate has already checked
+	// FPPMQTTHosts' ids against cfg.FPPEndpoints and FPPMQTTBrokerURL's
+	// shape (internal/coordinator/config's validateFPPMQTTConfig); fppmqtt.New
+	// re-checks the same shape on its own for the identical "safe to
+	// construct directly, without relying on config validation having
+	// already run" reason fpp.New already documents for the REST collector
+	// above, so a failure here would mean those two checks have drifted
+	// apart — a startup-worthy inconsistency in this binary, not a
+	// condition to skip past silently.
+	var mqttFPPCollector *fppmqtt.Collector
+	if cfg.FPPMQTTBrokerURL != "" {
+		mqttFPPCollector, err = fppmqtt.New(fppmqtt.Options{
+			BrokerURL:   cfg.FPPMQTTBrokerURL,
+			Username:    cfg.FPPMQTTUsername,
+			Password:    cfg.FPPMQTTPassword,
+			TopicPrefix: cfg.FPPMQTTTopicPrefix,
+			Hosts:       cfg.FPPMQTTHosts,
+			Logger:      logger,
+		})
+		if err != nil {
+			logger.Error("failed to construct fpp mqtt collector", "error", err)
+			_ = bm.Disconnect(ctx)
+			_ = st.Close()
+			return 1
+		}
+		fppRunner.Add(mqttFPPCollector, mqttFPPCollector.PollInterval())
 	}
 
 	// The store and the broker each contribute independently to /readyz;
@@ -204,6 +249,29 @@ func Run() int {
 		defer backgroundWG.Done()
 		fppRunner.Run(ctx)
 	}()
+
+	// mqttFPPCollector.Run owns the FPP MQTT broker connection's own
+	// lifecycle (connect, resubscribe across reconnects, graceful
+	// disconnect on ctx cancellation — see that method's doc comment),
+	// entirely separate from fppRunner's poll-loop goroutine above: Poll
+	// only ever renders whatever mqttFPPCollector's message store already
+	// holds (contract section 4.1 — Poll never touches the network), so the
+	// connection itself needs its own goroutine the same way hub.Run and
+	// fppRunner.Run already get theirs, joined via the identical
+	// backgroundWG so shutdown still waits for every one of them cleanly.
+	// Started (and only started) exactly when mqttFPPCollector was
+	// constructed above, matching that same cfg.FPPMQTTBrokerURL != ""
+	// condition — an unconfigured FPP MQTT collector contributes no
+	// goroutine at all, per contract section 4.4.
+	if mqttFPPCollector != nil {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			if err := mqttFPPCollector.Run(ctx); err != nil {
+				logger.Error("fpp mqtt collector connection ended", "error", err)
+			}
+		}()
+	}
 
 	serveErrCh := make(chan error, 1)
 	go func() {

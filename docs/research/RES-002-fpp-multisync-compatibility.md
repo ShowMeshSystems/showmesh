@@ -112,6 +112,25 @@ Read-only `GET /api/system/info` and `GET /api/fppd/status` against the three de
 - The player's own `warnings` array reported `MQTT Disconnected` and `A Log Level is set to Debug` at probe time. Both are FPP-side conditions unrelated to MultiSync, noted so a future capture is not read against an assumed-clean baseline.
 - The operator intends to move the fleet to a 9.x release or trial the FPP 10 beta before the season. That is a material environment change: captures taken before it do not carry forward.
 
+### `warnings` is omitted from the status document when empty (2026-08-11, L1, source-verified)
+
+A second read-only pass over the fleet found the three hosts disagreeing in shape rather than in content: `FPP-remote-04` has **no `warnings` key at all** in `/api/fppd/status`, while its MQTT `warnings` topic publishes `[]`, and the other two hosts carry populated arrays. Absent, empty, and populated are three different claims, and guessing between them is exactly what this project's evidence discipline forbids.
+
+Settled against FPP's own source rather than by inference. In `src/httpAPI.cpp`, the field is built only inside the loop:
+
+```cpp
+for (auto& warn : WarningHolder::GetWarnings()) {
+    result["warnings"].append(warn.message());
+    result["warningInfo"].append(warn);
+}
+```
+
+`.append()` creates the key on first use, so an empty warning list never creates it. **FPP omits `warnings` and `warningInfo` from `/api/fppd/status` when there are no warnings.** Verified at commit `7e3c6acb02386e65855f420aa21cde518453be38`, which is the `RemoteGitVersion` `FPP-Main` itself reports, so it is the correct source for this fleet rather than for `master` generally. Read at lines 120-124 of that file; a builder independently cited the same construct in the same file. [src: `src/httpAPI.cpp` @ `7e3c6acb0`, accessed 2026-08-11]
+
+Also confirmed live in the same pass, and worth recording next to the note above about not assuming a clean baseline: the player's `MQTT Disconnected` warning is **gone**, and all three hosts now report `MQTT: {configured: true, connected: true}` against the operator's existing broker. The earlier reading was a point-in-time observation, not a standing condition.
+
+**What this does and does not license.** ShowMesh still models a REST-absent `warnings` as `unsupported` with a reason rather than as a measured zero, and lets the MQTT source answer the signal positively. The source verification makes that a deliberate conservatism rather than an unknown: turning a key's absence into a measured value is the failure mode this project keeps catching, and having a second source that states the fact positively costs nothing.
+
 ### How ShowMesh detects that MultiSync is off (2026-08-10, tier 1)
 
 The note above says ShowMesh must be able to report "MultiSync is disabled"

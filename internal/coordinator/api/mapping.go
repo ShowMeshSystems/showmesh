@@ -143,8 +143,27 @@ func evidenceReason(o observation.Observation, state observation.State, now time
 	case observation.StateUnknownAge:
 		return "observation time is unknown (e.g. a retained MQTT delivery replayed on reconnect)"
 	case observation.StateStale:
-		age := now.Sub(*o.ObservedAt).Round(time.Second)
-		return fmt.Sprintf("value is %s old, past its %s validity window", age, o.ValidFor)
+		// Deliberately NOT a computed age (contract section 6.2 forbids a
+		// precomputed age anywhere in a payload, in as many words). This
+		// used to be fmt.Sprintf("value is %s old, past its %s validity
+		// window", now.Sub(*o.ObservedAt).Round(time.Second), o.ValidFor)
+		// — reading as harmless because it only touches a "reason" string,
+		// but `now` is the RENDER clock, so this reason changed on every
+		// single render tick for any instance carrying even one stale
+		// signal, which defeated Hub.updateRendered's byte-for-byte diff
+		// (contract section 6.5) and re-broadcast that instance forever at
+		// tick rate — measured against the real fleet at ~43 KB/s per
+		// connected browser on an otherwise idle system (Step 5 review
+		// finding 2). o.ValidFor is fixed per observation (not
+		// clock-derived), so including it is safe; the wire already carries
+		// observedAt, validForSeconds, and serverTime, and the UI derives
+		// the actual age from those at render time (EvidenceValue.tsx) —
+		// this reason only needs to explain WHY state is stale, not restate
+		// a number the client can already compute more precisely itself.
+		// See fppInstanceDiffProjection in stream.go for the other half of
+		// this same fix (masking observedAt/source churn for
+		// otherwise-unchanged current-state evidence).
+		return fmt.Sprintf("value has not been reconfirmed within its %s validity window", o.ValidFor)
 	default:
 		// Unreachable: StateNotCollected/StateCollectionFailed/StateUnsupported
 		// are exactly the absence states Validate requires a non-empty Reason
@@ -396,51 +415,208 @@ func sanitizeEndpoint(endpoint string) string {
 	return u.String()
 }
 
-// deriveInstanceHealth aggregates an FPP instance's collected observations
-// into one [observation.Health]. Step 3 has very little basis for
-// "degraded" or "failed" (contract section 4's closing note): a REST
-// collector reading FPP's own status either has current evidence or it
-// does not, and nothing at this layer knows enough about any individual
-// signal's meaning to call it unhealthy on its own (fpp.multisync.enabled
-// == false is information, not a fault). So every observation contributes
-// [observation.HealthHealthy] when current and [observation.HealthUnknown]
-// otherwise (via [observation.DeriveHealth], which enforces that gate
-// structurally), and the instance's aggregate is the worst of those via
-// [observation.AggregateHealth] with every member marked critical.
+// healthCriticalSignals is the fixed, named set of FPP signals whose value
+// drives an FPP instance's aggregate [observation.Health], per Step 5
+// contract section 5.3. Every signal NOT in this map is informational and
+// contributes nothing to the verdict — it may still render prominently in
+// [v1.FPPInstance.Observations], it simply never moves Health. This
+// replaces Step 3's "every observation is a critical member, any value is
+// healthy" rule (see this function's git history), which Step 5 would
+// otherwise have broken two different ways simultaneously: the many
+// legitimately-unsupported signals Step 5 adds (remote-mode playback,
+// smart-receiver current, an absent pixelCount) would have dragged every
+// real host to unknown forever, and fpp.power.bad == true would have kept
+// contributing HealthHealthy because the old mapper never looked at the
+// value at all.
 //
-// An instance with zero observations is [observation.HealthUnknown]:
-// [observation.AggregateHealth] itself now returns HealthUnknown for an
-// empty (or entirely suppressed/non-critical-unknown) member list — it
-// used to return the vacuously-healthy HealthHealthy for that case, which
-// this function's own comment used to call out as a deliberate
-// divergence, but that was AggregateHealth's bug to fix, not a case this
-// caller needed to keep working around. There is accordingly no explicit
-// "len(obs) == 0" guard here any more: `members` is simply an empty slice
-// in that case, and AggregateHealth(nil-or-empty) already answers
-// HealthUnknown on its own — the correct, and now the honest, default
-// either way.
-func deriveInstanceHealth(obs []observation.Observation, now time.Time) observation.Health {
-	members := make([]observation.AggregateMember, 0, len(obs))
-	for _, o := range obs {
-		h := observation.DeriveHealth(o, now, func(any) observation.Health {
+// Deliberately NOT here: fpp.warnings.count / fpp.warnings.summary (or any
+// fpp.warnings.* signal). FPP's own warning list mixes purely informational
+// entries ("A Log Level is set to Debug") with entries that look like real
+// faults ("Cannot Ping ArtNet Channel Data Target") in the same untyped
+// string list, with no structured severity this coordinator can read.
+// Classifying those strings into a health verdict would be ShowMesh
+// inventing a verdict from text it does not understand — exactly what
+// ADR-011 forbids ("never fabricate a confident verdict from evidence that
+// does not support one"). Warnings are surfaced prominently by the
+// Operator UI and never drive this field; do not add a warnings entry to
+// this map without first getting a structured (not string-classified)
+// signal for whatever specific fault it is meant to catch.
+//
+// This is Step 5's implementation of ADR-011, not itself a new durable
+// constraint requiring its own ADR — see this task's report for that
+// judgment call, which the orchestrator makes, not this file.
+var healthCriticalSignals = map[observation.SignalID]func(value any) observation.Health{
+	// "fpp.reachable" is [fpp.SignalReachable]'s exact wire value, inlined
+	// as a literal rather than importing
+	// internal/coordinator/collector/fpp into this package: this API
+	// renders and now resolves (see [ResolveObservations]) evidence from
+	// whichever collector source produced it, fpp-rest or fpp-mqtt, and
+	// importing one concrete collector package to borrow a string constant
+	// would make that source-agnostic promise a lie in the one file that
+	// most needs to keep it honest.
+	//
+	// The `else HealthFailed` branch below is real, total behavior for any
+	// current-state Measured value this function is ever handed (and is
+	// pinned directly by TestDeriveInstanceHealthReachableFalseIsFailed),
+	// but it is DEAD CODE against every actual poll internal/coordinator/
+	// collector/fpp has ever produced: that collector never calls
+	// observation.Measured(false, ...) for this signal — an unreachable FPP
+	// is reported as observation.CollectionFailed instead (see that
+	// package's Collector.Poll), and [observation.DeriveHealth] never even
+	// invokes this function for a non-current state in the first place (see
+	// this map's own doc comment above the deriveInstanceHealth call site).
+	// So a definitively-down, correctly-configured FPP instance reports
+	// health "unknown", never "failed" — Step 3's deliberate decision,
+	// which this task's spec confirmed still stands (Step 5 review finding
+	// 4(a): the spec's own health table was wrong to imply "failed" was
+	// reachable here, the code was already right, and
+	// TestDeriveInstanceHealthUnreachableInstanceReportsUnknown below pins
+	// the real, reachable behavior by name). This comment — not a code
+	// change — is what closes that gap between what this map's shape
+	// implies and what a real collector poll can actually produce.
+	"fpp.reachable": func(value any) observation.Health {
+		if b, ok := value.(bool); ok && b {
 			return observation.HealthHealthy
-		})
+		}
+		return observation.HealthFailed
+	},
+	// "fpp.fppd.state" carries FPP's own daemon state string, e.g.
+	// "running" (contract section 3.1). Any other value — including one
+	// this coordinator has never seen before — is degraded, never failed:
+	// Step 5 has no evidence FPP's daemon-state vocabulary is closed, so
+	// treating an unrecognized string as merely degraded (not a hard
+	// failure) is the conservative reading available from what little this
+	// signal says on its own.
+	"fpp.fppd.state": func(value any) observation.Health {
+		if s, ok := value.(string); ok && s == "running" {
+			return observation.HealthHealthy
+		}
+		return observation.HealthDegraded
+	},
+	// "fpp.power.bad" is FPP's own boolean fault flag (contract section
+	// 3.1). false is healthy; true (or any other type this coordinator
+	// somehow received) is degraded — this is the literal Step 5 defect
+	// this map exists to fix: the Step 3 mapper contributed HealthHealthy
+	// for fpp.power.bad == true because it never looked at the value.
+	"fpp.power.bad": func(value any) observation.Health {
+		if b, ok := value.(bool); ok && !b {
+			return observation.HealthHealthy
+		}
+		return observation.HealthDegraded
+	},
+}
+
+// deriveInstanceHealth aggregates an FPP instance's RESOLVED (see
+// [ResolveObservations] — callers must already have collapsed any
+// multi-source duplicates before calling this) observations into one
+// [observation.Health], per Step 5 contract section 5.3.
+//
+// Two things are true of every observation before it can become an
+// [observation.AggregateMember] here:
+//
+//  1. Its resolved state must not be [observation.StateUnsupported].
+//     Unsupported is a positive statement that a source cannot answer this
+//     signal at all (remote-mode playback, a smart-receiver's current, an
+//     absent pixelCount), not missing evidence — it contributes nothing to
+//     the verdict, critical signal or not, and does not even get built into
+//     an AggregateMember (a critical member whose Health resolved to
+//     HealthUnknown would still count against the aggregate per
+//     [observation.AggregateHealth]'s own critical-unknown rule, which is
+//     exactly the wrong outcome for a signal that positively cannot be
+//     answered).
+//  2. Its Signal must be one of [healthCriticalSignals]' keys. Everything
+//     else — every fpp.warnings.*, every fpp.sensor.*, every fpp.port.*,
+//     platform/utilization signals, the identity/version signals — is
+//     informational and is skipped entirely, never added as a
+//     non-critical member either: OBSERVABILITY section 4.2's aggregate
+//     rule already lets a non-critical HealthUnknown pass through without
+//     blocking a healthy verdict, but skipping it here (rather than adding
+//     it as Critical: false) also keeps a large fleet of informational
+//     signals from silently padding the aggregate with HealthHealthy
+//     members for values this file has no actual health opinion about.
+//
+// For the two above, [observation.DeriveHealth] still does the real work:
+// it returns HealthUnknown for anything that is not
+// [observation.StateCurrent] as of now (stale, unknown_age,
+// collection_failed, not_collected), and only calls this map's per-signal
+// function when the observation is genuinely current.
+//
+// An instance with no health-critical evidence at all — none of the three
+// signals above has ever been observed for it — is [observation.HealthUnknown]:
+// [observation.AggregateHealth] returns HealthUnknown for an empty (or
+// entirely suppressed/non-critical-unknown) member list, which `members`
+// legitimately is whenever every observation was either unsupported or
+// informational.
+//
+// A third rule, beyond what the two numbered above and
+// [observation.AggregateHealth] give for free (Step 5 review finding
+// 4(b)): a HealthHealthy verdict additionally requires fpp.fppd.state
+// itself to have resolved HealthHealthy — present, current, and reading
+// "running" — not merely fpp.reachable and fpp.power.bad. Before this
+// rule, an instance whose source never reports fpp.fppd.state at all (not
+// a hypothetical — any source that only implements reachability and the
+// power-fault flag) read fully healthy from two of three critical
+// signals, with zero evidence the player daemon itself was ever running:
+// "the HTTP server answered" is not evidence that the player is healthy,
+// and ADR-011 forbids a confident verdict the evidence does not support.
+// If fpp.fppd.state is absent or [observation.StateUnsupported] — either
+// one means it never becomes a member at all, by rule 2 above and this
+// map's key set — the aggregate is capped to [observation.HealthUnknown]
+// even when reachable+power.bad alone would otherwise read healthy. A
+// fpp.fppd.state that IS present but not current (stale,
+// collection_failed, unknown_age...) already forces this outcome for free
+// via [observation.AggregateHealth]'s own critical-unknown rule, since
+// DeriveHealth returns HealthUnknown for it as a normal critical member —
+// this cap exists only for the "never observed at all" gap that rule
+// cannot see, because a signal with zero observations never becomes a
+// member to begin with.
+func deriveInstanceHealth(obs []observation.Observation, now time.Time) observation.Health {
+	members := make([]observation.AggregateMember, 0, len(healthCriticalSignals))
+	fppdStateHealthy := false
+	for _, o := range obs {
+		if o.Absence == observation.StateUnsupported {
+			continue
+		}
+		whenCurrent, critical := healthCriticalSignals[o.Signal]
+		if !critical {
+			continue
+		}
+		h := observation.DeriveHealth(o, now, whenCurrent)
 		members = append(members, observation.AggregateMember{Health: h, Critical: true})
+		if o.Signal == "fpp.fppd.state" && h == observation.HealthHealthy {
+			fppdStateHealthy = true
+		}
 	}
-	return observation.AggregateHealth(members)
+	health := observation.AggregateHealth(members)
+	if health == observation.HealthHealthy && !fppdStateHealthy {
+		return observation.HealthUnknown
+	}
+	return health
 }
 
 // mapFPPInstance renders one [FPPInstanceView] as a [v1.FPPInstance].
+// [ResolveObservations] runs here, once: fv.Observations may carry more
+// than one collector source's row for the same signal (fpp-rest and
+// fpp-mqtt both report the identically-named status/port signals — Step 5
+// contract section 4.3), and this is the single call site every FPP
+// instance rendering path — GET /api/v1/fpp, GET /api/v1/fpp/{id}, the
+// snapshot's fpp section, and every fpp.changed stream event (see
+// stream.go) — goes through, so resolving here makes it resolved
+// everywhere, once, per contract section 5.2's "resolution happens once,
+// at read."
 func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
-	obsEvidence := make([]v1.Evidence, 0, len(fv.Observations))
-	for _, o := range fv.Observations {
+	resolved := ResolveObservations(fv.Observations)
+	sortObservations(resolved)
+
+	obsEvidence := make([]v1.Evidence, 0, len(resolved))
+	for _, o := range resolved {
 		obsEvidence = append(obsEvidence, mapEvidence(o, now))
 	}
 
 	return v1.FPPInstance{
 		InstanceID:    fv.InstanceID,
 		Endpoint:      sanitizeEndpoint(fv.Endpoint),
-		Health:        string(deriveInstanceHealth(fv.Observations, now)),
+		Health:        string(deriveInstanceHealth(resolved, now)),
 		Observations:  obsEvidence,
 		LastPollAt:    formatTimePtr(fv.LastPollAt),
 		LastPollError: fv.LastPollError,

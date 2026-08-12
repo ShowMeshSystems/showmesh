@@ -223,7 +223,9 @@ The fix keeps the coordinator's `state` verdict untouched, because that verdict 
 
 ## Step 5: Real FPP signals on the dashboard
 
-Status: specified, not started
+Status: **complete, 2026-08-11.** The first work in this project exercised against real show hardware: the coordinator was run read-only against all three deployed FPP hosts and the operator's live broker, and every acceptance criterion below was demonstrated there rather than only in a fixture. See the [build log](BUILD-LOG.md) for what that does and does not license, the five ways the live probe corrected this specification before any code was written, and the SSE finding that is measured and deliberately left open.
+
+Three narrowings, recorded rather than silently dropped: the change stream still re-sends a whole instance to report a single changed observation, which needs an ADR-020 decision on delta frames; observation rows are never pruned, so a removed cape leaves ghost port rows behind (RES-013 owns retention); and observation changes still produce no event-history entries.
 
 **Goal:** Step 4 built a surface with almost nothing to display. Step 5 fills it with the four signal groups the operator actually looks at, collected from the real deployed fleet rather than from a container. Still read-only; ADR-021 rule 5 continues to bar any write endpoint.
 

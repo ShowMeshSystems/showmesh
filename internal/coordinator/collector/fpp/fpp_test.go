@@ -142,8 +142,12 @@ func TestMultiSyncEnabledNeverReadsTheSettingsEndpoint(t *testing.T) {
 	obs := c.Poll(context.Background())
 
 	// Pin the exact, complete set of endpoints one Poll call is allowed to
-	// touch — not merely that one forbidden path was avoided.
-	srv.assertExactPathSet(t, "/api/fppd/status", "/api/fppd/multiSyncSystems")
+	// touch — not merely that one forbidden path was avoided. Step 5 added
+	// /api/fppd/ports and /api/system/info to this set (contract section
+	// 3); both are unregistered on this test server and so 404, which is
+	// fine — this assertion only cares which paths were requested, not
+	// what they returned.
+	srv.assertExactPathSet(t, "/api/fppd/status", "/api/fppd/multiSyncSystems", "/api/fppd/ports", "/api/system/info")
 
 	// The multisync.enabled signal must still be correctly derived from
 	// status.multisync (which this capture set to false) — proving the
@@ -155,9 +159,17 @@ func TestMultiSyncEnabledNeverReadsTheSettingsEndpoint(t *testing.T) {
 }
 
 // TestPollHealthyStatusAllSignals is a broad assertion, against the same
-// real "enabled" capture, that every signal in the Task C table is present
-// and carries the exact value the real daemon reported — pinning the whole
-// table at once rather than one signal per test.
+// real "enabled" capture, that every static status-derived signal is
+// present and carries the exact value (or, for the handful this fixture
+// cannot answer, the exact Unsupported absence) the real daemon's document
+// implies — pinning the whole table at once rather than one signal per
+// test.
+//
+// This bench capture (status_multisync_enabled.json) is player mode with
+// no "warnings" key and no "sensors" array, so four of the static signals
+// are legitimately Unsupported here: fpp.media.filename and
+// fpp.position.elapsed.seconds (remote-mode-only fields, contract section
+// 3.3) and fpp.warnings.count/fpp.warnings.summary (contract section 3.4).
 func TestPollHealthyStatusAllSignals(t *testing.T) {
 	srv := newFPPServer()
 	srv.serveBody("/api/fppd/status", loadTestdata(t, "status_multisync_enabled.json"))
@@ -168,25 +180,48 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 	c := newTestCollector(t, ts.URL, Options{Now: fixedClock(&now)})
 	obs := c.Poll(context.Background())
 
-	want := map[observation.SignalID]any{
-		SignalReachable:         true,
-		SignalVersion:           "9.5.3",
-		SignalMode:              "player",
-		SignalStatus:            "idle",
-		SignalPlaylistName:      "",
-		SignalSequenceName:      "",
-		SignalPositionSeconds:   float64(0),
-		SignalPositionRemaining: float64(0),
-		SignalMultiSyncEnabled:  true,
-		SignalMultiSyncSystems:  int64(1),
-		SignalSchedulerStatus:   "idle",
-		SignalUptimeSeconds:     float64(37),
+	wantValue := map[observation.SignalID]any{
+		SignalReachable:              true,
+		SignalVersion:                "9.5.3",
+		SignalMode:                   "player",
+		SignalStatus:                 "idle",
+		SignalPlaylistName:           "",
+		SignalSequenceName:           "",
+		SignalPositionSeconds:        float64(0),
+		SignalPositionRemaining:      float64(0),
+		SignalMultiSyncEnabled:       true,
+		SignalMultiSyncSystems:       int64(1),
+		SignalSchedulerStatus:        "idle",
+		SignalUptimeSeconds:          float64(37),
+		SignalSongName:               "",
+		SignalPlaylistRepeatMode:     int64(0),
+		SignalPlaylistIndex:          int64(0),
+		SignalPlaylistCount:          int64(0),
+		SignalPlaylistType:           "",
+		SignalSchedulerEnabled:       true,
+		SignalSchedulerNextPlaylist:  "No playlist scheduled.",
+		SignalSchedulerNextStartTime: int64(0),
+		SignalFPPDState:              "running",
+		SignalPowerBad:               false,
+		SignalBridging:               false,
+		SignalChannelInputsEnabled:   false,
+		SignalChannelOutputsEnabled:  false,
+		SignalBranch:                 "(HEAD detached at 9.5.3)",
+		SignalUUID:                   "M4-ce13ae2b62b238e533a474876a7a8b88",
+		SignalHostName:               "fpp-master",
+		SignalVolume:                 int64(0),
+		SignalMQTTConfigured:         false,
+		SignalMQTTConnected:          false,
+	}
+	wantUnsupported := []observation.SignalID{
+		SignalMediaFilename, SignalPositionElapsedSeconds,
+		SignalWarningsCount, SignalWarningsSummary,
 	}
 
-	for sig, wantVal := range want {
+	for sig, wantVal := range wantValue {
 		got := findSignal(t, obs, sig)
 		if got.Absence != "" {
-			t.Errorf("signal %q: Absence = %q, want a value (%v)", sig, got.Absence, wantVal)
+			t.Errorf("signal %q: Absence = %q (reason %q), want a value (%v)", sig, got.Absence, got.Reason, wantVal)
 			continue
 		}
 		if got.Value != wantVal {
@@ -200,8 +235,21 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 		}
 	}
 
-	if len(want) != len(allDataSignals)+2 { // +SignalReachable +SignalMultiSyncSystems
-		t.Fatalf("test bug: want table has %d entries, expected %d", len(want), len(allDataSignals)+2)
+	for _, sig := range wantUnsupported {
+		got := findSignal(t, obs, sig)
+		if got.Absence != observation.StateUnsupported {
+			t.Errorf("signal %q Absence = %q, want unsupported", sig, got.Absence)
+		}
+		if got.Reason == "" {
+			t.Errorf("signal %q Reason is empty, want an explanation", sig)
+		}
+	}
+
+	// wantValue + SignalReachable is checked above but SignalReachable and
+	// SignalMultiSyncSystems are not part of allStatusSignals (see its doc
+	// comment) — the "+2" below accounts for exactly those two.
+	if got, want := len(wantValue)+len(wantUnsupported), len(allStatusSignals)+2; got != want {
+		t.Fatalf("test bug: want tables cover %d signals, expected %d (len(allStatusSignals)+2)", got, want)
 	}
 }
 
@@ -246,11 +294,33 @@ func TestPollUnreachableProducesCollectionFailedNeverFabricatedFalse(t *testing.
 		t.Errorf("fpp.multisync.enabled Absence = %q, want collection_failed", enabled.Absence)
 	}
 
-	for _, sig := range allDataSignals {
+	for _, sig := range allStatusSignals {
 		got := findSignal(t, obs, sig)
 		if got.Absence != observation.StateCollectionFailed {
 			t.Errorf("signal %q Absence = %q, want collection_failed when the instance is unreachable", sig, got.Absence)
 		}
+	}
+
+	// The whole server is down (ts.Close()), so /api/fppd/ports and
+	// /api/system/info fail too — their own independent
+	// collection_failed, via the same path as multiSyncSystems below, not
+	// because status failing "took them down."
+	for _, sig := range portsFailureSignals {
+		got := findSignal(t, obs, sig)
+		if got.Absence != observation.StateCollectionFailed {
+			t.Errorf("signal %q Absence = %q, want collection_failed when the instance is unreachable", sig, got.Absence)
+		}
+	}
+	for _, sig := range systemInfoStaticSignals {
+		got := findSignal(t, obs, sig)
+		if got.Absence != observation.StateCollectionFailed {
+			t.Errorf("signal %q Absence = %q, want collection_failed when the instance is unreachable", sig, got.Absence)
+		}
+	}
+
+	msSig := findSignal(t, obs, SignalMultiSyncSystems)
+	if msSig.Absence != observation.StateCollectionFailed {
+		t.Errorf("fpp.multisync.systems Absence = %q, want collection_failed when the instance is unreachable", msSig.Absence)
 	}
 }
 

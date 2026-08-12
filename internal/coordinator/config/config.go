@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -67,6 +68,45 @@ type Config struct {
 	// as a stated fact (StateNotCollected) rather than an absent list that
 	// reads as a healthy empty system.
 	FPPEndpoints []FPPEndpoint
+
+	// --- Step 5 Seam B: the FPP MQTT collector (internal/coordinator/collector/fppmqtt) ---
+
+	// FPPMQTTBrokerURL is SHOWMESH_FPP_MQTT_BROKER_URL, e.g.
+	// "tcp://broker.example:1883". Empty (the default) means the FPP
+	// MQTT collector is never constructed at all — no startup warning, no
+	// failed-connection signals for a feature the operator did not enable.
+	// This is a deliberately separate broker connection from MQTTBroker
+	// above: MQTTBroker is ADR-008's ShowMesh control plane, and this is a
+	// second, unrelated MQTT source (an operator's existing FPP/home-
+	// automation broker) that the coordinator only ever subscribes to —
+	// see internal/coordinator/collector/fppmqtt's package doc comment for
+	// why the two must never be merged.
+	FPPMQTTBrokerURL string
+
+	// FPPMQTTUsername and FPPMQTTPassword are optional credentials for
+	// FPPMQTTBrokerURL. FPPMQTTPassword is exactly as sensitive as
+	// MQTTPassword and never appears in an error, a log line, or LogValue's
+	// output in the clear — see LogValue.
+	FPPMQTTUsername string
+	FPPMQTTPassword string
+
+	// FPPMQTTTopicPrefix is SHOWMESH_FPP_MQTT_TOPIC_PREFIX, the topic root
+	// FPP publishes under (e.g. "falcon/player"). Defaults to
+	// defaultFPPMQTTTopicPrefix when unset; never assumed empty, because
+	// the reference fleet's MQTTPrefix setting is unset today but the
+	// field this backs is genuinely configurable on FPP's side (contract
+	// section 1.2).
+	FPPMQTTTopicPrefix string
+
+	// FPPMQTTHosts maps a coordinator FPP instance id (matching an entry
+	// in FPPEndpoints) to that instance's FPP HostName as it appears in
+	// its MQTT topics, from SHOWMESH_FPP_MQTT_HOSTS. Empty (the default,
+	// nil) means the collector ingests nothing for any host — see
+	// Validate for the requirement that every id here also appear in
+	// FPPEndpoints, which is what keeps a stray publish from an
+	// unconfigured host from ever becoming a new resource (contract
+	// section 4.4).
+	FPPMQTTHosts map[string]string
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -122,6 +162,20 @@ const (
 	// [Config.APIAllowedOrigins]. See those fields' doc comments.
 	envAPIToken          = "SHOWMESH_API_TOKEN"
 	envAPIAllowedOrigins = "SHOWMESH_API_ALLOWED_ORIGINS"
+
+	// envFPPMQTTBrokerURL, envFPPMQTTUsername, envFPPMQTTPassword,
+	// envFPPMQTTTopicPrefix, and envFPPMQTTHosts back the Step 5 Seam B
+	// fields above. See each field's doc comment.
+	envFPPMQTTBrokerURL   = "SHOWMESH_FPP_MQTT_BROKER_URL"
+	envFPPMQTTUsername    = "SHOWMESH_FPP_MQTT_USERNAME"
+	envFPPMQTTPassword    = "SHOWMESH_FPP_MQTT_PASSWORD"
+	envFPPMQTTTopicPrefix = "SHOWMESH_FPP_MQTT_TOPIC_PREFIX"
+	envFPPMQTTHosts       = "SHOWMESH_FPP_MQTT_HOSTS"
+
+	// defaultFPPMQTTTopicPrefix matches the reference fleet's actual,
+	// unprefixed topic root (contract section 1.2: "MQTTPrefix is unset on
+	// this fleet, so there is no extra prefix segment"), not a guess.
+	defaultFPPMQTTTopicPrefix = "falcon/player"
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -170,6 +224,11 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	fppMQTTHosts, err := parseFPPMQTTHosts(getEnvDefault(lookup, envFPPMQTTHosts, ""))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
@@ -182,6 +241,12 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 
 		APIToken:          getEnvDefault(lookup, envAPIToken, ""),
 		APIAllowedOrigins: parseAPIAllowedOrigins(getEnvDefault(lookup, envAPIAllowedOrigins, "")),
+
+		FPPMQTTBrokerURL:   getEnvDefault(lookup, envFPPMQTTBrokerURL, ""),
+		FPPMQTTUsername:    getEnvDefault(lookup, envFPPMQTTUsername, ""),
+		FPPMQTTPassword:    getEnvDefault(lookup, envFPPMQTTPassword, ""),
+		FPPMQTTTopicPrefix: getEnvDefault(lookup, envFPPMQTTTopicPrefix, defaultFPPMQTTTopicPrefix),
+		FPPMQTTHosts:       fppMQTTHosts,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -223,6 +288,74 @@ func parseFPPEndpoints(raw string) ([]FPPEndpoint, error) {
 	}
 
 	return endpoints, nil
+}
+
+// parseFPPMQTTHosts splits raw (SHOWMESH_FPP_MQTT_HOSTS's value) into
+// id=HostName pairs, mirroring [parseFPPEndpoints]'s shape and division of
+// labor: structural checks (an empty entry, a missing "=", an empty id or
+// HostName, a duplicate id within this variable) are rejected here by
+// name; the semantic cross-check against SHOWMESH_FPP_ENDPOINTS is
+// [Config.Validate]'s job, the same split parseFPPEndpoints uses for its
+// own id syntax and URL checks. An empty raw string (the unset/default
+// case) returns (nil, nil): no hosts, not an error.
+//
+// Unlike parseFPPEndpoints's URL half, HostName's syntax IS checked here
+// (via [mqttproto.ValidateNodeID] for the id half and a direct character
+// check for HostName): HostName is placed directly into an MQTT topic
+// filter string by internal/coordinator/collector/fppmqtt, so a HostName
+// containing '/', '+', '#', or whitespace is a topic-injection risk the
+// same way an unvalidated node id would be (see
+// pkg/mqttproto.ValidateNodeID's doc comment for the precedent), not
+// merely a cosmetic concern deferred to a later layer.
+func parseFPPMQTTHosts(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	entries := strings.Split(raw, ",")
+	hosts := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return nil, fmt.Errorf("%s: contains an empty entry (check for a stray comma)", envFPPMQTTHosts)
+		}
+
+		id, hostName, ok := strings.Cut(entry, "=")
+		id = strings.TrimSpace(id)
+		hostName = strings.TrimSpace(hostName)
+		if !ok || id == "" || hostName == "" {
+			return nil, fmt.Errorf("%s: entry %q must have the form id=HostName", envFPPMQTTHosts, entry)
+		}
+
+		if err := mqttproto.ValidateNodeID(id); err != nil {
+			return nil, fmt.Errorf("%s: instance id %q: %w", envFPPMQTTHosts, id, err)
+		}
+		if err := validateFPPMQTTHostName(hostName); err != nil {
+			return nil, fmt.Errorf("%s: instance %q: %w", envFPPMQTTHosts, id, err)
+		}
+		if _, dup := hosts[id]; dup {
+			return nil, fmt.Errorf("%s: duplicate instance id %q", envFPPMQTTHosts, id)
+		}
+
+		hosts[id] = hostName
+	}
+
+	return hosts, nil
+}
+
+// fppMQTTHostNameForbidden matches any character that must never appear in
+// an FPP HostName accepted by SHOWMESH_FPP_MQTT_HOSTS: MQTT's own
+// wildcard/level-separator characters plus whitespace. See
+// parseFPPMQTTHosts's doc comment for why this is a real injection check,
+// not cosmetic validation.
+var fppMQTTHostNameForbidden = regexp.MustCompile(`[+#/\s]`)
+
+func validateFPPMQTTHostName(hostName string) error {
+	if fppMQTTHostNameForbidden.MatchString(hostName) {
+		return fmt.Errorf("HostName %q must not contain '/', '+', '#', or whitespace", hostName)
+	}
+	return nil
 }
 
 // parseAPIAllowedOrigins splits raw (SHOWMESH_API_ALLOWED_ORIGINS's value)
@@ -278,6 +411,10 @@ func (c Config) Validate() error {
 		return err
 	}
 
+	if err := validateFPPMQTTConfig(c); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -322,6 +459,119 @@ func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 	return nil
 }
 
+// validateFPPMQTTConfig enforces the Step 5 contract section 4.4 rule
+// ("every id in SHOWMESH_FPP_MQTT_HOSTS must also appear in
+// SHOWMESH_FPP_ENDPOINTS; reject the configuration at startup otherwise,
+// with a message naming the unmatched ID") plus the two structural checks
+// that make the feature-flag shape ("unset broker URL means the collector
+// is never constructed") actually coherent at startup rather than only at
+// [fppmqtt.New] time:
+//
+//   - FPPMQTTBrokerURL, when set, must be a valid URL with an accepted
+//     scheme and a host — the same rule MQTTBroker enforces above, applied
+//     to the second, unrelated broker connection this feature configures.
+//   - FPPMQTTBrokerURL set with no FPPMQTTHosts configured is rejected: a
+//     collector with nowhere to subscribe is very likely a missing
+//     SHOWMESH_FPP_MQTT_HOSTS, not a deliberate "connect and do nothing"
+//     configuration, and rejecting it here gives a startup error instead of
+//     a collector that silently ingests nothing forever.
+//
+// The id<->FPPEndpoints cross-check runs whenever FPPMQTTHosts is
+// non-empty, independent of whether FPPMQTTBrokerURL is set: a HOSTS
+// mapping prepared for a collector that will never run (broker URL still
+// unset) is far more likely a typo than a deliberate "prepare for later"
+// gesture, and the contract requires the cross-check unconditionally.
+// brokerURLHasUserinfo reports whether raw carries userinfo (`user:pass@`)
+// in its authority section, using a purely textual check that runs BEFORE
+// url.Parse.
+//
+// The ordering is the whole point. url.Parse's own *url.Error embeds the
+// URL it failed on, so a malformed AND credentialed value reaches a log or
+// an operator's terminal through the error text even if every later format
+// string is careful. A password supplied through SHOWMESH_FPP_MQTT_PASSWORD
+// is redacted in LogValue; the same password supplied inside the broker URL
+// was not, which made the redaction a convention rather than a guarantee.
+//
+// The check is: between "//" and the first subsequent "/", is there an "@"?
+// That is exactly RFC 3986's authority component, and it does not depend on
+// the rest of the string being parseable.
+func brokerURLHasUserinfo(raw string) bool {
+	_, after, found := strings.Cut(raw, "//")
+	if !found {
+		return false
+	}
+	authority, _, _ := strings.Cut(after, "/")
+	return strings.Contains(authority, "@")
+}
+
+// redactURLUserinfo returns raw with any authority-section userinfo replaced
+// by "redacted", for use in log output. It is deliberately textual and total:
+// it must not fail, and must not return the original on a value it could not
+// parse, because the unparseable case is exactly when a caller would
+// otherwise log the raw string.
+func redactURLUserinfo(raw string) string {
+	before, after, found := strings.Cut(raw, "//")
+	if !found {
+		return raw
+	}
+	authority, rest, hadRest := strings.Cut(after, "/")
+	if !strings.Contains(authority, "@") {
+		return raw
+	}
+	_, host, _ := strings.Cut(authority, "@")
+	out := before + "//redacted@" + host
+	if hadRest {
+		out += "/" + rest
+	}
+	return out
+}
+
+func validateFPPMQTTConfig(c Config) error {
+	if c.FPPMQTTBrokerURL != "" {
+		// Checked first, and reported without echoing the value, so a
+		// credential embedded in the URL never reaches an error string.
+		// internal/coordinator/collector/fppmqtt's New rejects the same
+		// shape, so accepting it here would only defer the failure to a
+		// point where the operator has less context.
+		if brokerURLHasUserinfo(c.FPPMQTTBrokerURL) {
+			return fmt.Errorf("%s must not embed credentials in the URL; set %s and %s instead",
+				envFPPMQTTBrokerURL, envFPPMQTTUsername, envFPPMQTTPassword)
+		}
+		brokerURL, err := url.Parse(c.FPPMQTTBrokerURL)
+		if err != nil {
+			return fmt.Errorf("%s %q is not a valid URL: %w, must have one of the schemes %s",
+				envFPPMQTTBrokerURL, c.FPPMQTTBrokerURL, err, strings.Join(validBrokerSchemesList, ", "))
+		}
+		if !validBrokerSchemes[brokerURL.Scheme] {
+			return fmt.Errorf("%s %q must use one of the schemes %s",
+				envFPPMQTTBrokerURL, c.FPPMQTTBrokerURL, strings.Join(validBrokerSchemesList, ", "))
+		}
+		if brokerURL.Host == "" {
+			return fmt.Errorf("%s %q must include a host, e.g. %s://broker:1883",
+				envFPPMQTTBrokerURL, c.FPPMQTTBrokerURL, brokerURL.Scheme)
+		}
+		if len(c.FPPMQTTHosts) == 0 {
+			return fmt.Errorf("%s is set but %s configures no hosts", envFPPMQTTBrokerURL, envFPPMQTTHosts)
+		}
+	}
+
+	if len(c.FPPMQTTHosts) == 0 {
+		return nil
+	}
+
+	knownFPPEndpoints := make(map[string]bool, len(c.FPPEndpoints))
+	for _, ep := range c.FPPEndpoints {
+		knownFPPEndpoints[ep.ID] = true
+	}
+	for id := range c.FPPMQTTHosts {
+		if !knownFPPEndpoints[id] {
+			return fmt.Errorf("%s: instance id %q is not configured in %s", envFPPMQTTHosts, id, envFPPEndpoints)
+		}
+	}
+
+	return nil
+}
+
 func getEnvDefault(lookup func(string) (string, bool), key, def string) string {
 	if v, ok := lookup(key); ok {
 		return v
@@ -353,9 +603,24 @@ func (c Config) LogValue() slog.Value {
 		apiToken = redactedPassword
 	}
 
+	// fppMQTTPassword is redacted the same way and for the same reason as
+	// mqtt_password and api_token above: this is SHOWMESH_FPP_MQTT_PASSWORD,
+	// exactly as sensitive as the control-plane broker's password, and the
+	// Step 5 contract requires it "never appear in a log line" — see
+	// [Config.FPPMQTTPassword].
+	fppMQTTPassword := ""
+	if c.FPPMQTTPassword != "" {
+		fppMQTTPassword = redactedPassword
+	}
+
 	return slog.GroupValue(
 		slog.String("http_addr", c.HTTPAddr),
-		slog.String("mqtt_broker", c.MQTTBroker),
+		// Both broker URLs are redacted rather than logged verbatim.
+		// SHOWMESH_MQTT_BROKER is NOT rejected for carrying userinfo the
+		// way the FPP MQTT one is, because it is the ADR-008 control-plane
+		// broker and an existing deployment may legitimately be configured
+		// that way; redaction is the part that must hold either way.
+		slog.String("mqtt_broker", redactURLUserinfo(c.MQTTBroker)),
 		slog.String("mqtt_client_id", c.MQTTClientID),
 		slog.String("mqtt_username", c.MQTTUsername),
 		slog.String("mqtt_password", password),
@@ -364,6 +629,17 @@ func (c Config) LogValue() slog.Value {
 		slog.Any("fpp_endpoints", fppEndpointIDs(c.FPPEndpoints)),
 		slog.String("api_token", apiToken),
 		slog.Any("api_allowed_origins", c.APIAllowedOrigins),
+		slog.String("fpp_mqtt_broker_url", redactURLUserinfo(c.FPPMQTTBrokerURL)),
+		slog.String("fpp_mqtt_username", c.FPPMQTTUsername),
+		slog.String("fpp_mqtt_password", fppMQTTPassword),
+		slog.String("fpp_mqtt_topic_prefix", c.FPPMQTTTopicPrefix),
+		// HostNames are not secret (see parseFPPMQTTHosts's doc comment:
+		// they are validated topic-safe strings, not credentials), so the
+		// full id->HostName map is logged directly, unlike FPPEndpoints
+		// (which strips to ids only because its URLs, while not secret
+		// either, are simply less useful here than knowing which hosts
+		// this feature is watching).
+		slog.Any("fpp_mqtt_hosts", c.FPPMQTTHosts),
 	)
 }
 

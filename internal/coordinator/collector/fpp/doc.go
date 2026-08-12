@@ -74,9 +74,48 @@
 // real FPP 9.5.3 (bench/fpp-multisync, container showmesh-bench-fpp-master)
 // as of 2026-08-10 — see each testdata file and fpp_test.go /
 // integration_test.go for which claims were checked against the live
-// daemon versus against a captured body. This raises RES-002's L2 promotion
-// (protocol semantics) not at all — RES-002 covers the MultiSync wire
-// protocol, and this package speaks REST, never that wire — and says
-// nothing about hardware, drift, or live-show behavior; L1 there is
-// untouched.
+// daemon versus against a captured body. Step 5 (2026-08-11) added a
+// read-only REST probe of the operator's live fleet — FPP-Main, FPP-remote-01,
+// FPP-remote-04 (see docs/reference-installation.md) — captured to
+// testdata/live_*.json; those captures are what signals.go's StatusSignals,
+// PortSignals, and SystemInfoSignals are written and tested against.
+// Neither the bench captures nor the live fleet probe raises RES-002's L2
+// promotion (protocol semantics) at all — RES-002 covers the MultiSync wire
+// protocol, and this package speaks REST, never that wire — and neither
+// says anything about hardware, drift, or live-show behavior; L1 there is
+// untouched. Per Step 5 contract section 7: every "ma" (pixel current)
+// reading on the live fleet was 0 with the display de-energized, which
+// confirms the field's shape and type and proves NOTHING about whether
+// current telemetry works — no comment, log line, test name, or document
+// in this package may claim otherwise.
+//
+// # The "warnings" key: absent-when-empty, verified against FPP's own source
+//
+// FPP-remote-04's live /api/fppd/status capture (testdata/live_remote04_fppd_status.json)
+// has no "warnings" key at all, while FPP-Main's and FPP-remote-01's both
+// carry a populated array. Step 5 contract section 3.4 asks this to be
+// checked against FPP's own source rather than assumed: httpAPI.cpp's
+// status handler builds the field with
+//
+//	for (auto& warn : WarningHolder::GetWarnings()) {
+//	    result["warnings"].append(warn.message());
+//	    result["warningInfo"].append(warn);
+//	}
+//
+// — a jsoncpp Json::Value's operator[] is only ever invoked inside this
+// loop, so when GetWarnings() is empty, "warnings" and "warningInfo" are
+// never touched and the key is never created; jsoncpp does not implicitly
+// materialize a key that was never accessed. Confirmed by reading the
+// source directly, not by inference from the captures alone: FalconChristmas/fpp,
+// branch "v9.4" (the exact branch this fleet's "branch" field names — see
+// live_main_fppd_status.json/live_remote04_fppd_status.json), commit
+// 7e3c6acb02386e65855f420aa21cde518453be38, src/httpAPI.cpp lines 181-182
+// (fetched via the GitHub API 2026-08-11; permalink:
+// https://github.com/FalconChristmas/fpp/blob/7e3c6acb02386e65855f420aa21cde518453be38/src/httpAPI.cpp#L181-L182).
+// This is an L1 citation (source-verified, not merely bench-observed): FPP
+// omits "warnings" from /api/fppd/status when there are no active
+// warnings, rather than publishing an empty array. signals.go's
+// warningsSignals models REST absence as StateUnsupported regardless — see
+// its doc comment for why the source-verified answer does not change the
+// modeling choice contract section 3.4 specifies.
 package fpp
