@@ -252,3 +252,45 @@ type CommandStore interface {
 	// separate, append-only concern (identity.Service.WriteAudit).
 	UpdateCommandOutcome(ctx context.Context, id string, upd store.CommandOutcomeUpdate) error
 }
+
+// DeclarationStore is what this package needs from seam 0's
+// node_declarations and discovery_runs tables (RES-008 D2/D6, BUILD-PLAN
+// Step 7 seam B) — satisfied directly by *store.Store, matching
+// [NodeLister]'s "the real dependency already has this method set"
+// pattern: no adapter type is needed in
+// internal/coordinator/apiwiring.go, exactly the way *inventory.Manager
+// already satisfies NodeLister with no wrapper (see that interface's own
+// doc comment).
+//
+// DeclareNode and DeleteNodeDeclaration are deliberately NOT part of this
+// interface. Both are coordinator-local state changes gated by
+// config:write, and ADR-024 decision 11's same-transaction rule applies to
+// both in full — see discovery.go's handlePromoteNode/
+// handleDeleteNodeDeclaration, which call identity.Service.AuditedWrite and
+// reach store.Tx.DeclareNode/store.Tx.DeleteNodeDeclaration directly inside
+// its closure instead of through a plain *Store method a caller could
+// invoke outside a transaction by mistake.
+type DeclarationStore interface {
+	// StartDiscoveryRun records a new, in-progress discovery run.
+	StartDiscoveryRun(ctx context.Context, rec store.DiscoveryRunRecord) (store.DiscoveryRunRecord, error)
+	// FinishDiscoveryRun records id's terminal state — complete (with
+	// foundCount) or, if the run could not complete, complete=false with a
+	// stated reason. See [store.Store.FinishDiscoveryRun]'s doc comment:
+	// "never a missing row and never a silent partial success."
+	FinishDiscoveryRun(ctx context.Context, id string, complete bool, reason string, foundCount int64) error
+	// ListDiscoveryRuns returns the most recent discovery runs, newest
+	// first. This package only ever asks for the single newest one (see
+	// mapping.go's declarationState) to compute B3's flag states.
+	ListDiscoveryRuns(ctx context.Context, limit int) ([]store.DiscoveryRunRecord, error)
+
+	// ListNodeDeclarations returns every declared node, for computing
+	// discovery proposals (what is observed but not declared) and for
+	// rendering every [v1.Node]'s declaration block.
+	ListNodeDeclarations(ctx context.Context) ([]store.NodeDeclarationRecord, error)
+	// RecordNodeDiscoverySeen stamps a declared node's last-seen-by-
+	// discovery evidence. Never creates or deletes a declaration — see
+	// [store.Store.RecordNodeDiscoverySeen]'s own doc comment — which is
+	// exactly why this narrow method, rather than DeclareNode, is what a
+	// discovery run itself is allowed to call.
+	RecordNodeDiscoverySeen(ctx context.Context, nodeID, runID string, seenAt time.Time) error
+}

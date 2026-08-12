@@ -207,3 +207,37 @@ func timeOrDash(t *time.Time) string {
 	}
 	return t.Format(time.RFC3339)
 }
+
+// declarationColumn renders node.declaration (RES-008 D2/D6, BUILD-PLAN
+// Step 7 seam B) as a single table cell. "not_seen" and "unknown" are made
+// visually loud for the same reason scopesStateGlyph/stateGlyph make their
+// own non-"fine" states loud: a declared node that a discovery run did not
+// see, or whose discovery evidence cannot currently be trusted, must not
+// blend into a column of ordinary "present" rows the way a bare lowercase
+// word would.
+func declarationColumn(d nodeDeclaration) string {
+	if !d.Declared {
+		return "not declared"
+	}
+	switch d.DiscoveryState {
+	case "present":
+		return "declared, present"
+	case "not_seen":
+		return "declared, NOT SEEN by the most recent discovery run"
+	case "unknown":
+		reason := ""
+		if d.DiscoveryReason != nil {
+			reason = ": " + *d.DiscoveryReason
+		}
+		return "declared, discovery UNKNOWN" + reason
+	case "not_applicable":
+		// Unreachable in practice for a Declared:true declaration (the
+		// server only ever reports not_applicable when Declared is
+		// false), kept as an honest fallback rather than a panic — this
+		// program renders whatever it is sent, per contract §6.2's
+		// tolerate-a-newer-server posture.
+		return "declared"
+	default:
+		return "declared, UNRECOGNIZED-STATE(" + d.DiscoveryState + ")"
+	}
+}

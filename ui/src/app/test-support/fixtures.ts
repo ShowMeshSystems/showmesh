@@ -26,6 +26,7 @@ import type {
   FPPInstance,
   Model,
   Node,
+  NodeDeclaration,
   ShowMeshEvent,
 } from '../types'
 
@@ -43,6 +44,26 @@ export function makeEvidence(overrides: Partial<Evidence> = {}): Evidence {
     source: 'test',
     quality: 'direct',
     validForSeconds: 30,
+    ...overrides,
+  }
+}
+
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): a node nobody has declared —
+// makeNode's default, matching what an ordinary observed-only node
+// actually looks like on the wire (v1.NodeDeclaration's own doc comment:
+// "declared: false means every other field is null").
+export function makeNodeDeclaration(overrides: Partial<NodeDeclaration> = {}): NodeDeclaration {
+  return {
+    declared: false,
+    label: null,
+    notes: null,
+    declaredAt: null,
+    declaredByPrincipalId: null,
+    declaredByPrincipalName: null,
+    discoveryState: 'not_applicable',
+    discoveryReason: null,
+    lastDiscoveryRunId: null,
+    lastDiscoveredAt: null,
     ...overrides,
   }
 }
@@ -70,6 +91,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
       }),
       heartbeat: makeEvidence({ signal: 'node.heartbeat' }),
     },
+    declaration: makeNodeDeclaration(),
     ...overrides,
   }
 }

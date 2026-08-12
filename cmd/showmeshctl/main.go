@@ -50,6 +50,12 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdAudit(rest, stdout, stderr, clock)
 	case "config":
 		return cmdConfig(rest, stdout, stderr, clock)
+	case "discover":
+		return cmdDiscover(rest, stdout, stderr, clock)
+	case "declare":
+		return cmdDeclare(rest, stdout, stderr, clock)
+	case "undeclare":
+		return cmdUndeclare(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -69,12 +75,12 @@ control API (ADR-014). Since ADR-024, reads and the audit log are gated
 by an authenticated principal's scopes rather than by one shared secret,
 see --token below and "showmeshctl session --help".
 
-Every subcommand below is a read except two, both from Step 7. "config
-set" writes operator-facing configuration into the coordinator's store
-(RES-008 D1) and needs the config:write scope. "fpp stop-playlist"
-dispatches FPP's own stop command (ADR-001) and needs fpp:command; it
-never reports success on an HTTP 200 alone, because ADR-003 requires
-evidence that observed state actually moved.
+Step 7 gave this program its first writes, and everything else remains a
+read. "config set", "discover", "declare" and "undeclare" change this
+coordinator's own configuration and inventory and need the config:write
+scope. "fpp stop-playlist" dispatches FPP's own stop command (ADR-001)
+and needs fpp:command; it never reports success on an HTTP 200 alone,
+because ADR-003 requires evidence that observed state actually moved.
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -91,6 +97,9 @@ Commands:
   audit                    show the audit log (requires the audit:read scope)
   config                   read or write the fpp.endpoints configuration
                            ("config set" is a write, requires config:write)
+  discover                 run discovery and print proposals (write)
+  declare <id>             promote a node to declared, or update its label/notes (write)
+  undeclare <id>           remove a node's declaration, requires --confirm (write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

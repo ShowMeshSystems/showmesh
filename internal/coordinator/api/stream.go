@@ -368,12 +368,19 @@ func (h *Hub) render(ctx context.Context) {
 
 	if views, err := h.deps.Nodes.Snapshot(ctx, now); err != nil {
 		h.logger.Warn("stream hub: list nodes failed", "error", err)
+	} else if declByNodeID, latestRun, err := fetchDeclarationContext(ctx, h.deps.Discovery); err != nil {
+		// BUILD-PLAN Step 7 seam B: fetched once per render pass, mirroring
+		// h.deps.Nodes/h.deps.FPP's own "one dependency error skips this
+		// resource kind for the pass" posture immediately below — a
+		// transient store error here must not crash the hub's goroutine or
+		// poison every subsequent tick either.
+		h.logger.Warn("stream hub: list node declarations failed", "error", err)
 	} else {
 		present := make(map[string]struct{}, len(views))
 		for _, nv := range views {
 			key := "node:" + nv.NodeID
 			present[key] = struct{}{}
-			node := mapNode(nv, now)
+			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun)
 			if h.updateRendered(key, node) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})

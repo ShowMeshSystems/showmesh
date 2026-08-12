@@ -61,6 +61,18 @@ type Dependencies struct {
 	// identical "refuse loudly, never fabricate success" posture under
 	// this default (noIdentityService.CreateSession and friends, auth.go).
 	Commands CommandStore
+
+	// Discovery is BUILD-PLAN Step 7 seam B's node-declaration surface
+	// (RES-008 D2/D6) — see [DeclarationStore]'s doc comment. In practice
+	// the real argument to [New] is *store.Store itself, whose
+	// StartDiscoveryRun/FinishDiscoveryRun/ListDiscoveryRuns/
+	// ListNodeDeclarations/RecordNodeDiscoverySeen methods already satisfy
+	// this interface with no adapter, exactly like [Dependencies.Nodes].
+	// A nil field is replaced by [noDeclarationStore]: every read returns
+	// an empty, successful result and every write refuses with an
+	// internal error, matching this package's standing "an unwired
+	// dependency is not this API failing" posture.
+	Discovery DeclarationStore
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -98,6 +110,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Commands == nil {
 		d.Commands = noCommandStore{}
+	}
+	if d.Discovery == nil {
+		d.Discovery = noDeclarationStore{}
 	}
 	return d
 }
@@ -173,6 +188,38 @@ func (noCommandStore) SetDesiredState(context.Context, store.DesiredStateRecord)
 func (noCommandStore) UpdateCommandOutcome(context.Context, string, store.CommandOutcomeUpdate) error {
 	return errCommandStoreNotConfigured
 }
+
+// noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads
+// answer empty and successful (matching every other no-op lister in this
+// file); a write refuses with errDeclarationStoreNotConfigured rather than
+// fabricating a row that was never persisted — the same posture
+// [noIdentityService]'s write methods take for an unwired identity
+// dependency.
+type noDeclarationStore struct{}
+
+var errDeclarationStoreNotConfigured = errors.New("api: no DeclarationStore was wired into this API's Dependencies")
+
+func (noDeclarationStore) StartDiscoveryRun(context.Context, store.DiscoveryRunRecord) (store.DiscoveryRunRecord, error) {
+	return store.DiscoveryRunRecord{}, errDeclarationStoreNotConfigured
+}
+
+func (noDeclarationStore) FinishDiscoveryRun(context.Context, string, bool, string, int64) error {
+	return errDeclarationStoreNotConfigured
+}
+
+func (noDeclarationStore) ListDiscoveryRuns(context.Context, int) ([]store.DiscoveryRunRecord, error) {
+	return nil, nil
+}
+
+func (noDeclarationStore) ListNodeDeclarations(context.Context) ([]store.NodeDeclarationRecord, error) {
+	return nil, nil
+}
+
+func (noDeclarationStore) RecordNodeDiscoverySeen(context.Context, string, string, time.Time) error {
+	return errDeclarationStoreNotConfigured
+}
+
+// scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
 
 // Options configures [New]. The zero value is usable: auth and CORS are
 // disabled (contract section 6.8's documented default posture), the clock
@@ -511,6 +558,18 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/fpp.endpoints", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfig))
 	mux.HandleFunc("PUT /api/v1/config/fpp.endpoints", h.writeGuard(&scopeConfigWrite, h.handlePutFPPEndpointsConfig))
 	mux.HandleFunc("GET /api/v1/config/fpp.endpoints/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfigRevisions))
+
+	// Step 7 seam B: node discovery and declaration (RES-008
+	// D2/D6). All three are behind config:write — declaring what hardware
+	// exists is configuration, and ADR-024 decision 4 defines no narrower
+	// scope, so this is a deliberate choice recorded here rather than a
+	// default; see discovery.go's own doc comments on each handler. All
+	// three go through writeGuard, so decision 6's CSRF check (with the
+	// bearer exemption) applies exactly as it does to every other write in
+	// this package.
+	mux.HandleFunc("POST /api/v1/discovery/runs", h.writeGuard(&scopeConfigWrite, h.handleStartDiscoveryRun))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handlePromoteNode))
+	mux.HandleFunc("DELETE /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handleDeleteNodeDeclaration))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

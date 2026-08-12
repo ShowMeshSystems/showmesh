@@ -70,6 +70,13 @@ export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResp
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
+// declaration. NodeDeclaration is also reachable as Node['declaration'],
+// aliased here separately for call sites (DomainBadges.tsx,
+// NodesList.tsx) that only ever need the declaration block on its own.
+export type NodeDeclaration = components['schemas']['NodeDeclaration']
+export type DiscoveryRun = components['schemas']['DiscoveryRun']
+export type DiscoveryProposal = components['schemas']['DiscoveryProposal']
 
 /**
  * One recorded event, as held in the model. Identical to the wire

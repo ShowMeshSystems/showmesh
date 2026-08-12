@@ -9,6 +9,7 @@ import type { components } from '../generated/schema'
 
 type Evidence = components['schemas']['Evidence']
 type Node = components['schemas']['Node']
+type NodeDeclaration = components['schemas']['NodeDeclaration']
 type FPPInstance = components['schemas']['FPPInstance']
 type Snapshot = components['schemas']['Snapshot']
 type EventsResponse = components['schemas']['EventsResponse']
@@ -34,6 +35,24 @@ export function makeEvidence(overrides: Partial<Evidence> = {}): Evidence {
   }
 }
 
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): matches v1.NodeDeclaration's
+// own "declared: false means every other field is null" contract.
+export function makeNodeDeclaration(overrides: Partial<NodeDeclaration> = {}): NodeDeclaration {
+  return {
+    declared: false,
+    label: null,
+    notes: null,
+    declaredAt: null,
+    declaredByPrincipalId: null,
+    declaredByPrincipalName: null,
+    discoveryState: 'not_applicable',
+    discoveryReason: null,
+    lastDiscoveryRunId: null,
+    lastDiscoveredAt: null,
+    ...overrides,
+  }
+}
+
 export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
   return {
     nodeId,
@@ -51,6 +70,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
       lastWill: makeEvidence({ signal: 'node.lastWill', state: 'not_collected', value: null, collectedAt: null, reason: 'no last will observed yet' }),
       heartbeat: makeEvidence({ signal: 'node.heartbeat' }),
     },
+    declaration: makeNodeDeclaration(),
     ...overrides,
   }
 }

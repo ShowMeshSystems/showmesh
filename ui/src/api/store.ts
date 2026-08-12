@@ -86,6 +86,9 @@ type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfi
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
+type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
+type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -413,12 +416,59 @@ export class ApiStore {
     }
   }
 
+  // -- BUILD-PLAN Step 7 seam B: node discovery and declaration ---------
+  //
+  // Unlike login/logout/claimBootstrap above, these three do NOT call
+  // wakeReadLoop() or touch `this.model` directly: a discovery run or a
+  // declaration change is node/config data, not identity, so its effect
+  // reaches the model through the ordinary path every other node change
+  // does — the next SSE `node.changed` frame or hub tick (contract
+  // section 6.5) — never a client-side guess at what the coordinator now
+  // holds. Each still uses beginSideCall/endSideCall so an in-flight
+  // request is tracked and aborted on dispose() exactly like the session
+  // calls above.
+
+  /**
+   * `POST /api/v1/discovery/runs` (RES-008 D2/D6). Reads what the
+   * coordinator already observes and proposes what is not currently
+   * declared; never creates, modifies, or deletes a declaration by
+   * itself (ADR-003). Throws on 401/403/500 — the caller renders the
+   * failure.
+   */
+  async runDiscovery(): Promise<SchemaDiscoveryRunResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaDiscoveryRunResponse>('/discovery/runs', undefined, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/fpp.endpoints/revisions` (Step 7 seam A): revision history, newest first, metadata only. */
   async getFPPEndpointsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/fpp.endpoints/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/nodes/{nodeId}/declaration`. Promotes nodeId to
+   * declared, or — idempotently — updates its label/notes. Throws on
+   * 401/403/500, including when the audit store fails and ADR-024
+   * decision 11's same-transaction rule refuses the whole write.
+   */
+  async declareNode(nodeId: string, label: string, notes: string): Promise<SchemaNodeDeclarationResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaNodeDeclarationResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/declaration`,
+        { label, notes },
         controller.signal,
       )
     } finally {
@@ -452,6 +502,27 @@ export class ApiStore {
         controller.signal,
       )
       return resp.command
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/nodes/{nodeId}/declaration`. The server itself
+   * requires `{"confirm":true}` in the body (BUILD-PLAN Step 7 seam B
+   * B2) — this method always sends it, so the UI-level confirmation
+   * dialog (NodesList.tsx) is what actually gates the call from ever
+   * being made, in addition to, never instead of, the server's own
+   * check.
+   */
+  async deleteNodeDeclaration(nodeId: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(
+        `/nodes/${encodeURIComponent(nodeId)}/declaration`,
+        { confirm: true },
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }

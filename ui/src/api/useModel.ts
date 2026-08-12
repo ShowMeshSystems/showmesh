@@ -28,6 +28,10 @@ import type {
   FPPEndpointsConfigResponse,
   Model,
 } from './domain'
+import type { components } from './generated/schema'
+
+type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
+type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -83,4 +87,19 @@ export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsRespons
 // pass-through pattern as the others above.
 export function stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
   return store.stopFPPPlaylist(instanceId)
+}
+
+// Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same
+// thin pass-through pattern as the others above.
+
+export function runDiscovery(): Promise<SchemaDiscoveryRunResponse> {
+  return store.runDiscovery()
+}
+
+export function declareNode(nodeId: string, label: string, notes: string): Promise<SchemaNodeDeclarationResponse> {
+  return store.declareNode(nodeId, label, notes)
+}
+
+export function deleteNodeDeclaration(nodeId: string): Promise<void> {
+  return store.deleteNodeDeclaration(nodeId)
 }

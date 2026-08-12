@@ -211,6 +211,14 @@ func Run() int {
 		// POST /api/v1/fpp/{instanceId}/commands do anything other than
 		// always answer 500 against api.noCommandStore's no-op default.
 		Commands: st,
+		// Discovery is BUILD-PLAN Step 7 seam B's dependency (RES-008
+		// D2/D6): *store.Store already satisfies api.DeclarationStore
+		// directly, with no adapter — see that interface's own doc
+		// comment. Wiring it in is what makes POST /api/v1/discovery/runs
+		// and POST/DELETE /api/v1/nodes/{nodeId}/declaration do anything
+		// other than always answer a "not configured" internal error
+		// against api.noDeclarationStore's no-op default.
+		Discovery: st,
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		CloseReads:          cfg.CloseReads,

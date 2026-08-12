@@ -98,6 +98,81 @@ type node struct {
 	Capabilities []capability `json:"capabilities"`
 	ControlPlane controlPlane `json:"controlPlane"`
 	Evidence     nodeEvidence `json:"evidence"`
+
+	// Declaration is BUILD-PLAN Step 7 seam B's addition (RES-008 D2/D6),
+	// additive per contract §6.2's within-a-major-version rule — decoded
+	// here unconditionally rather than treated as optional, since
+	// encoding/json's default (no DisallowUnknownFields) already tolerates
+	// an OLDER coordinator that predates this field: nodeDeclaration's own
+	// zero value (every pointer field nil) is what this program renders
+	// for that case, not a special "declaration unknown" branch.
+	Declaration nodeDeclaration `json:"declaration"`
+}
+
+// nodeDeclaration is node.declaration (RES-008 D2/D6). See
+// internal/coordinator/api/v1.NodeDeclaration's own doc comment for what
+// each DiscoveryState value means; this program renders the vocabulary
+// rather than re-deciding it (format.go's discoveryStateGlyph).
+type nodeDeclaration struct {
+	Declared bool `json:"declared"`
+
+	Label *string `json:"label"`
+	Notes *string `json:"notes"`
+
+	DeclaredAt              *time.Time `json:"declaredAt"`
+	DeclaredByPrincipalID   *string    `json:"declaredByPrincipalId"`
+	DeclaredByPrincipalName *string    `json:"declaredByPrincipalName"`
+
+	DiscoveryState  string  `json:"discoveryState"`
+	DiscoveryReason *string `json:"discoveryReason"`
+
+	LastDiscoveryRunID *string    `json:"lastDiscoveryRunId"`
+	LastDiscoveredAt   *time.Time `json:"lastDiscoveredAt"`
+}
+
+// discoveryRun is one discovery_runs row (BUILD-PLAN Step 7 seam B).
+type discoveryRun struct {
+	ID         string     `json:"id"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
+	Complete   bool       `json:"complete"`
+	Reason     *string    `json:"reason"`
+	FoundCount int64      `json:"foundCount"`
+
+	InitiatedByPrincipalID   string `json:"initiatedByPrincipalId"`
+	InitiatedByPrincipalName string `json:"initiatedByPrincipalName"`
+}
+
+// discoveryProposal is one element of discoveryRunResponse.Proposals: an
+// entity the run observed that is not currently declared.
+type discoveryProposal struct {
+	NodeID string `json:"nodeId"`
+	Source string `json:"source"`
+}
+
+// discoveryRunResponse is the body of POST /api/v1/discovery/runs.
+type discoveryRunResponse struct {
+	ServerTime time.Time           `json:"serverTime"`
+	Run        discoveryRun        `json:"run"`
+	Proposals  []discoveryProposal `json:"proposals"`
+}
+
+// declareNodeRequest is the body of POST /api/v1/nodes/{nodeId}/declaration.
+type declareNodeRequest struct {
+	Label string `json:"label"`
+	Notes string `json:"notes"`
+}
+
+// nodeDeclarationResponse is the body of POST /api/v1/nodes/{nodeId}/declaration.
+type nodeDeclarationResponse struct {
+	ServerTime  time.Time       `json:"serverTime"`
+	Declaration nodeDeclaration `json:"declaration"`
+}
+
+// deleteNodeDeclarationRequest is the required body of
+// DELETE /api/v1/nodes/{nodeId}/declaration.
+type deleteNodeDeclarationRequest struct {
+	Confirm bool `json:"confirm"`
 }
 
 // fppInstance is the FPP instance shape from contract §6.10.

@@ -300,6 +300,29 @@ input {
   color: var(--color-text-muted);
 }
 
+/* BUILD-PLAN Step 7 seam B: an inline write-failure message (declare,
+   undeclare, or a discovery run that did not complete), matching
+   .session-form__error's identical color choice for the same class of
+   fact — an operator-visible failure, not decoration. */
+.text-error {
+  color: var(--status-bad-fg);
+  font-weight: 600;
+}
+
+/* A destructive write control (BUILD-PLAN Step 7 seam B's "Remove
+   declaration"): visually distinct from an ordinary action button so it
+   is not pressed by the same reflex that dismisses a routine control,
+   without relying on color alone (OBSERVABILITY section 6.3) — the label
+   itself already says "Remove". */
+.button-danger {
+  border: 1px solid var(--status-bad-fg);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--status-bad-fg);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

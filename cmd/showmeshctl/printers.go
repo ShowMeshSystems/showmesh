@@ -58,12 +58,13 @@ func printNodesTable(w io.Writer, resp nodesResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "NODE ID\tLABEL\tCONTROL PLANE\tHELLO\tHEARTBEAT\tLAST WILL")
+	_, _ = fmt.Fprintln(tw, "NODE ID\tLABEL\tCONTROL PLANE\tDECLARATION\tHELLO\tHEARTBEAT\tLAST WILL")
 	for _, n := range resp.Nodes {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			n.NodeID,
 			stringOrDash(n.Label),
 			controlPlaneColumn(n.ControlPlane),
+			declarationColumn(n.Declaration),
 			evidenceColumn(n.Evidence.Hello, resp.ServerTime),
 			evidenceColumn(n.Evidence.Heartbeat, resp.ServerTime),
 			evidenceColumn(n.Evidence.LastWill, resp.ServerTime),
@@ -86,6 +87,9 @@ func printNodeDetail(w io.Writer, n node, serverTime time.Time) {
 	_, _ = fmt.Fprintf(w, "First seen at: %s\n", n.FirstSeenAt.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(w, "Updated at:    %s\n", n.UpdatedAt.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(w, "%s\n", controlPlaneColumn(n.ControlPlane))
+	_, _ = fmt.Fprintln(w)
+
+	printDeclarationDetail(w, n.Declaration)
 	_, _ = fmt.Fprintln(w)
 
 	_, _ = fmt.Fprintln(w, "Capabilities:")
@@ -338,6 +342,63 @@ func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {
 			stringOrDash(r.CreatedByPrincipalName), r.Source, emptyOrDash(r.Note))
 	}
 	_ = tw.Flush()
+}
+
+// printDeclarationDetail renders node.declaration (RES-008 D2/D6,
+// BUILD-PLAN Step 7 seam B) for `showmeshctl node`'s detail view.
+func printDeclarationDetail(w io.Writer, d nodeDeclaration) {
+	_, _ = fmt.Fprintln(w, "Declaration:")
+	if !d.Declared {
+		_, _ = fmt.Fprintln(w, "  (not declared — an observed node nobody has promoted; see `showmeshctl discover`)")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "  Label:            %s\n", stringOrDash(d.Label))
+	_, _ = fmt.Fprintf(w, "  Notes:            %s\n", stringOrDash(d.Notes))
+	_, _ = fmt.Fprintf(w, "  Declared at:      %s\n", timeOrDash(d.DeclaredAt))
+	_, _ = fmt.Fprintf(w, "  Declared by:      %s (%s)\n", stringOrDash(d.DeclaredByPrincipalName), stringOrDash(d.DeclaredByPrincipalID))
+	_, _ = fmt.Fprintf(w, "  Discovery state:  %s\n", d.DiscoveryState)
+	if d.DiscoveryReason != nil {
+		_, _ = fmt.Fprintf(w, "  Discovery reason: %s\n", *d.DiscoveryReason)
+	}
+	_, _ = fmt.Fprintf(w, "  Last discovery run: %s (%s)\n", stringOrDash(d.LastDiscoveryRunID), timeOrDash(d.LastDiscoveredAt))
+}
+
+// printDiscoveryRunResult renders the body of POST /api/v1/discovery/runs
+// (BUILD-PLAN Step 7 seam B B1). The honest consequence B1 requires stated
+// rather than implied: a discovery run reads what this coordinator already
+// observes and cannot find equipment that has never talked to ShowMesh.
+func printDiscoveryRunResult(w io.Writer, resp discoveryRunResponse) {
+	_, _ = fmt.Fprintf(w, "Discovery run %s\n", resp.Run.ID)
+	_, _ = fmt.Fprintf(w, "  Started at:  %s\n", resp.Run.StartedAt.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(w, "  Finished at: %s\n", timeOrDash(resp.Run.FinishedAt))
+	completeStr := "yes"
+	if !resp.Run.Complete {
+		completeStr = "NO"
+	}
+	_, _ = fmt.Fprintf(w, "  Complete:    %s\n", completeStr)
+	if resp.Run.Reason != nil {
+		_, _ = fmt.Fprintf(w, "  Reason:      %s\n", *resp.Run.Reason)
+	}
+	_, _ = fmt.Fprintf(w, "  Found:       %d\n", resp.Run.FoundCount)
+	_, _ = fmt.Fprintf(w, "  Initiated by: %s (%s)\n\n", resp.Run.InitiatedByPrincipalName, resp.Run.InitiatedByPrincipalID)
+
+	if len(resp.Proposals) == 0 {
+		_, _ = fmt.Fprintln(w, "No undeclared entities observed. This run performed no active probing — it cannot find equipment that has never talked to ShowMesh; see `showmeshctl discover --help`.")
+		return
+	}
+	_, _ = fmt.Fprintln(w, "Proposals (observed but not declared — promote with `showmeshctl declare <id>`):")
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "  NODE ID\tSOURCE")
+	for _, p := range resp.Proposals {
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\n", p.NodeID, p.Source)
+	}
+	_ = tw.Flush()
+}
+
+// printNodeDeclarationResult renders the body of
+// POST /api/v1/nodes/{nodeId}/declaration.
+func printNodeDeclarationResult(w io.Writer, resp nodeDeclarationResponse) {
+	printDeclarationDetail(w, resp.Declaration)
 }
 
 func printSnapshotDetail(w io.Writer, s snapshot) {

@@ -143,6 +143,149 @@ type Node struct {
 
 	ControlPlane ControlPlane `json:"controlPlane"`
 	Evidence     NodeEvidence `json:"evidence"`
+
+	// Declaration is RES-008 D2/D6's declared-versus-observed split
+	// (BUILD-PLAN Step 7 seam B), added additively per ADR-020 decision 8:
+	// an existing client that has never heard of it keeps working
+	// unchanged. Always present, even for a node nobody has ever declared
+	// — see [NodeDeclaration]'s own doc comment for what "declared: false"
+	// means and why this is never an omitted field.
+	Declaration NodeDeclaration `json:"declaration"`
+}
+
+// NodeDeclaration is a node's declaration state: an operator's durable
+// statement that this node belongs to the installation (RES-008 D2),
+// independent of whether the node currently reports in, plus the
+// discovery-evidence verdict RES-008 D6 requires (BUILD-PLAN Step 7 seam B,
+// acceptance criteria 2/5/6).
+//
+// Declared is false for a node that exists only as an observation — an
+// agent hello, in the [Node] this is embedded in — that no operator action
+// has ever promoted. Every field below Declared is null in that case:
+// there is nothing to report about a declaration that does not exist, and
+// rendering zero-valued placeholders (an empty label, a zero-time
+// declaredAt) would be exactly the "blank reads as fine" failure ADR-011
+// and ADR-020 decision 5 exist to forbid.
+//
+// DiscoveryState is one of four values, computed at read time from
+// evidence plus the caller's clock — never stored, matching every other
+// derived verdict in this API (ADR-011: "a verdict is computed on read,
+// never stored"):
+//
+//   - "present": the most recent discovery run was complete and saw this
+//     node. DiscoveryReason is null; LastDiscoveryRunID/LastDiscoveredAt
+//     name which run and when.
+//   - "not_seen": the most recent discovery run was complete and did NOT
+//     see this node. DiscoveryReason, LastDiscoveryRunID, and
+//     LastDiscoveredAt describe that run — never this declaration's own
+//     (possibly older, possibly pruned) last-seen bookkeeping, which is
+//     exactly what "not seen by the CURRENT most recent run" means.
+//   - "unknown": either the most recent discovery run did not complete
+//     (still running, or ended with complete=false) — an incomplete run is
+//     not evidence of absence, so this is never "not_seen" — or no
+//     discovery run history is available at all, which covers BOTH "no
+//     run has ever been performed" and "the run(s) this coordinator once
+//     had have all been pruned by retention" identically, because this API
+//     cannot and must not guess which. DiscoveryReason states why.
+//   - "not_applicable": Declared is false. Discovery-seen state has no
+//     meaning for something that is not part of the declared inventory —
+//     it may still appear as a proposal (POST /api/v1/discovery/runs'
+//     response), which is a different question this field does not
+//     answer.
+//
+// None of this is stored: [store.NodeDeclarationRecord] only ever holds
+// LastDiscoveryRunID and LastDiscoveredAt (the last run that DID see this
+// node, whenever that was); present/not_seen/unknown is derived here, on
+// every read, against the single most recent [store.DiscoveryRunRecord] —
+// see internal/coordinator/api/mapping.go's declarationState.
+type NodeDeclaration struct {
+	Declared bool `json:"declared"`
+
+	Label *string `json:"label"`
+	Notes *string `json:"notes"`
+
+	DeclaredAt              *string `json:"declaredAt"`
+	DeclaredByPrincipalID   *string `json:"declaredByPrincipalId"`
+	DeclaredByPrincipalName *string `json:"declaredByPrincipalName"`
+
+	DiscoveryState  string  `json:"discoveryState"`
+	DiscoveryReason *string `json:"discoveryReason"`
+
+	// LastDiscoveryRunID may name a run id that no longer resolves to any
+	// [DiscoveryRun] — discovery_runs is pruned by retention and
+	// node_declarations is not, so a dangling id is expected, not a bug
+	// (RES-008 D2/D6, migrations.go's schemaV6 doc comment). A client must
+	// never treat this as evidence of anything on its own; DiscoveryState
+	// is what to read.
+	LastDiscoveryRunID *string `json:"lastDiscoveryRunId"`
+	LastDiscoveredAt   *string `json:"lastDiscoveredAt"`
+}
+
+// DiscoveryRun is one discovery_runs row's wire representation, per
+// BUILD-PLAN Step 7 seam B / RES-008 D6. FinishedAt and Reason are null
+// while a run is still in progress; Reason is also null for a run that
+// completed successfully (Complete true) — it is populated only when
+// Complete is false and the run has finished (failed partway), per
+// [store.DiscoveryRunRecord]'s own doc comment on that distinction.
+type DiscoveryRun struct {
+	ID         string  `json:"id"`
+	StartedAt  string  `json:"startedAt"`
+	FinishedAt *string `json:"finishedAt"`
+	Complete   bool    `json:"complete"`
+	Reason     *string `json:"reason"`
+	FoundCount int64   `json:"foundCount"`
+
+	InitiatedByPrincipalID   string `json:"initiatedByPrincipalId"`
+	InitiatedByPrincipalName string `json:"initiatedByPrincipalName"`
+}
+
+// DiscoveryProposal is one entity a discovery run observed that is not
+// currently declared (BUILD-PLAN Step 7 seam B B1: "Proposals are computed
+// at read time by diffing what is observed against what is declared").
+// Source is "node" (an agent hello already in inventory) or "fpp" (a
+// configured FPP instance) — the two sources B1 names discovery as
+// reading, since it performs no active probing of its own.
+//
+// A run never creates a declaration from a proposal by itself — that is
+// exactly what ADR-003 forbids ("discovery as authoritative desired
+// configuration") — POST /api/v1/nodes/{nodeId}/declaration is the
+// separate operator action that promotes one.
+type DiscoveryProposal struct {
+	NodeID string `json:"nodeId"`
+	Source string `json:"source"`
+}
+
+// DiscoveryRunResponse is the body of POST /api/v1/discovery/runs.
+type DiscoveryRunResponse struct {
+	ServerTime string              `json:"serverTime"`
+	Run        DiscoveryRun        `json:"run"`
+	Proposals  []DiscoveryProposal `json:"proposals"`
+}
+
+// DeclareNodeRequest is the body of POST /api/v1/nodes/{nodeId}/declaration.
+// Both fields are optional and default to empty — a bare {} promotes
+// nodeId to declared with no label or notes, matching
+// [store.Store.DeclareNode]'s own idempotent create-or-update semantics.
+type DeclareNodeRequest struct {
+	Label string `json:"label"`
+	Notes string `json:"notes"`
+}
+
+// NodeDeclarationResponse is the body of POST /api/v1/nodes/{nodeId}/declaration.
+type NodeDeclarationResponse struct {
+	ServerTime  string          `json:"serverTime"`
+	Declaration NodeDeclaration `json:"declaration"`
+}
+
+// DeleteNodeDeclarationRequest is the required body of
+// DELETE /api/v1/nodes/{nodeId}/declaration. Confirm must be true, per
+// BUILD-PLAN Step 7 seam B B2: "requires an explicit confirmation in the
+// request rather than being a bare DELETE, so a mis-issued call cannot
+// quietly remove inventory." A missing or false Confirm is rejected with
+// 400 before anything is deleted; this is in addition to, never instead
+// of, any confirmation dialog a UI client shows.
+type DeleteNodeDeclarationRequest struct {
+	Confirm bool `json:"confirm"`
 }
 
 // FPPInstance is one configured FPP instance's current representation: an

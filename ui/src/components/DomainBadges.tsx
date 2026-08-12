@@ -1,4 +1,4 @@
-import type { ControlPlaneState, EventSeverity, FPPHealth } from '../app/types'
+import type { ControlPlaneState, DiscoveryState, EventSeverity, FPPHealth } from '../app/types'
 import { StatusBadge, type StatusTone } from './StatusBadge'
 
 // Domain-specific status badges, all built on the one StatusBadge
@@ -65,4 +65,24 @@ export function CollectorStatusBadge({ state }: { state: string }) {
   const tone = COLLECTOR_STATE_TONE[state] ?? 'unknown'
   const icon = COLLECTOR_STATE_ICON[state] ?? '?'
   return <StatusBadge tone={tone} icon={icon} label={state} />
+}
+
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6): a declared node's discovery
+// verdict. "not_seen" and "unknown" are both non-good tones — an
+// incomplete run's "unknown" must never read as fine (ADR-011), and
+// "not_seen" is flagged, never silently indistinguishable from "present",
+// per RES-008 D6's whole reason for existing.
+const DISCOVERY_STATE: Record<DiscoveryState, { tone: StatusTone; icon: string; label: string }> = {
+  present: { tone: 'good', icon: '●', label: 'seen by discovery' },
+  not_seen: { tone: 'warn', icon: '⚠', label: 'not seen by the most recent discovery run' },
+  unknown: { tone: 'unknown', icon: '?', label: 'discovery evidence unknown' },
+  not_applicable: { tone: 'unknown', icon: '–', label: 'not declared' },
+}
+
+export function DeclarationBadge({ declared, discoveryState }: { declared: boolean; discoveryState: DiscoveryState }) {
+  if (!declared) {
+    return <StatusBadge tone="unknown" icon="–" label="not declared" />
+  }
+  const spec = DISCOVERY_STATE[discoveryState]
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }

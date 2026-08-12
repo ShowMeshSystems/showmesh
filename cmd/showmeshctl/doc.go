@@ -17,11 +17,14 @@
 // test would keep passing — exactly the shape of risk contract §1 warns
 // about.
 //
-// showmeshctl is read-only. It has no write or command subcommand, matching
-// the API it talks to: ADR-024 (Step 6) adds authentication, authorization,
-// and an audit log, but no write endpoint of its own, and this package adds
-// nothing beyond what that step shipped — `session` and `audit` are both
-// GET.
+// Through Step 6, showmeshctl was read-only: ADR-024 (Step 6) added
+// authentication, authorization, and an audit log, but no write endpoint of
+// its own, and this package added nothing beyond what that step shipped —
+// `session` and `audit` are both GET. BUILD-PLAN Step 7 seam B (node
+// discovery and declaration, RES-008 D2/D6) is what changes that: `discover`,
+// `declare`, and `undeclare` are this program's first write subcommands,
+// each a real POST/DELETE gated by config:write on the coordinator side
+// exactly like any other client. Every other subcommand remains read-only.
 //
 // Step 6 is also this package's proof of ADR-024 decision 1's promise that
 // "principal kind does not restrict credential form": a human may mint an

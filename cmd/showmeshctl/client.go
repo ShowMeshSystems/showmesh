@@ -141,15 +141,16 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 	return body, nil
 }
 
-// writeJSON issues an authenticated request carrying a JSON body against
-// apiPath and decodes a successful JSON response into out. It backs both
-// write subcommands this CLI has: `config set` (Step 7 seam A, PUT) and
-// `fpp stop-playlist` (Step 7 seam C, POST).
+// writeJSON issues an authenticated request carrying an optional JSON
+// body against apiPath and decodes a successful JSON response into out.
+// putJSON, postJSON and deleteJSON below are its three call sites, one per
+// method this API actually uses, so a call reads as the verb it issues
+// rather than as a string argument.
 //
-// One helper rather than a putJSON and a postJSON, because the two seams
-// arrived with near-identical copies of it and two copies of a bounded
-// read, a status check and a version check are two places for those to
-// stop agreeing.
+// One request core rather than one per verb, because Step 7's three seams
+// each arrived with a near-identical copy of it and three copies of a
+// bounded read, a status check and a version check are three places for
+// those to stop agreeing.
 //
 // No Sec-Fetch-Site handling here, and none is needed: ADR-024 decision
 // 6's same-origin CSRF check applies only to a request authenticated by
@@ -162,41 +163,11 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 // write still reaches the coordinator and gets back a real 401, exactly
 // like every other path this program does not special-case.
 func (c *client) writeJSON(ctx context.Context, method, apiPath string, body, out any) error {
-	payload, err := json.Marshal(body)
+	respBody, err := c.doWithBody(ctx, method, apiPath, body)
 	if err != nil {
-		return newCLIError(exitUsage, "encoding request body: %v", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(apiPath, nil), bytes.NewReader(payload))
-	if err != nil {
-		return newCLIError(exitUsage, "building request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.applyHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return classifyRequestError(c.baseURL.String(), err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Bounded read, identical posture to getRaw, see that method's doc
-	// comment for why.
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return newCLIError(exitUnreachable, "reading response body: %v", err)
-	}
-	if int64(len(respBody)) > maxResponseBytes {
-		return newCLIError(exitAPIError, "%v (from %s)", errResponseTooLarge, c.endpoint(apiPath, nil))
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return decodeProblemError(resp, respBody)
-	}
-	if err := c.checkAPIVersionHeader(resp); err != nil {
 		return err
 	}
-	if out == nil {
+	if out == nil || len(respBody) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
@@ -205,15 +176,70 @@ func (c *client) writeJSON(ctx context.Context, method, apiPath string, body, ou
 	return nil
 }
 
-// putJSON and postJSON name the two methods the API actually uses, so a
-// call site reads as the HTTP verb it issues rather than as a string
-// argument.
+// putJSON is `config set`'s write (Step 7 seam A).
 func (c *client) putJSON(ctx context.Context, apiPath string, body, out any) error {
 	return c.writeJSON(ctx, http.MethodPut, apiPath, body, out)
 }
 
+// postJSON is `discover`/`declare` (seam B) and `fpp stop-playlist`
+// (seam C). body may be nil: POST /api/v1/discovery/runs takes none.
 func (c *client) postJSON(ctx context.Context, apiPath string, body, out any) error {
 	return c.writeJSON(ctx, http.MethodPost, apiPath, body, out)
+}
+
+// deleteJSON is `undeclare` (seam B): DELETE
+// /api/v1/nodes/{nodeId}/declaration and its required {"confirm":true}
+// body. A 204 decodes to nothing rather than to an error.
+func (c *client) deleteJSON(ctx context.Context, apiPath string, body, out any) error {
+	return c.writeJSON(ctx, http.MethodDelete, apiPath, body, out)
+}
+
+// doWithBody is [client.getRaw]'s POST/DELETE sibling: identical request
+// construction, header application, bounded read, and success/problem
+// split, plus a JSON-encoded request body when body is non-nil. Returns an
+// empty (not nil) slice, no error, for a success response with an empty
+// body (e.g. this contract's 204s), matching getRaw's own posture of
+// returning exactly what the server sent on success.
+func (c *client) doWithBody(ctx context.Context, method, apiPath string, body any) ([]byte, error) {
+	var reqBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, newCLIError(exitUsage, "encoding request body: %v", err)
+		}
+		reqBody = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(apiPath, nil), reqBody)
+	if err != nil {
+		return nil, newCLIError(exitUsage, "building request: %v", err)
+	}
+	c.applyHeaders(req)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, classifyRequestError(c.baseURL.String(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, newCLIError(exitUnreachable, "reading response body: %v", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return nil, newCLIError(exitAPIError, "%v (from %s)", errResponseTooLarge, c.endpoint(apiPath, nil))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, decodeProblemError(resp, respBody)
+	}
+	if err := c.checkAPIVersionHeader(resp); err != nil {
+		return nil, err
+	}
+	return respBody, nil
 }
 
 // applyHeaders sets the headers common to every /api/v1 request: the

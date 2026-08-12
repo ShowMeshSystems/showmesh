@@ -13,6 +13,8 @@ export type {
   ConfigRevisionsResponse,
   ConnectionState,
   ControlPlane,
+  DiscoveryProposal,
+  DiscoveryRun,
   Evidence,
   EvidenceState,
   Event,
@@ -22,6 +24,7 @@ export type {
   FPPInstance,
   Model,
   Node,
+  NodeDeclaration,
   NodeEvidence,
   PrincipalSummary,
   ResourceRef,
@@ -40,6 +43,9 @@ export {
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
   stopFPPPlaylist,
+  runDiscovery,
+  declareNode,
+  deleteNodeDeclaration,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

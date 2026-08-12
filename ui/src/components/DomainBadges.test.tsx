@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ControlPlaneBadge } from './DomainBadges'
+import { ControlPlaneBadge, DeclarationBadge } from './DomainBadges'
 
 // See EvidenceValue.test.tsx for why this is registered explicitly here.
 afterEach(cleanup)
@@ -37,5 +37,31 @@ describe('ControlPlaneBadge', () => {
       expect(label?.textContent?.trim().length).toBeGreaterThan(0)
       unmount()
     }
+  })
+})
+
+// BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
+describe('DeclarationBadge', () => {
+  it('renders "not declared" for an undeclared node regardless of discoveryState', () => {
+    render(<DeclarationBadge declared={false} discoveryState="not_applicable" />)
+    expect(screen.getByText('not declared')).toBeInTheDocument()
+  })
+
+  // The whole reason RES-008 D6 exists: a declared node a discovery run
+  // did not see must be visibly flagged, never indistinguishable from
+  // "present".
+  it('flags a declared node the most recent run did not see, distinctly from present', () => {
+    const { unmount } = render(<DeclarationBadge declared={true} discoveryState="present" />)
+    expect(screen.getByText(/seen by discovery/)).toBeInTheDocument()
+    unmount()
+
+    render(<DeclarationBadge declared={true} discoveryState="not_seen" />)
+    const label = screen.getByText(/not seen/i)
+    expect(label.textContent).not.toMatch(/^seen by discovery$/)
+  })
+
+  it('never renders unknown discovery evidence as though it were fine', () => {
+    render(<DeclarationBadge declared={true} discoveryState="unknown" />)
+    expect(screen.getByText(/unknown/i)).toBeInTheDocument()
   })
 })
