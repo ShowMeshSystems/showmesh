@@ -80,7 +80,19 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 	}
 	defer h.loginLimiter.release()
 
-	principal, err := h.deps.Identity.ClaimBootstrap(r.Context(), code, name, req.Password, now)
+	// ClaimBootstrap (Step 7 seam 0) now writes its own "bootstrap.claim"
+	// audit entry atomically with the principal creation and the bootstrap
+	// row's claim (ADR-024 decision 11's same-transaction rule) — see that
+	// method's doc comment. h.clientAddr(r) is passed through so the audit
+	// entry can record it under [Options.TrustClientAddr]'s existing rule.
+	// deviceLabel restores the F6 review finding's other half (it fell off
+	// the entry entirely in an earlier version of this handler); identity.
+	// FormPassword is this endpoint's genuine credential — a network caller
+	// verified a password over HTTP, unlike the host-shell `bootstrap`
+	// subcommand's filesystem-access credential (identity.FormCLI) — see
+	// [identity.Service.ClaimBootstrap]'s doc comment for why the two must
+	// stay distinguishable in the audit log.
+	principal, err := h.deps.Identity.ClaimBootstrap(r.Context(), code, name, req.Password, deviceLabel, h.clientAddr(r), identity.FormPassword, now)
 	switch {
 	case errors.Is(err, identity.ErrInvalidCredential),
 		errors.Is(err, identity.ErrBootstrapClaimed),
@@ -106,22 +118,12 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 	}
 	h.loginLimiter.recordSuccess(source)
 
-	sess, secret, err := h.deps.Identity.CreateSession(r.Context(), principal.ID, deviceLabel, now)
+	// CreateSession (Step 7 seam 0) writes its own "session.create" audit
+	// entry atomically with the session row, identical to
+	// handleCreateSession's own path — see that method's doc comment.
+	sess, secret, err := h.deps.Identity.CreateSession(r.Context(), principal.ID, principal.Name, deviceLabel, h.clientAddr(r), now)
 	if err != nil {
 		h.writeInternalError(w, now, "create session after bootstrap claim", err)
-		return
-	}
-
-	// ADR-024 decision 11's default rule, identical to handleCreateSession's
-	// own ordering: the audit entry must exist before this handler hands
-	// back a working credential.
-	if !h.writeAuditOrFail(r.Context(), w, now, identity.AuditEntry{
-		Timestamp: now, PrincipalID: principal.ID, PrincipalName: principal.Name,
-		Form: identity.FormPassword, ClientAddr: h.clientAddr(r),
-		Action: "bootstrap.claim", Target: principal.ID,
-		Params: map[string]any{"deviceLabel": deviceLabel},
-		Kind:   identity.AuditAdmin,
-	}) {
 		return
 	}
 

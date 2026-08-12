@@ -243,6 +243,22 @@ var (
 	// the access a written code would too).
 	ErrBootstrapExpired      = errors.New("identity: bootstrap code has expired")
 	ErrBootstrapNotAvailable = errors.New("identity: no bootstrap code is currently available")
+
+	// ErrAuditWrite is [Service.AuditedWrite]'s distinguishable failure
+	// mode (Step 7 seam 0, ADR-024 decision 11's same-transaction rule):
+	// wraps the underlying store error when fn's own state change
+	// succeeded but appending its audit entry failed, so the whole
+	// transaction rolled back. A caller can errors.Is against this to tell
+	// "the write itself failed" (fn returned its own error, returned
+	// unwrapped by AuditedWrite) apart from "the attribution failed" —
+	// seams A and B need that distinction for decision 11's fail-closed
+	// rule on config:write/principal:write, and seam C needs it for the
+	// blackout/stop/power-off safety-class exemption (decision 11: those
+	// three proceed with a degraded, stderr-only attribution record rather
+	// than being refused for want of an audit write — a distinction only
+	// possible to act on if the caller can tell this failure mode apart
+	// from every other one).
+	ErrAuditWrite = errors.New("identity: state change succeeded but its audit entry could not be written; the transaction was rolled back")
 )
 
 // AuditKind distinguishes the append-only records ADR-024 decision 11

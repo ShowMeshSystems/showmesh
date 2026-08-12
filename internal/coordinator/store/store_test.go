@@ -377,6 +377,333 @@ func TestMigrateRefusesNewerSchemaVersion(t *testing.T) {
 	}
 }
 
+// TestMigrationV6AddsSixTablesAndPreservesEveryV5Row is acceptance
+// criterion 4's first half: "a v5 database migrates to v6 with every
+// existing row preserved."
+//
+// A previous version of this test built its "v5 database" by opening it
+// through the normal [open] path and writing one principal through it —
+// which does not test a migration at all: [open] always brings a database
+// to len(migrations), so that "v5" database was already at v6 before the
+// principal row was ever written, and the "reopen" this test performed was
+// a v6-to-v6 no-op. Confirmed by mutation, not by reading: appending
+// `DELETE FROM principals; DELETE FROM audit_log;` to schemaV6 left the
+// entire repository test suite green, this test included — see this
+// task's report for that mutation run. It also seeded one row into one
+// pre-existing table, not "every existing row" the acceptance criterion
+// actually asks for.
+//
+// Fixed the honest way this package already established for schemaV5, in
+// identity_test.go's TestMigrationV5AddsIdentityTablesAndPreservesV4Data,
+// whose own doc comment warns about exactly this trap: build every
+// schemaV1-V5 table directly (bypassing open/migrate entirely, which is
+// the only way to get a database that is genuinely at v5 and nothing
+// newer), seed one row into EVERY pre-existing table — not just one — set
+// PRAGMA user_version = 5, then reopen through the real [open]/[migrate]
+// path and prove both that every one of those rows is still there and
+// that schemaV6 actually created six new tables, not five (this test's
+// own former name undercounted them too; config_objects and
+// config_revisions are two separate tables sharing one file, config.go).
+func TestMigrationV6AddsSixTablesAndPreservesEveryV5Row(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, dbFileName)
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	for _, s := range []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5} {
+		if _, err := db.ExecContext(context.Background(), s); err != nil {
+			t.Fatalf("apply schema: %v", err)
+		}
+	}
+	if _, err := db.ExecContext(context.Background(), `PRAGMA user_version = 5`); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+
+	now := timeToDB(time.Now())
+
+	// schemaV1/V2: nodes, node_lwt, node_health — a full row in all three
+	// for one node, mirroring
+	// TestMigrationV2MakesLWTObservedAtNullableAndPreservesData's pattern.
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO nodes (
+			node_id, label, platform, agent_version, boot_id, started_at,
+			capabilities_json, hello_observed_at, hello_provenance, hello_retained,
+			first_seen_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "node-v5", "v5 node", "linux-amd64", "0.1.0", "boot-node-v5", now,
+		"[]", now, "agent_report", 0, now, now); err != nil {
+		t.Fatalf("insert v5 node: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO node_lwt (node_id, online, reason, observed_at, provenance, retained, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "node-v5", 1, "v5 lwt reason", now, "agent_report", 0, now); err != nil {
+		t.Fatalf("insert v5 node_lwt: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO node_health (node_id, boot_id, sequence, agent_state, uptime_ms, observed_at, provenance, retained, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "node-v5", "boot-v5", 1, "running", 1000, now, "agent_report", 0, now); err != nil {
+		t.Fatalf("insert v5 node_health: %v", err)
+	}
+
+	// schemaV3/V4: observations, events.
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO observations (
+			resource_kind, resource_id, signal,
+			value_kind, value_text, unit,
+			observed_at, collected_at, source, quality, valid_for_ns,
+			absence, reason, first_seen_at, updated_at
+		) VALUES ('fpp', 'player-01', 'fpp.multisync.enabled', 'bool', 'true', '', ?, ?, 'fpp-rest', 'direct', 0, '', '', ?, ?)
+	`, now, now, now, now); err != nil {
+		t.Fatalf("insert v5 observation: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO events (recorded_at, source, resource_kind, resource_id, category, severity, summary)
+		VALUES (?, 'test', 'fpp', 'player-01', 'lifecycle', 'informational', 'v5 event')
+	`, now); err != nil {
+		t.Fatalf("insert v5 event: %v", err)
+	}
+
+	// schemaV5: principals, principal_tokens, principal_sessions,
+	// audit_log, bootstrap.
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO principals (id, name, kind, role, password_hash, disabled, generation, created_at, updated_at)
+		VALUES ('p-v5', 'v5-admin', 'human', 'admin', 'hash-v5', 0, 0, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert v5 principal: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO principal_tokens (id, principal_id, digest, hint, label, generation, created_at, expires_at, revoked_at, last_used_at)
+		VALUES ('t-v5', 'p-v5', 'digest-v5', 'smsh_v5', 'v5 token', 0, ?, NULL, NULL, NULL)
+	`, now); err != nil {
+		t.Fatalf("insert v5 token: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO principal_sessions (id, principal_id, digest, device_label, generation, created_at, last_used_at, revoked_at)
+		VALUES ('s-v5', 'p-v5', 'session-digest-v5', 'v5 device', 0, ?, ?, NULL)
+	`, now, now); err != nil {
+		t.Fatalf("insert v5 session: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO audit_log (recorded_at, principal_id, principal_name, form, credential_id, client_addr, action, target, params_json, idempotency_key, kind, command_id, outcome, outcome_state, outcome_reason)
+		VALUES (?, 'p-v5', 'v5-admin', 'cli', '', '', 'v5.preexisting', 'p-v5', '{}', '', 'admin', '', '', '', '')
+	`, now); err != nil {
+		t.Fatalf("insert v5 audit entry: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO bootstrap (id, code_digest, created_at, expires_at, claimed_at)
+		VALUES (1, 'bootstrap-digest-v5', ?, ?, NULL)
+	`, now, now); err != nil {
+		t.Fatalf("insert v5 bootstrap: %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	// The real migration path: open() on a genuinely v5 database applies
+	// schemaV6.
+	st, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("open (should apply migration 6): %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	ctx := context.Background()
+
+	var version int
+	if err := st.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	}
+
+	nodeRec, err := st.GetNode(ctx, "node-v5")
+	if err != nil {
+		t.Fatalf("get node after migration: %v", err)
+	}
+	if nodeRec.Hello == nil || nodeRec.Hello.Label != "v5 node" {
+		t.Errorf("node hello row not preserved: %+v", nodeRec.Hello)
+	}
+	if nodeRec.LWT == nil || nodeRec.LWT.Reason != "v5 lwt reason" {
+		t.Errorf("node_lwt row not preserved: %+v", nodeRec.LWT)
+	}
+	if nodeRec.Health == nil || nodeRec.Health.BootID != "boot-v5" {
+		t.Errorf("node_health row not preserved: %+v", nodeRec.Health)
+	}
+
+	obs, err := st.ListObservations(ctx, ObservationFilter{})
+	if err != nil {
+		t.Fatalf("list observations after migration: %v", err)
+	}
+	if len(obs) != 1 || obs[0].Source != "fpp-rest" {
+		t.Fatalf("observations row not preserved: %+v", obs)
+	}
+
+	events, _, err := st.ListEvents(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list events after migration: %v", err)
+	}
+	if len(events) != 1 || events[0].Summary != "v5 event" {
+		t.Fatalf("events row not preserved: %+v", events)
+	}
+
+	principal, err := st.GetPrincipalByName(ctx, "v5-admin")
+	if err != nil {
+		t.Fatalf("get principal after migration: %v", err)
+	}
+	if principal.ID != "p-v5" {
+		t.Errorf("principals row not preserved: %+v", principal)
+	}
+
+	tokens, err := st.ListTokens(ctx, "p-v5")
+	if err != nil {
+		t.Fatalf("list tokens after migration: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].ID != "t-v5" {
+		t.Fatalf("principal_tokens row not preserved: %+v", tokens)
+	}
+
+	sessions, err := st.ListSessions(ctx, "p-v5")
+	if err != nil {
+		t.Fatalf("list sessions after migration: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "s-v5" {
+		t.Fatalf("principal_sessions row not preserved: %+v", sessions)
+	}
+
+	auditEntries, err := st.ListAuditEntries(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries after migration: %v", err)
+	}
+	if len(auditEntries) != 1 || auditEntries[0].Action != "v5.preexisting" {
+		t.Fatalf("audit_log row not preserved: %+v", auditEntries)
+	}
+
+	bootstrap, err := st.GetBootstrap(ctx)
+	if err != nil {
+		t.Fatalf("get bootstrap after migration: %v", err)
+	}
+	if bootstrap.CodeDigest != "bootstrap-digest-v5" {
+		t.Errorf("bootstrap row not preserved: %+v", bootstrap)
+	}
+
+	for _, table := range []string{"config_objects", "config_revisions", "node_declarations", "discovery_runs", "commands", "desired_state"} {
+		var name string
+		err := st.db.QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&name)
+		if err != nil {
+			t.Errorf("schemaV6 table %q missing after migration: %v", table, err)
+		}
+	}
+}
+
+// TestMigrationV6IsNoOpOnSecondOpen is acceptance criterion 4's second
+// half: "migrating a v6 database again is a no-op." Proven by writing a
+// v6 row, reopening, and confirming both the row and the schema version
+// are unchanged — mirrors [TestOpenIsIdempotentOnSecondOpen]'s pattern,
+// applied to schemaV6 specifically rather than schemaV1.
+func TestMigrationV6IsNoOpOnSecondOpen(t *testing.T) {
+	dir := t.TempDir()
+
+	st1, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if _, err := st1.CreateConfigRevision(context.Background(), ConfigRevisionRecord{
+		Kind: "fpp_endpoints", ObjectID: "default", Revision: 1, PayloadJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create config revision: %v", err)
+	}
+	if err := st1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	st2, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer func() { _ = st2.Close() }()
+
+	var version int
+	if err := st2.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version = %d, want %d unchanged", version, len(migrations))
+	}
+
+	rev, err := st2.GetConfigRevision(context.Background(), "fpp_endpoints", "default", 1)
+	if err != nil {
+		t.Fatalf("get config revision after no-op reopen: %v", err)
+	}
+	if rev.PayloadJSON != `{}` {
+		t.Errorf("payload = %q, want unchanged", rev.PayloadJSON)
+	}
+}
+
+// TestMigrateRefusesV6DatabaseFromABinaryThatOnlyKnowsV5 is acceptance
+// criterion 4's third half, proven literally rather than only by the
+// generic "any newer version is refused" shape [TestMigrateRefusesNewerSchemaVersion]
+// already covers: this test simulates "a binary that only knows v5" by
+// temporarily truncating the package-level migrations slice to its first
+// five entries, opening (and thereby stamping user_version=5), restoring
+// the full (v6-aware) slice, bumping the on-disk version to 6 by applying
+// schemaV6 directly, then reopening with the TRUNCATED slice again and
+// checking that a v5-only binary refuses it.
+//
+// F12 nit: mutating the package-level `migrations` var is safe ONLY
+// because no test in this package's suite currently calls t.Parallel() —
+// two tests racing a write to a shared package variable is a data race
+// `go test -race` would (correctly) flag, and nothing here stops a future
+// contributor from adding t.Parallel() to some other test in this file
+// without realizing this one depends on nothing else touching `migrations`
+// concurrently. Recorded here rather than fixed (this test's own
+// t.Cleanup already restores the original value on the ordinary,
+// non-parallel path) so the next person adding t.Parallel() anywhere in
+// this package finds out from this comment, not from a flake.
+func TestMigrateRefusesV6DatabaseFromABinaryThatOnlyKnowsV5(t *testing.T) {
+	dir := t.TempDir()
+	fullMigrations := migrations
+	t.Cleanup(func() { migrations = fullMigrations })
+
+	migrations = fullMigrations[:5] // "a binary that only knows v5"
+	st, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("open at v5: %v", err)
+	}
+	var versionAfterV5 int
+	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&versionAfterV5); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if versionAfterV5 != 5 {
+		t.Fatalf("user_version after v5-only open = %d, want 5", versionAfterV5)
+	}
+
+	// Advance the on-disk database to v6, as a full binary would.
+	migrations = fullMigrations
+	if err := migrate(context.Background(), st.db); err != nil {
+		t.Fatalf("migrate to v6: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Now simulate the v5-only binary encountering that v6 database.
+	migrations = fullMigrations[:5]
+	_, err = open(context.Background(), dir, nil, time.Now)
+	if err == nil {
+		t.Fatalf("a v5-only binary opened a v6 database without error, want ErrSchemaTooNew")
+	}
+	if !errors.Is(err, ErrSchemaTooNew) {
+		t.Errorf("error = %v, want it to wrap ErrSchemaTooNew", err)
+	}
+}
+
 func TestCapabilitySetRoundTripsWithAttributes(t *testing.T) {
 	st := openTestStore(t, nil)
 

@@ -354,14 +354,14 @@ func New(deps Dependencies, opts Options) *API {
 	// implementation notes BUILD-PLAN recorded turned out not to require a
 	// code change here.
 	mux.HandleFunc("GET /api/v1/session", h.handleGetSession)
-	mux.HandleFunc("POST /api/v1/session", h.handleCreateSession)
+	mux.HandleFunc("POST /api/v1/session", h.loginCSRFGuard(h.handleCreateSession))
 	mux.HandleFunc("DELETE /api/v1/session", h.writeGuard(nil, h.handleDeleteSession))
 
 	// POST /api/v1/bootstrap (ADR-024 decision 9): unauthenticated by
 	// construction, exactly like POST /api/v1/session — registered
 	// directly, no [handlers.writeGuard], since there is no pre-existing
 	// credential to check a scope or CSRF header against. See bootstrap.go.
-	mux.HandleFunc("POST /api/v1/bootstrap", h.handleClaimBootstrap)
+	mux.HandleFunc("POST /api/v1/bootstrap", h.loginCSRFGuard(h.handleClaimBootstrap))
 
 	// GET /api/v1/audit is always gated by audit:read (requireScope, not
 	// readGuard): it is not one of the four pre-existing v1 read

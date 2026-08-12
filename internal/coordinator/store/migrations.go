@@ -34,6 +34,7 @@ var migrations = []migration{
 	{version: 3, sql: schemaV3},
 	{version: 4, sql: schemaV4},
 	{version: 5, sql: schemaV5},
+	{version: 6, sql: schemaV6},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -449,6 +450,178 @@ CREATE TABLE bootstrap (
 	created_at  TEXT NOT NULL,
 	expires_at  TEXT NOT NULL,
 	claimed_at  TEXT
+);
+`
+
+// schemaV6 adds Step 7's foundation tables (BUILD-PLAN Step 7, seam 0):
+// configuration objects and their immutable revisions (RES-008 D1),
+// declared node inventory (RES-008 D2), discovery runs, the command
+// journal (ARCHITECTURE §8.1's envelope), and desired state (ADR-003's
+// split, expressed in storage). This is a pure-addition migration —
+// nothing from schemaV1 through schemaV5 is touched — so, like schemaV5,
+// it needs none of SQLite's "12 steps to altering a table" dance; every
+// statement below is a plain CREATE. This creates SIX tables, not five —
+// config_objects and config_revisions are two separate tables sharing one
+// file — with repository methods living in five files: config.go (both
+// config tables), nodes_declared.go, discovery.go, commands.go, and
+// desired_state.go, each with a *Store form and a *Tx form built over the
+// identical querier-based body — see store/tx.go's [Tx] doc comment and
+// [appendAuditEntry]'s pattern in audit.go, which every writer here
+// follows.
+//
+// config_objects / config_revisions (RES-008 D1). ADR-009 makes revisions
+// immutable: config_revisions has no UpdateConfigRevision method and must
+// never grow one, exactly as audit_log (schemaV5) has no update path — the
+// only mutable value in either table is config_objects.current_revision,
+// which activates an already-written, never-edited revision. Seam A owns
+// the payload schema (what payload_json actually contains per config kind)
+// and the SHOWMESH_FPP_ENDPOINTS migration; this migration lands only the
+// generic tables and the generic revision repository.
+//
+// config_revisions is NEVER pruned, by this migration or by any retention
+// pass this package runs — pruning revisions would delete the rollback
+// ADR-009 requires, so its unbounded growth is a recorded open item for
+// RES-013 rather than a bound this package quietly imposes. node_declarations
+// is the same: never pruned, for the reason its own paragraph below gives.
+//
+// node_declarations (RES-008 D2). node_id deliberately carries NO foreign
+// key to nodes, and that absence is the point: nodes rows are observations
+// from agent hellos (schemaV1) and disappear/reappear as agents connect and
+// disconnect, while a declared node is an operator's durable inventory
+// decision that must survive its observed row being absent — an
+// ON DELETE CASCADE here would silently implement the auto-deletion
+// RES-008 D6 forbids, exactly at the schema layer, the moment a node's
+// nodes row happened to be purged or never existed yet. Powered-off
+// equipment is normal outside display hours; this is the fourth time this
+// codebase has needed "absence of evidence is not evidence of absence"
+// recorded against a concrete schema decision (see schemaV3's ObservedAt
+// nullability, schemaV2's LWT freshness fix, and the events/audit gap
+// reporting), and the next person should inherit that reasoning rather
+// than rediscover it. last_discovered_at is nullable for the identical
+// reason every other "when was this last seen" column in this package is
+// (schemaV1's health/LWT ObservedAt, schemaV3's observations.observed_at):
+// NULL means "no complete discovery run has ever seen this node", never
+// "seen at time zero" — a NOT NULL DEFAULT here would manufacture a false
+// freshness claim, which is the one thing ADR-011 exists to prevent.
+//
+// discovery_runs. complete exists so seam B can apply Step 5's
+// only-a-complete-poll-may-prune rule to node inventory instead of
+// observations: only a discovery run with complete=1 may say anything
+// about a node's absence, and reason exists so an incomplete run states
+// WHY per ADR-020's absent-evidence rule, rather than a missing row
+// standing in for "did not finish" — a run that fails partway is a row
+// with complete=0 and a reason, never silence.
+//
+// commands. Columns are fixed by ARCHITECTURE §8.1's envelope — identifier,
+// target, parameters, idempotency key, deadline, issuer, requested
+// revision, confirmation method, result — so seam C's pkg/command types map
+// onto this table without changing it. idempotency_key is UNIQUE, and
+// replay detection is that constraint violation, never a SELECT followed
+// by an INSERT: a read-then-write is a race by construction (this project
+// has already shipped one test that passed or failed on scheduling rather
+// than on correctness — see CLAUDE.md's Step 4/CI lessons), so
+// [Store.InsertCommand]/[Tx.InsertCommand] surface a duplicate key as the
+// distinguishable [ErrCommandIdempotencyKeyExists], carrying the existing
+// row, rather than ever checking first. outcome_state uses
+// pkg/observation's state vocabulary, matching audit_log.outcome_state
+// (schemaV5): an unresolved command carries a state and a reason, never a
+// null that renders as blank.
+//
+// desired_state (ADR-003's split, expressed in storage). value_kind/
+// value_text is the identical discriminated encoding schemaV3's
+// observations table uses and for the identical reason its doc comment
+// gives: a single JSON or NUMERIC column loses an int64 above 2^53 and
+// cannot tell an integral float from an integer on the way back —
+// [encodeObservationValue]/[decodeObservationValue] (observations.go) are
+// reused as-is rather than duplicated (desired_state.go has no second
+// encode/decode pair). NOTHING RECONCILES THIS TABLE, and that is a
+// standing constraint this migration records rather than a gap: a
+// background loop comparing desired to observed and re-issuing commands to
+// close any gap would make ShowMesh a second scheduler, which ADR-001
+// forbids as this project's very first constraint. This table exists only
+// so ADR-003's desired/observed split is expressible in storage and so a
+// command's confirmation has a recorded target to compare against — that
+// is the whole of what it is for in Step 7.
+const schemaV6 = `
+CREATE TABLE config_objects (
+	kind             TEXT NOT NULL,
+	id               TEXT NOT NULL,
+	current_revision INTEGER NOT NULL DEFAULT 0,
+	created_at       TEXT NOT NULL,
+	updated_at       TEXT NOT NULL,
+	PRIMARY KEY (kind, id)
+);
+
+CREATE TABLE config_revisions (
+	kind                      TEXT NOT NULL,
+	object_id                 TEXT NOT NULL,
+	revision                  INTEGER NOT NULL,
+	payload_json              TEXT NOT NULL,
+	created_at                TEXT NOT NULL,
+	created_by_principal_id   TEXT NOT NULL DEFAULT '',
+	created_by_principal_name TEXT NOT NULL DEFAULT '',
+	source                    TEXT NOT NULL DEFAULT '',
+	note                      TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (kind, object_id, revision)
+);
+
+CREATE TABLE node_declarations (
+	node_id                    TEXT PRIMARY KEY,
+	label                      TEXT NOT NULL DEFAULT '',
+	notes                      TEXT NOT NULL DEFAULT '',
+	declared_at                TEXT NOT NULL,
+	declared_by_principal_id   TEXT NOT NULL DEFAULT '',
+	declared_by_principal_name TEXT NOT NULL DEFAULT '',
+	last_discovery_run_id      TEXT NOT NULL DEFAULT '',
+	last_discovered_at         TEXT,
+	updated_at                 TEXT NOT NULL
+);
+
+CREATE TABLE discovery_runs (
+	id                          TEXT PRIMARY KEY,
+	started_at                  TEXT NOT NULL,
+	finished_at                 TEXT,
+	complete                    INTEGER NOT NULL DEFAULT 0,
+	reason                      TEXT NOT NULL DEFAULT '',
+	found_count                 INTEGER NOT NULL DEFAULT 0,
+	initiated_by_principal_id   TEXT NOT NULL DEFAULT '',
+	initiated_by_principal_name TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE commands (
+	id                    TEXT PRIMARY KEY,
+	idempotency_key       TEXT NOT NULL UNIQUE,
+	action                TEXT NOT NULL,
+	target_kind           TEXT NOT NULL DEFAULT '',
+	target_id             TEXT NOT NULL DEFAULT '',
+	params_json           TEXT NOT NULL DEFAULT '{}',
+	issuer_principal_id   TEXT NOT NULL DEFAULT '',
+	issuer_principal_name TEXT NOT NULL DEFAULT '',
+	requested_revision    TEXT NOT NULL DEFAULT '',
+	confirmation_method   TEXT NOT NULL DEFAULT '',
+	deadline_at           TEXT,
+	created_at            TEXT NOT NULL,
+	dispatched_at         TEXT,
+	resolved_at           TEXT,
+	state                 TEXT NOT NULL,
+	result_json           TEXT NOT NULL DEFAULT '{}',
+	outcome_state         TEXT NOT NULL DEFAULT '',
+	outcome_reason        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX idx_commands_created_at ON commands(created_at);
+
+CREATE TABLE desired_state (
+	resource_kind             TEXT NOT NULL,
+	resource_id               TEXT NOT NULL,
+	signal                    TEXT NOT NULL,
+	value_kind                TEXT NOT NULL DEFAULT '',
+	value_text                TEXT NOT NULL DEFAULT '',
+	requested_at              TEXT NOT NULL,
+	requested_by_principal_id TEXT NOT NULL DEFAULT '',
+	command_id                TEXT NOT NULL DEFAULT '',
+	deadline_at               TEXT,
+	PRIMARY KEY (resource_kind, resource_id, signal)
 );
 `
 

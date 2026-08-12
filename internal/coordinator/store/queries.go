@@ -91,6 +91,7 @@ func (s *Store) upsertNodeStub(ctx context.Context, ex execer, nodeID string) er
 // not touch first_seen_at once a row exists (see the ON CONFLICT clause
 // below, which omits it deliberately).
 func (s *Store) UpsertHello(ctx context.Context, nodeID string, h HelloRecord) error {
+	guardNotInTx(ctx, "Store.UpsertHello")
 	capsJSON, err := json.Marshal(h.Capabilities)
 	if err != nil {
 		return fmt.Errorf("store: encode capabilities for %q: %w", nodeID, err)
@@ -132,6 +133,7 @@ func (s *Store) UpsertHello(ctx context.Context, nodeID string, h HelloRecord) e
 // which derives them from the delivery's retained/live status the same way
 // it does for hello and health).
 func (s *Store) RecordLWT(ctx context.Context, nodeID string, l LWTRecord) error {
+	guardNotInTx(ctx, "Store.RecordLWT")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin record lwt for %q: %w", nodeID, err)
@@ -222,6 +224,7 @@ func (s *Store) refreshHealthObservedAt(ctx context.Context, tx *sql.Tx, nodeID 
 // (whether or not observed_at was refreshed), (true, nil) on a genuine
 // write of new boot ID/sequence content, and (false, err) on any error.
 func (s *Store) RecordHealth(ctx context.Context, nodeID string, h HealthRecord) (accepted bool, err error) {
+	guardNotInTx(ctx, "Store.RecordHealth")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("store: begin record health for %q: %w", nodeID, err)
@@ -406,6 +409,7 @@ var ErrNodeNotFound = fmt.Errorf("store: node not found")
 
 // GetNode returns the stored record for nodeID.
 func (s *Store) GetNode(ctx context.Context, nodeID string) (NodeRecord, error) {
+	guardNotInTx(ctx, "Store.GetNode")
 	row := s.db.QueryRowContext(ctx, `SELECT`+nodeQueryColumns+nodeQueryFrom+` WHERE n.node_id = ?`, nodeID)
 	rec, err := scanNode(row)
 	if err == sql.ErrNoRows {
@@ -420,6 +424,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (NodeRecord, error) 
 // ListNodes returns every node the store currently knows about, ordered by
 // node ID for a stable, deterministic result.
 func (s *Store) ListNodes(ctx context.Context) ([]NodeRecord, error) {
+	guardNotInTx(ctx, "Store.ListNodes")
 	rows, err := s.db.QueryContext(ctx, `SELECT`+nodeQueryColumns+nodeQueryFrom+` ORDER BY n.node_id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list nodes: %w", err)

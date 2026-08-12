@@ -140,6 +140,7 @@ func decodeObservationValue(kind, text string) (any, error) {
 // "helpfully" default it to obs.CollectedAt here or anywhere else in this
 // package.
 func (s *Store) UpsertObservation(ctx context.Context, obs observation.Observation) error {
+	guardNotInTx(ctx, "Store.UpsertObservation")
 	if err := obs.Validate(); err != nil {
 		return fmt.Errorf("store: upsert observation: %w", err)
 	}
@@ -237,6 +238,7 @@ func upsertObservation(ctx context.Context, ex execer, obs observation.Observati
 // observation in the batch fails the whole call with nothing written,
 // exactly as if UpsertObservation had been called for it directly.
 func (s *Store) ReplaceObservations(ctx context.Context, observations []observation.Observation) error {
+	guardNotInTx(ctx, "Store.ReplaceObservations")
 	for i := range observations {
 		if err := observations[i].Validate(); err != nil {
 			return fmt.Errorf("store: replace observations: %w", err)
@@ -394,6 +396,7 @@ func scanObservation(row interface {
 // package has no clock opinion about what "current" means to an API
 // response being rendered.
 func (s *Store) ListObservations(ctx context.Context, filter ObservationFilter) ([]observation.Observation, error) {
+	guardNotInTx(ctx, "Store.ListObservations")
 	var clauses []string
 	var args []any
 	if filter.ResourceKind != "" {

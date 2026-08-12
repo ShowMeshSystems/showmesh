@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // This file is ADR-024's authentication and authorization boundary: it
@@ -61,7 +62,7 @@ func (noIdentityService) RevalidateToken(context.Context, string) (identity.Auth
 	return identity.Authenticated{}, identity.ErrInvalidCredential
 }
 
-func (noIdentityService) CreateSession(context.Context, string, string, time.Time) (identity.Session, string, error) {
+func (noIdentityService) CreateSession(context.Context, string, string, string, string, time.Time) (identity.Session, string, error) {
 	return identity.Session{}, "", errIdentityNotConfigured
 }
 
@@ -81,8 +82,17 @@ func (noIdentityService) HasAnyPrincipal(context.Context) (bool, error) { return
 // dependency wired in has nothing to bootstrap.
 func (noIdentityService) EnsureBootstrap(context.Context) error { return nil }
 
-func (noIdentityService) ClaimBootstrap(context.Context, string, string, string, time.Time) (identity.Principal, error) {
+func (noIdentityService) ClaimBootstrap(context.Context, string, string, string, string, string, identity.CredentialForm, time.Time) (identity.Principal, error) {
 	return identity.Principal{}, errIdentityNotConfigured
+}
+
+// AuditedWrite's no-op default returns an error, never a fabricated
+// success — an unwired identity dependency has no store.Tx to hand fn at
+// all, so there is nothing safe to do here but refuse, matching every
+// other write method's identical posture in this default (CreateSession,
+// ClaimBootstrap, CreatePrincipal, ...).
+func (noIdentityService) AuditedWrite(context.Context, func(context.Context, *store.Tx) (identity.AuditEntry, error)) error {
+	return errIdentityNotConfigured
 }
 
 func (noIdentityService) CreatePrincipal(context.Context, string, identity.Kind, identity.Role, string) (identity.Principal, error) {
@@ -256,20 +266,33 @@ func resolveCredential(ctx context.Context, svc identity.Service, r *http.Reques
 //     hit has no scope gate at all — a per-route guard could not do this,
 //     because most routes never run one.
 //
-// limiter throttles the credential-in-url audit write per source — a
-// review finding caught that this path, unlike POST /api/v1/session and
-// POST /api/v1/bootstrap, was reachable by ANY request to ANY route with
-// no authentication and no bound at all, so a source repeating it could
-// grow the append-only audit table without limit at full request rate
-// (decision 11 already names disk exhaustion as a case this coordinator
-// must survive; an unthrottled unauthenticated INSERT source is a
-// self-inflicted way to reach it). Reusing the SAME per-source delay
-// bookkeeping [handlers.loginLimiter] already uses for login failures —
-// [loginLimiter.delay]/[loginLimiter.recordFailure], never
-// [loginLimiter.acquire] — bounds the SUSTAINED rate from one source
-// without inventing a second, independent mechanism and without coupling
-// this path to the login concurrency bound itself: acquiring a
-// concurrency slot here would let a credential-in-url flood queue out and
+// limiter throttles BOTH of this function's audit-write paths per source —
+// the credential-in-url rejection below and [resolveCredential]'s own
+// failure branch further down. A review finding caught the first: that
+// path, unlike POST /api/v1/session and POST /api/v1/bootstrap, was
+// reachable by ANY request to ANY route with no authentication and no
+// bound at all, so a source repeating it could grow the append-only audit
+// table without limit at full request rate (decision 11 already names
+// disk exhaustion as a case this coordinator must survive; an unthrottled
+// unauthenticated INSERT source is a self-inflicted way to reach it). A
+// second review pass, prompted by an operator's own stale-cookie browser
+// tab producing six credential.resolve rows in a few seconds of ordinary
+// page loads (a stale showmesh_session cookie is expected under ADR-024
+// decision 5 — cookies are scoped by host and ignore port — and nothing
+// clears it until sign-in or its 90-day expiry), found the identical
+// defect one branch over: resolveCredential's failure path runs on every
+// request to every open read route, which is most of this API's traffic
+// by design, and had no bound either. Worse than raw growth: audit
+// retention keeps only the newest N rows, so an unbounded credential.resolve
+// source quietly evicts genuine attribution history — the exact record
+// decision 11 exists to keep.
+//
+// Both paths reuse the SAME per-source delay bookkeeping [handlers.loginLimiter]
+// already uses for login failures — [loginLimiter.delay]/[loginLimiter.recordFailure],
+// never [loginLimiter.acquire] — bounding the SUSTAINED rate from one
+// source without inventing a second, independent mechanism and without
+// coupling either path to the login concurrency bound itself: acquiring a
+// concurrency slot here would let a flood on either path queue out and
 // 429 a genuinely different source's correct-password login, reproducing
 // the exact cross-source starvation shape finding 2 exists to prevent,
 // just one endpoint over. This is a real but partial mitigation, honestly
@@ -309,6 +332,18 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 
 			ac, failure := resolveCredential(r.Context(), identitySvc, r, now)
 			if failure != nil {
+				// Throttled the same way as the credential-in-url path
+				// above, and for the identical reason: this branch runs on
+				// EVERY request, on every route, including every open read
+				// — see the doc comment on limiter above this function for
+				// the incident that surfaced it (a stale session cookie
+				// from an unrelated local stack, ordinary page loads,
+				// six audit rows in a few seconds).
+				source := loginSource(r)
+				if limiter != nil {
+					limiter.delay(r.Context(), source)
+				}
+
 				entry := identity.AuditEntry{
 					Timestamp: now,
 					Form:      failure.form,
@@ -322,6 +357,9 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 				}
 				if err := identitySvc.WriteAudit(r.Context(), entry); err != nil && logger != nil {
 					logger.Warn("api: failed to audit credential resolution failure", "form", failure.form, "reason", failure.reason, "error", err)
+				}
+				if limiter != nil {
+					limiter.recordFailure(source)
 				}
 			}
 			next.ServeHTTP(w, r.WithContext(withAuthContext(r.Context(), ac)))
@@ -438,8 +476,55 @@ func (h *handlers) writeGuard(scope *identity.Scope, next http.HandlerFunc) http
 			writeProblem(w, h.logger, now, forbiddenProblem(*scope))
 			return
 		}
-		if ac.result.Form != identity.FormToken && r.Header.Get("Sec-Fetch-Site") != "same-origin" {
+		if ac.result.Form != identity.FormToken && !sameOriginCSRFOK(r) {
 			writeProblem(w, h.logger, now, csrfProblem())
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameOriginCSRFOK is ADR-024 decision 6's CSRF predicate: "a write
+// authenticated by cookie requires Sec-Fetch-Site: same-origin, and is
+// rejected when the header is absent." Factored out of [handlers.writeGuard]
+// (Step 7 seam 0, S0-2) into this one function, so [handlers.loginCSRFGuard]
+// — POST /api/v1/session and POST /api/v1/bootstrap's identical requirement,
+// decided 2026-08-12: strict — calls the SAME predicate rather than a
+// second, hand-copied comparison that could silently drift out of sync
+// with this one. There is deliberately one CSRF rule in this codebase, not
+// two.
+func sameOriginCSRFOK(r *http.Request) bool {
+	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+}
+
+// loginCSRFGuard wraps next with S0-2's login CSRF rule for
+// POST /api/v1/session and POST /api/v1/bootstrap. Both endpoints are
+// unauthenticated by construction (ADR-024 decision 8: there is no
+// principal yet for a credential to name), so — unlike [handlers.writeGuard]
+// — this predicate runs on its OWN, with no auth or scope gate before or
+// after it; that ordering difference is the only thing that may differ
+// between the two call sites, per S0-2's spec. There is also no bearer
+// exemption here: writeGuard's exemption exists because nothing attaches
+// an Authorization header automatically, but a login request has no
+// pre-existing credential to BE bearer-shaped in the first place, so the
+// exemption has no case to apply to.
+//
+// What this costs, stated rather than discovered later: a curl login must
+// pass the header explicitly, and a browser that sends no Sec-Fetch-Site
+// at all (Safari before 16.4) cannot log in via the cookie path — ADR-024
+// decision 6 already bars exactly those devices from cookie-authenticated
+// writes, so the cookie they are being denied here could not have
+// performed one anyway; their path is decision 5's bearer-paste
+// break-glass affordance, unchanged.
+func (h *handlers) loginCSRFGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameOriginCSRFOK(r) {
+			// loginCSRFProblem, never csrfProblem: the latter's Detail
+			// claims "a cookie-authenticated write" and "a bearer-token-
+			// authenticated request is exempt", neither of which is true
+			// for these two unauthenticated-by-construction endpoints — see
+			// [loginCSRFProblem]'s doc comment.
+			writeProblem(w, h.logger, h.now(), loginCSRFProblem())
 			return
 		}
 		next(w, r)
@@ -458,15 +543,22 @@ func (h *handlers) clientAddr(r *http.Request) string {
 
 // writeAuditOrFail writes entry and reports whether it succeeded, writing
 // a 500 problem itself on failure. This is ADR-024 decision 11's default
-// rule — "a write that cannot be attributed does not proceed" — applied
-// at this layer to the two writes Step 6 adds (session create, session
-// revoke): neither is in decision 11's blackout/stop/power-off safety
-// class, so neither gets that exemption. See session.go's callers for how
-// this is sequenced relative to the actual state change; true same-
-// transaction atomicity with identity.Service's own writes is not
-// achievable from this package (identity/store are not this task's to
-// change), which this package's report states as a known limitation
-// rather than a silent gap.
+// rule — "a write that cannot be attributed does not proceed" — applied at
+// this layer to a write whose audit entry is NOT written in the same
+// transaction as its state change: session.revoke's own Dispatch entry
+// (session.go's handleDeleteSession), which must be written and confirmed
+// successful BEFORE the revoke itself runs, per decision 11's
+// write-before-dispatch rule for an effect that has not happened yet (the
+// same rule a command dispatched to an agent follows, and the closest
+// analogue a coordinator-local effect has to one — see that handler's own
+// doc comment). session.create (both POST /api/v1/session and
+// POST /api/v1/bootstrap) no longer uses this: as of Step 7 seam 0,
+// identity.Service.CreateSession and identity.Service.ClaimBootstrap write
+// their OWN audit entry inside the SAME transaction as the state change
+// (ADR-024 decision 11's same-transaction rule, via
+// identity.Service.AuditedWrite), which is a strictly stronger guarantee
+// than this method provides and closes the atomicity gap this method used
+// to paper over for those two writes.
 func (h *handlers) writeAuditOrFail(ctx context.Context, w http.ResponseWriter, now time.Time, entry identity.AuditEntry) bool {
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.writeInternalError(w, now, "write audit entry", err)

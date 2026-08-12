@@ -63,6 +63,60 @@ func (s *svc) WriteAudit(ctx context.Context, entry AuditEntry) error {
 	return nil
 }
 
+// AuditedWrite implements [Service.AuditedWrite]: opens one transaction
+// via [store.Store.InTx], runs fn, and appends the [AuditEntry] fn returns
+// via [store.Tx.AppendAuditEntry] — both inside that same transaction, so
+// [store.Store.InTx] commits or rolls back the state change and the audit
+// row together. This is Step 7 seam 0's closure of ADR-024 decision 11's
+// same-transaction rule, which the record itself states was NOT achieved
+// as of Step 6 ("the API package cannot reach the transaction boundary,
+// which identity and store own").
+//
+// fn's own error is returned UNWRAPPED (a caller's errors.Is against its
+// own sentinel — e.g. store.ErrBootstrapClaimedRace — still works
+// unchanged); an audit-append failure is wrapped in [ErrAuditWrite]
+// instead, so the two failure modes stay distinguishable to every caller,
+// which is the entire reason AuditedWrite exists rather than a caller
+// composing store.Store.InTx and a raw store.Tx.AppendAuditEntry call
+// itself each time.
+func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (AuditEntry, error)) error {
+	return s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		entry, err := fn(ctx, tx)
+		if err != nil {
+			return err
+		}
+
+		paramsJSON := "{}"
+		if len(entry.Params) > 0 {
+			b, jerr := json.Marshal(entry.Params)
+			if jerr != nil {
+				return fmt.Errorf("identity: audited write: encode audit params: %w", jerr)
+			}
+			paramsJSON = string(b)
+		}
+
+		if _, aerr := tx.AppendAuditEntry(ctx, store.AuditRecord{
+			PrincipalID:    entry.PrincipalID,
+			PrincipalName:  entry.PrincipalName,
+			Form:           string(entry.Form),
+			CredentialID:   entry.CredentialID,
+			ClientAddr:     entry.ClientAddr,
+			Action:         entry.Action,
+			Target:         entry.Target,
+			ParamsJSON:     paramsJSON,
+			IdempotencyKey: entry.IdempotencyKey,
+			Kind:           string(entry.Kind),
+			CommandID:      entry.CommandID,
+			Outcome:        entry.Outcome,
+			OutcomeState:   entry.OutcomeState,
+			OutcomeReason:  entry.OutcomeReason,
+		}); aerr != nil {
+			return fmt.Errorf("%w: %v", ErrAuditWrite, aerr)
+		}
+		return nil
+	})
+}
+
 // ListAudit returns audit entries after since (an opaque cursor —
 // store.AuditRecord.ID under the hood, but callers should treat it as
 // opaque exactly the way the events API treats its since cursor), capped

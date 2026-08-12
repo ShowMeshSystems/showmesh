@@ -57,6 +57,65 @@ func TestWithIdentityThrottlesCredentialInURLPerSource(t *testing.T) {
 	}
 }
 
+// TestWithIdentityThrottlesCredentialResolveFailurePerSource is Fix 1 from
+// this task's report: resolveCredential's failure branch in withIdentity
+// wrote an audit entry on EVERY request, on every route — including every
+// open read, which is most of this API's traffic by design — with no
+// bound at all. Unlike the credential-in-url path directly above (which
+// requires a caller to deliberately misuse the URL), this branch is hit by
+// something as ordinary as a stale showmesh_session cookie left over from
+// an unrelated local stack: ADR-024 decision 5 scopes cookies by host and
+// ignores port, so the cookie rides along on every request until sign-in
+// or its 90-day expiry, and the orchestrator reproduced exactly this by
+// accident against the running stack (six credential.resolve rows from a
+// few seconds of ordinary page loads).
+//
+// This test drives the identical malformed-Authorization-header path
+// (bearerToken rejects a non-Bearer scheme before any identity.Service
+// call is even made, so no test identity service setup is needed) and
+// checks the SAME two structural properties
+// TestWithIdentityThrottlesCredentialInURLPerSource does: a rejection
+// measurably raises the source's currentDelay (recordFailure ran), and a
+// second offense from the same source actually requests a sleep (delay
+// ran) — both asserted against the limiter's own bookkeeping, never a
+// wall-clock measurement, per LESSONS.md's rule against racing a
+// scheduler.
+func TestWithIdentityThrottlesCredentialResolveFailurePerSource(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	clock := &fakeLoginClock{t: testNow}
+	limiter, rec := newTestLoginLimiter(clock, 4, time.Second, 50*time.Millisecond, time.Second)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mw := withIdentity(svc, limiter, testLogger(), fixedClock(testNow), false)(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil)
+	req.RemoteAddr = "198.51.100.20:1234"
+	req.Header.Set("Authorization", "Basic bm90LWEtYmVhcmVyLXRva2Vu")
+	rr := httptest.NewRecorder()
+	mw.ServeHTTP(rr, req)
+	// The malformed Authorization header does not itself reject the
+	// request — resolveCredential resolves ac.ok=false and withIdentity
+	// still calls next, per this file's doc comment on authContext's
+	// deliberate two-state design (ADR-024 decision 6).
+	if rr.Result().StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a resolution failure must not itself block the request; only the audit write is throttled)", rr.Result().StatusCode)
+	}
+
+	source := loginSource(req)
+	if d := limiter.currentDelay(source); d == 0 {
+		t.Errorf("currentDelay(%q) after one credential-resolution-failure = 0, want > 0 — the failure must feed the per-source throttle", source)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil)
+	req2.RemoteAddr = "198.51.100.20:1234"
+	req2.Header.Set("Authorization", "Basic bm90LWEtYmVhcmVyLXRva2Vu")
+	rr2 := httptest.NewRecorder()
+	mw.ServeHTTP(rr2, req2)
+	if n, _ := rec.calls(); n == 0 {
+		t.Errorf("loginLimiter.sleep was never invoked for a second credential-resolution offense from an already-penalized source")
+	}
+}
+
 // TestWithIdentityNilLimiterDoesNotPanic proves the nil-safety this
 // package's tests rely on elsewhere (every test in this file except the
 // one above builds its API through [New], which always constructs a real
@@ -169,7 +228,7 @@ func throttleHarness(t *testing.T, raceSource, raceName, racePassword string) (t
 	// One failure from throttledSource is already enough to reach the cap
 	// (LoginPerSourceDelay == LoginMaxDelay == loginRaceDelay).
 	failReq := newJSONRequest(t, http.MethodPost, "/api/v1/session",
-		`{"name":"victim","password":"wrong","deviceLabel":"x"}`, nil)
+		`{"name":"victim","password":"wrong","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	failReq.RemoteAddr = throttledSource
 	failResp, failBody := doRawRequest(t, api.Handler, failReq)
 	if failResp.StatusCode != http.StatusUnauthorized {
@@ -179,7 +238,7 @@ func throttleHarness(t *testing.T, raceSource, raceName, racePassword string) (t
 	throttledDone := make(chan int, 1)
 	go func() {
 		req := newJSONRequest(t, http.MethodPost, "/api/v1/session",
-			`{"name":"victim","password":"`+testPassword+`","deviceLabel":"x"}`, nil)
+			`{"name":"victim","password":"`+testPassword+`","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 		req.RemoteAddr = throttledSource
 		resp, _ := doRawRequest(t, api.Handler, req)
 		throttledDone <- resp.StatusCode
@@ -188,7 +247,7 @@ func throttleHarness(t *testing.T, raceSource, raceName, racePassword string) (t
 	time.Sleep(loginRaceStagger)
 
 	raceReq := newJSONRequest(t, http.MethodPost, "/api/v1/session",
-		`{"name":"`+raceName+`","password":"`+racePassword+`","deviceLabel":"x"}`, nil)
+		`{"name":"`+raceName+`","password":"`+racePassword+`","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	raceReq.RemoteAddr = raceSource
 	raceResp, _ := doRawRequest(t, api.Handler, raceReq)
 	raceStatus = raceResp.StatusCode
@@ -259,7 +318,7 @@ func TestLoginThrottleAppliesAcrossDifferentPrincipalsFromTheSameSource(t *testi
 	const sharedSource = "198.51.100.7:5000"
 
 	failReq := newJSONRequest(t, http.MethodPost, "/api/v1/session",
-		`{"name":"victim","password":"wrong","deviceLabel":"x"}`, nil)
+		`{"name":"victim","password":"wrong","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	failReq.RemoteAddr = sharedSource
 	rec := httptest.NewRecorder()
 	h.handleCreateSession(rec, failReq)
@@ -276,7 +335,7 @@ func TestLoginThrottleAppliesAcrossDifferentPrincipalsFromTheSameSource(t *testi
 	// what the limiter has recorded for that source string — the property
 	// under test is exactly "these two agree", which this checks directly.
 	byReq := newJSONRequest(t, http.MethodPost, "/api/v1/session",
-		`{"name":"bystander","password":"`+testPassword+`","deviceLabel":"x"}`, nil)
+		`{"name":"bystander","password":"`+testPassword+`","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	byReq.RemoteAddr = sharedSource
 	if d := limiter.currentDelay(loginSource(byReq)); d == 0 {
 		t.Errorf("currentDelay for bystander's own source = 0, want > 0 (inherited from victim's failure) — the throttle must be keyed on source, not on which principal name is being attempted")

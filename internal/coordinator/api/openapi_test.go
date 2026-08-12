@@ -257,6 +257,7 @@ func TestOpenAPIAuthenticatedResponsesMatchRealResponses(t *testing.T) {
 
 	body := `{"name":"admin-1","password":` + `"` + testPassword + `"` + `,"deviceLabel":"laptop"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(body))
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // login CSRF (S0-2): required, rejected when absent
 	rec := httptest.NewRecorder()
 	api.Handler.ServeHTTP(rec, req)
 	resp := rec.Result()
@@ -290,6 +291,7 @@ func TestOpenAPIBootstrapResponseMatchesRealResponse(t *testing.T) {
 	body := `{"code":"` + code + `","name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/bootstrap", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // login CSRF (S0-2): required, rejected when absent
 	rec := httptest.NewRecorder()
 	api.Handler.ServeHTTP(rec, req)
 	resp := rec.Result()
@@ -340,24 +342,58 @@ func TestOpenAPIProblemSchemaMatchesEveryClass(t *testing.T) {
 		method  string
 		target  string
 		headers map[string]string
+		// wantStatus and wantType are checked only when non-zero/non-empty
+		// — see the "login-csrf-rejected" entry below and its comment for
+		// why this row in particular needs them: a subtest named for a
+		// specific problem CLASS must fail when that class stops being
+		// what the response actually is, not merely when the response
+		// stops being Problem-SHAPED.
+		wantStatus int
+		wantType   string
 	}{
-		{"resource-not-found", api.Handler, "GET", "/api/v1/nodes/nonexistent", nil},
-		{"invalid-parameter", api.Handler, "GET", "/api/v1/nodes/Not_Valid!", nil},
-		{"unsupported-api-version", api.Handler, "GET", "/api/v2/nodes", nil},
-		{"unauthorized", closedReadsAPI.Handler, "GET", "/api/v1/nodes", nil},
-		{"method-not-allowed", api.Handler, "POST", "/api/v1/nodes", nil},
-		{"credential-in-url", api.Handler, "GET", "/api/v1/nodes?tok=" + identity.TokenPrefix + "leaked", nil},
+		{"resource-not-found", api.Handler, "GET", "/api/v1/nodes/nonexistent", nil, 0, ""},
+		{"invalid-parameter", api.Handler, "GET", "/api/v1/nodes/Not_Valid!", nil, 0, ""},
+		{"unsupported-api-version", api.Handler, "GET", "/api/v2/nodes", nil, 0, ""},
+		{"unauthorized", closedReadsAPI.Handler, "GET", "/api/v1/nodes", nil, 0, ""},
+		{"method-not-allowed", api.Handler, "POST", "/api/v1/nodes", nil, 0, ""},
+		{"credential-in-url", api.Handler, "GET", "/api/v1/nodes?tok=" + identity.TokenPrefix + "leaked", nil, 0, ""},
 		// forbidden: a real, authenticated viewer (holds every read scope
 		// but not audit:read) denied GET /api/v1/audit.
-		{"forbidden", scopedAPI.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + viewerToken}},
+		{"forbidden", scopedAPI.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + viewerToken}, 0, ""},
 		// csrf-rejected: a real, cookie-authenticated DELETE with no
 		// Sec-Fetch-Site header.
-		{"csrf-rejected", scopedAPI.Handler, "DELETE", "/api/v1/session", map[string]string{"Cookie": sessionCookieName + "=" + scopedCookie}},
+		{"csrf-rejected", scopedAPI.Handler, "DELETE", "/api/v1/session", map[string]string{"Cookie": sessionCookieName + "=" + scopedCookie}, 0, ""},
+		// login-csrf-rejected (Step 7 seam 0, S0-2): POST /api/v1/session
+		// with no Sec-Fetch-Site header at all — unauthenticated by
+		// construction, so this checks before any credential or body is
+		// even considered. api/openapi.yaml's LoginCSRFRejected response
+		// conformance-checked here in the "response matches its documented
+		// Problem shape" direction; TestLoginCSRFRejectedWhenHeaderAbsent
+		// in session_test.go checks the other direction (the real 403
+		// status code and the real predicate).
+		//
+		// F5 review finding: this row used to assert ONLY the Problem
+		// shape, which a lax mutation confirmed passes even with login
+		// CSRF checking removed entirely (the endpoint then answers 401
+		// instead of 403, still Problem-shaped) — a subtest whose name
+		// says "login CSRF" must fail when login CSRF is gone. wantStatus/
+		// wantType close that: both the status code AND the problem type
+		// are asserted below, not merely "some Problem-shaped body".
+		{"login-csrf-rejected", api.Handler, "POST", "/api/v1/session", nil, http.StatusForbidden, ProblemTypeCSRFRejected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, body := doRequest(t, tt.handler, tt.method, tt.target, tt.headers)
+			resp, body := doRequest(t, tt.handler, tt.method, tt.target, tt.headers)
 			assertMatchesSchema(t, c, "Problem", body)
+			if tt.wantStatus != 0 && resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if tt.wantType != "" {
+				m := decodeMap(t, body)
+				if m["type"] != tt.wantType {
+					t.Errorf("type = %v, want %v", m["type"], tt.wantType)
+				}
+			}
 		})
 	}
 

@@ -83,7 +83,7 @@ func TestClaimBootstrapSuccessCreatesAdminAndSetsCookie(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"code":` + strconv.Quote(code) + `,"name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
@@ -170,7 +170,7 @@ func TestGetSessionBootstrapRequiredTrueThenFalse(t *testing.T) {
 	mustEnsureBootstrap(t, svc)
 	code := readBootstrapCode(t, dataDir)
 	claimBody := `{"code":` + strconv.Quote(code) + `,"name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
-	claimReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", claimBody, nil)
+	claimReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", claimBody, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	claimResp, claimRespBody := doRawRequest(t, api.Handler, claimReq)
 	if claimResp.StatusCode != http.StatusOK {
 		t.Fatalf("bootstrap claim status = %d, want 200; body: %s", claimResp.StatusCode, claimRespBody)
@@ -221,7 +221,7 @@ func TestClaimBootstrapWrongCodeReturns401AndDoesNotCreateAPrincipal(t *testing.
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"code":"definitely-the-wrong-code","name":"attacker","password":"whatever12345","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, respBody)
@@ -251,14 +251,14 @@ func TestClaimBootstrapAlreadyClaimedReturns401(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	firstBody := `{"code":` + strconv.Quote(code) + `,"name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
-	firstReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", firstBody, nil)
+	firstReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", firstBody, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	firstResp, firstRespBody := doRawRequest(t, api.Handler, firstReq)
 	if firstResp.StatusCode != http.StatusOK {
 		t.Fatalf("first claim status = %d, want 200; body: %s", firstResp.StatusCode, firstRespBody)
 	}
 
 	secondBody := `{"code":` + strconv.Quote(code) + `,"name":"second-admin","password":"another-strong-pw","deviceLabel":"laptop"}`
-	secondReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", secondBody, nil)
+	secondReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", secondBody, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	secondResp, secondRespBody := doRawRequest(t, api.Handler, secondReq)
 	if secondResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("second claim (same code) status = %d, want 401; body: %s", secondResp.StatusCode, secondRespBody)
@@ -270,7 +270,7 @@ func TestClaimBootstrapMissingFieldsReturns400(t *testing.T) {
 	mustEnsureBootstrap(t, svc)
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", `{"code":"","name":"","password":""}`, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", `{"code":"","name":"","password":""}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
@@ -303,7 +303,7 @@ func TestClaimBootstrapSharesLoginLimiterWithSession(t *testing.T) {
 	firstDone := make(chan *http.Response, 1)
 	go func() {
 		loginBody := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"first"}`
-		req := newJSONRequest(t, http.MethodPost, "/api/v1/session", loginBody, nil)
+		req := newJSONRequest(t, http.MethodPost, "/api/v1/session", loginBody, map[string]string{"Sec-Fetch-Site": "same-origin"})
 		resp, _ := doRawRequest(t, api.Handler, req)
 		firstDone <- resp
 	}()
@@ -315,7 +315,7 @@ func TestClaimBootstrapSharesLoginLimiterWithSession(t *testing.T) {
 	}
 
 	bootstrapBody := `{"code":"whatever-code","name":"second-admin","password":"another-strong-pw","deviceLabel":"second"}`
-	bootstrapReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", bootstrapBody, nil)
+	bootstrapReq := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", bootstrapBody, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	bootstrapResp, bootstrapRespBody := doRawRequest(t, api.Handler, bootstrapReq)
 	if bootstrapResp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("concurrent bootstrap claim status = %d, want 429 (shared limiter with POST /session); body: %s",

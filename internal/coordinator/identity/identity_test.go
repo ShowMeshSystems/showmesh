@@ -496,7 +496,7 @@ func TestClaimBootstrapCreatesAdminAndInvalidatesCode(t *testing.T) {
 	}
 	code := readBootstrapCode(t, dataDir)
 
-	admin, err := svc.ClaimBootstrap(ctx, code, "operator", "a-strong-password", clock.now())
+	admin, err := svc.ClaimBootstrap(ctx, code, "operator", "a-strong-password", "phone", "", FormPassword, clock.now())
 	if err != nil {
 		t.Fatalf("claim bootstrap: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestClaimBootstrapCreatesAdminAndInvalidatesCode(t *testing.T) {
 
 	// The code must now be single-use: claiming again with the SAME code
 	// must fail, even though nothing else has changed.
-	if _, err := svc.ClaimBootstrap(ctx, code, "someone-else", "another-password", clock.now()); !errors.Is(err, ErrBootstrapClaimed) {
+	if _, err := svc.ClaimBootstrap(ctx, code, "someone-else", "another-password", "phone", "", FormPassword, clock.now()); !errors.Is(err, ErrBootstrapClaimed) {
 		t.Errorf("second claim with the same code: error = %v, want ErrBootstrapClaimed", err)
 	}
 
@@ -527,6 +527,63 @@ func TestClaimBootstrapCreatesAdminAndInvalidatesCode(t *testing.T) {
 	_ = st // st is used by other tests in this file via the shared helper
 }
 
+// TestClaimBootstrapAuditEntryRecordsCallerSuppliedFormAndDeviceLabel is
+// F6's review finding, reproduced directly: a host-shell claim
+// (cmd/showmesh-coordinator's `bootstrap` subcommand, form FormCLI) and a
+// network claim (POST /api/v1/bootstrap, form FormPassword) used to write
+// byte-identical "bootstrap.claim" audit entries — both hardcoded
+// Form: FormPassword regardless of which credential was actually used,
+// and neither carried the device label at all. ADR-024 decision 11
+// requires the entry to record the credential form and which credential
+// was used; this proves both are now threaded through from the caller
+// rather than assumed.
+func TestClaimBootstrapAuditEntryRecordsCallerSuppliedFormAndDeviceLabel(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		form        CredentialForm
+		deviceLabel string
+	}{
+		{"network claim records FormPassword", FormPassword, "laptop"},
+		{"host-shell claim records FormCLI", FormCLI, "bootstrap-cli"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+			svc, _, dataDir := newTestService(t, clock)
+			ctx := context.Background()
+
+			if err := svc.EnsureBootstrap(ctx); err != nil {
+				t.Fatalf("ensure bootstrap: %v", err)
+			}
+			code := readBootstrapCode(t, dataDir)
+
+			admin, err := svc.ClaimBootstrap(ctx, code, "operator", "a-strong-password", tt.deviceLabel, "203.0.113.5", tt.form, clock.now())
+			if err != nil {
+				t.Fatalf("claim bootstrap: %v", err)
+			}
+
+			entries, err := svc.ListAudit(ctx, 0, 10)
+			if err != nil {
+				t.Fatalf("list audit: %v", err)
+			}
+			var found *AuditEntry
+			for i := range entries {
+				if entries[i].Action == "bootstrap.claim" && entries[i].Target == admin.ID {
+					found = &entries[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("no bootstrap.claim audit entry found for principal %q among %d entries", admin.ID, len(entries))
+			}
+			if found.Form != tt.form {
+				t.Errorf("Form = %q, want %q", found.Form, tt.form)
+			}
+			if got, _ := found.Params["deviceLabel"].(string); got != tt.deviceLabel {
+				t.Errorf("Params[deviceLabel] = %q, want %q", got, tt.deviceLabel)
+			}
+		})
+	}
+}
+
 func TestClaimBootstrapWrongCodeFails(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	svc, _, _ := newTestService(t, clock)
@@ -536,7 +593,7 @@ func TestClaimBootstrapWrongCodeFails(t *testing.T) {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 
-	_, err := svc.ClaimBootstrap(ctx, "definitely-the-wrong-code", "operator", "password", clock.now())
+	_, err := svc.ClaimBootstrap(ctx, "definitely-the-wrong-code", "operator", "password", "phone", "", FormPassword, clock.now())
 	if !errors.Is(err, ErrInvalidCredential) {
 		t.Errorf("error = %v, want ErrInvalidCredential", err)
 	}
@@ -554,7 +611,7 @@ func TestClaimBootstrapExpiredFails(t *testing.T) {
 
 	clock.advance(2 * time.Hour)
 
-	_, err := svc.ClaimBootstrap(ctx, code, "operator", "password", clock.now())
+	_, err := svc.ClaimBootstrap(ctx, code, "operator", "password", "phone", "", FormPassword, clock.now())
 	if !errors.Is(err, ErrBootstrapExpired) {
 		t.Errorf("error = %v, want ErrBootstrapExpired", err)
 	}
@@ -567,7 +624,7 @@ func TestClaimBootstrapNoCodeAvailableFails(t *testing.T) {
 
 	// Deliberately never calling HasAnyPrincipal first, so no bootstrap
 	// row has ever been generated.
-	_, err := svc.ClaimBootstrap(ctx, "any-code", "operator", "password", clock.now())
+	_, err := svc.ClaimBootstrap(ctx, "any-code", "operator", "password", "phone", "", FormPassword, clock.now())
 	if !errors.Is(err, ErrBootstrapNotAvailable) {
 		t.Errorf("error = %v, want ErrBootstrapNotAvailable", err)
 	}
@@ -886,7 +943,7 @@ func TestRevalidateTokenAndRevalidateSessionNeverTouchLastUsedAt(t *testing.T) {
 		t.Errorf("token LastUsedAt = %v after RevalidateToken, want nil (never touched by revalidation)", tokRec.LastUsedAt)
 	}
 
-	sess, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	sess, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -964,7 +1021,7 @@ func TestCreateAndAuthenticateSession(t *testing.T) {
 		t.Fatalf("create principal: %v", err)
 	}
 
-	session, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	session, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1001,7 +1058,7 @@ func TestAuthenticateSessionSlidesLastUsedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	session, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	session, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1039,7 +1096,7 @@ func TestAuthenticateSessionRejectsStaleGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1068,7 +1125,7 @@ func TestAuthenticateSessionAfterRevokeAllStillAllowsANewSession(t *testing.T) {
 		t.Fatalf("revoke all sessions: %v", err)
 	}
 
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session after revoke-all: %v", err)
 	}
@@ -1090,7 +1147,7 @@ func TestAuthenticateSessionRejectsIdleExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	session, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	session, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1124,7 +1181,7 @@ func TestAuthenticateSessionJustUnderIdleLimitStillSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1143,7 +1200,7 @@ func TestAuthenticateSessionDisabledPrincipalReturnsErrDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1165,7 +1222,7 @@ func TestRevokeSessionThenAuthenticateFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	session, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	session, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1188,7 +1245,7 @@ func TestListSessionsNeverExposesTheCookieSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1288,7 +1345,7 @@ func TestSetPasswordBumpsGenerationAndInvalidatesExistingSessions(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1326,7 +1383,7 @@ func TestSetRoleChangesRoleAndInvalidatesExistingSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
-	_, secret, err := svc.CreateSession(ctx, p.ID, "phone", clock.now())
+	_, secret, err := svc.CreateSession(ctx, p.ID, p.Name, "phone", "", clock.now())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

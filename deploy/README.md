@@ -77,6 +77,17 @@ Everything the API reports carries provenance and freshness, and absent evidence
 
 **Upgrading: remove `SHOWMESH_API_TOKEN` from your environment before you start this release.** [ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) retired it, and a coordinator that still sees it set **refuses to start**, naming the migration in the error. That is deliberate and it is the most operator-visible hazard in this upgrade: ignoring the variable would silently reopen a read API you had deliberately closed, on nothing more than a container tag change. Set `SHOWMESH_API_CLOSE_READS=true` instead, then create your first administrator from the one-time bootstrap code the coordinator writes to its data volume (`POST /api/v1/bootstrap`, or `showmesh-coordinator bootstrap` against the volume). Machine credentials for `showmeshctl` and automation come from `showmesh-coordinator issue-token`.
 
+**`POST /api/v1/bootstrap` and `POST /api/v1/session` require a `Sec-Fetch-Site: same-origin` request header and refuse the request without it**, which closes cross-site forgery against the two endpoints that create or mint a credential ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 6). A browser sends that header by itself, so the Operator UI needs nothing; a script does not, so a `curl` call must pass it:
+
+```bash
+curl -sS -X POST http://localhost:8080/api/v1/bootstrap \
+  -H 'Content-Type: application/json' \
+  -H 'Sec-Fetch-Site: same-origin' \
+  -d '{"code":"<the code from the data volume>","name":"admin","password":"..."}'
+```
+
+Two consequences worth knowing before you hit them. A browser that sends no `Sec-Fetch-Site` at all, which means Safari before 16.4, cannot sign in; that device was already unable to perform any authenticated write and its path is pasting a machine token. And this is a **deliberate compatibility break** against a v1 endpoint that shipped without the requirement, recorded as [ADR-020](../docs/decisions/ADR-020-control-api-shape-and-change-stream.md) decision 8's one exception: if you have a script that logged in before this release, it needs the header added and nothing else.
+
 [ADR-021](../docs/decisions/ADR-021-read-api-authentication-posture.md) records what that token is and is not. It is one shared secret with no identity, no roles, and no audit attribution, so it does not satisfy ARCHITECTURE section 10.4. **The show VLAN remains the actual security boundary.**
 
 *This paragraph is narrower than it used to be, and on purpose.* Earlier revisions of this document also named the bundled Mosquitto's anonymous access as "the larger exposure of the two". That is no longer accurate: the bundled broker now requires authentication and enforces an access-control list ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10) — see "MQTT broker credentials" above for what that means and what it does not close (a compromised *coordinator* broker credential can still forge a command to any node; that residual exposure is recorded there, not solved here).

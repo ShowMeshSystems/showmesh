@@ -145,41 +145,18 @@ func (e EventRecord) validate() error {
 	return nil
 }
 
-// AppendEvent validates ev, then records it as the next entry in the
-// event history, returning its assigned seq. ev.Seq and ev.RecordedAt are
-// ignored on input — see [EventRecord]'s doc comment — and the returned
-// EventRecord from [Store.ListEvents] carries the values this method
-// actually assigned instead.
-//
-// The insert and the amortized pruning pass it may trigger (see
-// [pruneEvents] in retention.go) share one transaction: either both
-// happen or neither does. This is a deliberate choice against the
-// alternative of pruning on a background goroutine — a goroutine would
-// need its own shutdown coordination (a stop channel, a WaitGroup) purely
-// to satisfy ADR-012's "start and stay up, leak nothing" bar for a
-// mechanism that a write-coupled design does not need at all: it runs on
-// the same goroutine, inside the same transaction, and simply does not run
-// when AppendEvent is not called.
-//
-// That coupling has a real, accepted cost, corrected here after Step 3
-// review finding 3.5 caught a previous version of this comment asserting
-// it away: a coordinator that appends NO events for a long stretch has, by
-// construction, nothing that can trigger a check in that stretch, so
-// already-stored events aging past maxEventAge during it are not pruned
-// until the next insert, whenever that happens. This is accepted, not
-// fixed, because there is genuinely nothing to prune-check for in that
-// specific window — no new row exists to justify running a write-coupled
-// pass with nothing driving it. What was actually wrong, and what Step 3
-// review finding 3.5 is about, is a DIFFERENT case this trigger logic used
-// to get wrong: a coordinator that DOES keep appending events, just too
-// infrequently for [pruneEveryNEvents] insertions to ever accumulate
-// between restarts, went just as unpruned as the "nothing at all" case
-// even though it had plenty of opportunities (every insert) to check. See
-// [pruneCheckInterval] in retention.go for the second trigger that closes
-// that gap: below, a prune pass now runs when EITHER pruneEveryNEvents
-// insertions have elapsed OR pruneCheckInterval of wall-clock time has,
-// whichever comes first.
-func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) {
+// appendEvent is the shared body behind [Store.AppendEvent] and
+// [Tx.AppendEvent]: validate ev, insert it, and run pruneEvents's
+// amortized on-insert check — written once against [querier] rather than
+// twice, matching this package's standing rule against a second,
+// hand-copied INSERT that can silently stop agreeing with the first (see
+// store/tx.go's [Tx] doc comment and [appendAuditEntry]'s identical
+// pattern in audit.go). q is whichever connection the caller is writing
+// through; s is only used for its clock and its retention counters/
+// bounds, never for a second connection — inserting through s.db here
+// (instead of q) would silently defeat the whole point of a caller
+// passing a [Tx] in.
+func appendEvent(ctx context.Context, q querier, s *Store, ev EventRecord) (int64, error) {
 	if err := ev.validate(); err != nil {
 		return 0, fmt.Errorf("store: append event: %w", err)
 	}
@@ -193,13 +170,7 @@ func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) 
 		correlationID = *ev.CorrelationID
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("store: begin append event: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	res, err := tx.ExecContext(ctx, `
+	res, err := q.ExecContext(ctx, `
 		INSERT INTO events (
 			recorded_at, occurred_at, source, resource_kind, resource_id,
 			category, severity, summary, details, correlation_id
@@ -236,16 +207,85 @@ func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) 
 		byAge = last == 0 || s.now().Sub(time.Unix(0, last)) >= pruneCheckInterval
 	}
 	if byCount || byAge {
-		if err := s.pruneEvents(ctx, tx); err != nil {
+		if err := s.pruneEvents(ctx, q); err != nil {
 			return 0, fmt.Errorf("store: append event: %w", err)
 		}
 		s.lastPruneAtNanos.Store(s.now().UnixNano())
+	}
+
+	return seq, nil
+}
+
+// AppendEvent validates ev, then records it as the next entry in the
+// event history, returning its assigned seq. ev.Seq and ev.RecordedAt are
+// ignored on input — see [EventRecord]'s doc comment — and the returned
+// EventRecord from [Store.ListEvents] carries the values this method
+// actually assigned instead.
+//
+// The insert and the amortized pruning pass it may trigger (see
+// [pruneEvents] in retention.go) share one transaction: either both
+// happen or neither does. This is a deliberate choice against the
+// alternative of pruning on a background goroutine — a goroutine would
+// need its own shutdown coordination (a stop channel, a WaitGroup) purely
+// to satisfy ADR-012's "start and stay up, leak nothing" bar for a
+// mechanism that a write-coupled design does not need at all: it runs on
+// the same goroutine, inside the same transaction, and simply does not run
+// when AppendEvent is not called.
+//
+// That coupling has a real, accepted cost, corrected here after Step 3
+// review finding 3.5 caught a previous version of this comment asserting
+// it away: a coordinator that appends NO events for a long stretch has, by
+// construction, nothing that can trigger a check in that stretch, so
+// already-stored events aging past maxEventAge during it are not pruned
+// until the next insert, whenever that happens. This is accepted, not
+// fixed, because there is genuinely nothing to prune-check for in that
+// specific window — no new row exists to justify running a write-coupled
+// pass with nothing driving it. What was actually wrong, and what Step 3
+// review finding 3.5 is about, is a DIFFERENT case this trigger logic used
+// to get wrong: a coordinator that DOES keep appending events, just too
+// infrequently for [pruneEveryNEvents] insertions to ever accumulate
+// between restarts, went just as unpruned as the "nothing at all" case
+// even though it had plenty of opportunities (every insert) to check. See
+// [pruneCheckInterval] in retention.go for the second trigger that closes
+// that gap: below, a prune pass now runs when EITHER pruneEveryNEvents
+// insertions have elapsed OR pruneCheckInterval of wall-clock time has,
+// whichever comes first.
+func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) {
+	guardNotInTx(ctx, "Store.AppendEvent")
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin append event: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	seq, err := appendEvent(ctx, tx, s, ev)
+	if err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("store: commit append event: %w", err)
 	}
 	return seq, nil
+}
+
+// AppendEvent is [Store.AppendEvent]'s [Tx] form (F10). Needed because a
+// configuration change and the change-stream event announcing it could
+// not previously land in one transaction: the only AppendEvent was the
+// *Store form, which always opens and commits its own transaction, and
+// calling ANY *Store method from inside an already-open [Store.InTx]
+// closure now panics ([guardNotInTx]) rather than silently nesting. An
+// event announcing a change that then rolls back is a lie on the change
+// stream — ADR-020 ("absent evidence is stated, never omitted", and more
+// broadly a client trusts what the stream tells it happened) and ADR-011
+// (evidence, never a fabricated state) both forbid exactly that in their
+// own terms — so a caller composing a coordinator-local write with its own
+// announcing event (via [Store.InTx] or [identity.Service.AuditedWrite])
+// needs this to keep the two atomic, the same way [Tx.AppendAuditEntry]
+// already lets a state change and its audit entry land together.
+func (t *Tx) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) {
+	return appendEvent(ctx, t.tx, t.s, ev)
 }
 
 const eventColumns = `
@@ -319,6 +359,7 @@ func scanEvent(row interface {
 // that is ordinary bounded history, not a broken promise to a returning
 // caller.
 func (s *Store) ListEvents(ctx context.Context, since int64, limit int) (events []EventRecord, gap bool, err error) {
+	guardNotInTx(ctx, "Store.ListEvents")
 	if since < 0 {
 		return nil, false, fmt.Errorf("store: list events: since must be >= 0, got %d", since)
 	}
@@ -408,6 +449,7 @@ func (s *Store) eventsGapBefore(ctx context.Context, since int64) (bool, error) 
 // AppendEvent's own pruning specifically to avoid assuming one code path's
 // current behavior is the only way the table could ever become empty.
 func (s *Store) LatestEventSeq(ctx context.Context) (int64, error) {
+	guardNotInTx(ctx, "Store.LatestEventSeq")
 	var seq sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT seq FROM sqlite_sequence WHERE name = 'events'`).Scan(&seq)
 	switch {
@@ -445,6 +487,7 @@ func (s *Store) LatestEventSeq(ctx context.Context) (int64, error) {
 // high-water mark would let an old client's already-seen seq look new
 // again.
 func (s *Store) OldestEventSeq(ctx context.Context) (int64, bool, error) {
+	guardNotInTx(ctx, "Store.OldestEventSeq")
 	var oldest sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, `SELECT MIN(seq) FROM events`).Scan(&oldest); err != nil {
 		return 0, false, fmt.Errorf("store: oldest event seq: %w", err)

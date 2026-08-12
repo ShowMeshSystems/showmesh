@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 )
@@ -69,6 +68,35 @@ const (
 	DefaultMaxAuditRows int64 = 200_000
 )
 
+// DefaultMaxCommandAge and DefaultMaxCommandRows bound the commands table
+// (schemaV6, Step 7 seam 0), and DefaultMaxDiscoveryRunAge/
+// DefaultMaxDiscoveryRunRows bound discovery_runs, the identical pattern
+// applied to a second table that also grows only by insert.
+//
+// SHOWMESH HYPOTHESES, NOT DERIVED FROM ANY MEASUREMENT — labeled exactly
+// as every other retention bound in this file is, for the identical
+// reason: nothing has measured a real season's command-issue rate or
+// discovery-run frequency. RES-013 owns the real answer. These exist now,
+// rather than being deferred, for the same reason [DefaultMaxAuditAge]
+// is: ADR-024 decision 11 names disk exhaustion as a real trigger rather
+// than a theoretical one, and an unbounded table that a fail-closed write
+// rule depends on being writable is a scheduled outage. commands shares
+// audit_log's 180-day/200,000-row shape (a command is exactly the kind of
+// record an operator investigating a dispute months later wants intact);
+// discovery_runs is bounded far smaller — 90 days / 5,000 rows — because a
+// discovery run is triggered by an operator action, not a per-request
+// write, so its volume is structurally lower by orders of magnitude, and
+// there is no config_revisions-style rollback requirement pinning any of
+// its history in place (see migrations.go's schemaV6 doc comment: unlike
+// config_revisions and node_declarations, discovery_runs IS pruned).
+const (
+	DefaultMaxCommandAge        = 180 * 24 * time.Hour
+	DefaultMaxCommandRows int64 = 200_000
+
+	DefaultMaxDiscoveryRunAge        = 90 * 24 * time.Hour
+	DefaultMaxDiscoveryRunRows int64 = 5_000
+)
+
 // storeConfig holds every [Option]'s target. It exists only inside Open —
 // the resolved values it produces live on *Store (maxEventAge,
 // maxEventRows) — so a caller never sees storeConfig itself.
@@ -85,6 +113,15 @@ type storeConfig struct {
 	maxAuditAge  time.Duration
 	maxAuditRows int64
 
+	// maxCommandAge/maxCommandRows and maxDiscoveryRunAge/maxDiscoveryRunRows
+	// are commands.go's and discovery.go's equivalent bounds, following the
+	// identical pattern for the identical reason (see
+	// DefaultMaxCommandAge/DefaultMaxDiscoveryRunAge above).
+	maxCommandAge       time.Duration
+	maxCommandRows      int64
+	maxDiscoveryRunAge  time.Duration
+	maxDiscoveryRunRows int64
+
 	// clock overrides [Open]'s hardcoded time.Now, when set by [WithClock].
 	// nil (the default) leaves Open's existing time.Now behavior
 	// unchanged for every pre-Step-6 call site.
@@ -93,10 +130,14 @@ type storeConfig struct {
 
 func defaultConfig() storeConfig {
 	return storeConfig{
-		maxEventAge:  DefaultMaxEventAge,
-		maxEventRows: DefaultMaxEventRows,
-		maxAuditAge:  DefaultMaxAuditAge,
-		maxAuditRows: DefaultMaxAuditRows,
+		maxEventAge:         DefaultMaxEventAge,
+		maxEventRows:        DefaultMaxEventRows,
+		maxAuditAge:         DefaultMaxAuditAge,
+		maxAuditRows:        DefaultMaxAuditRows,
+		maxCommandAge:       DefaultMaxCommandAge,
+		maxCommandRows:      DefaultMaxCommandRows,
+		maxDiscoveryRunAge:  DefaultMaxDiscoveryRunAge,
+		maxDiscoveryRunRows: DefaultMaxDiscoveryRunRows,
 	}
 }
 
@@ -145,6 +186,37 @@ func WithMaxAuditRows(n int64) Option {
 	return func(c *storeConfig) {
 		if n > 0 {
 			c.maxAuditRows = n
+		}
+	}
+}
+
+// WithMaxCommandAge and WithMaxCommandRows override [DefaultMaxCommandAge]/
+// [DefaultMaxCommandRows]; WithMaxDiscoveryRunAge and
+// WithMaxDiscoveryRunRows override [DefaultMaxDiscoveryRunAge]/
+// [DefaultMaxDiscoveryRunRows]. All four mirror [WithMaxAuditAge]/
+// [WithMaxAuditRows] exactly, including the asymmetry (a non-positive age
+// disables that bound; a non-positive row count is ignored) — see those
+// two doc comments.
+func WithMaxCommandAge(d time.Duration) Option {
+	return func(c *storeConfig) { c.maxCommandAge = d }
+}
+
+func WithMaxCommandRows(n int64) Option {
+	return func(c *storeConfig) {
+		if n > 0 {
+			c.maxCommandRows = n
+		}
+	}
+}
+
+func WithMaxDiscoveryRunAge(d time.Duration) Option {
+	return func(c *storeConfig) { c.maxDiscoveryRunAge = d }
+}
+
+func WithMaxDiscoveryRunRows(n int64) Option {
+	return func(c *storeConfig) {
+		if n > 0 {
+			c.maxDiscoveryRunRows = n
 		}
 	}
 }
@@ -212,29 +284,116 @@ const pruneEveryNEvents = 100
 // re-checked the age bound at all.
 const pruneCheckInterval = 1 * time.Hour
 
+// pruneEveryNCommands and pruneEveryNDiscoveryRuns mirror
+// [pruneEveryNEvents]/[pruneEveryNAuditEntries] applied to commands and
+// discovery_runs respectively; see those constants' doc comments for the
+// tradeoff they encode. Kept identical to the events/audit value
+// deliberately, for the identical reason: neither number is derived from
+// a measured write rate.
+//
+// (F7 review finding: this const block used to sit between pruneEvents's
+// own doc comment and its declaration below, which made godoc attach
+// three paragraphs about EVENT pruning to these two integer constants
+// instead — every statement in that misplaced comment was false when read
+// as documentation for pruneEveryNCommands/pruneEveryNDiscoveryRuns, and
+// pruneEvents itself had no documentation at all. Moved here, next to
+// pruneCheckInterval and ahead of pruneCommands/pruneDiscoveryRuns, which
+// actually use these two constants.)
+const (
+	pruneEveryNCommands      = 100
+	pruneEveryNDiscoveryRuns = 100
+)
+
+// pruneCommands deletes command rows older than maxCommandAge (if
+// positive) and, of whatever remains, all but the newest maxCommandRows —
+// see [pruneAudit]'s identical shape and doc comment in audit.go, applied
+// here to the commands table via the same querier abstraction so it runs
+// correctly whether q is *Store's own owned transaction or an already-open
+// [Tx]'s *sql.Tx.
+func (s *Store) pruneCommands(ctx context.Context, q querier) error {
+	if s.maxCommandAge > 0 {
+		cutoff := timeToDB(s.now().Add(-s.maxCommandAge))
+		if _, err := q.ExecContext(ctx, `DELETE FROM commands WHERE created_at < ?`, cutoff); err != nil {
+			return fmt.Errorf("store: prune commands by age: %w", err)
+		}
+	}
+	if s.maxCommandRows > 0 {
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM commands WHERE id NOT IN (
+				SELECT id FROM commands ORDER BY created_at DESC LIMIT ?
+			)
+		`, s.maxCommandRows); err != nil {
+			return fmt.Errorf("store: prune commands by row count: %w", err)
+		}
+	}
+	return nil
+}
+
+// pruneDiscoveryRuns is [pruneCommands]'s identical shape applied to
+// discovery_runs — see migrations.go's schemaV6 doc comment for why this
+// table, unlike config_revisions and node_declarations, IS pruned.
+//
+// F10 caveat: node_declarations.last_discovery_run_id (nodes_declared.go)
+// points at a discovery_runs row by id, with no foreign key between them
+// (matching node_declarations' own deliberate absence of a FK to nodes —
+// see migrations.go's schemaV6 doc comment). This method can therefore
+// orphan that pointer: a declaration's last_discovery_run_id can name a
+// run this method has already deleted. That is not itself a bug — it is
+// the same "absence of evidence is not evidence of absence" shape this
+// codebase has already recorded three times over (schemaV3's ObservedAt
+// nullability, schemaV2's LWT freshness fix, node_declarations' own FK
+// absence) — but it means a reader resolving that pointer must be able to
+// fail: [Store.GetDiscoveryRun] already returns [ErrDiscoveryRunNotFound]
+// for exactly this case. A caller rendering a declaration whose
+// last_discovery_run_id no longer resolves MUST render that evidence as
+// `unknown` with a reason, per ADR-020's absent-evidence rule, never as
+// blank or as if the discovery run had simply never happened — seam B, the
+// owner of node_declarations' read surface, is where that rule needs to be
+// honored; this method only needs to not lie about what it deleted.
+func (s *Store) pruneDiscoveryRuns(ctx context.Context, q querier) error {
+	if s.maxDiscoveryRunAge > 0 {
+		cutoff := timeToDB(s.now().Add(-s.maxDiscoveryRunAge))
+		if _, err := q.ExecContext(ctx, `DELETE FROM discovery_runs WHERE started_at < ?`, cutoff); err != nil {
+			return fmt.Errorf("store: prune discovery runs by age: %w", err)
+		}
+	}
+	if s.maxDiscoveryRunRows > 0 {
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM discovery_runs WHERE id NOT IN (
+				SELECT id FROM discovery_runs ORDER BY started_at DESC LIMIT ?
+			)
+		`, s.maxDiscoveryRunRows); err != nil {
+			return fmt.Errorf("store: prune discovery runs by row count: %w", err)
+		}
+	}
+	return nil
+}
+
 // pruneEvents deletes events older than maxEventAge (if positive) and, of
 // whatever remains, all but the newest maxEventRows (see [WithMaxEventAge]/
 // [WithMaxEventRows] for why the two bounds are not symmetric). It is
-// always called from inside the same transaction as the [Store.AppendEvent]
-// write that triggered it — see that method — so a caller either observes
-// both the new event and its consequent pruning, or (on any error) neither,
-// never a partial state where an event was appended but a failed prune
-// silently never ran.
+// always called from inside the same transaction as the AppendEvent write
+// that triggered it — either [Store.AppendEvent]'s own owned transaction,
+// or an already-open [Tx]'s (see [Tx.AppendEvent]) — via the identical
+// [querier] abstraction every other writer in this package shares, so a
+// caller either observes both the new event and its consequent pruning,
+// or (on any error) neither, never a partial state where an event was
+// appended but a failed prune silently never ran.
 //
 // This is the one place ListEvents's `gap` return value (events.go)
 // becomes possible: pruneEvents deleting a still-unread event is the exact
 // condition eventsGapBefore detects and reports, rather than the two
 // pretending to a caller mid-page that nothing happened in the range that
 // was actually deleted out from under it.
-func (s *Store) pruneEvents(ctx context.Context, tx *sql.Tx) error {
+func (s *Store) pruneEvents(ctx context.Context, q querier) error {
 	if s.maxEventAge > 0 {
 		cutoff := timeToDB(s.now().Add(-s.maxEventAge))
-		if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE recorded_at < ?`, cutoff); err != nil {
+		if _, err := q.ExecContext(ctx, `DELETE FROM events WHERE recorded_at < ?`, cutoff); err != nil {
 			return fmt.Errorf("store: prune events by age: %w", err)
 		}
 	}
 	if s.maxEventRows > 0 {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := q.ExecContext(ctx, `
 			DELETE FROM events WHERE seq NOT IN (
 				SELECT seq FROM events ORDER BY seq DESC LIMIT ?
 			)

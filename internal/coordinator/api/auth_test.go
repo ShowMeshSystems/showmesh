@@ -89,6 +89,12 @@ func loginAndGetCookie(t *testing.T, h http.Handler, name, password string) stri
 	body := `{"name":` + strconv.Quote(name) + `,"password":` + strconv.Quote(password) + `,"deviceLabel":"test device"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// Login CSRF (Step 7 seam 0, S0-2): POST /api/v1/session requires
+	// Sec-Fetch-Site: same-origin unconditionally, the identical predicate
+	// writeGuard already applies to every other write — see loginCSRFGuard
+	// in auth.go. Every caller of this helper wants a successful login, so
+	// this header is set here once rather than at every call site.
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	resp := rec.Result()

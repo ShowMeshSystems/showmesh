@@ -164,29 +164,17 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.loginLimiter.recordSuccess(source)
 
-	sess, secret, err := h.deps.Identity.CreateSession(r.Context(), principal.ID, deviceLabel, now)
+	// CreateSession now writes its own "session.create" audit entry in the
+	// SAME transaction as the session row (Step 7 seam 0, ADR-024 decision
+	// 11's same-transaction rule; see identity.Service.CreateSession's doc
+	// comment) — no separate writeAuditOrFail call here, and no orphaned
+	// session row possible on an audit-write failure: either both the
+	// session and its audit entry commit, or neither does, and this
+	// handler reports the failure as an internal error with no cookie set
+	// either way.
+	sess, secret, err := h.deps.Identity.CreateSession(r.Context(), principal.ID, principal.Name, deviceLabel, h.clientAddr(r), now)
 	if err != nil {
 		h.writeInternalError(w, now, "create session", err)
-		return
-	}
-
-	// ADR-024 decision 11's default rule applied here (see
-	// writeAuditOrFail's doc comment in auth.go): the audit entry must
-	// exist before this handler hands back a working credential. On
-	// failure, the cookie is never set — the caller gets a 500 and no
-	// session, even though the session row itself now exists, orphaned
-	// and unreferenced by anything the caller received. That row is
-	// harmless (nothing can present its secret; it was only ever
-	// returned to this call frame) and is exactly the imperfect-but-safe
-	// outcome this package's report names as a known limitation of not
-	// owning store/identity's transaction boundary.
-	if !h.writeAuditOrFail(r.Context(), w, now, identity.AuditEntry{
-		Timestamp: now, PrincipalID: principal.ID, PrincipalName: principal.Name,
-		Form: identity.FormPassword, ClientAddr: h.clientAddr(r),
-		Action: "session.create", Target: sess.ID,
-		Params: map[string]any{"deviceLabel": deviceLabel},
-		Kind:   identity.AuditAdmin,
-	}) {
 		return
 	}
 

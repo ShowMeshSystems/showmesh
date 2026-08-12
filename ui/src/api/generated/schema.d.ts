@@ -217,7 +217,7 @@ export interface paths {
         put?: never;
         /**
          * Log in (ADR-024)
-         * @description Unauthenticated by construction (ADR-024 decision 8): this is how a session is created in the first place, so no pre-existing credential is required or considered. Bounded by a login concurrency limit and a per-source increasing delay, NEVER a per-principal lockout — a correct password always eventually succeeds, only more slowly from a source with recent failures. On success, sets the HttpOnly session cookie via Set-Cookie.
+         * @description Unauthenticated by construction (ADR-024 decision 8): this is how a session is created in the first place, so no pre-existing credential is required or considered. Requires `Sec-Fetch-Site: same-origin` regardless (Step 7 seam 0, owner decision 2026-08-12: strict), checked on its own before any credential is verified — see the `403` response. Bounded by a login concurrency limit and a per-source increasing delay, NEVER a per-principal lockout — a correct password always eventually succeeds, only more slowly from a source with recent failures. On success, sets the HttpOnly session cookie via Set-Cookie.
          */
         post: operations["createSession"];
         /**
@@ -241,7 +241,7 @@ export interface paths {
         put?: never;
         /**
          * Claim the one-time bootstrap code and create the first admin (ADR-024 decision 9)
-         * @description Unauthenticated by construction, exactly like `POST /session` — no principal exists yet for a credential to name. Useless without `code`, which is readable only from a file in the coordinator's data volume: possessing it proves filesystem access, which is what keeps this endpoint from being a network-reachable way to become administrator. Bounded by the SAME login concurrency limit and per-source delay as `POST /session` (ADR-024 decision 8), never a per-principal lockout. A successful claim creates the first administrator (always `kind: human`, `role: admin`), invalidates and deletes the bootstrap code, and immediately mints a session for it exactly as `POST /session` does — the response body is the identical `SessionResponse` shape.
+         * @description Unauthenticated by construction, exactly like `POST /session` — no principal exists yet for a credential to name. Useless without `code`, which is readable only from a file in the coordinator's data volume: possessing it proves filesystem access, which is what keeps this endpoint from being a network-reachable way to become administrator. Bounded by the SAME login concurrency limit and per-source delay as `POST /session` (ADR-024 decision 8), never a per-principal lockout. A successful claim creates the first administrator (always `kind: human`, `role: admin`), invalidates and deletes the bootstrap code, and immediately mints a session for it exactly as `POST /session` does — the response body is the identical `SessionResponse` shape. Requires `Sec-Fetch-Site: same-origin` exactly as `POST /session` does (Step 7 seam 0, owner decision 2026-08-12: strict) — see the `403` response.
          */
         post: operations["claimBootstrap"];
         delete?: never;
@@ -667,6 +667,16 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `Sec-Fetch-Site: same-origin` was missing (owner decision, 2026-08-12: strict — the identical predicate `CSRFRejected` already applies to every other write, since there is deliberately one CSRF rule in this codebase, not two). Unlike `CSRFRejected`, there is no bearer exemption for this operation: it is unauthenticated by construction, so there is no pre-existing credential that could BE bearer-shaped in the first place. A `curl` login must pass the header explicitly, and a browser sending no `Sec-Fetch-Site` at all (Safari before 16.4) cannot use this endpoint — its path is the bearer-paste break-glass affordance (ADR-024 decision 5), unchanged. */
+        LoginCSRFRejected: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `POST /session`'s login concurrency bound was exceeded (ADR-024 decision 8). Carries a `Retry-After` response header. */
         TooManyRequests: {
             headers: {
@@ -1024,6 +1034,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            403: components["responses"]["LoginCSRFRejected"];
             405: components["responses"]["MethodNotAllowed"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
@@ -1092,6 +1103,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            403: components["responses"]["LoginCSRFRejected"];
             405: components["responses"]["MethodNotAllowed"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];

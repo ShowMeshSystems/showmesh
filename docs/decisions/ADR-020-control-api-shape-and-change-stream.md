@@ -106,6 +106,31 @@ three were explicitly deferred to this point:
    added; never removed, renamed, or retyped. Clients must ignore unknown
    fields, and the published contract says so. A breaking change is `/api/v2`.
 
+   **One recorded exception, taken deliberately on 2026-08-12, and it is a
+   security requirement rather than a schema change.** Step 7 made
+   `Sec-Fetch-Site: same-origin` mandatory on `POST /api/v1/session` and
+   `POST /api/v1/bootstrap`, rejecting the request when the header is absent
+   ([ADR-024](ADR-024-identity-authorization-and-audit.md) decision 6, as
+   amended). Both endpoints shipped in v1 with Step 6, so this is a **new
+   required request header on an existing v1 operation**, and an existing
+   caller that worked yesterday receives `403` today. Nothing in the rule above
+   permits that, and calling it additive because no response field changed
+   would be a lawyer's reading of a promise made to clients.
+
+   It is taken anyway, for a reason that should not be generalized into a
+   loophole. The endpoints in question are the two that mint or create a
+   credential, the affected callers are scripts rather than browsers, since a
+   browser sends the header automatically, and the fix for such a caller is one
+   header rather than a rewrite. Cutting a `/api/v2` to close a cross-site
+   forgery hole would leave v1 exploitable for as long as anything still spoke
+   it, which is the opposite of what versioning is for.
+
+   The rule this sets, so the exception does not become a habit: **a
+   compatibility break inside a major version is permitted only to close a
+   security defect, must be recorded here at the time it is taken, and must
+   name the callers it breaks and what they do about it.** Anything else is a
+   `/api/v2`.
+
 9. **`api/openapi.yaml` (OpenAPI 3.1) is the machine-readable contract, and it
    is machine-checked against real responses.** A hand-written specification
    drifts from its implementation, and a specification that lies is worse than

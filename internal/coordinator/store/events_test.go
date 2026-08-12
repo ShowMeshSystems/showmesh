@@ -553,3 +553,60 @@ func TestAppendEventAndPruneShareOneTransaction(t *testing.T) {
 		t.Errorf("LatestEventSeq = %d, want %d", latest, pruneEveryNEvents)
 	}
 }
+
+// TestTxAppendEventCommitsWithTheOuterTransaction is F10's addition
+// ("Add Tx.AppendEvent"): proves the Tx form runs inside a caller-supplied
+// transaction and is visible once that transaction commits — mirroring
+// TestConfigRevisionTxForm's pattern in config_test.go exactly, applied to
+// events instead of config revisions. This is what lets a config write and
+// the change-stream event announcing it land atomically, which the
+// *Store-only form could never do (it always opens and commits its own
+// transaction).
+func TestTxAppendEventCommitsWithTheOuterTransaction(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		_, err := tx.AppendEvent(ctx, mustEvent(t, func(ev *EventRecord) { ev.Summary = "inside InTx" }))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("InTx: %v", err)
+	}
+
+	events, _, err := st.ListEvents(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list events after commit: %v", err)
+	}
+	if len(events) != 1 || events[0].Summary != "inside InTx" {
+		t.Fatalf("events = %+v, want exactly one event committed via Tx.AppendEvent", events)
+	}
+}
+
+// TestTxAppendEventRollsBackWithTheOuterTransaction proves the other half:
+// an event appended via Tx.AppendEvent inside a closure that goes on to
+// fail must not survive — the whole point of this method sharing the
+// caller's transaction rather than opening its own.
+func TestTxAppendEventRollsBackWithTheOuterTransaction(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	sentinel := errors.New("boom")
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		if _, err := tx.AppendEvent(ctx, mustEvent(t, nil)); err != nil {
+			return err
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("InTx error = %v, want it to wrap the sentinel", err)
+	}
+
+	events, _, err := st.ListEvents(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("events = %+v, want none (the transaction that appended it rolled back)", events)
+	}
+}

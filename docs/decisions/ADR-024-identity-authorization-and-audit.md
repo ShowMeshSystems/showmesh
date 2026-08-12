@@ -391,6 +391,46 @@ real and it is named here: `Sec-Fetch-Site` requires Safari 16.4 or later, so a
 sufficiently old iOS device cannot use cookie-authenticated writes at all and
 must use the bearer-paste path from decision 5.
 
+**Login and bootstrap carry the same requirement, decided 2026-08-12 and
+amended in.** This record originally left `POST /api/v1/session` uncovered,
+which the section below on what implementation proved wrong records as an
+omission rather than a judgement: `SameSite=Lax` governs whether a cookie is
+*sent*, not whether one is *set*, so a cross-site form post to the login
+endpoint makes the victim's browser hold, and the audit log attribute, the
+attacker's principal. `POST /api/v1/bootstrap` has the same shape and creates
+the first administrator. Both now require `Sec-Fetch-Site: same-origin` and are
+rejected when the header is absent, which is the identical predicate the rule
+above applies to every other write.
+
+The point of adopting the identical predicate rather than a weaker one is that
+there is **one** cross-site rule in this system rather than two. A
+deny-known-bad variant, rejecting the header when it is present and wrong while
+permitting its absence, protects the same browsers in practice and costs a
+second rule that reads almost the same as the first. This project's recurring
+defect is a near-duplicate that diverges quietly, and a security predicate is
+the worst place to keep one.
+
+The cost is real and is named here rather than discovered: a `curl` login must
+pass the header explicitly, and a browser that sends no `Sec-Fetch-Site`, which
+means Safari before 16.4, cannot log in at all. That population is already
+barred from cookie-authenticated writes by the paragraph above, so the cookie
+being refused could not have performed one; its path is decision 5's
+bearer-paste break-glass, unchanged. A machine client authenticates with a
+token and never posts to this endpoint at all.
+
+Both endpoints shipped in v1 with Step 6, so requiring a header they did not
+require yesterday is a **compatibility break inside a major version**, which
+[ADR-020](ADR-020-control-api-shape-and-change-stream.md) decision 8 otherwise
+forbids. It is recorded there as that record's one exception, with the rule
+that keeps it from becoming a habit: a break inside a major version is
+permitted only to close a security defect, and only when it is recorded at the
+time it is taken.
+
+What this does **not** address is the exposure decision 8 already governs:
+login remains unauthenticated by construction, and a same-origin page can still
+submit it. Cross-site forgery and login flooding are different problems with
+different mechanisms, and this clause closes only the first.
+
 **The bearer exemption is keyed on the credential that actually authenticated
 the request, never on the presence of a header.** A bearer write carries no CSRF
 exposure because nothing attaches an `Authorization` header automatically. But
@@ -743,6 +783,15 @@ than one that is visibly incomplete.
   banner makes the substitution visible rather than silent, which is a mitigation
   by accident rather than by design. The record covering the first write endpoint
   must decide this deliberately.
+
+  **Decided 2026-08-12, and amended into decision 6 above rather than settled in
+  code**, because "which requests may set a session cookie" is a durable
+  constraint and the next person to touch the login handler needs to find it
+  here. The answer is the strict one: the same `Sec-Fetch-Site: same-origin`
+  requirement every other write already carries, rejecting on absence, applied to
+  `POST /api/v1/session` and to `POST /api/v1/bootstrap`. The finding is left
+  standing above rather than rewritten, because the omission was real and the
+  record having missed it is the part worth remembering.
 - **Decision 7 exists nowhere in the code.** No macro format, no FPP plugin, and
   no node policy classifies a `401` or `403` as "the coordinator is unavailable
   to this caller". That is defensible, because Step 6 ships no macro and no

@@ -121,6 +121,26 @@ type Store struct {
 	maxAuditRows          int64
 	auditAppendCount      atomic.Int64
 	lastAuditPruneAtNanos atomic.Int64
+
+	// maxCommandAge, maxCommandRows, commandInsertCount, and
+	// lastCommandPruneAtNanos are commands.go's counterparts to the four
+	// audit fields above, applied to the commands table — see retention.go's
+	// DefaultMaxCommandAge/DefaultMaxCommandRows doc comment for why this
+	// bound exists in Step 7 rather than being left to RES-013 (ADR-024
+	// decision 11 already names disk exhaustion as a real trigger, and a
+	// command journal is exactly the kind of unbounded-write-driven table
+	// that reaches it). maxDiscoveryRunAge, maxDiscoveryRunRows,
+	// discoveryRunInsertCount, and lastDiscoveryRunPruneAtNanos are the
+	// identical pattern applied to discovery_runs.
+	maxCommandAge           time.Duration
+	maxCommandRows          int64
+	commandInsertCount      atomic.Int64
+	lastCommandPruneAtNanos atomic.Int64
+
+	maxDiscoveryRunAge           time.Duration
+	maxDiscoveryRunRows          int64
+	discoveryRunInsertCount      atomic.Int64
+	lastDiscoveryRunPruneAtNanos atomic.Int64
 }
 
 // Open opens (creating if necessary) the SQLite database under dataDir,
@@ -218,13 +238,17 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() t
 	}
 
 	return &Store{
-		db:           db,
-		now:          now,
-		logger:       logger,
-		maxEventAge:  cfg.maxEventAge,
-		maxEventRows: cfg.maxEventRows,
-		maxAuditAge:  cfg.maxAuditAge,
-		maxAuditRows: cfg.maxAuditRows,
+		db:                  db,
+		now:                 now,
+		logger:              logger,
+		maxEventAge:         cfg.maxEventAge,
+		maxEventRows:        cfg.maxEventRows,
+		maxAuditAge:         cfg.maxAuditAge,
+		maxAuditRows:        cfg.maxAuditRows,
+		maxCommandAge:       cfg.maxCommandAge,
+		maxCommandRows:      cfg.maxCommandRows,
+		maxDiscoveryRunAge:  cfg.maxDiscoveryRunAge,
+		maxDiscoveryRunRows: cfg.maxDiscoveryRunRows,
 	}, nil
 }
 

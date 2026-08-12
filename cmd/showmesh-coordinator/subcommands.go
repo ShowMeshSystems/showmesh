@@ -154,6 +154,25 @@ func openIdentityService(ctx context.Context, deps *cliDeps) (*store.Store, iden
 // would be the audit-gates-blackout mistake decision 11 explicitly
 // rejected, applied to the tool meant to recover from exactly that kind of
 // breakage.
+//
+// This reasoning does NOT extend to bootstrap, and runBootstrapSubcommandWithDeps
+// below deliberately never calls this function — it calls
+// identity.Service.ClaimBootstrap directly instead, which is fail-closed.
+// The argument above depends on the state change and its audit write being
+// two SEPARATE operations, one of which (the write) this function is free
+// to treat as best-effort without touching the other; as of Step 7 seam 0
+// the principal insert and the audit insert for a bootstrap claim share
+// ONE transaction (ADR-024 decision 11's same-transaction rule, via
+// [identity.Service.AuditedWrite]), so the disk-exhaustion scenario this
+// comment was originally written for fails BOTH writes regardless of
+// whether a best-effort exemption exists — the exemption would buy
+// nothing in the exact case that justified it. And creating the first
+// administrator on this coordinator with literally no record that it
+// happened is precisely the case decision 11 fail-closes on: unlike every
+// other mutation in this file, a failed bootstrap claim stays a failed
+// bootstrap claim, and the operator retries once the underlying disk/audit
+// problem is fixed (see ClaimBootstrap's own doc comment: the bootstrap
+// code itself is not consumed by a failed attempt either).
 func auditCLIAction(ctx context.Context, deps *cliDeps, svc identity.Service, action string, p identity.Principal) {
 	err := svc.WriteAudit(ctx, identity.AuditEntry{
 		Timestamp: deps.now(), PrincipalID: p.ID, PrincipalName: p.Name,
@@ -555,12 +574,28 @@ func runBootstrapSubcommandWithDeps(deps *cliDeps, args []string) int {
 		return 1
 	}
 
-	principal, err := svc.ClaimBootstrap(ctx, trimmedCode, trimmedName, password, deps.now())
+	// ClaimBootstrap (Step 7 seam 0) now writes its own "bootstrap.claim"
+	// audit entry atomically with the principal creation and the bootstrap
+	// row claim (ADR-024 decision 11's same-transaction rule) — no separate
+	// auditCLIAction call here, unlike this file's other mutating
+	// subcommands, because a second call would duplicate that entry rather
+	// than cover a gap (see auditCLIAction's own doc comment for why its
+	// best-effort reasoning does not extend to bootstrap in any case).
+	// clientAddr is "" for a host-local subcommand: there is no network
+	// client address to attribute, matching how this subcommand already
+	// has no request to read one from. identity.FormCLI, not FormPassword:
+	// this claim's credential is filesystem access to the data volume
+	// (ADR-024 decision 9), not a network-verified password, and the two
+	// must stay distinguishable in the audit log from a claim made through
+	// POST /api/v1/bootstrap — see ClaimBootstrap's own doc comment. The
+	// -device-label flag's value is threaded through so it lands in this
+	// entry's Params, exactly like every other identity.Service audit
+	// entry that records a device label.
+	principal, err := svc.ClaimBootstrap(ctx, trimmedCode, trimmedName, password, *deviceLabel, "", identity.FormCLI, deps.now())
 	if err != nil {
 		writeCLIError(deps, "bootstrap: claim failed: %v\n", err)
 		return 1
 	}
-	auditCLIAction(ctx, deps, svc, "bootstrap.claim", principal)
 
 	if err := writeCLIOutput(deps, "Created administrator %q (id %s, device label %q). "+
 		"The bootstrap code has been invalidated and its file deleted.\n", principal.Name, principal.ID, *deviceLabel); err != nil {

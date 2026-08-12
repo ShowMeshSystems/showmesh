@@ -443,7 +443,7 @@ func TestResetPasswordInvalidatesAnExistingSession(t *testing.T) {
 
 	var sessionSecret string
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
-		_, secret, err := svc.CreateSession(ctx, principal.ID, "phone", clock.now())
+		_, secret, err := svc.CreateSession(ctx, principal.ID, principal.Name, "phone", "", clock.now())
 		if err != nil {
 			t.Fatalf("CreateSession: %v", err)
 		}
@@ -628,6 +628,21 @@ func TestEveryMutationWritesACLIAuditEntry(t *testing.T) {
 			}
 			principal = ps[0]
 		})
+		// Step 7 seam 0: identity.Service.ClaimBootstrap now writes its own
+		// "bootstrap.claim" audit entry atomically with the principal
+		// creation (ADR-024 decision 11's same-transaction rule), so
+		// subcommands.go's runBootstrapSubcommandWithDeps no longer calls
+		// auditCLIAction for this one action (see that call site's own
+		// comment). F6 review finding: an earlier version of this diff
+		// widened this assertion to expect Form "password" here, on the
+		// theory that ClaimBootstrap always hardcoded FormPassword
+		// regardless of caller — which was itself the defect (a host-shell
+		// claim and a network claim were byte-identical in the audit log).
+		// runBootstrapSubcommandWithDeps now passes identity.FormCLI
+		// through explicitly (see that call site), so this test's own name
+		// — "every mutation writes a CLI audit entry" — is true again for
+		// bootstrap too: assertAudited (plain, not assertAuditedForm) is
+		// the same check every other subtest in this test uses.
 		assertAudited(t, deps, "bootstrap.claim", principal)
 	})
 }
@@ -652,6 +667,15 @@ func TestEveryMutationWritesACLIAuditEntry(t *testing.T) {
 // property this test's name claims.
 func assertAudited(t *testing.T, deps *cliDeps, action string, principal identity.Principal) {
 	t.Helper()
+	assertAuditedForm(t, deps, action, principal, "cli")
+}
+
+// assertAuditedForm is [assertAudited] with the expected Form
+// parameterized — every caller except the "bootstrap" subtest wants "cli"
+// (auditCLIAction's own literal); see that subtest's comment for why it
+// alone wants "password" instead.
+func assertAuditedForm(t *testing.T, deps *cliDeps, action string, principal identity.Principal, wantForm string) {
+	t.Helper()
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
 		entries, err := svc.ListAudit(ctx, 0, 100)
 		if err != nil {
@@ -661,8 +685,8 @@ func assertAudited(t *testing.T, deps *cliDeps, action string, principal identit
 			if e.Action != action || e.PrincipalID != principal.ID {
 				continue
 			}
-			if string(e.Form) != "cli" {
-				t.Errorf("audit entry for %q: Form = %q, want %q", action, e.Form, "cli")
+			if string(e.Form) != wantForm {
+				t.Errorf("audit entry for %q: Form = %q, want %q", action, e.Form, wantForm)
 			}
 			if e.Kind != identity.AuditAdmin {
 				t.Errorf("audit entry for %q: Kind = %q, want AuditAdmin", action, e.Kind)
@@ -861,7 +885,7 @@ func TestInvalidateAllSessionsRequiresYesFlag(t *testing.T) {
 
 	var sessionSecret string
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
-		_, secret, err := svc.CreateSession(ctx, principal.ID, "phone", clock.now())
+		_, secret, err := svc.CreateSession(ctx, principal.ID, principal.Name, "phone", "", clock.now())
 		if err != nil {
 			t.Fatalf("CreateSession: %v", err)
 		}
@@ -897,12 +921,12 @@ func TestInvalidateAllSessionsInvalidatesEverySessionAcrossAllPrincipals(t *test
 
 	var aliceSecret, bobSecret string
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
-		_, s1, err := svc.CreateSession(ctx, alice.ID, "alice-phone", clock.now())
+		_, s1, err := svc.CreateSession(ctx, alice.ID, alice.Name, "alice-phone", "", clock.now())
 		if err != nil {
 			t.Fatalf("CreateSession alice: %v", err)
 		}
 		aliceSecret = s1
-		_, s2, err := svc.CreateSession(ctx, bob.ID, "bob-phone", clock.now())
+		_, s2, err := svc.CreateSession(ctx, bob.ID, bob.Name, "bob-phone", "", clock.now())
 		if err != nil {
 			t.Fatalf("CreateSession bob: %v", err)
 		}
@@ -959,7 +983,7 @@ func TestInvalidateAllSessionsClosesARealBackupRestoreResurrection(t *testing.T)
 
 	var sessionSecret string
 	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
-		_, secret, err := svc.CreateSession(ctx, principal.ID, "phone", clock.now())
+		_, secret, err := svc.CreateSession(ctx, principal.ID, principal.Name, "phone", "", clock.now())
 		if err != nil {
 			t.Fatalf("CreateSession: %v", err)
 		}

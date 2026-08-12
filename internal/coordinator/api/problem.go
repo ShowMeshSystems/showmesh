@@ -155,13 +155,39 @@ func forbiddenProblem(scope identity.Scope) v1.Problem {
 }
 
 // csrfProblem is ADR-024 decision 6's same-origin rejection for a
-// cookie-authenticated write.
+// cookie-authenticated write, used by [handlers.writeGuard]. Do not reuse
+// this for [handlers.loginCSRFGuard] — see [loginCSRFProblem], its own
+// accurate detail, and why the two must not share one.
 func csrfProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeCSRFRejected,
 		Title:  "CSRF check failed",
 		Status: http.StatusForbidden,
 		Detail: "a cookie-authenticated write requires the Sec-Fetch-Site: same-origin request header (ADR-024 decision 6); a bearer-token-authenticated request is exempt",
+	}
+}
+
+// loginCSRFProblem is [handlers.loginCSRFGuard]'s own rejection for
+// POST /api/v1/session and POST /api/v1/bootstrap (Step 7 seam 0, S0-2).
+// Same Type/Title/Status as [csrfProblem] — both are ADR-024 decision
+// 6-shaped 403s, and api/openapi.yaml's Problem.type enum has only one
+// "csrf-rejected" value for both — but a DIFFERENT Detail, because
+// csrfProblem's text is false for these two endpoints: they are
+// unauthenticated by construction (ADR-024 decision 8, no principal exists
+// yet for a credential to name), so there is no "cookie-authenticated
+// write" to describe, and there is deliberately no bearer exemption here
+// either — see [handlers.loginCSRFGuard]'s doc comment for why a login
+// request has no pre-existing credential that could BE bearer-shaped in
+// the first place. Reusing csrfProblem's Detail for this rejection told a
+// `curl` caller the exact opposite of the truth on both counts; this
+// exists so the wire and api/openapi.yaml's LoginCSRFRejected description
+// agree instead of contradicting each other.
+func loginCSRFProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeCSRFRejected,
+		Title:  "CSRF check failed",
+		Status: http.StatusForbidden,
+		Detail: "POST /api/v1/session and POST /api/v1/bootstrap require the Sec-Fetch-Site: same-origin request header (ADR-024 decision 6, owner decision 2026-08-12: strict); there is no bearer exemption for this rejection, because both endpoints are unauthenticated by construction and carry no pre-existing credential that could be bearer-shaped",
 	}
 }
 

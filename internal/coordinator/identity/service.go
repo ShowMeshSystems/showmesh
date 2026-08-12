@@ -107,8 +107,15 @@ type Service interface {
 
 	// CreateSession's second return value is the raw session secret to
 	// set as the cookie — see this type's doc comment for why that is
-	// not Session.ID.
-	CreateSession(ctx context.Context, principalID, deviceLabel string, now time.Time) (Session, string, error)
+	// not Session.ID. principalName and clientAddr (Step 7 seam 0) are
+	// what CreateSession now needs to write its own "session.create"
+	// audit entry atomically with the session row itself (ADR-024
+	// decision 11's same-transaction rule; see [Service.AuditedWrite]) —
+	// the caller already has both in hand (principalName from whatever
+	// authenticated the request; clientAddr from [handlers.clientAddr]'s
+	// equivalent upstream) and passing them in avoids a second store round
+	// trip inside the transaction just to look the name back up.
+	CreateSession(ctx context.Context, principalID, principalName, deviceLabel, clientAddr string, now time.Time) (Session, string, error)
 	RevokeSession(ctx context.Context, sessionID string) error
 	ListSessions(ctx context.Context, principalID string) ([]Session, error)
 
@@ -138,7 +145,49 @@ type Service interface {
 	// SELECT, with no file write).
 	EnsureBootstrap(ctx context.Context) error
 
-	ClaimBootstrap(ctx context.Context, code, name, password string, now time.Time) (Principal, error)
+	// ClaimBootstrap's deviceLabel, clientAddr, and form parameters (Step 7
+	// seam 0) are what let this method write its own "bootstrap.claim"
+	// audit entry atomically with the principal creation and the bootstrap
+	// row's claim (ADR-024 decision 11's same-transaction rule; see
+	// [Service.AuditedWrite]) — closing the live defect ADR-024 names by
+	// name: "an audit failure on a bootstrap claim leaves the first
+	// administrator existing with no record of its creation."
+	//
+	// form exists because ClaimBootstrap has two genuinely different
+	// callers with two genuinely different credentials, and decision 11
+	// requires the entry to record which one was used: the network path
+	// (POST /api/v1/bootstrap) verifies a password over HTTP and passes
+	// [FormPassword]; the host-shell path (cmd/showmesh-coordinator's
+	// `bootstrap` subcommand) verifies filesystem access to the data
+	// volume — ADR-024 decision 9's stronger authority — and passes
+	// [FormCLI]. A review finding caught an earlier version of this method
+	// hardcoding FormPassword regardless of caller, which made a host-shell
+	// claim and a network claim byte-identical in the audit log. deviceLabel
+	// is threaded the same way [Service.CreateSession] already threads its
+	// own deviceLabel: the caller has it in hand (the API request body's
+	// deviceLabel field, or the CLI's own -device-label flag), and losing
+	// it off this entry was the other half of that same review finding.
+	ClaimBootstrap(ctx context.Context, code, name, password, deviceLabel, clientAddr string, form CredentialForm, now time.Time) (Principal, error)
+
+	// AuditedWrite runs fn and appends the [AuditEntry] fn returns, both
+	// inside ONE transaction: either the state change and its audit record
+	// both land, or neither does (ADR-024 decision 11's same-transaction
+	// rule for a coordinator-local write). fn returns the entry rather than
+	// receiving one so it can name a target that does not exist until the
+	// write has happened — a new principal id, a new config revision
+	// number — which also makes it impossible to write the audit record
+	// without doing the work it describes.
+	//
+	// An audit-append failure is returned wrapped in [ErrAuditWrite], so a
+	// caller can distinguish "the write failed" (fn's own error, returned
+	// UNWRAPPED — errors.Is against whatever sentinel fn itself returned
+	// still works) from "the attribution failed" (wrapped in
+	// ErrAuditWrite). [WriteAudit] stays: it remains correct for a command
+	// dispatched outward (decision 11's write-before-dispatch rule, where
+	// the command has not happened yet and there is nothing to compose a
+	// transaction around) and for authentication-failure records, which
+	// name no state change at all.
+	AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (AuditEntry, error)) error
 
 	// --- extensions beyond the seam contract; see type doc comment ---
 
@@ -536,24 +585,53 @@ func (s *svc) checkSession(ctx context.Context, sessionSecret string, now time.T
 
 // --- sessions ---
 
-// CreateSession mints a new session for principalID. See [Service]'s doc
-// comment for why the raw secret is this method's second return value
-// rather than [Session.ID].
-func (s *svc) CreateSession(ctx context.Context, principalID, deviceLabel string, now time.Time) (Session, string, error) {
+// CreateSession mints a new session for principalID, and — Step 7 seam
+// 0 — writes its own "session.create" [AuditAdmin] entry in the SAME
+// transaction as the session row via [Service.AuditedWrite] (ADR-024
+// decision 11's same-transaction rule). Before this, the caller (the API
+// layer) sequenced CreateSession and a separate WriteAudit call, and
+// session.go documented the resulting gap: "the session row itself now
+// exists, orphaned and unreferenced by anything the caller received" if
+// the audit write failed. That gap no longer exists — an audit-append
+// failure here rolls the session insert back too, and CreateSession
+// returns an error wrapping [ErrAuditWrite] rather than a secret for a
+// session nothing will ever be able to present, since the row never
+// commits.
+//
+// See [Service]'s doc comment for why the raw secret is this method's
+// second return value rather than [Session.ID].
+func (s *svc) CreateSession(ctx context.Context, principalID, principalName, deviceLabel, clientAddr string, now time.Time) (Session, string, error) {
 	secret, err := generateSessionSecret()
 	if err != nil {
 		return Session{}, "", err
 	}
-	rec, err := s.st.CreateSession(ctx, store.SessionRecord{
-		ID:          uuid.NewString(),
-		PrincipalID: principalID,
-		Digest:      hashSessionSecret(secret),
-		DeviceLabel: deviceLabel,
-	}, now)
+	digest := hashSessionSecret(secret)
+	id := uuid.NewString()
+
+	var created store.SessionRecord
+	err = s.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (AuditEntry, error) {
+		rec, err := tx.CreateSession(ctx, store.SessionRecord{
+			ID:          id,
+			PrincipalID: principalID,
+			Digest:      digest,
+			DeviceLabel: deviceLabel,
+		}, now)
+		if err != nil {
+			return AuditEntry{}, err
+		}
+		created = rec
+		return AuditEntry{
+			Timestamp: now, PrincipalID: principalID, PrincipalName: principalName,
+			Form: FormPassword, ClientAddr: clientAddr,
+			Action: "session.create", Target: rec.ID,
+			Params: map[string]any{"deviceLabel": deviceLabel},
+			Kind:   AuditAdmin,
+		}, nil
+	})
 	if err != nil {
 		return Session{}, "", fmt.Errorf("identity: create session: %w", err)
 	}
-	return sessionFromRecord(rec), secret, nil
+	return sessionFromRecord(created), secret, nil
 }
 
 func (s *svc) RevokeSession(ctx context.Context, sessionID string) error {
@@ -690,9 +768,18 @@ func (s *svc) ensureBootstrap(ctx context.Context) error {
 // expiry, and — only if valid — creates the first administrator principal
 // (always [KindHuman]/[RoleAdmin]: bootstrap exists specifically to
 // create "the first admin", per ADR-024 decision 9's own phrasing) with
-// name and password, atomically with invalidating the code
-// (store.Store.ClaimBootstrapAndCreatePrincipal), then deletes the
-// bootstrap file.
+// name and password, atomically with invalidating the code AND with its
+// own "bootstrap.claim" audit entry (Step 7 seam 0, via
+// [Service.AuditedWrite] over [store.Tx.ClaimBootstrapAndCreatePrincipal])
+// — closing the live defect ADR-024 names by name: "an audit failure on a
+// bootstrap claim leaves the first administrator existing with no record
+// of its creation." Only once that transaction has committed does this
+// method delete the bootstrap file: a filesystem side effect, deliberately
+// OUTSIDE the transaction, because a database rollback cannot undo a file
+// deletion, so doing it first (or inside the transaction, which cannot
+// roll it back either) would risk deleting the operator's only copy of
+// the code out from under a claim that then failed for an unrelated
+// reason (e.g. the audit write).
 //
 // Returns [ErrBootstrapNotAvailable] if no bootstrap code has ever been
 // generated (should not happen once [HasAnyPrincipal] has been called at
@@ -706,7 +793,11 @@ func (s *svc) ensureBootstrap(ctx context.Context) error {
 // constant time, matching [Service.AuthenticateToken]'s pattern, even
 // though a bootstrap code's single-use nature already limits a timing
 // side channel's usefulness far more than a reusable token's would be).
-func (s *svc) ClaimBootstrap(ctx context.Context, code, name, password string, now time.Time) (Principal, error) {
+// An audit-append failure inside the transaction is reported wrapped in
+// [ErrAuditWrite]; per the same-transaction rule, that also means no
+// principal was created and the bootstrap code was NOT consumed — the
+// operator may simply try again.
+func (s *svc) ClaimBootstrap(ctx context.Context, code, name, password, deviceLabel, clientAddr string, form CredentialForm, now time.Time) (Principal, error) {
 	rec, err := s.st.GetBootstrap(ctx)
 	if errors.Is(err, store.ErrBootstrapNotFound) {
 		return Principal{}, ErrBootstrapNotAvailable
@@ -729,12 +820,27 @@ func (s *svc) ClaimBootstrap(ctx context.Context, code, name, password string, n
 		return Principal{}, fmt.Errorf("identity: claim bootstrap: %w", err)
 	}
 
-	created, err := s.st.ClaimBootstrapAndCreatePrincipal(ctx, store.PrincipalRecord{
-		ID:           uuid.NewString(),
-		Name:         name,
-		Kind:         string(KindHuman),
-		Role:         string(RoleAdmin),
-		PasswordHash: hash,
+	id := uuid.NewString()
+	var created store.PrincipalRecord
+	err = s.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (AuditEntry, error) {
+		rec, err := tx.ClaimBootstrapAndCreatePrincipal(ctx, store.PrincipalRecord{
+			ID:           id,
+			Name:         name,
+			Kind:         string(KindHuman),
+			Role:         string(RoleAdmin),
+			PasswordHash: hash,
+		})
+		if err != nil {
+			return AuditEntry{}, err
+		}
+		created = rec
+		return AuditEntry{
+			Timestamp: now, PrincipalID: rec.ID, PrincipalName: rec.Name,
+			Form: form, ClientAddr: clientAddr,
+			Action: "bootstrap.claim", Target: rec.ID,
+			Params: map[string]any{"deviceLabel": deviceLabel},
+			Kind:   AuditAdmin,
+		}, nil
 	})
 	if errors.Is(err, store.ErrBootstrapClaimedRace) {
 		return Principal{}, ErrBootstrapClaimed

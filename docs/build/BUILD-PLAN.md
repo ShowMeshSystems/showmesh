@@ -301,7 +301,7 @@ Status: **complete, 2026-08-12.** [ADR-024](../decisions/ADR-024-identity-author
 
 ## Step 7: The first write endpoint
 
-Status: not started
+Status: **in progress.** Seam 0 (the `identity.Service` atomic audit variant, all of schema v6, and login CSRF) landed 2026-08-12, reviewed and repaired; see the build log. Seams A, B and C not started.
 
 **Goal:** the first write operation in the project, and with it the command model's first appearance in code. ARCHITECTURE Phase 1 opens with native FPP lifecycle commands. This step delivers exactly one of them, end to end, from an operator control through authorization, audit, dispatch, and confirmation by evidence. Step 6 built the mechanism that permits a write and deliberately added none; this step spends it once, on the smallest command that exercises every layer.
 
@@ -345,7 +345,11 @@ Every previous FPP step was verified against the deployed fleet because reads ar
 
 - **The agent fallback cache's trust model** is [ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md): signed rather than checksummed, keypair per deployment, verifying key pinned at enrollment and never fetched at boot, which is what keeps the mechanism working during the outage it exists for. **This step implements nothing of it**; there is no cache yet and no ADR-008 topic that carries configuration. It is named here because ADR-025 came out of this step's planning, and because its decision 4, that a verifying key the agent could rewrite is checksum-level protection wearing a signature's clothes, is the kind of thing implemented the easy way by someone who never read the record.
 
-**Still open and owned by seam 0:** login CSRF at `POST /api/v1/session`, per the obligation above.
+- **Login CSRF is strict**, decided by the owner on 2026-08-12 as seam 0 was specified, and amended into [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 6 rather than settled in code, because which requests may set a session cookie is a durable constraint. `POST /api/v1/session` and `POST /api/v1/bootstrap` require `Sec-Fetch-Site: same-origin` and are refused when the header is absent, which is the identical predicate every other write already carries.
+
+  The deciding argument is that the alternative, rejecting the header only when it is present and wrong, protects the same browsers in practice and costs a second cross-site rule that reads almost like the first. A near-duplicate that diverges quietly is this project's recurring defect, and a security predicate is the worst place to keep one. The named cost: a `curl` login must pass the header, and a browser sending no `Sec-Fetch-Site`, meaning Safari before 16.4, cannot log in. Decision 6 already bars that population from cookie writes, so the cookie being refused could not have performed one.
+
+**Nothing in this step's decision list is still open.**
 
 ### Build ordering
 

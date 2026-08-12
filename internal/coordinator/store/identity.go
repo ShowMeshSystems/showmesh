@@ -61,6 +61,7 @@ var ErrPrincipalNameTaken = errors.New("store: principal name already in use")
 // input: a brand-new principal has never had a session revoked out from
 // under it, so there is no history to start counting from above zero.
 func (s *Store) CreatePrincipal(ctx context.Context, rec PrincipalRecord) (PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.CreatePrincipal")
 	now := s.now()
 	rec.CreatedAt = now
 	rec.UpdatedAt = now
@@ -110,6 +111,7 @@ func scanPrincipal(row interface{ Scan(dest ...any) error }) (PrincipalRecord, e
 // GetPrincipal returns the principal with the given id, or
 // [ErrPrincipalNotFound].
 func (s *Store) GetPrincipal(ctx context.Context, id string) (PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.GetPrincipal")
 	row := s.db.QueryRowContext(ctx, `SELECT `+principalColumns+` FROM principals WHERE id = ?`, id)
 	rec, err := scanPrincipal(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -125,6 +127,7 @@ func (s *Store) GetPrincipal(ctx context.Context, id string) (PrincipalRecord, e
 // identifier [identity.Service.AuthenticatePassword] looks up), or
 // [ErrPrincipalNotFound].
 func (s *Store) GetPrincipalByName(ctx context.Context, name string) (PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.GetPrincipalByName")
 	row := s.db.QueryRowContext(ctx, `SELECT `+principalColumns+` FROM principals WHERE name = ?`, name)
 	rec, err := scanPrincipal(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -139,6 +142,7 @@ func (s *Store) GetPrincipalByName(ctx context.Context, name string) (PrincipalR
 // ListPrincipals returns every principal, ordered by name for a stable,
 // deterministic result (matching [Store.ListNodes]'s ordering convention).
 func (s *Store) ListPrincipals(ctx context.Context) ([]PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.ListPrincipals")
 	rows, err := s.db.QueryContext(ctx, `SELECT `+principalColumns+` FROM principals ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list principals: %w", err)
@@ -163,6 +167,7 @@ func (s *Store) ListPrincipals(ctx context.Context) ([]PrincipalRecord, error) {
 // first-run state per ADR-024 decision 9, which [identity.Service.HasAnyPrincipal]
 // exposes directly.
 func (s *Store) HasAnyPrincipal(ctx context.Context) (bool, error) {
+	guardNotInTx(ctx, "Store.HasAnyPrincipal")
 	var exists int64
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM principals)`).Scan(&exists); err != nil {
 		return false, fmt.Errorf("store: check any principal exists: %w", err)
@@ -177,6 +182,7 @@ func (s *Store) HasAnyPrincipal(ctx context.Context) (bool, error) {
 // landing without the invalidation it depends on. Returns the new
 // generation value.
 func (s *Store) SetPrincipalPasswordHash(ctx context.Context, principalID, passwordHash string) (uint64, error) {
+	guardNotInTx(ctx, "Store.SetPrincipalPasswordHash")
 	return s.bumpPrincipalGenerationTx(ctx, principalID, func(tx *sql.Tx, now string) error {
 		_, err := tx.ExecContext(ctx, `UPDATE principals SET password_hash = ? WHERE id = ?`, passwordHash, principalID)
 		return err
@@ -190,6 +196,7 @@ func (s *Store) SetPrincipalPasswordHash(ctx context.Context, principalID, passw
 // bump it again — there is nothing stale to invalidate by turning access
 // back on.
 func (s *Store) SetPrincipalDisabled(ctx context.Context, principalID string, disabled bool) (uint64, error) {
+	guardNotInTx(ctx, "Store.SetPrincipalDisabled")
 	if !disabled {
 		now := timeToDB(s.now())
 		_, err := s.db.ExecContext(ctx, `UPDATE principals SET disabled = 0, updated_at = ? WHERE id = ?`, now, principalID)
@@ -224,6 +231,7 @@ func (s *Store) SetPrincipalDisabled(ctx context.Context, principalID string, di
 // silently keep serving the principal's old (narrower OR wider) view
 // from a cookie a client is still holding.
 func (s *Store) SetPrincipalRole(ctx context.Context, principalID, role string) (uint64, error) {
+	guardNotInTx(ctx, "Store.SetPrincipalRole")
 	return s.bumpPrincipalGenerationTx(ctx, principalID, func(tx *sql.Tx, now string) error {
 		_, err := tx.ExecContext(ctx, `UPDATE principals SET role = ? WHERE id = ?`, role, principalID)
 		return err
@@ -235,6 +243,7 @@ func (s *Store) SetPrincipalRole(ctx context.Context, principalID, role string) 
 // decision 5 names explicitly, invoked with no accompanying credential
 // change (unlike [Store.SetPrincipalPasswordHash]).
 func (s *Store) BumpPrincipalGeneration(ctx context.Context, principalID string) (uint64, error) {
+	guardNotInTx(ctx, "Store.BumpPrincipalGeneration")
 	return s.bumpPrincipalGenerationTx(ctx, principalID, func(tx *sql.Tx, now string) error { return nil })
 }
 
@@ -314,6 +323,7 @@ type TokenRecord struct {
 // insert, so the stored value is always the principal's true current
 // generation at creation time regardless of what a caller guessed it to be.
 func (s *Store) CreateToken(ctx context.Context, rec TokenRecord) (TokenRecord, error) {
+	guardNotInTx(ctx, "Store.CreateToken")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TokenRecord{}, fmt.Errorf("store: begin create token for principal %q: %w", rec.PrincipalID, err)
@@ -393,6 +403,7 @@ var ErrTokenNotFound = errors.New("store: token not found")
 // is a live comparison against the current time) and there is no reason
 // for any caller to ever need a revoked token's row back by digest.
 func (s *Store) GetTokenByDigest(ctx context.Context, digest string) (TokenRecord, error) {
+	guardNotInTx(ctx, "Store.GetTokenByDigest")
 	row := s.db.QueryRowContext(ctx, `SELECT `+tokenColumns+` FROM principal_tokens WHERE digest = ? AND revoked_at IS NULL`, digest)
 	rec, err := scanToken(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -410,6 +421,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, digest string) (TokenRecor
 // the caller's request-scoped now is threaded through explicitly rather
 // than this package's own s.now() being trusted to match it exactly.
 func (s *Store) TouchToken(ctx context.Context, tokenID string, now time.Time) error {
+	guardNotInTx(ctx, "Store.TouchToken")
 	_, err := s.db.ExecContext(ctx, `UPDATE principal_tokens SET last_used_at = ? WHERE id = ?`, timeToDB(now), tokenID)
 	if err != nil {
 		return fmt.Errorf("store: touch token %q: %w", tokenID, err)
@@ -420,6 +432,7 @@ func (s *Store) TouchToken(ctx context.Context, tokenID string, now time.Time) e
 // RevokeToken sets revoked_at on the token with the given (non-secret) row
 // id.
 func (s *Store) RevokeToken(ctx context.Context, tokenID string) error {
+	guardNotInTx(ctx, "Store.RevokeToken")
 	now := timeToDB(s.now())
 	res, err := s.db.ExecContext(ctx, `UPDATE principal_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, tokenID)
 	if err != nil {
@@ -439,6 +452,7 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string) error {
 // token, leaving this process in a listing response, and that boundary is
 // the API layer's responsibility, not this package's.
 func (s *Store) ListTokens(ctx context.Context, principalID string) ([]TokenRecord, error) {
+	guardNotInTx(ctx, "Store.ListTokens")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+tokenColumns+` FROM principal_tokens
 		WHERE principal_id = ? AND revoked_at IS NULL
@@ -495,14 +509,46 @@ type SessionRecord struct {
 // [identity.Service.CreateSession], not this package's own bookkeeping
 // clock.
 func (s *Store) CreateSession(ctx context.Context, rec SessionRecord, now time.Time) (SessionRecord, error) {
+	guardNotInTx(ctx, "Store.CreateSession")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SessionRecord{}, fmt.Errorf("store: begin create session for %q: %w", rec.PrincipalID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	rec, err = createSession(ctx, tx, rec, now)
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionRecord{}, fmt.Errorf("store: commit create session for %q: %w", rec.PrincipalID, err)
+	}
+	return rec, nil
+}
+
+// CreateSession is [Store.CreateSession]'s [Tx] form: the identical
+// read-generation-then-insert body, run against this already-open
+// transaction instead of opening a new one — so a session it creates
+// commits or rolls back together with whatever else t's caller composed
+// it with (identity.Service's atomic login/bootstrap paths, Step 7 seam
+// 0). See store/tx.go's [Tx] doc comment and [appendAuditEntry]'s
+// identical querier-based pattern in audit.go.
+func (t *Tx) CreateSession(ctx context.Context, rec SessionRecord, now time.Time) (SessionRecord, error) {
+	return createSession(ctx, t.tx, rec, now)
+}
+
+// createSession is the shared body behind [Store.CreateSession] and
+// [Tx.CreateSession]: read PrincipalID's current generation and insert rec
+// stamped with it, both against q — written once against [querier] rather
+// than twice, per this package's standing rule (see [appendAuditEntry]'s
+// doc comment in audit.go for the fuller version of why). Generation is
+// NOT taken from rec on input — see [SessionRecord]'s doc comment — so it
+// is always the principal's true current generation at creation time
+// regardless of what a caller guessed it to be, closing the read-then-use
+// race a caller-supplied value would otherwise leave open.
+func createSession(ctx context.Context, q querier, rec SessionRecord, now time.Time) (SessionRecord, error) {
 	var generation uint64
-	if err := tx.QueryRowContext(ctx, `SELECT generation FROM principals WHERE id = ?`, rec.PrincipalID).Scan(&generation); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT generation FROM principals WHERE id = ?`, rec.PrincipalID).Scan(&generation); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SessionRecord{}, fmt.Errorf("store: create session for %q: %w", rec.PrincipalID, ErrPrincipalNotFound)
 		}
@@ -513,7 +559,7 @@ func (s *Store) CreateSession(ctx context.Context, rec SessionRecord, now time.T
 	rec.LastUsedAt = now
 	rec.RevokedAt = nil
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := q.ExecContext(ctx, `
 		INSERT INTO principal_sessions (id, principal_id, digest, device_label, generation, created_at, last_used_at, revoked_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
@@ -521,9 +567,6 @@ func (s *Store) CreateSession(ctx context.Context, rec SessionRecord, now time.T
 		timeToDB(rec.CreatedAt), timeToDB(rec.LastUsedAt), nil,
 	); err != nil {
 		return SessionRecord{}, fmt.Errorf("store: create session for %q: %w", rec.PrincipalID, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return SessionRecord{}, fmt.Errorf("store: commit create session for %q: %w", rec.PrincipalID, err)
 	}
 	return rec, nil
 }
@@ -568,6 +611,7 @@ var ErrSessionNotFound = errors.New("store: session not found")
 // method's sibling GetTokenByDigest for the identical division of
 // responsibility.
 func (s *Store) GetSessionByDigest(ctx context.Context, digest string) (SessionRecord, error) {
+	guardNotInTx(ctx, "Store.GetSessionByDigest")
 	row := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM principal_sessions WHERE digest = ? AND revoked_at IS NULL`, digest)
 	rec, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -586,6 +630,7 @@ func (s *Store) GetSessionByDigest(ctx context.Context, digest string) (SessionR
 // including a read", and the request that triggered this touch is the
 // one piece of evidence about when that use occurred.
 func (s *Store) TouchSession(ctx context.Context, sessionID string, now time.Time) error {
+	guardNotInTx(ctx, "Store.TouchSession")
 	_, err := s.db.ExecContext(ctx, `UPDATE principal_sessions SET last_used_at = ? WHERE id = ?`, timeToDB(now), sessionID)
 	if err != nil {
 		return fmt.Errorf("store: touch session %q: %w", sessionID, err)
@@ -597,6 +642,7 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, now time.Tim
 // row id — see [identity.Session.ID]'s doc comment for why this id is
 // never the cookie value.
 func (s *Store) RevokeSession(ctx context.Context, sessionID string) error {
+	guardNotInTx(ctx, "Store.RevokeSession")
 	now := timeToDB(s.now())
 	res, err := s.db.ExecContext(ctx, `UPDATE principal_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, sessionID)
 	if err != nil {
@@ -614,6 +660,7 @@ func (s *Store) RevokeSession(ctx context.Context, sessionID string) error {
 // comment — and never leaves this process as anything but the
 // non-secret [SessionRecord.ID].
 func (s *Store) ListSessions(ctx context.Context, principalID string) ([]SessionRecord, error) {
+	guardNotInTx(ctx, "Store.ListSessions")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+sessionColumns+` FROM principal_sessions
 		WHERE principal_id = ? AND revoked_at IS NULL
@@ -660,6 +707,7 @@ type BootstrapRecord struct {
 // currently be holding). CreatedAt is stamped from this Store's clock and
 // ignored on input; ExpiresAt is caller-supplied.
 func (s *Store) PutBootstrap(ctx context.Context, rec BootstrapRecord) (BootstrapRecord, error) {
+	guardNotInTx(ctx, "Store.PutBootstrap")
 	rec.CreatedAt = s.now()
 	rec.ClaimedAt = nil
 	_, err := s.db.ExecContext(ctx, `
@@ -685,6 +733,7 @@ var ErrBootstrapNotFound = errors.New("store: no bootstrap code recorded")
 
 // GetBootstrap returns the current singleton bootstrap row.
 func (s *Store) GetBootstrap(ctx context.Context) (BootstrapRecord, error) {
+	guardNotInTx(ctx, "Store.GetBootstrap")
 	var (
 		rec                  BootstrapRecord
 		createdAt, expiresAt string
@@ -729,14 +778,57 @@ func (s *Store) GetBootstrap(ctx context.Context) (BootstrapRecord, error) {
 // method exists to close is the race between the caller's GetBootstrap
 // check and this write, not to be a second, weaker copy of that check.
 func (s *Store) ClaimBootstrapAndCreatePrincipal(ctx context.Context, principal PrincipalRecord) (PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.ClaimBootstrapAndCreatePrincipal")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PrincipalRecord{}, fmt.Errorf("store: begin claim bootstrap: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := s.now()
-	res, err := tx.ExecContext(ctx, `UPDATE bootstrap SET claimed_at = ? WHERE id = 1 AND claimed_at IS NULL`, timeToDB(now))
+	rec, err := claimBootstrapAndCreatePrincipal(ctx, tx, s.now(), principal)
+	if err != nil {
+		return PrincipalRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PrincipalRecord{}, fmt.Errorf("store: commit claim bootstrap: %w", err)
+	}
+	return rec, nil
+}
+
+// ClaimBootstrapAndCreatePrincipal is [Store.ClaimBootstrapAndCreatePrincipal]'s
+// [Tx] form: the identical claim-then-create body, run against this
+// already-open transaction instead of opening a new one — this is what
+// lets identity.Service.AuditedWrite (Step 7 seam 0) put the bootstrap
+// row's claim, the new administrator's creation, and its audit entry in
+// ONE transaction, closing the defect ADR-024 names by name: "an audit
+// failure on a bootstrap claim leaves the first administrator existing
+// with no record of its creation." See store/tx.go's [Tx] doc comment.
+func (t *Tx) ClaimBootstrapAndCreatePrincipal(ctx context.Context, principal PrincipalRecord) (PrincipalRecord, error) {
+	return claimBootstrapAndCreatePrincipal(ctx, t.tx, t.s.now(), principal)
+}
+
+// claimBootstrapAndCreatePrincipal is the shared body behind
+// [Store.ClaimBootstrapAndCreatePrincipal] and
+// [Tx.ClaimBootstrapAndCreatePrincipal] — written once against [querier]
+// rather than twice, per this package's standing rule (see
+// [appendAuditEntry]'s doc comment in audit.go). now is passed in rather
+// than read from a Store here, since a [Tx] has no independent clock of
+// its own beyond its parent Store's (see [Tx]'s doc comment) and both
+// callers already have one in hand.
+//
+// The caller (identity.Service.ClaimBootstrap) is expected to fetch the
+// bootstrap row via [Store.GetBootstrap] first and validate the presented
+// code's digest and expiry against its own clock BEFORE ever calling this
+// — that is the primary validation path, and this function does not
+// repeat it: it does not check the code, does not check expiry, and does
+// not distinguish "no bootstrap row has ever existed" from "one exists
+// but is already claimed". It re-checks only claimed_at IS NULL, via the
+// UPDATE's WHERE clause, and returns [ErrBootstrapClaimedRace] wrapped for
+// EITHER of those two cases if it affects zero rows — the one thing this
+// exists to close is the race between the caller's GetBootstrap check and
+// this write, not to be a second, weaker copy of that check.
+func claimBootstrapAndCreatePrincipal(ctx context.Context, q querier, now time.Time, principal PrincipalRecord) (PrincipalRecord, error) {
+	res, err := q.ExecContext(ctx, `UPDATE bootstrap SET claimed_at = ? WHERE id = 1 AND claimed_at IS NULL`, timeToDB(now))
 	if err != nil {
 		return PrincipalRecord{}, fmt.Errorf("store: claim bootstrap: %w", err)
 	}
@@ -751,7 +843,7 @@ func (s *Store) ClaimBootstrapAndCreatePrincipal(ctx context.Context, principal 
 	principal.CreatedAt = now
 	principal.UpdatedAt = now
 	principal.Generation = 0
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := q.ExecContext(ctx, `
 		INSERT INTO principals (id, name, kind, role, password_hash, disabled, generation, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
@@ -762,9 +854,6 @@ func (s *Store) ClaimBootstrapAndCreatePrincipal(ctx context.Context, principal 
 			return PrincipalRecord{}, fmt.Errorf("store: claim bootstrap: %w", ErrPrincipalNameTaken)
 		}
 		return PrincipalRecord{}, fmt.Errorf("store: claim bootstrap: create principal: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return PrincipalRecord{}, fmt.Errorf("store: commit claim bootstrap: %w", err)
 	}
 	return principal, nil
 }

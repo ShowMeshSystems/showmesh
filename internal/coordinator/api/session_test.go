@@ -21,7 +21,7 @@ func TestLoginSuccessSetsCookieAndReturnsPrincipal(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
@@ -63,13 +63,148 @@ func TestLoginSuccessSetsCookieAndReturnsPrincipal(t *testing.T) {
 	}
 }
 
+// --- Login CSRF (Step 7 seam 0, S0-2) ---
+//
+// Owner decision, 2026-08-12: strict. POST /api/v1/session and
+// POST /api/v1/bootstrap require Sec-Fetch-Site: same-origin and are
+// rejected when the header is absent — the identical predicate
+// [sameOriginCSRFOK] that [handlers.writeGuard] already applies to every
+// other write, factored out so a future change cannot move one and leave
+// the other behind (see [handlers.loginCSRFGuard]'s doc comment). Both
+// endpoints are unauthenticated by construction, so the check must fire
+// BEFORE body decoding or credential verification — proven below by a
+// request whose body is otherwise a well-formed, correct login and would
+// otherwise succeed.
+
+// TestLoginCSRFRejectedWhenHeaderAbsent is this seam's acceptance
+// criterion 6, half one: proven against the binary directly (a real
+// *http.Handler, no browser involved) with an otherwise-correct login
+// body — the header, not the credentials, is what must be rejected on.
+func TestLoginCSRFRejectedWhenHeaderAbsent(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil) // Sec-Fetch-Site deliberately absent
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", resp.StatusCode, respBody)
+	}
+	m := decodeMap(t, respBody)
+	if m["type"] != ProblemTypeCSRFRejected {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeCSRFRejected)
+	}
+	assertAccurateLoginCSRFDetail(t, m)
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			t.Fatalf("a session cookie was set on a CSRF-rejected login: %v", c)
+		}
+	}
+}
+
+// assertAccurateLoginCSRFDetail is F4's fix, proven on the wire: a
+// reviewer verified live against the running binary that POST
+// /api/v1/session's 403 body claimed "a cookie-authenticated write
+// requires ... a bearer-token-authenticated request is exempt" —
+// [csrfProblem]'s text, reused by mistake for [handlers.loginCSRFGuard],
+// which is false on both counts for this endpoint (unauthenticated by
+// construction, and there is deliberately no bearer exemption here at
+// all — see [loginCSRFProblem]'s doc comment). This asserts the literal
+// detail text a caller actually receives, pinned against the false claims
+// specifically, not merely against the [loginCSRFProblem] function's own
+// string (which would be a tautology no code change to that function
+// could ever fail) — matching this codebase's existing rule that a
+// literal assertion is what actually proves the wire-visible property
+// (see subcommands_test.go's assertAuditedForm doc comment for the
+// identical reasoning applied to CLI audit attribution).
+func assertAccurateLoginCSRFDetail(t *testing.T, m map[string]any) {
+	t.Helper()
+	detail, _ := m["detail"].(string)
+	if detail == "" {
+		t.Fatalf("problem body has no detail field: %+v", m)
+	}
+	if strings.Contains(detail, "cookie-authenticated write") {
+		t.Errorf("detail = %q, want it to NOT describe this endpoint as requiring a cookie-authenticated write — POST /api/v1/session and POST /api/v1/bootstrap are unauthenticated by construction", detail)
+	}
+	if strings.Contains(detail, "bearer-token-authenticated request is exempt") {
+		t.Errorf("detail = %q, want it to NOT claim a bearer exemption — there is deliberately none for this rejection", detail)
+	}
+	if !strings.Contains(detail, "Sec-Fetch-Site") {
+		t.Errorf("detail = %q, want it to still name the missing header", detail)
+	}
+}
+
+// TestLoginCSRFRejectedForCrossSite proves the rejection is not merely
+// "absent" but genuinely value-checked: a Sec-Fetch-Site value OTHER than
+// same-origin (what a real cross-site fetch sends) is rejected exactly
+// like an absent header, mirroring [TestDeleteSessionRequiresSecFetchSiteForCookie]'s
+// sibling coverage for the write-guard predicate this one shares code with.
+func TestLoginCSRFRejectedForCrossSite(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", resp.StatusCode, respBody)
+	}
+}
+
+// TestLoginCSRFCheckedBeforeCredentialsOrBody proves ordering: S0-2
+// requires the check run "on its own rather than after an auth or scope
+// gate" for these two unauthenticated-by-construction endpoints. A
+// malformed, empty body with no Sec-Fetch-Site header must still come
+// back 403 (CSRF), never 400 (bad request body) — if the CSRF check ran
+// second, this would observe 400 instead, which is exactly the ordering
+// bug this test exists to catch.
+func TestLoginCSRFCheckedBeforeCredentialsOrBody(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", `not even json`, nil)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (CSRF checked before body decoding); body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestBootstrapCSRFRejectedWhenHeaderAbsent is acceptance criterion 6's
+// other endpoint: POST /api/v1/bootstrap carries the identical rule.
+func TestBootstrapCSRFRejectedWhenHeaderAbsent(t *testing.T) {
+	svc, dataDir := newTestIdentityServiceWithDataDir(t, fixedClock(testNow))
+	mustEnsureBootstrap(t, svc)
+	code := readBootstrapCode(t, dataDir)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"code":` + strconv.Quote(code) + `,"name":"first-admin","password":"a-strong-password-1","deviceLabel":"laptop"}`
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/bootstrap", body, nil) // Sec-Fetch-Site deliberately absent
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", resp.StatusCode, respBody)
+	}
+	assertAccurateLoginCSRFDetail(t, decodeMap(t, respBody))
+
+	// The code must not have been consumed by a CSRF-rejected attempt —
+	// the check runs before ClaimBootstrap is ever called.
+	has, err := svc.HasAnyPrincipal(context.Background())
+	if err != nil {
+		t.Fatalf("has any principal: %v", err)
+	}
+	if has {
+		t.Fatalf("a principal was created by a CSRF-rejected bootstrap claim")
+	}
+}
+
 func TestLoginWrongPasswordReturns401NoCookie(t *testing.T) {
 	svc := newTestIdentityService(t, fixedClock(testNow))
 	mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"name":"operator-1","password":"wrong","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, respBody)
@@ -86,7 +221,7 @@ func TestLoginUnknownNameReturns401(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"name":"nobody","password":"whatever","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, respBody)
@@ -102,7 +237,7 @@ func TestLoginDisabledPrincipalReturns401(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, respBody)
@@ -113,7 +248,7 @@ func TestLoginMissingFieldsReturns400(t *testing.T) {
 	svc := newTestIdentityService(t, fixedClock(testNow))
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", `{"name":"","password":""}`, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", `{"name":"","password":""}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
@@ -138,7 +273,7 @@ func TestLoginConcurrencyLimitRejectsWithRetryAfter(t *testing.T) {
 	firstDone := make(chan *http.Response, 1)
 	go func() {
 		body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"first"}`
-		req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+		req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 		resp, _ := doRawRequest(t, api.Handler, req)
 		firstDone <- resp
 	}()
@@ -150,7 +285,7 @@ func TestLoginConcurrencyLimitRejectsWithRetryAfter(t *testing.T) {
 	}
 
 	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"second"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("second (queued) login status = %d, want 429; body: %s", resp.StatusCode, respBody)
@@ -300,7 +435,7 @@ func TestLoginCookieSecureAttributeReflectsOption(t *testing.T) {
 			api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger(), SecureCookie: secure})
 
 			body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
-			req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+			req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 			resp, respBody := doRawRequest(t, api.Handler, req)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
@@ -328,7 +463,7 @@ func TestLoginCookieSameSiteIsLax(t *testing.T) {
 	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	body := `{"name":"operator-1","password":"` + testPassword + `","deviceLabel":"phone"}`
-	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, nil)
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session", body, map[string]string{"Sec-Fetch-Site": "same-origin"})
 	resp, respBody := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
