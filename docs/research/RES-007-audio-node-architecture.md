@@ -80,6 +80,18 @@ Measure rather than observe: alignment in samples, drift in milliseconds against
 
 No evidence collected. This section is a work queue, not a conclusion.
 
+### The interface is purchased (2026-08-13): Behringer U-Phoria UMC204HD
+
+Recorded because the clock-domain questions above were blocked on interface selection, and because the owner's stated posture is worth carrying: this is a holiday light show rather than a music festival, so the interface is chosen for adequacy against [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) rather than for audio quality headroom.
+
+**What it appears to satisfy.** The unit is a 2-in / 4-out USB interface, so on channel count alone it clears ADR-018's minimum of three outputs from one interface, leaving program on 1/2 and LTC on 3. Because program and LTC both leave the same USB device they share one clock domain, which is the property ADR-018 actually protects. ADR-018's specific prohibition, program on USB with LTC on Dante, is **not** triggered by this choice.
+
+**The one thing to test first, and it is cheap.** This record's own clock-domain question asks how many usable output channels from one clock the interface provides *and whether the driver exposes them as one device*. On consumer interfaces a second output pair is sometimes a **mirror** of the main pair rather than an independently addressable one. If outputs 3/4 mirror 1/2 under ALSA, LTC is summed into program audio, which is precisely the failure ADR-018 exists to prevent. It would be close to inaudible on a casual listen while corrupting timecode, and it would be discovered during a show.
+
+So the first bench action, before any engine work: confirm under Linux that a signal sent to output 3 alone appears on output 3 and **not** on outputs 1/2. That is a signal generator, a cable, and twenty minutes. Everything else in this record's clock-domain section is worth nothing if that check fails, and if it fails the answer is a different interface, not a software workaround.
+
+**Unverified and deliberately not asserted here:** the unit's Linux class-compliance behaviour, its channel map under ALSA versus PipeWire, achievable sample rates, and whether any mode switch affects output addressing. These are test parameters for the prototype, recorded as questions rather than guessed at, per this project's rule that an external system's behaviour is named only from that system's own output.
+
 ## Decision, fallback, and revalidation
 
 The architecture is decided (ADR-017, ADR-018, ADR-019) and unverified. If bench work shows the node path cannot meet the acceptance criteria — most plausibly if GStreamer cannot hold LTC alignment to program — the correct response is a superseding ADR, not moving sample generation into ShowMesh code, which [ADR-006](../decisions/ADR-006-go-implementation-language.md) and [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md) forbid.

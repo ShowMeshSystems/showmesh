@@ -12,6 +12,56 @@ This is a working document, not an architectural contract. It records intent and
 
 Status vocabulary: `not started`, `in progress`, `blocked`, `complete`.
 
+## Delivery tracks and the day-0 schedule
+
+Added 2026-08-13, when the owner supplied dates and scope that the numbered steps alone cannot express. **The numbered steps below remain correct and are not renumbered**; this section says which of them run at the same time, and against what deadline.
+
+### The dates
+
+| Date | What it is |
+|---|---|
+| **Mid-September 2026** | **Day-0.** ShowMesh must be able to control a real show. Chosen deliberately early so faults surface with slack. |
+| **Week of 21 September 2026** | Projector setup, testing, and mapping begins. Not a show, but the projection path wants to be usable by then. |
+| **Early October 2026** | "One button runs the show" is acceptable here rather than at day-0, by the owner's call. |
+| **17 October 2026** | Halloween show opens. |
+| **31 October 2026** | Halloween. |
+
+**Scope at day-0 is the whole show**, not an FPP slice: FPP control, audio, media and projection. Two items are the reason the project exists and cannot be cut. **Show macros** answer one of the biggest complaints about FPP that ShowMesh was started to address. **ShowMesh driving projection** is the second: projection did not work on Raspberry Pis last season, which is why the node work matters as much as the coordinator work.
+
+### The tracks
+
+Four tracks run in parallel. They are independent enough to build simultaneously, and the dependency that is *not* obvious is called out below.
+
+- **Track A, FPP control.** Step 8 then Step 9. Sequential within itself. Specified.
+- **Track B, nodes and projection.** The node agent is a stub today, so this starts close to zero: a real agent, GStreamer pipeline supervision, local FSEQ virtual-matrix extraction, NDI output, into Resolume. Governed by [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md). **The largest and riskiest track**, and the one carrying reason two for the project. Opens with the transport spike in [`docs/bench/TRACK-B-NDI-SPIKE.md`](../bench/TRACK-B-NDI-SPIKE.md).
+- **Track C, audio node.** The interface is purchased (Behringer U-Phoria UMC204HD, 2026-08-13). Design work can start now; the first bench action is the twenty-minute output-addressing check recorded in [RES-007](../research/RES-007-audio-node-architecture.md), because if outputs 3/4 mirror 1/2 then [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) is violated inaudibly and the interface is the wrong one.
+- **Track D, projector power.** `pkg/pjlink` and the first control provider under [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md), needed if a showtime macro turns projectors on. Smallest track.
+
+### The dependency that will bite, and how it is handled
+
+**Step 9's macros orchestrate all four tracks, and three of them do not exist yet.** Left alone that makes Step 9 block on everything and land in late October, after the show opens.
+
+So Step 9 builds the macro **mechanism** against the step types that exist, and the step vocabulary grows as tracks B, C, and D land. A macro ships early with a small vocabulary rather than late with a complete one. This is the same shape as Step 7 shipping one command rather than waiting for a family.
+
+### What is deliberately cut from day-0
+
+Recorded so each is a decision rather than an omission discovered in October.
+
+- **Reduced local fallback for macros.** [ADR-004](../decisions/ADR-004-layered-commands-and-fallback.md) requires every critical macro to define one, and the RES-008 re-survey established there is no delivery path: no agent cache ([ADR-025](../decisions/ADR-025-agent-fallback-cache-is-signed.md) decided the trust model and nothing built it) and no configuration-distribution topic in ADR-008's v1 set. **The first macros ship with no critical fallback and say so**, which answers the open question in Step 9 below. Revisit after Halloween.
+- **YAML configuration export and import.** ADR-009's portable-bundle half, still entirely unbuilt. Not day-0.
+- **Preview wall.** RES-010. Cut.
+- **Any further authentication or authorization work.** ADR-024 shipped and that is the end of it. This is a local application on an isolated show network, target scoping is already declined in Step 8, and nothing may grow the security surface without being asked for.
+
+### How this work is verified, which changed on 2026-08-13
+
+**The containerized `fppd` is sufficient evidence for the core build.** The owner's decision: FPP's core behaves the same in the container as on the deployed Pis, the differences are real but not disqualifying, and per-step live-fleet verification costs schedule that day-0 does not have.
+
+The owner tests **top to bottom once a track is fully delivered**, producing a punch list to work through. "Fully delivered" means a complete vertical slice that runs, not a partial build needing hand-holding. Node work gets tested as it lands, because nodes are physical.
+
+**This supersedes the earlier standing rule** that every acceptance criterion is re-proved against real show hardware before a step closes. It does **not** change the rule that criteria are proved against a *running binary* rather than against the test suite, which is a different claim and still holds: Step 7's three worst defects were all found by running the thing rather than by reading or testing it. **The one exception is [RES-002](../research/RES-002-fpp-multisync-compatibility.md)**, which the owner benches personally against the physical rig, because the MultiSync timing path has to be right.
+
+**The live-fleet write prohibition is unchanged.** No write, no command, no restart, no settings change, and no MQTT publish against the deployed FPP hosts during the build. When that changes it will be the owner doing it deliberately, in his own testing pass.
+
 ## Step 0: Foundation
 
 Status: complete (2026-08-10)
@@ -456,7 +506,7 @@ Both were taken by the owner on 2026-08-13, and both are recorded here rather th
 
 ## Step 9: Show macros and the FPP plugin
 
-Status: not started. Its RES-008 prerequisite was discharged on 2026-08-13; **one open question, below, must be answered before the step can be specified.**
+Status: not started, and **fully unblocked as of 2026-08-13**. Its RES-008 prerequisite was discharged that day, and the open question below was answered the same day by the owner: **the first macros ship with no critical local fallback**, stated in the macro definition rather than left implicit, because the delivery path does not exist and building it is cut from day-0. Revisit after Halloween. **This step is day-0 scope**, not optional: show macros are one of the reasons the project was started.
 
 **Goal:** the first show macro, and with it the first ShowMesh code running on an FPP host. This is where ADR-004's three-part model is finally complete: primitives from Steps 7 and 8, macros here, and the reduced local fallback that every critical macro must define.
 
@@ -466,12 +516,9 @@ Status: not started. Its RES-008 prerequisite was discharged on 2026-08-13; **on
 
 **The blocking one: there is no way to deliver a fallback to the node that would run it.** ADR-004 requires every critical macro to define what runs locally when the coordinator is unreachable. The survey establishes that the agent has **no cached fallback subset** (ADR-025 decided its trust model and Step 7 built none of it) and that **ADR-008's v1 topic set contains no configuration-distribution topic**. So a fallback definition has no path to a node. Under [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md) a macro carrying a fallback field that provably cannot be delivered is a field no code computes, which is forbidden.
 
-**The question to answer before specifying this step**, and it is a scope decision rather than a technical one:
+**Answered by the owner on 2026-08-13: the second option.** The first macros are deliberately scoped to carry **no critical fallback**, and that limitation is stated in the step and in each macro definition rather than left for someone to discover when the coordinator drops mid-show. Building the distribution path, meaning the ADR-025 agent cache with its pinned verifying key plus an ADR-008 topic to carry it, is a large piece of work in its own right and is cut from day-0.
 
-- **Either** this step builds the distribution path, meaning the agent cache under ADR-025 with its pinned verifying key and an ADR-008 topic to carry it, which is a large step in its own right and would be landing alongside the plugin.
-- **Or** the first macro is deliberately scoped to one with **no critical fallback**, and that limitation is stated in the step and in the macro definition rather than left for someone to discover when the coordinator goes down mid-show.
-
-The second is almost certainly right for a first macro, and it is the shape this project has used before: Step 7 shipped the safe direction first and said so. But it must be decided and written down, because "the first macro has no fallback" is the kind of sentence that is fine as a decision and dangerous as an accident.
+This is the shape the project has used before: Step 7 shipped the safe direction first and said so. The reason it had to be decided rather than defaulted into is that "the first macro has no fallback" is fine as a decision and dangerous as an accident, and the difference between the two is entirely whether it is written down.
 
 ### Deliverables
 
