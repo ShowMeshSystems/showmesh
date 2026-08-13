@@ -71,12 +71,29 @@ Note the tension the adapter has to resolve: the owner's shape names **OSC** as 
 ## Decisions this track must make
 
 - **What happens on timecode loss**, once D0 establishes what Resolume actually does. If it holds the last frame, ShowMesh must surface that as a fault rather than trusting the wall to look wrong.
-- **How composition state is addressed stably.** Clips, layers, and columns can be referred to by index or by name, and indices move when someone edits the composition. A macro that launches "layer 3, clip 2" silently does the wrong thing after a reorder, which is a defect that will only ever appear in front of an audience.
+- ~~How composition state is addressed stably.~~ **Answered by the owner 2026-08-13, and the answer is asymmetric.** See the section below, because the two halves of it have different safety properties and someone will otherwise try to unify them.
 - **What ShowMesh does about a composition it does not recognise**, since the operator authors the composition in Resolume and ShowMesh learns about it rather than owning it.
+
+## Addressing: clips are pinned, layers are coordinates
+
+Settled by the owner 2026-08-13, who does it this way in practice already.
+
+**Clips are pinned.** Resolume can bind a DMX, MIDI, or OSC command to *this clip*, rather than to a layer-and-column position. The owner always pins, so a clip trigger addresses an identity and keeps addressing the right thing after the composition is reordered. **This is the safe half and it removes the index-drift defect entirely.** ShowMesh should require pinned addressing for clips and should not offer positional clip triggering at all, because offering both means someone eventually uses the fragile one.
+
+**Layers are coordinates, and this is the half that needs care.** There appears to be no way to pin "this layer on this page", so selecting a layer is **two commands: select the page, then select the layer.** The owner will confirm whether pinning is possible; if it turns out to be, this collapses to one command and everything below stops mattering.
+
+Assuming two commands, three things follow.
+
+**The page is global mutable state, so the pair is a race.** A layer command means "layer 3 of whatever page is currently selected". If anything changes the page between ShowMesh's two messages, the wrong layer activates, and it activates successfully with no error anywhere. That is the same class of defect as Step 7's confirmation coin flip: a correct-looking operation whose result depends on timing.
+
+**So page-plus-layer is one ShowMesh action, never two macro steps.** The macro vocabulary exposes a single "activate layer" step taking a page and a layer, which emits two OSC messages internally. Exposing them separately would let an operator interleave other steps between them, which is how the race above gets built deliberately. Two of these actions must also not run concurrently.
+
+**Confirmation checks the end state, not the messages.** Both messages are fire-and-forget UDP with no reply and no ordering guarantee, so neither one confirms anything. The adapter reads back over REST that the intended layer on the intended page is active. Always asserting the page, even when ShowMesh believes it is already selected, is cheaper than tracking assumed state and being wrong.
 
 ## Acceptance criteria
 
 - RES-001's test matrix is run and recorded, moving its fault behaviour off L0.
+- **Layer activation is confirmed by reading back page and layer state, not by the two OSC messages being sent**, and the two messages are never separately schedulable from a macro.
 - A macro step launches a clip, activates a layer, and triggers a column, each confirmed by Resolume reporting the result rather than by the OSC message being sent.
 - **An inactive layer is reported as a readiness fault before a show**, not discovered when timecode arrives and nothing launches.
 - Resolume state appears in the Operator UI with provenance and freshness.
