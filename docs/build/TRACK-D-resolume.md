@@ -20,17 +20,19 @@ Resolume Arena accepts SMPTE only as **audio LTC**, configured per clip. It is n
 2. That output goes by cable into an audio input on the machine running Resolume.
 3. Resolume clips are configured to follow that input.
 
-Three consequences that should be settled early rather than discovered:
+Two consequences that are software problems, and one that is not:
 
-- **Track C is on this track's critical path.** Audio is not just for the audience; it is the timecode source. If the UMC204HD's output 3 turns out to mirror outputs 1 and 2, both tracks break, which is why that twenty-minute check leads Track C.
-- **The Resolume machine is not the render node.** Arena runs on Windows or macOS, while the render node is Debian. They are separate machines with a cable between them, and that cable is a single point of failure with no software mitigation.
-- **ShowMesh cannot confirm timecode delivery from its own side.** It can confirm that LTC is being generated and it can ask Resolume what it thinks the time is, but the cable in between is unobserved. Any confirmation logic must rest on Resolume's own reported state, never on the audio node having sent something.
+- **Track C is on this track's critical path.** Audio is not just for the audience; it is the timecode source. Nothing in Track D's timecode half can be benched before the audio node generates LTC.
+- **ShowMesh cannot confirm timecode delivery from its own side.** It can confirm that LTC is being generated and it can ask Resolume what it thinks the time is, but the cable in between is unobserved. Confirmation logic must rest on Resolume's own reported state, never on the audio node having sent something.
+- **The cable and the interface are the owner's problem and need no design here.** He is an audio engineer; getting LTC out of an interface and into a computer is his day job. The interface's output addressing was checked against documentation and will be confirmed on arrival, with a known-good Focusrite as the fallback if it disappoints. This is recorded so that nobody spends planning effort on it.
 
 ## What is known, and the large hole in it
 
+**The installation, confirmed by the owner 2026-08-13.** Resolume Arena **7.23.2**, currently on macOS, and **Halloween runs this version**. Two things follow. The REST API needs 7.8 or later, so it is comfortably available and the adapter can rely on it rather than leaning on OSC for everything. And the machine is a Hackintosh whose platform is effectively dead, so **it may move to Windows**: the adapter must not acquire a macOS assumption, and nothing may depend on host-specific behaviour. A version upgrade is planned for Christmas on the Black Friday sale, which is a recorded revalidation trigger rather than a surprise.
+
 From RES-001's desk research, all L1 from documentation and none of it benched:
 
-- **Arena, not Avenue**, accepts SMPTE as audio LTC configured per clip. Clip launch is **not** driven by timecode; those are two separate mechanisms.
+- **Arena, not Avenue**, accepts SMPTE as audio LTC configured per clip.
 - The REST API (7.8 and later, port 8080, `/api/v1`) plus a WebSocket give confirmable state. **OSC gives low-latency triggers.**
 - **Timecode-loss behaviour is undocumented.** Forums report that it holds the last frame, and the forum pages are bot-gated so even that is a search excerpt rather than a read source.
 
@@ -42,23 +44,41 @@ That last point is the hole, and it is exactly the shape this project keeps gett
 
 **D1. The Resolume adapter.** REST and WebSocket for state and confirmable operations, OSC for low-latency triggers. The split follows ARCHITECTURE §4.6: management operations use confirmable interfaces, operational triggers may use lower-latency ones. **The adapter never enters the frame path.**
 
-**D2. Composition and clip control**, as macro step types Track A's Step 9 can sequence: launch what should be playing, and blackout.
+**D2. Explicit composition control**, and this is larger than "launch a clip". See the section below; it is the half of this track that has no timecode in it at all.
 
 **D3. Resolume state as observations**, with provenance and freshness like every other signal: is it running, what is playing, is it following timecode, and what does it think the current time is. Stale reads `unknown` rather than healthy, per [ADR-011](../decisions/ADR-011-context-aware-observability.md).
 
 **D4. Confirmation by evidence**, per [ADR-003](../decisions/ADR-003-desired-and-observed-state.md). A clip launch is confirmed by Resolume reporting that clip playing, on evidence that post-dates the dispatch. This is Step 7's 179-microsecond lesson in a third subsystem, and OSC makes it sharper: **OSC is fire-and-forget UDP with no reply**, so an OSC trigger has no acknowledgement at all and confirmation must come from the REST or WebSocket side. A trigger that was sent is not a clip that launched.
 
+## Two control paths, not one, and the precondition that links them
+
+Settled by the owner 2026-08-13. This track carries **both** halves, and the earlier framing of "either ShowMesh launches clips or Resolume follows timecode" was a false choice.
+
+**Path one, timecode.** LTC launches timeline clips. **But a clip only launches from timecode if its layer is active**, which means layer activation is a *precondition for the timecode path working at all*, not a separate feature. ShowMesh must be able to activate layers.
+
+This has a readiness consequence worth building for rather than discovering: **an inactive layer is a silent failure.** Timecode arrives, nothing launches, and nothing reports an error, because from Resolume's point of view nothing was asked for. Layer-active state belongs in readiness evidence checked before a show, in the same class as OBSERVABILITY §10's other pre-show checks, rather than being noticed from the yard when the wall stays dark.
+
+**Path two, explicit control.** Everything that is not timeline content, and there is a lot of it: countdowns, resting visuals, pre-show text, blackout, "show starts in 5 minutes". For these **ShowMesh explicitly says what to launch.** They are not timecode-driven and never will be.
+
+The system shape, in the owner's words:
+
+> FPP schedule or ShowMesh macro or ShowMesh UI → ShowMesh coordinator → Resolume OSC command → launch or switch the appropriate clip, layer, column, or composition state.
+
+So the control vocabulary is **clip, layer, column, and composition state**, and all four are addressable. That is the scope of D2, and it is closer to "ShowMesh is the Resolume controller for everything that is not timecode" than to "ShowMesh can trigger a clip".
+
+Note the tension the adapter has to resolve: the owner's shape names **OSC** as the transport, and OSC is fire-and-forget UDP with no reply. [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) still wants evidence. Since 7.23.2 has the REST API, the resolution is **OSC to act and REST or WebSocket to confirm**, which is also exactly the split ARCHITECTURE §4.6 already describes. Nothing confirms off the OSC send.
+
 ## Decisions this track must make
 
-- **Resolume version and host OS**, which determine whether the REST API exists at all: it arrived in 7.8. This needs checking against the installed copy before the adapter is designed.
-- **Whether ShowMesh launches clips or Resolume's own timeline runs from timecode.** These are genuinely different designs. Timecode-driven means ShowMesh feeds LTC and Resolume follows; ShowMesh-driven means OSC or REST triggers at moments ShowMesh decides. The reference installation may want both, and RES-001 notes that clip launch is not driven by timecode, so choosing "just feed timecode" does not get clip selection for free.
 - **What happens on timecode loss**, once D0 establishes what Resolume actually does. If it holds the last frame, ShowMesh must surface that as a fault rather than trusting the wall to look wrong.
-- **Where the audio node's LTC output physically lands**, which is a cabling decision with no software component and a real chance of being deferred until it blocks something.
+- **How composition state is addressed stably.** Clips, layers, and columns can be referred to by index or by name, and indices move when someone edits the composition. A macro that launches "layer 3, clip 2" silently does the wrong thing after a reorder, which is a defect that will only ever appear in front of an audience.
+- **What ShowMesh does about a composition it does not recognise**, since the operator authors the composition in Resolume and ShowMesh learns about it rather than owning it.
 
 ## Acceptance criteria
 
 - RES-001's test matrix is run and recorded, moving its fault behaviour off L0.
-- A macro step launches a composition and is confirmed by Resolume reporting it, not by the trigger being sent.
+- A macro step launches a clip, activates a layer, and triggers a column, each confirmed by Resolume reporting the result rather than by the OSC message being sent.
+- **An inactive layer is reported as a readiness fault before a show**, not discovered when timecode arrives and nothing launches.
 - Resolume state appears in the Operator UI with provenance and freshness.
 - Timecode loss produces the defined, operator-visible response decided above.
 - A Resolume restart mid-show recovers to a defined composition state rather than an undefined one.
@@ -72,8 +92,8 @@ That last point is the hole, and it is exactly the shape this project keeps gett
 
 Decided by the owner 2026-08-13. Projector power stays on Home Assistant and Node-RED, driven by an MQTT message the way it was driven from FPP.
 
-What ShowMesh provides instead is **an arbitrary MQTT publish step type for macros**, landing in Track A's Step 9. That is a much smaller thing than [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md)'s provider model, and it buys back the time that `pkg/pjlink`, a provider, and the RES-014 metadata question would have cost.
+What ShowMesh provides instead is **an external MQTT command step type with a declared response contract**, landing in Track A's Step 9. That is far smaller than [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md)'s provider model and buys back everything `pkg/pjlink`, a provider, and the RES-014 metadata question would have cost.
 
-**The honest cost, which must be stated in the macro rather than papered over:** an arbitrary MQTT publish has **no observable effect from ShowMesh's side**. It cannot be confirmed under ADR-003, and it fails Step 8's rule that a command ships only when its effect is visible. It is a deliberate escape hatch, and it must report as unconfirmable with a reason from [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md)'s vocabulary, never as success. A macro step that always reports success is worse than no step, because the operator stops reading it.
+**It stays confirmable, which was the owner's refinement.** Node-RED can publish a status back when it sees the projector actually come on, so the step declares what it expects in return: nothing, a boolean, a number, text, or a matched value, on a named topic, within a deadline. That is a real ADR-003 evidence check against a contract the operator wrote, rather than a hope. A step configured to expect nothing is honestly unconfirmable and reports as such, never as success.
 
 `pkg/pjlink` and the ADR-016 provider model are deferred, not cancelled. RES-012 and RES-014 keep them.

@@ -6,6 +6,10 @@ Status: planned (bench) · Risk: critical · Verification: L1 (capabilities) —
 
 **This record is day-0 scope as of 2026-08-13**, promoted from "not sequenced". Controlling Resolume is one of the three founding problems ShowMesh exists to solve, alongside virtual-matrix generation and FPP's scheduler, so it cannot be cut to make a date. Its bench work leads [Track D](../build/TRACK-D-resolume.md), because the adapter's error handling would otherwise be a design against behaviour nobody has observed.
 
+**The installation, confirmed 2026-08-13:** Arena **7.23.2** on macOS, and Halloween runs this version. The REST API needs 7.8 or later, so it is available. The host is a Hackintosh on a dying platform and **may move to Windows**, so nothing here may acquire a macOS assumption. A version upgrade is planned for Christmas, which is a revalidation trigger for everything this record establishes.
+
+**Layer activation is a precondition for the timecode path**, not a separate feature: a clip launches from timecode only when its layer is active. That makes an inactive layer a **silent failure**, since timecode arrives, nothing launches, and Resolume reports no error because nothing was asked of it. Layer-active state therefore belongs in pre-show readiness evidence rather than being discovered from the yard.
+
 **The timecode chain runs through the audio node**, which is easy to miss: Arena accepts SMPTE only as audio LTC, so the signal originates on the [Track C](../build/TRACK-C-audio-node.md) node's discrete output and reaches Resolume over a physical cable. That makes the audio interface's output addressing a prerequisite for this record's bench, and it means ShowMesh cannot observe the cable in the middle. Confirmation must rest on Resolume's own reported state, never on LTC having been generated.
 
 ## Decision to make
