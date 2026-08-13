@@ -51,6 +51,39 @@ export interface JsonRequestInit {
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 
 /**
+ * Step 7 seam C review defect 1: the request budget for
+ * `POST /fpp/{instanceId}/commands` (store.ts's `stopFPPPlaylist`) must
+ * not be [DEFAULT_REQUEST_TIMEOUT_MS] — a command dispatch is a long
+ * request BY DESIGN (the coordinator waits out its own confirmation
+ * deadline, `internal/coordinator/api`'s `defaultFPPCommandConfirmDeadline`,
+ * 20s, before answering) and sharing a snapshot read's 15s budget made
+ * the coordinator's own honest "unconfirmed" outcome unreachable: this
+ * client aborted first, every time, rendering a transport-timeout error
+ * for what was a successful conversation with a healthy coordinator —
+ * the exact inverted failure direction ADR-024 decision 7 exists to
+ * name.
+ *
+ * A THIRD independently chosen literal, deliberately: this is
+ * TypeScript and cannot import
+ * `pkg/command.DefaultFPPCommandConfirmDeadline`/`MinClientTimeoutForConfirmation`
+ * (the Go module boundary is absolute here, not a style choice), so — like
+ * cmd/showmeshctl's own `minStopPlaylistClientTimeout`, chosen
+ * independently for the identical reason — this cannot be DERIVED from the
+ * server's value, only reconciled against it: `client.test.ts` proves this
+ * client actually waits this long when given a slow response, and the
+ * acceptance criteria for this fix are verified against the running stack
+ * (CLAUDE.md's own standing rule) rather than trusted from three numbers
+ * that merely look consistent on paper.
+ *
+ * 35s = the coordinator's 20s default confirmation deadline + a 15s
+ * margin for the round trip itself — the same value and reasoning as
+ * cmd/showmeshctl's `minStopPlaylistClientTimeout` and
+ * `pkg/command.ClientTimeoutMargin`, chosen independently here rather than
+ * shared, for the reason above.
+ */
+export const FPP_COMMAND_REQUEST_TIMEOUT_MS = 35_000
+
+/**
  * Thin transport layer: builds the request (version header, bearer
  * token if one is stored), and turns a non-2xx response into a typed
  * error by dispatching on the RFC 9457 problem document's `type` field
@@ -111,8 +144,19 @@ export class ApiClient {
    * browser is not a fact about `fetch` in a browser. Being explicit also
    * makes this an assertion a test can read off the constructed request
    * rather than a behavior only a browser can confirm.
+   *
+   * timeoutMs overrides `this.requestTimeoutMs` for this ONE call — Step 7
+   * seam C review defect 1: `POST /fpp/{instanceId}/commands` is a long
+   * request by design and must not share every other route's short
+   * snapshot-read budget (see [FPP_COMMAND_REQUEST_TIMEOUT_MS]). Defaults
+   * to the instance-wide value, so every existing call site is unaffected.
    */
-  async request(path: string, signal: AbortSignal, init: JsonRequestInit = {}): Promise<Response> {
+  async request(
+    path: string,
+    signal: AbortSignal,
+    init: JsonRequestInit = {},
+    timeoutMs: number = this.requestTimeoutMs,
+  ): Promise<Response> {
     const token = getStoredToken()
     const tokenWasPresent = token !== null
     const headers: Record<string, string> = {
@@ -151,10 +195,8 @@ export class ApiClient {
     const onOuterAbort = (): void => combined.abort(signal.reason)
     if (signal.aborted) combined.abort(signal.reason)
     else signal.addEventListener('abort', onOuterAbort, { once: true })
-    const timeoutErr = new ApiError(
-      `request to ${path} timed out after ${this.requestTimeoutMs}ms with no response`,
-    )
-    const timer: TimerHandle = this.clock.setTimeout(() => combined.abort(timeoutErr), this.requestTimeoutMs)
+    const timeoutErr = new ApiError(`request to ${path} timed out after ${timeoutMs}ms with no response`)
+    const timer: TimerHandle = this.clock.setTimeout(() => combined.abort(timeoutErr), timeoutMs)
 
     let response: Response
     try {
@@ -203,9 +245,14 @@ export class ApiClient {
     return (await response.json()) as T
   }
 
-  /** `POST` with a JSON body, expecting a JSON response — `POST /session`, `POST /bootstrap`. */
-  async postJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
-    const response = await this.request(path, signal, { method: 'POST', body })
+  /**
+   * `POST` with a JSON body, expecting a JSON response — `POST /session`,
+   * `POST /bootstrap`, `POST /fpp/{instanceId}/commands`. timeoutMs
+   * overrides the instance-wide default for this one call — see
+   * [ApiClient.request]'s own doc comment (Step 7 seam C review defect 1).
+   */
+  async postJson<T>(path: string, body: unknown, signal: AbortSignal, timeoutMs?: number): Promise<T> {
+    const response = await this.request(path, signal, { method: 'POST', body }, timeoutMs)
     return (await response.json()) as T
   }
 

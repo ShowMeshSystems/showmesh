@@ -190,7 +190,17 @@ func listDiscoveryRuns(ctx context.Context, q querier, limit int) ([]DiscoveryRu
 	case limit > MaxDiscoveryRunPageSize:
 		limit = MaxDiscoveryRunPageSize
 	}
-	rows, err := q.QueryContext(ctx, `SELECT`+discoveryRunColumns+`FROM discovery_runs ORDER BY started_at DESC LIMIT ?`, limit)
+	// ORDER BY started_at DESC alone has no tiebreaker: timeToDB's stored
+	// precision can render two runs identical, and started_at is supplied
+	// by the caller's clock rather than guaranteed monotonic. rowid (SQLite
+	// implicitly assigns one to this TEXT-PRIMARY-KEY, non-WITHOUT-ROWID
+	// table) increases strictly with insertion order regardless of clock
+	// value, so appending it as a second DESC key makes "the most recent
+	// run" — what api.handlePromoteNode/mapNodeDeclaration call latestRun —
+	// deterministic even on an exact started_at tie (DEFECT 7c: two
+	// discovery runs starting in the same instant must never leave "which
+	// one is latest" to SQLite's unspecified tie behavior).
+	rows, err := q.QueryContext(ctx, `SELECT`+discoveryRunColumns+`FROM discovery_runs ORDER BY started_at DESC, rowid DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list discovery runs: %w", err)
 	}

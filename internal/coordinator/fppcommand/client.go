@@ -66,7 +66,7 @@ func (o Options) withDefaults() Options {
 // intact but never dereferenced. Written independently rather than
 // imported from that package — see this package's doc comment for why a
 // shared implementation would undermine the exact property
-// TestCollectorPackageNeverImportsFPPCommand exists to prove: two
+// TestPackageNeverImportsFPPCommand exists to prove: two
 // packages that agree today because they share code are not proven to
 // still agree once one of them changes, only asserted to.
 func refuseRedirects(*http.Request, []*http.Request) error {

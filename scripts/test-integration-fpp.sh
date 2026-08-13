@@ -35,6 +35,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# This script's entire job is to supply the Go suites' dependencies (a live
+# fpp-master, a throwaway broker). SHOWMESH_REQUIRE_TEST_DEPS turns every
+# dependency skip in those suites (requireLiveFPP, requireBroker) into a
+# hard test failure instead — a missing dependency under THIS script means
+# the script itself failed to supply it, which must never read as a quiet,
+# green skip (docs/build/LESSONS.md: "a test that guards on a dependency
+# must fail, not skip, when a harness whose whole job is to supply that
+# dependency is what invoked it"). Run by hand with this unset, the skip
+# stays the convenient default an unprepared laptop gets.
+export SHOWMESH_REQUIRE_TEST_DEPS=true
+
 COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
 CONTAINER_NAME="showmesh-bench-fpp-master"
 FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:8090}"
@@ -59,7 +70,13 @@ fi
 echo "test-integration-fpp: waiting for $FPP_URL to answer /api/fppd/status"
 ready=0
 for _ in $(seq 1 60); do
-  if curl -s -o /dev/null -w '' --max-time 2 "${FPP_URL}/api/fppd/status"; then
+  # -f (--fail): a non-2xx response makes curl exit nonzero instead of
+  # exiting 0 on ANY HTTP response. Without it, a wedged fppd whose web
+  # server still answers with a 404 (or any other non-2xx) on every path
+  # made this loop declare readiness immediately — proven by pointing this
+  # at a server answering 404 on every path and watching the script print
+  # its normal progress, skip the main test, and exit 0.
+  if curl -fsS -o /dev/null --max-time 2 "${FPP_URL}/api/fppd/status"; then
     ready=1
     break
   fi
@@ -161,6 +178,43 @@ if [ "$broker_ready" -ne 1 ]; then
   exit 1
 fi
 
-echo "test-integration-fpp: running TestFPPSuccessPathThroughRealCoordinator against $FPP_URL and tcp://localhost:${FPP_MOSQUITTO_PORT}"
+
+# Step 7 seam C review: this filter used to name only
+# TestFPPSuccessPathThroughRealCoordinator, so when the review's own
+# fpp_command_test.go added TestFPPCommandAgainstRealCoordinatorAndBenchFPP
+# and TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline (the write
+# path's own "verified against the running stack" acceptance criterion),
+# neither was reachable from this script — the exact defect this project
+# already shipped once, recorded in docs/build/LESSONS.md as "a test can
+# report success while running at all": a script's -run pattern silently
+# excluding a real test is invisible in green CI output, because
+# `go test -run <pattern>` exits 0 when a pattern matches nothing, the
+# identical shape as a skip nobody reads. Broadened to an alternation
+# naming all three FPP-write tests explicitly (never a bare wildcard,
+# which would silently start matching an unrelated future test this
+# script was never meant to gate), and RAN_COUNT below turns "matched
+# nothing" from a silent, exit-0 no-op into a loud failure.
+FPP_RUN_PATTERN='^(TestFPPSuccessPathThroughRealCoordinator|TestFPPCommandAgainstRealCoordinatorAndBenchFPP|TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline)$'
+
+echo "test-integration-fpp: running $FPP_RUN_PATTERN against $FPP_URL and tcp://localhost:${FPP_MOSQUITTO_PORT}"
+FPP_TEST_LOG="$(mktemp)"
+set +e
 SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${FPP_MOSQUITTO_PORT}" \
-  go test -tags=integration -race -count=1 -timeout=5m -v ./test/integration/... -run '^TestFPPSuccessPathThroughRealCoordinator$'
+  go test -tags=integration -race -count=1 -timeout=5m -v ./test/integration/... -run "$FPP_RUN_PATTERN" | tee "$FPP_TEST_LOG"
+FPP_TEST_STATUS="${PIPESTATUS[0]}"
+set -e
+
+# The silent-zero guard itself: a pattern that matched nothing produces NO
+# "=== RUN" lines at all and `go test` still exits 0 — this is what turns
+# that into a loud failure instead of a green run that proved nothing.
+RAN_COUNT="$(grep -c '^=== RUN' "$FPP_TEST_LOG" || true)"
+rm -f "$FPP_TEST_LOG"
+if [ "$RAN_COUNT" -eq 0 ]; then
+  echo "test-integration-fpp: -run '$FPP_RUN_PATTERN' matched ZERO tests — this is the silent-skip shape LESSONS.md " \
+       "already recorded once; treating a no-op match as a hard failure rather than a quiet, misleadingly-green exit 0" >&2
+  exit 1
+fi
+if [ "$FPP_TEST_STATUS" -ne 0 ]; then
+  exit "$FPP_TEST_STATUS"
+fi
+echo "test-integration-fpp: ran $RAN_COUNT top-level/subtest cases matching '$FPP_RUN_PATTERN'"

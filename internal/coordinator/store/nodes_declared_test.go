@@ -115,17 +115,21 @@ func TestRecordNodeDiscoverySeenUpdatesEvidence(t *testing.T) {
 // actually have yet: nothing on the path this test exercises
 // (DeclareNode, StartDiscoveryRun, FinishDiscoveryRun) is CAPABLE of
 // deleting a node_declarations row at all — [Store.DeleteNodeDeclaration]
-// exists, but nothing here calls it — so this test would pass identically
-// against any implementation, including one that later wires a discovery
-// run's completion to auto-delete quiet declarations (the exact RES-008
-// D6-forbidden behavior schemaV6's own doc comment warns against). What
-// this test actually proves, honestly, is narrower: FinishDiscoveryRun's
-// own write touches only the discovery_runs table, never
-// node_declarations, at the repository layer, today. Seam B owns the real
-// version of the resilience property the old name claimed — deciding what
-// a completed discovery run finding nothing should ever do (if anything)
-// to a declaration it did not see, and proving that decision holds under
-// its own test.
+// exists, but nothing here calls it. Seam B owns the real version of the
+// resilience property the old name claimed — deciding what a completed
+// discovery run finding nothing should ever do (if anything) to a
+// declaration it did not see, and proving that decision holds under its
+// own test.
+//
+// A later review pass (this project's own "a test's name is a claim"
+// rule) noted the RENAMED test still only checked non-deletion — asserting
+// len(decls) == 1 — while its own name promised the broader "does not
+// touch". A finishDiscoveryRun that wiped every declaration's
+// LastDiscoveryRunID/LastDiscoveredAt on every run (never deleting the row
+// itself) would have passed this test unchanged. This version asserts the
+// full record is byte-for-byte unchanged — LastDiscoveryRunID still empty,
+// LastDiscoveredAt still nil — so the test now proves what its name says,
+// rather than merely a narrower fact that happens to share the name.
 func TestFinishingAQuietDiscoveryRunDoesNotTouchNodeDeclarations(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
@@ -133,6 +137,11 @@ func TestFinishingAQuietDiscoveryRunDoesNotTouchNodeDeclarations(t *testing.T) {
 	if _, err := st.DeclareNode(ctx, NodeDeclarationRecord{NodeID: "media-03"}); err != nil {
 		t.Fatalf("declare: %v", err)
 	}
+	before, err := st.GetNodeDeclaration(ctx, "media-03")
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+
 	// A "discovery run" that finds nothing at all — the powered-off-outside-
 	// display-hours case — touches node_declarations not at all.
 	if _, err := st.StartDiscoveryRun(ctx, DiscoveryRunRecord{ID: "run-quiet"}); err != nil {
@@ -148,6 +157,20 @@ func TestFinishingAQuietDiscoveryRunDoesNotTouchNodeDeclarations(t *testing.T) {
 	}
 	if len(decls) != 1 {
 		t.Fatalf("len(decls) = %d, want 1 — a discovery run finding nothing must not delete the declaration", len(decls))
+	}
+
+	after, err := st.GetNodeDeclaration(ctx, "media-03")
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.LastDiscoveryRunID != before.LastDiscoveryRunID {
+		t.Errorf("LastDiscoveryRunID changed from %q to %q — a discovery run that never observed this node must not stamp it", before.LastDiscoveryRunID, after.LastDiscoveryRunID)
+	}
+	if before.LastDiscoveredAt != nil || after.LastDiscoveredAt != nil {
+		t.Errorf("LastDiscoveredAt = %v (before) / %v (after), want both nil — this node was never observed", before.LastDiscoveredAt, after.LastDiscoveredAt)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt changed from %v to %v — a run that did not touch this declaration must not bump its own update timestamp either", before.UpdatedAt, after.UpdatedAt)
 	}
 }
 

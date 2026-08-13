@@ -140,6 +140,53 @@ func ValidateIdempotencyKey(key string) error {
 	return nil
 }
 
+// DefaultFPPCommandConfirmDeadline is the coordinator's own default
+// confirmation deadline for a command using [ConfirmationEvidence]
+// (internal/coordinator/api's defaultFPPCommandConfirmDeadline is defined
+// AS this constant, not as an independently chosen literal that happens to
+// agree with it — see that constant's doc comment). Exported here, in this
+// shared package, so the server side of every confirmation-bearing command
+// has exactly one place this number is chosen.
+//
+// Step 7 seam C review, defect 1: a client dispatching a command with
+// [ConfirmationEvidence] and abandoning the request before the server's
+// own deadline elapses can never observe "unconfirmed" — only "the
+// connection timed out," which reports a transport failure for what was a
+// successful conversation with a healthy coordinator (CLAUDE.md's
+// recurring architectural error, restated for a client timeout rather than
+// a fallback trigger). See [MinClientTimeoutForConfirmation].
+//
+// cmd/showmeshctl deliberately does NOT import this package (see that
+// program's importgraph_test.go: "this CLI mints its own idempotency key
+// independently... for the identical reason it decodes every wire type
+// independently rather than importing pkg/observation for one"), so its
+// own minimum request timeout for "fpp stop-playlist" is a second,
+// independently chosen literal that must be reconciled against this value
+// by a test that runs the real coordinator and the real CLI together
+// (test/integration), not by a shared import. The Operator UI, being
+// TypeScript, cannot import this constant either; its own FPP-command
+// request timeout is reconciled the same documented, non-imported way.
+const DefaultFPPCommandConfirmDeadline = 20 * time.Second
+
+// ClientTimeoutMargin is added on top of [DefaultFPPCommandConfirmDeadline]
+// to get a client-side request budget: even a command that resolves
+// EXACTLY at the server's deadline still has to round-trip the response
+// (and its own JSON body) back to the client, so a client timeout equal to
+// the server deadline is already too tight. SHOWMESH HYPOTHESIS, NOT
+// MEASURED — chosen only to be comfortably larger than one HTTP round trip
+// and JSON encode/decode on a LAN, the same class of hypothesis
+// internal/coordinator/fppcommand.DefaultTimeout already is.
+const ClientTimeoutMargin = 15 * time.Second
+
+// MinClientTimeoutForConfirmation returns the minimum request budget a
+// client dispatching a command with [ConfirmationEvidence] must allow,
+// given the server's own confirmation deadline. A client budget below this
+// value can NEVER observe the confirmed/unconfirmed outcome the server
+// eventually reaches — it always aborts first.
+func MinClientTimeoutForConfirmation(serverConfirmDeadline time.Duration) time.Duration {
+	return serverConfirmDeadline + ClientTimeoutMargin
+}
+
 // NewIdempotencyKey mints a fresh idempotency key: a random UUID (RFC
 // 4122 version 4, via github.com/google/uuid — already a dependency of
 // this module, used identically for principal, session, and command IDs

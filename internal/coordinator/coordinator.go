@@ -108,15 +108,12 @@ func Run() int {
 	// environment value); nothing downstream — apiDeps, the FPP collector
 	// construction loop, the FPPMQTTHosts cross-check below — may read the
 	// raw env-parsed value again.
-	authoritativeFPPEndpoints, err := syncFPPEndpointsConfig(ctx, st, identitySvc, cfg.FPPEndpoints, time.Now, logger)
+	cfg, err = resolveAuthoritativeFPPEndpoints(ctx, st, identitySvc, cfg, time.Now, logger)
 	if err != nil {
 		logger.Error("failed to resolve the authoritative fpp.endpoints configuration", "error", err)
 		_ = st.Close()
 		return 1
 	}
-	cfg.FPPEndpoints = authoritativeFPPEndpoints
-	logger.Info("resolved authoritative fpp.endpoints configuration (RES-008 D1)",
-		"fpp_endpoint_count", len(cfg.FPPEndpoints))
 
 	// config.Config.Validate already cross-checked SHOWMESH_FPP_MQTT_HOSTS
 	// against cfg.FPPEndpoints as parsed from the ENVIRONMENT (deferred,
@@ -205,6 +202,27 @@ func Run() int {
 		// api.ConfigStore directly (see that interface's doc comment), no
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
+		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
+		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
+		// THIS PROCESS's environment — into the API package, which must
+		// never read the environment itself (see [api.Dependencies]'s own
+		// doc comment). Defect 3a (Step 7 seam A review): PUT
+		// /api/v1/config/fpp.endpoints refuses with 409 while this is
+		// true, because a write that succeeds now cannot actually survive
+		// the coordinator's own disagreement rule (configsync.go) on the
+		// very next restart — the refusal belongs at the moment of the
+		// mistake, while this coordinator is still up and the operator can
+		// still read why, not after a restart that never completes.
+		FPPEndpointsEnvVarSet: cfg.FPPEndpointsEnvSet,
+		// FPPMQTTHostIDs plumbs cfg.FPPMQTTHosts — the SHOWMESH_FPP_MQTT_HOSTS
+		// mapping — into the API package for the identical reason: defect
+		// 4 (Step 7 seam A review), PUT /api/v1/config/fpp.endpoints must
+		// refuse an endpoint list that would break the MQTT host
+		// cross-check startup already enforces fatally
+		// ([config.ValidateFPPMQTTHostIDs] above), naming the host id at
+		// write time rather than accepting 200 and refusing to boot on the
+		// next restart.
+		FPPMQTTHostIDs: cfg.FPPMQTTHosts,
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -232,6 +250,24 @@ func Run() int {
 		Logger:              logger,
 	})
 	hub = apiInst.Hub
+
+	// Step 7 seam C review defect 5: resolve any command a PRIOR process
+	// left dispatched-but-unresolved (a crash, a kill, or an abandoned
+	// client connection between dispatch and outcome) before it can sit
+	// blank forever. Backgrounded and run exactly once, here — see
+	// api.ReconcileStrandedFPPCommands's own doc comment for why this
+	// timing (before this process has served its first request) is what
+	// makes "still unresolved" mean "stranded" rather than "in flight."
+	go func() {
+		n, rerr := api.ReconcileStrandedFPPCommands(ctx, apiDeps, time.Now, logger)
+		if rerr != nil {
+			logger.Warn("failed to reconcile stranded fpp commands at startup", "error", rerr)
+			return
+		}
+		if n > 0 {
+			logger.Warn("resolved commands left stranded by a prior process", "count", n)
+		}
+	}()
 
 	// One shared *http.Client per contract/Task C's own guidance ("callers
 	// SHOULD construct one *http.Client and pass it to every fpp.New call")

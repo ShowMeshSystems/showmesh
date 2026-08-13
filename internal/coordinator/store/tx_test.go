@@ -86,13 +86,23 @@ func TestInTxRollsBackOnPanic(t *testing.T) {
 // TestStoreMethodCalledInsideInTxPanics is acceptance criterion 3: a
 // *Store method called from inside an InTx closure must panic naming the
 // method, rather than hanging forever on the single-connection pool (see
-// guardNotInTx's doc comment in tx.go). Broken deliberately first — with
-// the guard call removed from a method, this exact test would hang instead
-// of panicking, which is why guardNotInTx must be a hard panic rather than
-// a value a caller could accidentally ignore.
+// guardNotInTx's doc comment in tx.go). It bounds itself with a context
+// timeout, matching TestNestedInTxPanicsRatherThanHanging and identity's
+// TestCreateSessionInsideAuditedWriteClosurePanicsRatherThanHanging
+// immediately below it. Without guardNotInTx, calling a *Store method from
+// inside an already-open InTx blocks forever trying to acquire the same
+// single-connection pool's one connection — measured: the package binary
+// dies at go test's own -timeout watchdog (10 minutes by default in CI)
+// with a goroutine dump and no named test failure, and this is NOT the
+// last test store's suite happens to run alphabetically, so a hang here
+// prevents every test after it — including
+// TestNestedInTxPanicsRatherThanHanging itself — from ever reporting.
+// Bounding this test the same way its two siblings already are turns that
+// into a clean, named FAILURE in about 4 seconds instead.
 func TestStoreMethodCalledInsideInTxPanics(t *testing.T) {
 	st := openTestStore(t, nil)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
 
 	var panicMsg string
 	func() {
@@ -110,6 +120,9 @@ func TestStoreMethodCalledInsideInTxPanics(t *testing.T) {
 		})
 	}()
 
+	if ctx.Err() != nil {
+		t.Fatalf("Store.ListNodeDeclarations called from inside InTx hung until the test's own timeout instead of panicking (ctx.Err() = %v) — this is exactly the coordinator-wedging defect this test exists to catch", ctx.Err())
+	}
 	if panicMsg == "" {
 		t.Fatalf("Store.ListNodeDeclarations called from inside InTx did not panic")
 	}

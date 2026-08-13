@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -61,6 +62,15 @@ const (
 	// detail text never echoes the offending query string — see
 	// withIdentity in auth.go, the only caller.
 	ProblemTypeCredentialInURL = problemBaseURI + "credential-in-url"
+
+	// ProblemTypeConflict is a 409: the request itself is valid, but this
+	// coordinator's current state makes it unsafe or meaningless to act on
+	// right now. Step 7 seam B's own use is
+	// [discoveryRunConflictProblem]: a second discovery run refused while
+	// one is already in flight, never queued. Distinct from
+	// [ProblemTypeInvalidParameter] (a property of the request itself)
+	// because the identical request would succeed at a different moment.
+	ProblemTypeConflict = problemBaseURI + "conflict"
 
 	// ProblemTypeInternalError matches the literal handlers.go's
 	// writeInternalError already writes (problemBaseURI +
@@ -229,5 +239,73 @@ func methodNotAllowedProblem(detail string) v1.Problem {
 		Title:  "Method not allowed",
 		Status: http.StatusMethodNotAllowed,
 		Detail: detail,
+	}
+}
+
+// fppEndpointsEnvVarSetProblem is Step 7 seam A review defect 3a's 409:
+// [handlers.handlePutFPPEndpointsConfig]'s refusal while
+// [Dependencies.FPPEndpointsEnvVarSet] is true. Shares [ProblemTypeConflict]
+// with [discoveryRunConflictProblem]/[fppCommandReplayConflictProblem]
+// below rather than minting a second "conflict" type URI — all three are
+// the identical RFC 9457 shape this constant's own doc comment names ("the
+// request itself is valid, but this coordinator's current state makes it
+// unsafe or meaningless to act on right now"); detail is what tells them
+// apart for a caller reading the body, exactly like every other problem
+// class in this file that shares a Type/Status pair (see loginCSRFProblem
+// vs. csrfProblem). detail names the exact variable and the two-step
+// remedy (remove it, restart once) rather than a generic "conflict" — an
+// operator hitting this needs to know it is action-shaped, not a
+// permission or validation problem.
+func fppEndpointsEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: SHOWMESH_FPP_ENDPOINTS is still set",
+		Status: http.StatusConflict,
+		Detail: "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
+			"still set in its process environment (RES-008 D1): a write accepted now would disagree with that variable " +
+			"on the coordinator's very next restart and refuse to start. Remove SHOWMESH_FPP_ENDPOINTS from this " +
+			"coordinator's environment and restart it once, then retry this write.",
+	}
+}
+
+// discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
+// [handlers.handleStartDiscoveryRun] refuses a second discovery run while
+// one is already in flight on this coordinator, rather than queuing it —
+// see that handler's own doc comment for why interleaving two runs is the
+// actual failure (not merely a wasted duplicate poll): it can leave every
+// declared node in the installation reading not_seen, because whichever
+// run's RecordNodeDiscoverySeen pass lands last wins "the most recent run"
+// regardless of which one an operator actually meant to be looking at.
+func discoveryRunConflictProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Discovery run already in progress",
+		Status: http.StatusConflict,
+		Detail: "another discovery run is currently in progress on this coordinator; this request is refused outright rather than queued — wait for the in-progress run to finish and try again",
+	}
+}
+
+// fppCommandReplayConflictProblem is Step 7 seam C review defect 6's own
+// refusal: an idempotency key is scoped to the exact (action, target) it
+// was first used against — schemaV6's UNIQUE constraint on
+// commands.idempotency_key alone cannot express that, so this handler
+// checks it before ever treating a matching key as a replay. Reusing a key
+// against a DIFFERENT action or a DIFFERENT instanceId is not a replay (a
+// replay dispatches nothing and returns the ORIGINAL command's own result
+// under its OWN target); answering it as one would report a stored outcome
+// under a target that request never actually named — see
+// fppcommand_handler.go's handleFPPCommandReplay for the full accounting
+// of why that is a false statement about the system, not a convenience.
+func fppCommandReplayConflictProblem(existingID, existingAction, existingTargetID, requestedAction, requestedTargetID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used for a different command",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (action %q, instanceId %q); this request names action %q, "+
+				"instanceId %q. An idempotency key is scoped to the exact action and target it was first used against "+
+				"(api/openapi.yaml: FPPCommandRequest.idempotencyKey) — mint a fresh key for a genuinely new request "+
+				"rather than reusing one across a different action or a different FPP instance.",
+			existingID, existingAction, existingTargetID, requestedAction, requestedTargetID),
 	}
 }

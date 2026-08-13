@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -279,6 +280,39 @@ func TestPutFPPEndpointsConfigWithoutFailingAuditSucceeds(t *testing.T) {
 	if obj.CurrentRevision != 1 {
 		t.Errorf("CurrentRevision = %d, want 1", obj.CurrentRevision)
 	}
+
+	// ADR-024's rule is that a write which cannot be attributed does not
+	// proceed — which means the attribution actually landed in the
+	// transaction matters as much as the write itself. Assert the audit
+	// entry's content, not merely its presence: a garbage action string, a
+	// wrong target, or a dropped principal/form/credential/client address
+	// would all leave every other assertion in this test passing.
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Action != "config.write" || e.Target != "fpp.endpoints" {
+			continue
+		}
+		found = true
+		if e.PrincipalID != admin.ID {
+			t.Errorf("audit entry PrincipalID = %q, want %q", e.PrincipalID, admin.ID)
+		}
+		if e.PrincipalName != admin.Name {
+			t.Errorf("audit entry PrincipalName = %q, want %q", e.PrincipalName, admin.Name)
+		}
+		if e.Form != identity.FormToken {
+			t.Errorf("audit entry Form = %q, want %q (this request authenticated via bearer token)", e.Form, identity.FormToken)
+		}
+		if e.CredentialID == "" {
+			t.Errorf("audit entry CredentialID is empty, want the token's credential id recorded")
+		}
+	}
+	if !found {
+		t.Fatalf("no config.write audit entry for fpp.endpoints found among %d entries", len(entries))
+	}
 }
 
 // TestFPPEndpointsConfigRevisionsAreImmutable is acceptance criterion 6:
@@ -413,6 +447,231 @@ func TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated(t *testing.T) {
 	m2 := decodeMap(t, body2)
 	if m2["restartRequired"] != true {
 		t.Errorf("GET response restartRequired = %v, want true", m2["restartRequired"])
+	}
+}
+
+// TestPutFPPEndpointsConfigRefusesWhenEnvVarSet is Step 7 seam A review
+// defect 3a's own regression test: while [Dependencies.FPPEndpointsEnvVarSet]
+// is true, the write is refused with 409 before it can do anything —
+// reproducing (without a real coordinator process) the live sequence the
+// review found: a config write accepted while SHOWMESH_FPP_ENDPOINTS is
+// still set cannot survive this coordinator's own disagreement rule on the
+// next restart. Also proves the refusal really is BEFORE activation: no
+// revision exists afterward.
+func TestPutFPPEndpointsConfigRefusesWhenEnvVarSet(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.FPPEndpointsEnvVarSet = true
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	if m["type"] != ProblemTypeConflict {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeConflict)
+	}
+	if !strings.Contains(fmt.Sprint(m["detail"]), "SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("detail = %v, want it to name SHOWMESH_FPP_ENDPOINTS", m["detail"])
+	}
+
+	if _, err := st.GetConfigObject(context.Background(), "fpp.endpoints", "default"); err == nil {
+		t.Fatalf("GetConfigObject succeeded after a refused write — the refusal must precede activation, same as any other validation failure")
+	}
+}
+
+// TestPutFPPEndpointsConfigAllowsWriteWhenEnvVarNotSet is the control for
+// TestPutFPPEndpointsConfigRefusesWhenEnvVarSet: identical setup with
+// FPPEndpointsEnvVarSet left false (its zero value, matching every other
+// test in this file and every production coordinator once the env
+// migration guidance has been followed), proving the 409 above really
+// comes from that flag and not from unrelated scaffolding breakage.
+func TestPutFPPEndpointsConfigAllowsWriteWhenEnvVarNotSet(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (FPPEndpointsEnvVarSet is false); body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutFPPEndpointsConfigRefusesWhenMQTTHostWouldBeDropped is Step 7
+// seam A review defect 4's own regression test: SHOWMESH_FPP_MQTT_HOSTS
+// references an instance id the proposed endpoint list drops, and this
+// must be refused at write time — startup already refuses to boot on the
+// identical mismatch (config.ValidateFPPMQTTHostIDs), so accepting it here
+// with 200 would only defer the operator's mistake to a restart that
+// never completes.
+func TestPutFPPEndpointsConfigRefusesWhenMQTTHostWouldBeDropped(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	// "shed" is referenced by SHOWMESH_FPP_MQTT_HOSTS but validFPPEndpointsBody
+	// still names it (id "shed") — use a body that DROPS it instead.
+	deps.FPPMQTTHostIDs = map[string]string{"shed": "shed-fpp"}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	bodyDroppingShed := `{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", bodyDroppingShed,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "shed") {
+		t.Errorf("body = %s, want it to name the dropped instance id %q", body, "shed")
+	}
+
+	if _, err := st.GetConfigObject(context.Background(), "fpp.endpoints", "default"); err == nil {
+		t.Fatalf("GetConfigObject succeeded after a refused write — the MQTT cross-check must precede activation")
+	}
+}
+
+// TestPutFPPEndpointsConfigAllowsWriteThatKeepsMQTTHostIsControl is the
+// control for TestPutFPPEndpointsConfigRefusesWhenMQTTHostWouldBeDropped:
+// identical FPPMQTTHostIDs, but a body that KEEPS "shed" — proving the 400
+// above comes from the id actually being dropped, not from
+// FPPMQTTHostIDs being set at all.
+func TestPutFPPEndpointsConfigAllowsWriteThatKeepsMQTTHost(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.FPPMQTTHostIDs = map[string]string{"shed": "shed-fpp"}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// validFPPEndpointsBody names both "player-01" and "shed".
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the body keeps the id FPPMQTTHostIDs references); body: %s", resp.StatusCode, body)
+	}
+}
+
+// --- Defect 1: absent/null/typo'd "endpoints" ---
+
+// TestPutFPPEndpointsConfigRejectsAbsentEndpointsKey is Step 7 seam A
+// review defect 1's own regression test, the headline finding: a PUT body
+// with NO "endpoints" key at all (`{}`) must be a 400 naming the missing
+// field, never a 200 that silently wipes every configured endpoint. I
+// reproduced the wipe live against a running coordinator before this fix.
+func TestPutFPPEndpointsConfigRejectsAbsentEndpointsKey(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// Seed an existing revision so a silent wipe would be visible as a
+	// state change, not merely "still nothing configured".
+	seedReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp, body := doRawRequest(t, api.Handler, seedReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed PUT: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", `{}`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (absent \"endpoints\" key); body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "endpoints") {
+		t.Errorf("body = %s, want it to name the missing \"endpoints\" field", body)
+	}
+
+	// The seeded revision must survive untouched: still revision 1 active,
+	// still one revision total.
+	obj, err := st.GetConfigObject(context.Background(), "fpp.endpoints", "default")
+	if err != nil {
+		t.Fatalf("GetConfigObject after a rejected write: %v", err)
+	}
+	if obj.CurrentRevision != 1 {
+		t.Errorf("CurrentRevision = %d, want 1 (unchanged by the rejected write)", obj.CurrentRevision)
+	}
+}
+
+// TestPutFPPEndpointsConfigRejectsNullEndpoints is defect 1's second
+// finding: {"endpoints":null} decodes into a nil slice with NO error under
+// a naive `struct{ Endpoints []T "json:\"endpoints\"" }` decode — the
+// exact "a JSON null is not an absent key" defect class CLAUDE.md names —
+// so this must ALSO be a 400, indistinguishable in effect from the absent
+// case above.
+func TestPutFPPEndpointsConfigRejectsNullEndpoints(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", `{"endpoints":null}`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (null \"endpoints\"); body: %s", resp.StatusCode, body)
+	}
+
+	if _, err := st.GetConfigObject(context.Background(), "fpp.endpoints", "default"); err == nil {
+		t.Fatalf("GetConfigObject succeeded after a null-endpoints write — must never create a zero-endpoint revision from null")
+	}
+}
+
+// TestPutFPPEndpointsConfigRejectsUnknownTopLevelField is defect 1's third
+// finding: a typo'd key ("endpoint" instead of "endpoints") must be a 400
+// naming the unrecognized field, not a silent no-op that also happens to
+// wipe the list (a struct-based decode simply drops a field it does not
+// recognize).
+func TestPutFPPEndpointsConfigRejectsUnknownTopLevelField(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	typoBody := `{"endpoint":[{"id":"player-01","url":"http://10.0.1.20"}]}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", typoBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (unknown top-level field \"endpoint\"); body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "endpoint") {
+		t.Errorf("body = %s, want it to name the unrecognized field", body)
+	}
+}
+
+// TestPutFPPEndpointsConfigAcceptsExplicitEmptyEndpoints is defect 1's
+// deliberate positive case: "endpoints": [] — PRESENT but empty — is the
+// one way to legitimately configure zero endpoints (an operator
+// decommissioning their last FPP), and must be accepted rather than
+// treated the same as the absent/null cases above.
+func TestPutFPPEndpointsConfigAcceptsExplicitEmptyEndpoints(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", `{"endpoints":[]}`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an explicit empty array deliberately configures zero endpoints); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	if m["revision"] != float64(1) {
+		t.Errorf("revision = %v, want 1", m["revision"])
 	}
 }
 

@@ -64,4 +64,19 @@ describe('DeclarationBadge', () => {
     render(<DeclarationBadge declared={true} discoveryState="unknown" />)
     expect(screen.getByText(/unknown/i)).toBeInTheDocument()
   })
+
+  // ADR-020: within a major version the contract is additive-only and
+  // clients must tolerate an unknown value, never assume the union
+  // TypeScript sees today is exhaustive at runtime. Before this test's
+  // fix, `DISCOVERY_STATE[discoveryState]` indexed to `undefined` for any
+  // value outside the four known ones, and the immediate `spec.tone`
+  // dereference threw -- which, unhandled in a render pass, unmounts the
+  // whole route, not just this one badge. Cast bypasses the compile-time
+  // union deliberately, the same way a real coordinator response would at
+  // runtime.
+  it('renders a fallback rather than crashing on an unrecognized discoveryState', () => {
+    const unrecognized = 'archived' as unknown as Parameters<typeof DeclarationBadge>[0]['discoveryState']
+    expect(() => render(<DeclarationBadge declared={true} discoveryState={unrecognized} />)).not.toThrow()
+    expect(screen.getByText(/unrecognized/i)).toBeInTheDocument()
+  })
 })

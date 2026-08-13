@@ -257,8 +257,48 @@ func probeBroker(rawURL string, timeout time.Duration) bool {
 func requireBroker(t *testing.T) {
 	t.Helper()
 	if !brokerReachable {
-		t.Skipf("no MQTT broker reachable at %s (set %s, or run `make test-integration`)", brokerURL, envBrokerURL)
+		skipOrFatalDependency(t, "no MQTT broker reachable at %s (set %s, or run `make test-integration`)", brokerURL, envBrokerURL)
 	}
+}
+
+// envRequireTestDeps, when set to a truthy value, turns every dependency
+// skip behind [skipOrFatalDependency] into a hard test failure instead of a
+// skip. docs/build/LESSONS.md: "make test-integration-fpp had been
+// silently skipping its main test on every single run since Step 6 landed
+// allow_anonymous false ... a skip *looks* like a considered decision, and
+// a dependency guard is exactly the kind of considered decision a
+// reviewer nods past." Every scripts/test-integration*.sh sets this before
+// invoking `go test`, so a missing dependency under one of the `make
+// test-integration*` targets — whose entire job is to supply that
+// dependency — fails loudly instead of reporting a quiet, green skip. Run
+// by hand with this unset, the skip stays the convenient, laptop-friendly
+// default the Task E spec asks for.
+const envRequireTestDeps = "SHOWMESH_REQUIRE_TEST_DEPS"
+
+// requireTestDepsSet reports whether envRequireTestDeps is set to a truthy
+// value in this process's environment.
+func requireTestDepsSet() bool {
+	switch strings.ToLower(os.Getenv(envRequireTestDeps)) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// skipOrFatalDependency is what every dependency guard in this package
+// (and, by the identical env var name, internal/coordinator/collector/fpp's
+// own integration_test.go) calls instead of t.Skipf directly: a skip when
+// envRequireTestDeps is unset (the convenient, unprepared-laptop default),
+// a hard t.Fatalf when it is set (a harness whose whole job was to supply
+// this exact dependency, and did not).
+func skipOrFatalDependency(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if requireTestDepsSet() {
+		t.Fatalf(format, args...)
+		return
+	}
+	t.Skipf(format, args...)
 }
 
 // moduleRoot walks up from this source file's own directory to find the

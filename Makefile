@@ -23,7 +23,7 @@ build:
 
 .PHONY: test
 test:
-	go test ./...
+	go test -count=1 ./...
 
 # test-integration proves the Step 2 acceptance criteria that cannot be
 # proven against a fake: an agent appearing in coordinator inventory, an

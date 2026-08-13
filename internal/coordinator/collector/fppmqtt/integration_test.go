@@ -32,6 +32,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,8 @@ func requireTestBroker(t *testing.T) testBroker {
 	t.Helper()
 	broker := os.Getenv(envTestMQTTBroker)
 	if broker == "" {
-		t.Skipf("%s not set; skipping this package's real-broker integration suite (see this file's doc comment for how to run it)", envTestMQTTBroker)
+		skipOrFatalDependency(t, "%s not set; skipping this package's real-broker integration suite (see this file's doc comment for how to run it)", envTestMQTTBroker)
+		return testBroker{}
 	}
 	credentials := testBroker{
 		url:               broker,
@@ -78,9 +80,43 @@ func requireTestBroker(t *testing.T) testBroker {
 		publisherPassword: os.Getenv(envTestPublisherPassword),
 	}
 	if credentials.collectorUsername == "" || credentials.collectorPassword == "" || credentials.publisherUsername == "" || credentials.publisherPassword == "" {
-		t.Skipf("authenticated FPP MQTT test credentials are incomplete; run scripts/test-integration-fppmqtt.sh (or set %s, %s, %s, and %s)", envTestCollectorUsername, envTestCollectorPassword, envTestPublisherUsername, envTestPublisherPassword)
+		skipOrFatalDependency(t, "authenticated FPP MQTT test credentials are incomplete; run scripts/test-integration-fppmqtt.sh (or set %s, %s, %s, and %s)", envTestCollectorUsername, envTestCollectorPassword, envTestPublisherUsername, envTestPublisherPassword)
+		return testBroker{}
 	}
 	return credentials
+}
+
+// envRequireTestDeps, when set to a truthy value, turns [skipOrFatalDependency]
+// into a hard test failure rather than a skip. Same env var name (and
+// intent) as test/integration's and internal/coordinator/collector/fpp's
+// own copies — a separate package needs its own copy of this small helper,
+// but all three must agree on the variable scripts/test-integration*.sh
+// sets. See harness_test.go's fuller doc comment (docs/build/LESSONS.md:
+// "a test that guards on a dependency must fail, not skip, when a harness
+// whose whole job is to supply that dependency is what invoked it").
+const envRequireTestDeps = "SHOWMESH_REQUIRE_TEST_DEPS"
+
+func requireTestDepsSet() bool {
+	switch strings.ToLower(os.Getenv(envRequireTestDeps)) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// skipOrFatalDependency is requireTestBroker's own dependency guard: a
+// skip when envRequireTestDeps is unset (the convenient, unprepared-laptop
+// default), a hard t.Fatalf when it is set (a `make test-integration-fppmqtt`
+// invocation, whose whole job was to supply this exact broker and these
+// credentials, did not).
+func skipOrFatalDependency(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if requireTestDepsSet() {
+		t.Fatalf(format, args...)
+		return
+	}
+	t.Skipf(format, args...)
 }
 
 // testPublisher is a throwaway MQTT client this suite uses to play the

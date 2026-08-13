@@ -42,6 +42,15 @@ func (s *svc) WriteAudit(ctx context.Context, entry AuditEntry) error {
 	}
 
 	_, err := s.st.AppendAuditEntry(ctx, store.AuditRecord{
+		// RecordedAt: entry.Timestamp, honored by store.AppendAuditEntry
+		// only when non-zero (falling back to the store's own clock
+		// otherwise) — see that field's doc comment. Every production
+		// caller in this codebase already sets AuditEntry.Timestamp (to
+		// h.now() or an equivalent request-scoped clock read), so this was
+		// previously a field callers set that had no effect: the store
+		// silently re-stamped its own "now" regardless. Step 7 seam A
+		// review defect 5.
+		RecordedAt:     entry.Timestamp,
 		PrincipalID:    entry.PrincipalID,
 		PrincipalName:  entry.PrincipalName,
 		Form:           string(entry.Form),
@@ -96,6 +105,10 @@ func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx 
 		}
 
 		if _, aerr := tx.AppendAuditEntry(ctx, store.AuditRecord{
+			// See WriteAudit's identical field above for why this is now
+			// passed through rather than dropped (Step 7 seam A review
+			// defect 5).
+			RecordedAt:     entry.Timestamp,
 			PrincipalID:    entry.PrincipalID,
 			PrincipalName:  entry.PrincipalName,
 			Form:           string(entry.Form),

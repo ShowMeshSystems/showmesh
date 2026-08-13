@@ -88,7 +88,20 @@ export function NodesList() {
       <h2 className="panel__title">Nodes</h2>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-        <ScopedButton requiredScope="config:write" onClick={() => void handleRunDiscovery()}>
+        {/* BUILD-PLAN Step 7 seam B review defect 7: a double-click here
+            used to start two overlapping discovery runs, which can leave
+            every declared node in the installation reading not_seen (see
+            api/discovery.go's handleStartDiscoveryRun doc comment for the
+            interleaving failure this, and the server's own serialization,
+            both guard against). `busy` disables the control the instant
+            the first click's request is in flight, distinctly from the
+            requiredScope-denied path ScopedButton already handles. */}
+        <ScopedButton
+          requiredScope="config:write"
+          onClick={() => void handleRunDiscovery()}
+          busy={discovering}
+          busyReason="A discovery run is already in progress."
+        >
           {discovering ? 'Running discovery…' : 'Run discovery'}
         </ScopedButton>
         <span className="text-muted">
@@ -117,7 +130,12 @@ export function NodesList() {
                   <span>
                     {p.nodeId} <span className="text-muted">({p.source})</span>
                   </span>
-                  <ScopedButton requiredScope="config:write" onClick={() => void handleDeclare(p.nodeId)}>
+                  <ScopedButton
+                    requiredScope="config:write"
+                    onClick={() => void handleDeclare(p.nodeId)}
+                    busy={busyId === p.nodeId}
+                    busyReason="Already declaring this node."
+                  >
                     {busyId === p.nodeId ? 'Declaring…' : 'Declare'}
                   </ScopedButton>
                 </li>
@@ -159,6 +177,8 @@ export function NodesList() {
                     requiredScope="config:write"
                     className="button-danger"
                     onClick={() => void handleUndeclare(node.nodeId)}
+                    busy={busyId === node.nodeId}
+                    busyReason="Already removing this declaration."
                   >
                     {busyId === node.nodeId ? 'Removing…' : 'Remove declaration'}
                   </ScopedButton>

@@ -71,7 +71,9 @@
         "discoveryState": "not_applicable",
         "discoveryReason": null,
         "lastDiscoveryRunId": null,
-        "lastDiscoveredAt": null
+        "lastDiscoveredAt": null,
+        "notSeenAsOfRunId": null,
+        "notSeenAsOfRunFinishedAt": null
       }
     },
     {
@@ -136,7 +138,9 @@
         "discoveryState": "not_applicable",
         "discoveryReason": null,
         "lastDiscoveryRunId": null,
-        "lastDiscoveredAt": null
+        "lastDiscoveredAt": null,
+        "notSeenAsOfRunId": null,
+        "notSeenAsOfRunFinishedAt": null
       }
     }
   ]

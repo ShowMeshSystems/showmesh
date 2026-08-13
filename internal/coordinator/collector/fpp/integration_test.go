@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,13 +57,47 @@ func requireLiveFPP(t *testing.T) string {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Skipf("no FPP reachable at %s (%v); start bench/fpp-multisync (`make test-integration-fpp` does this) or set %s — skipping", url, err, envTestFPPURL)
+		skipOrFatalDependency(t, "no FPP reachable at %s (%v); start bench/fpp-multisync (`make test-integration-fpp` does this) or set %s — skipping", url, err, envTestFPPURL)
+		return ""
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		t.Skipf("FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
+		skipOrFatalDependency(t, "FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
+		return ""
 	}
 	return url
+}
+
+// envRequireTestDeps, when set to a truthy value, turns [skipOrFatalDependency]
+// into a hard test failure rather than a skip. Same env var name (and
+// intent) as test/integration's own copy in harness_test.go — a separate
+// package needs its own copy of this small helper, but both must agree on
+// the variable scripts/test-integration*.sh sets. See that file's fuller
+// doc comment (docs/build/LESSONS.md: "a test that guards on a dependency
+// must fail, not skip, when a harness whose whole job is to supply that
+// dependency is what invoked it").
+const envRequireTestDeps = "SHOWMESH_REQUIRE_TEST_DEPS"
+
+func requireTestDepsSet() bool {
+	switch strings.ToLower(os.Getenv(envRequireTestDeps)) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// skipOrFatalDependency is requireLiveFPP's own dependency guard: a skip
+// when envRequireTestDeps is unset (the convenient, unprepared-laptop
+// default), a hard t.Fatalf when it is set (a `make test-integration-fpp`
+// invocation, whose whole job was to supply this exact FPP, did not).
+func skipOrFatalDependency(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if requireTestDepsSet() {
+		t.Fatalf(format, args...)
+		return
+	}
+	t.Skipf(format, args...)
 }
 
 // mustFindSignal is findSignal without the "exactly once" requirement

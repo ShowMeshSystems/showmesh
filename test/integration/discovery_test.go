@@ -141,3 +141,88 @@ func TestDiscoveryNeverDeletesADeclaredNodeAcrossARealAgentStop(t *testing.T) {
 		t.Errorf("declaration.discoveryState = %q, want \"not_seen\" once the agent is offline and a complete run did not observe it", node2.Declaration.DiscoveryState)
 	}
 }
+
+// TestDeclareAfterDiscoveryRendersPresentImmediatelyAcrossARealAgent is
+// this file's own review-fix companion to
+// TestDiscoveryNeverDeletesADeclaredNodeAcrossARealAgentStop above, and
+// the reason DEFECT 1 survived review long enough to reach this seam's
+// own report: every test in this file declared FIRST and ran discovery
+// SECOND, which is the reverse of the order the UI and CLI actually push
+// an operator toward (run discovery, THEN click Declare on a proposal).
+// This test drives that real ordering against a real coordinator and a
+// real agent subprocess — internal/coordinator/api's own
+// TestDeclareAfterDiscoveryRendersPresentImmediately proves the identical
+// rule at the handler level against a fake inventory; this is where it is
+// proven against a real MQTT-fed inventory.Manager and the real HTTP
+// surface, matching this file's own stated reason for existing.
+//
+// Confirmed to fail before DEFECT 1's fix, by the same mechanism as the
+// handler-level test: with handlePromoteNode's discoveryObservedNow
+// re-check removed, this test's discoveryState assertion below observes
+// "not_seen" (or "unknown") immediately after declaring a node discovery
+// had JUST proposed, rather than "present".
+func TestDeclareAfterDiscoveryRendersPresentImmediatelyAcrossARealAgent(t *testing.T) {
+	requireBroker(t)
+
+	dataDir := t.TempDir()
+	token := createAdminAndIssueToken(t, dataDir, "admin-1", "a-strong-password-1")
+	coord := startCoordinatorWithConfig(t, coordinatorConfig{
+		dataDir: dataDir, clientID: "coord-" + uniqueSuffix(),
+		bearerToken: token,
+	})
+
+	nodeID := "agent-" + uniqueSuffix()
+	// startAgent registers its own t.Cleanup teardown; no explicit kill is
+	// needed here since this test never stops the agent itself.
+	_ = startAgent(t, agentConfig{nodeID: nodeID})
+	waitOnline(t, coord, nodeID)
+
+	// Run discovery FIRST — proposing nodeID, since nothing has declared
+	// it yet.
+	status, body := postRaw(t, coord, "/api/v1/discovery/runs", nil)
+	if status != http.StatusOK {
+		t.Fatalf("discovery run status = %d, want 200; body: %s", status, body)
+	}
+	var runResp v1.DiscoveryRunResponse
+	if err := json.Unmarshal(body, &runResp); err != nil {
+		t.Fatalf("decode discovery run response: %v; body: %s", err, body)
+	}
+	if !runResp.Run.Complete {
+		t.Fatalf("discovery run did not complete: %+v", runResp.Run)
+	}
+	var proposed bool
+	for _, p := range runResp.Proposals {
+		if p.NodeID == nodeID {
+			proposed = true
+		}
+	}
+	if !proposed {
+		t.Fatalf("discovery did not propose %s (a live, undeclared agent): %+v", nodeID, runResp.Proposals)
+	}
+
+	// THEN declare it — the ordering the UI's "Run discovery" panel and
+	// `showmeshctl discover`/`showmeshctl declare` actually drive.
+	declStatus, declBody := postRaw(t, coord, "/api/v1/nodes/"+nodeID+"/declaration", map[string]any{"label": "integration test node"})
+	if declStatus != http.StatusOK {
+		t.Fatalf("declare status = %d, want 200; body: %s", declStatus, declBody)
+	}
+	var declResp v1.NodeDeclarationResponse
+	if err := json.Unmarshal(declBody, &declResp); err != nil {
+		t.Fatalf("decode declare response: %v; body: %s", err, declBody)
+	}
+	if declResp.Declaration.DiscoveryState != "present" {
+		t.Fatalf(`declare response declaration.discoveryState = %q immediately after declaring a node discovery JUST proposed, want "present" `+
+			`(a node this coordinator knows about SOLELY because discovery just proposed it must never render "not seen by the most recent discovery run")`,
+			declResp.Declaration.DiscoveryState)
+	}
+
+	// And the ordinary node listing agrees, not only the declare response
+	// itself.
+	node, ok := coord.findNode(t, nodeID)
+	if !ok {
+		t.Fatalf("node %s not found after declaring", nodeID)
+	}
+	if node.Declaration.DiscoveryState != "present" {
+		t.Errorf("GET node declaration.discoveryState = %q, want \"present\"", node.Declaration.DiscoveryState)
+	}
+}

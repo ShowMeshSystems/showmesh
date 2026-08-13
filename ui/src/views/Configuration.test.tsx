@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -166,6 +166,77 @@ describe('Configuration', () => {
     // which must re-fetch the (now newly active) configuration rather
     // than leaving the page showing what it locally guesses happened.
     await waitFor(() => expect(getFPPEndpointsConfig).toHaveBeenCalledTimes(2))
+  })
+
+  // Step 7 seam A review defect 8: two fast clicks on Save must create at
+  // most one revision. A bare `fireEvent.click(button)` called twice in a
+  // row does NOT reproduce the race — Testing Library wraps every single
+  // `fireEvent` call in its own `act()`, which flushes React's state
+  // update synchronously before the next `fireEvent.click` runs, so by
+  // the second call `saving` has already committed `true` and even the
+  // OLD, buggy `if (saving) return` guard (react STATE, not a ref) would
+  // have caught it — proven below by first trying exactly that and
+  // watching it pass for the wrong reason. Both clicks are wrapped in ONE
+  // outer `act()` instead, which is what actually holds React's update
+  // un-flushed across both dispatches — the real shape of two clicks
+  // landing before the first render commits, which is exactly the
+  // scenario a `saving`-state-only guard cannot see (both onClick
+  // closures read `saving` as it stood at the render that created them,
+  // `false` for both) but the synchronous `savingRef` guard can.
+  it('does not double-submit when clicked twice before the first request resolves', async () => {
+    getFPPEndpointsConfig.mockResolvedValue(activeConfig)
+    getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
+    let resolvePut: (value: typeof activeConfig) => void = () => {}
+    putFPPEndpointsConfig.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePut = resolve
+        }),
+    )
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('player-01')
+    const button = screen.getByRole('button', { name: /save configuration/i })
+
+    act(() => {
+      fireEvent.click(button)
+      fireEvent.click(button)
+    })
+
+    resolvePut({ ...activeConfig, revision: 2 })
+    await waitFor(() => expect(getFPPEndpointsConfig).toHaveBeenCalledTimes(2))
+
+    expect(putFPPEndpointsConfig).toHaveBeenCalledTimes(1)
+  })
+
+  // Step 7 seam A review defect 3c: the 409 SHOWMESH_FPP_ENDPOINTS-still-set
+  // refusal must render as an actionable message, not a generic failure —
+  // ADR-024 decision 12's "stated reason, never a blank or a bare error
+  // code" pattern applied to a refused write rather than a disabled
+  // control.
+  it('renders the coordinator’s 409 refusal (SHOWMESH_FPP_ENDPOINTS still set) as an actionable message', async () => {
+    getFPPEndpointsConfig.mockResolvedValue(activeConfig)
+    getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
+    putFPPEndpointsConfig.mockRejectedValue(
+      new ApiError(
+        "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
+          'still set in its process environment (RES-008 D1); remove it and restart this coordinator once, then retry this write.',
+        409,
+        'https://showmesh.dev/problems/conflict',
+      ),
+    )
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('player-01')
+    await user.click(screen.getByRole('button', { name: /save configuration/i }))
+
+    // The static page description also mentions SHOWMESH_FPP_ENDPOINTS
+    // (in a <code> tag), so this scopes to the alert specifically rather
+    // than asserting the substring appears SOMEWHERE on the page.
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/SHOWMESH_FPP_ENDPOINTS/)
+    expect(alert).toHaveTextContent(/remove it and restart/i)
   })
 
   it('renders the coordinator’s rejection reason on a failed save, without silently succeeding', async () => {

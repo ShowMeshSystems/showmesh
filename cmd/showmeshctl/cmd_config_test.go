@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,6 +121,109 @@ func TestCmdConfigSetPutsTheFileContents(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "revision 1 is now active") {
 		t.Errorf("stderr = %q, want confirmation of the new active revision and the restart note", stderr.String())
+	}
+}
+
+// TestCmdConfigSetAcceptsAFullConfigGetResponse is Step 7 seam A review
+// defect 2's own regression test: feed `config set` the EXACT bytes
+// `config get --output json` prints (testFPPEndpointsConfigResponse — the
+// endpoint nested three levels down, under "payload"), and prove the PUT
+// body it sends still carries that endpoint. Before this fix, `config
+// set` decoded this shape directly as {"endpoints":[...]}, found no
+// top-level "endpoints" key, silently kept Endpoints nil, and PUT a body
+// that wiped every configured instance — reproduced against a live
+// coordinator, which then refused to start on its next restart.
+func TestCmdConfigSetAcceptsAFullConfigGetResponse(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "get-output.json")
+	// The EXACT shape `config get --output json` emits — not a hand-typed
+	// approximation of it.
+	if err := os.WriteFile(file, []byte(testFPPEndpointsConfigResponse), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var sent configFPPEndpointsPayload
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("PUT body did not decode as {\"endpoints\":[...]}: %v; body=%s", err, gotBody)
+	}
+	if len(sent.Endpoints) != 1 || sent.Endpoints[0].ID != "player-01" || sent.Endpoints[0].URL != "http://10.0.1.20" {
+		t.Fatalf("PUT body endpoints = %+v, want the one endpoint from the config get response — the round trip must survive",
+			sent.Endpoints)
+	}
+}
+
+// TestCmdConfigSetRejectsBodyWithNoEndpointsKeyAnywhere is Step 7 seam A
+// review defect 2's other half: this CLI must refuse, client-side, any
+// input where it cannot find an "endpoints" key at all (neither bare nor
+// under "payload") — it must never send a request with a nil/absent
+// endpoints list. The server URL is deliberately unreachable: a correct
+// fix never issues the request at all.
+func TestCmdConfigSetRejectsBodyWithNoEndpointsKeyAnywhere(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "no-endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"foo":"bar"}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", "http://unused.invalid"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want exitUsage (%d); stderr=%s", code, exitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "endpoints") {
+		t.Errorf("stderr = %q, want it to name the missing \"endpoints\" key", stderr.String())
+	}
+}
+
+// TestCmdConfigSetRejectsNullEndpoints proves the identical "a JSON null
+// is not an absent key" rule the coordinator's own decode enforces is ALSO
+// enforced client-side: {"endpoints":null} must never reach the wire as a
+// PUT body. The server URL is deliberately unreachable: a correct fix
+// never issues the request at all.
+func TestCmdConfigSetRejectsNullEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "null-endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":null}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", "http://unused.invalid"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want exitUsage (%d); stderr=%s", code, exitUsage, stderr.String())
+	}
+}
+
+// TestCmdConfigSetRejectsPayloadWithNoEndpointsKey mirrors
+// TestCmdConfigSetRejectsBodyWithNoEndpointsKeyAnywhere for the
+// "config get"-shaped path: a "payload" object present but with no
+// "endpoints" key inside it must not silently become an empty list.
+func TestCmdConfigSetRejectsPayloadWithNoEndpointsKey(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "payload-no-endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"serverTime":"2026-08-12T00:00:00Z","kind":"fpp.endpoints","payload":{}}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", "http://unused.invalid"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want exitUsage (%d); stderr=%s", code, exitUsage, stderr.String())
 	}
 }
 

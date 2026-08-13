@@ -251,6 +251,14 @@ type CommandStore interface {
 	// state, result, outcome) — never the audit trail, which is a
 	// separate, append-only concern (identity.Service.WriteAudit).
 	UpdateCommandOutcome(ctx context.Context, id string, upd store.CommandOutcomeUpdate) error
+
+	// ListUnresolvedCommands returns every command whose lifecycle never
+	// reached resolution (resolved_at IS NULL) — Step 7 seam C review
+	// defect 5's startup reconciliation sweep
+	// ([ReconcileStrandedFPPCommands]) is this method's only caller; see
+	// its own doc comment for why calling it at any time other than
+	// coordinator startup would be unsound.
+	ListUnresolvedCommands(ctx context.Context) ([]store.CommandRecord, error)
 }
 
 // DeclarationStore is what this package needs from seam 0's

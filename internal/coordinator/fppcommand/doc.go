@@ -14,7 +14,7 @@
 // and hoping nothing changes underneath that reading. With two packages,
 // "the collector's read-only guarantee is unaffected by this seam's
 // existence" is checkable mechanically — see collector/fpp's own
-// TestCollectorPackageNeverImportsFPPCommand — and stays checkable after
+// TestPackageNeverImportsFPPCommand — and stays checkable after
 // this package grows a second command.
 //
 // This package holds no store access, no identity/authorization

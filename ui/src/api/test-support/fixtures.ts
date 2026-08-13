@@ -49,6 +49,8 @@ export function makeNodeDeclaration(overrides: Partial<NodeDeclaration> = {}): N
     discoveryReason: null,
     lastDiscoveryRunId: null,
     lastDiscoveredAt: null,
+    notSeenAsOfRunId: null,
+    notSeenAsOfRunFinishedAt: null,
     ...overrides,
   }
 }

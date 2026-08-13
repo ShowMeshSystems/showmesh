@@ -125,11 +125,49 @@ func TestCmdDeclareSendsLabelAndNotes(t *testing.T) {
 	if gotPath != "/api/v1/nodes/shed-01/declaration" {
 		t.Errorf("path = %q, want /api/v1/nodes/shed-01/declaration", gotPath)
 	}
-	if gotBody.Label != "Shed controller" || gotBody.Notes != "north yard" {
+	if gotBody.Label == nil || *gotBody.Label != "Shed controller" || gotBody.Notes == nil || *gotBody.Notes != "north yard" {
 		t.Errorf("request body = %+v, want label/notes forwarded", gotBody)
 	}
 	if !strings.Contains(stdout.String(), "Shed controller") {
 		t.Errorf("output missing declared label:\n%s", stdout.String())
+	}
+}
+
+// TestCmdDeclareWithNoFlagsOmitsLabelAndNotesFromTheRequest is DEFECT 6's
+// own regression coverage: before the fix, cmdDeclare sent
+// {"label":"","notes":""} on EVERY invocation regardless of whether
+// --label/--notes were passed, so a bare `showmeshctl declare shed-01`
+// after an earlier `showmeshctl declare --label "Shed controller"
+// shed-01` silently erased the label. Broken deliberately to confirm this
+// fails first: reverting cmdDeclare's fs.Visit gating (declareNodeRequest{Label:
+// &label, Notes: &notes} unconditionally) makes gotBody.Label/Notes both
+// non-nil pointers to "" here, and this test catches that immediately.
+func TestCmdDeclareWithNoFlagsOmitsLabelAndNotesFromTheRequest(t *testing.T) {
+	var gotBody declareNodeRequest
+	var gotBodyRaw []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBodyRaw, _ = io.ReadAll(r.Body)
+		_ = json.Unmarshal(gotBodyRaw, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","declaration":{
+			"declared":true,"label":"Shed controller","notes":"north yard","declaredAt":"2026-08-10T21:00:00Z",
+			"declaredByPrincipalId":"p1","declaredByPrincipalName":"admin-1",
+			"discoveryState":"unknown","discoveryReason":"no discovery run history is available",
+			"lastDiscoveryRunId":null,"lastDiscoveredAt":null,
+			"notSeenAsOfRunId":null,"notSeenAsOfRunFinishedAt":null}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdDeclare([]string{"--server", ts.URL, "--token", "t", "shed-01"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotBody.Label != nil || gotBody.Notes != nil {
+		t.Errorf("request body = %+v (raw %s), want both label and notes ABSENT (nil) when neither flag was passed",
+			gotBody, gotBodyRaw)
 	}
 }
 

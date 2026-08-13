@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -80,8 +81,10 @@ func cmdDeclare(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl declare [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nPromote a node to declared, or update its label/notes")
 		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/nodes/{nodeId}/declaration). Requires config:write (ADR-024")
-		_, _ = fmt.Fprintln(stderr, "decision 4). Idempotent: declaring an already-declared node updates its")
-		_, _ = fmt.Fprintln(stderr, "label/notes without disturbing who first declared it or when.")
+		_, _ = fmt.Fprintln(stderr, "decision 4). Idempotent: declaring an already-declared node with NEITHER")
+		_, _ = fmt.Fprintln(stderr, "flag set leaves its label/notes exactly as they already were — only a flag")
+		_, _ = fmt.Fprintln(stderr, "you actually pass changes anything, including setting one to empty with")
+		_, _ = fmt.Fprintln(stderr, "-label='' — and never disturbs who first declared it or when.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -97,6 +100,24 @@ func cmdDeclare(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	}
 	nodeID := rest[0]
 
+	// DEFECT 6: only a flag the operator ACTUALLY passed on this
+	// invocation becomes part of the request body. fs.Visit calls back
+	// only for flags set explicitly (the standard library's own
+	// documented distinction from fs.VisitAll, which would visit every
+	// flag regardless), so a bare `showmeshctl declare roof-01` after an
+	// earlier `showmeshctl declare -label "Roof controller" roof-01` sends
+	// `{}` — leaving the previously set label untouched — rather than the
+	// `{"label":"","notes":""}` that used to erase it unconditionally.
+	var body declareNodeRequest
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "label":
+			body.Label = &label
+		case "notes":
+			body.Notes = &notes
+		}
+	})
+
 	c, err := newRequestClient(g)
 	if err != nil {
 		return reportError(stderr, "declare", err)
@@ -106,7 +127,6 @@ func cmdDeclare(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	defer cancel()
 
 	var resp nodeDeclarationResponse
-	body := declareNodeRequest{Label: label, Notes: notes}
 	if err := c.postJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/declaration", body, &resp); err != nil {
 		return reportError(stderr, "declare", err)
 	}

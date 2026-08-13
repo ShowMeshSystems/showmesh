@@ -92,7 +92,11 @@ What replaced `SHOWMESH_API_TOKEN` is not another shared secret. [ADR-024](../do
 
 *This paragraph is narrower than it used to be, and on purpose.* Earlier revisions of this document also named the bundled Mosquitto's anonymous access as "the larger exposure of the two". That is no longer accurate: the bundled broker now requires authentication and enforces an access-control list ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 10) — see "MQTT broker credentials" above for what that means and what it does not close (a compromised *coordinator* broker credential can still forge a command to any node; that residual exposure is recorded there, not solved here).
 
-There are no write operations at all in this release. Nothing reachable through this API can change a device, a playlist, or a show.
+**This release has write operations, and until Step 7 it did not.** Three of them: the FPP endpoint configuration surface (`config:write`), node discovery and declaration (`config:write`), and one native FPP lifecycle command, Stop Now (`fpp:command`). The first two change only this coordinator's own store. The third leaves this machine: it dispatches FPP's own command to a configured FPP host and then waits for evidence that observed state actually moved, because [ADR-003](../docs/decisions/ADR-003-desired-and-observed-state.md) does not accept an HTTP `200` as success.
+
+Every one of them requires an authenticated principal holding the named scope. Reads stay open by default ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md) decision 2), so a credential problem never costs you sight of the show; set `SHOWMESH_API_CLOSE_READS=true` to require a principal for reads too.
+
+Two things follow that an operator should know before pointing this at a display. A coordinator restart is required before an endpoint configuration change takes effect. This coordinator does not hot-reload configuration, and the API response and the UI both say so at the point of use. And ShowMesh still never becomes a second scheduler ([ADR-001](../docs/decisions/ADR-001-fpp-is-authoritative.md)): there is exactly one command here, it is FPP's own, and nothing in this release starts, schedules, or sequences anything.
 
 ## The Operator UI
 

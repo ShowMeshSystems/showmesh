@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   getFPPEndpointsConfig,
@@ -52,6 +52,17 @@ export function Configuration() {
   const [rows, setRows] = useState<ConfigFPPEndpoint[]>([])
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Step 7 seam A review defect 8: `saving` (React state) is what the
+  // BUTTON renders from, but it is the wrong thing to GUARD on. Two fast
+  // clicks each invoke handleSave from a render closure that captured
+  // `saving` as it stood at THAT render — if both clicks land before
+  // React has committed the first `setSaving(true)`, both closures see
+  // `saving === false` and both proceed, creating two revisions from one
+  // intended save. `savingRef` is synchronous and shared across every
+  // closure immediately (no render in between required), so the second
+  // call's guard check happens after the first call's guard-and-set,
+  // regardless of React's render/commit timing.
+  const savingRef = useRef(false)
   // A generation counter, not a boolean: "load again" needs to fire once
   // per Save success, and a plain `useEffect` dependency on `scopeGate.allowed`
   // alone would never re-run after the first successful fetch (the
@@ -116,7 +127,11 @@ export function Configuration() {
   }
 
   async function handleSave(): Promise<void> {
-    if (saving) return
+    // Synchronous, shared-across-closures guard — see savingRef's own
+    // comment for why `saving` (state) alone let two fast clicks both pass
+    // this check and both PUT.
+    if (savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     setSaveError(null)
     try {
@@ -126,12 +141,18 @@ export function Configuration() {
       // authority on what is acceptable, and this view renders whatever
       // it says via describeApiError below — it never second-guesses a
       // coordinator rejection with a different, client-invented message.
+      // This also covers the 409 SHOWMESH_FPP_ENDPOINTS-still-set refusal
+      // (Step 7 seam A review defect 3): the coordinator's own detail text
+      // already states the variable, the two-step remedy, and why, so
+      // there is nothing this view needs to special-case to render it as
+      // an actionable message rather than a generic failure.
       const payload = { endpoints: rows.map((r) => ({ id: r.id.trim(), url: r.url.trim() })) }
       await putFPPEndpointsConfig(payload)
       setReloadGeneration((g) => g + 1)
     } catch (err) {
       setSaveError(describeApiError(err))
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -227,7 +248,12 @@ export function Configuration() {
                     {saveError}
                   </p>
                 )}
-                <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => void handleSave()}>
+                <ScopedButton
+                  requiredScope={CONFIG_WRITE_SCOPE}
+                  onClick={() => void handleSave()}
+                  busy={saving}
+                  busyReason="Saving this configuration revision…"
+                >
                   {saving ? 'Saving…' : 'Save configuration'}
                 </ScopedButton>
               </div>

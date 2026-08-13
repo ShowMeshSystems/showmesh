@@ -41,16 +41,36 @@ var ErrNodeDeclarationNotFound = errors.New("store: node declaration not found")
 
 func declareNode(ctx context.Context, q querier, rec NodeDeclarationRecord, now time.Time) (NodeDeclarationRecord, error) {
 	nowStr := timeToDB(now)
+	// rec.LastDiscoveryRunID/LastDiscoveredAt are ONLY ever consulted on the
+	// INSERT branch below (a brand-new declaration) — the ON CONFLICT branch
+	// deliberately does not touch these two columns at all, exactly as it
+	// already left them alone before this parameter existed. That matters
+	// for DEFECT 6 (an update must never disturb discovery evidence it was
+	// not asked to change) and for DEFECT 1: a caller promoting a node from
+	// a LIVE proposal (api/discovery.go's handlePromoteNode) may pass the
+	// discovery run that evidenced it, so the very first read of a freshly
+	// promoted declaration reports it seen rather than defaulting to '' /
+	// NULL and immediately rendering not_seen — see that caller's own doc
+	// comment for why this is done there (a fresh presence re-check) rather
+	// than trusting a client-supplied run id blindly. A caller with no such
+	// evidence (the ordinary declare-with-no-prior-sighting path) simply
+	// leaves NodeDeclarationRecord's zero values here (""/nil), identical to
+	// the hardcoded '' / NULL this replaces.
+	var lastDiscoveredAt any
+	if rec.LastDiscoveredAt != nil {
+		lastDiscoveredAt = timeToDB(*rec.LastDiscoveredAt)
+	}
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO node_declarations (
 			node_id, label, notes, declared_at, declared_by_principal_id,
 			declared_by_principal_name, last_discovery_run_id, last_discovered_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, '', NULL, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(node_id) DO UPDATE SET
 			label      = excluded.label,
 			notes      = excluded.notes,
 			updated_at = excluded.updated_at
-	`, rec.NodeID, rec.Label, rec.Notes, nowStr, rec.DeclaredByPrincipalID, rec.DeclaredByPrincipalName, nowStr)
+	`, rec.NodeID, rec.Label, rec.Notes, nowStr, rec.DeclaredByPrincipalID, rec.DeclaredByPrincipalName,
+		rec.LastDiscoveryRunID, lastDiscoveredAt, nowStr)
 	if err != nil {
 		return NodeDeclarationRecord{}, fmt.Errorf("store: declare node %q: %w", rec.NodeID, err)
 	}
@@ -62,7 +82,9 @@ func declareNode(ctx context.Context, q querier, rec NodeDeclarationRecord, now 
 // promoting"). Idempotent by node_id: declaring an already-declared node
 // again updates Label/Notes but leaves DeclaredAt/DeclaredByPrincipal*
 // exactly as originally recorded — the attribution of WHO first declared
-// this node is not overwritten by a later edit to its label.
+// this node is not overwritten by a later edit to its label. rec's
+// LastDiscoveryRunID/LastDiscoveredAt are honored only when this call
+// creates a brand-new row — see declareNode's own doc comment above.
 func (s *Store) DeclareNode(ctx context.Context, rec NodeDeclarationRecord) (NodeDeclarationRecord, error) {
 	guardNotInTx(ctx, "Store.DeclareNode")
 	return declareNode(ctx, s.db, rec, s.now())

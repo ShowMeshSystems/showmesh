@@ -80,6 +80,22 @@ describe('FPPStopPlaylistControl', () => {
     expect(screen.getByRole('button', { name: 'Stop Playlist' })).toBeDisabled()
   })
 
+  // CLAUDE.md DEFECT 3: this is the case the previous version of this
+  // file did not cover at all — `sessionFetchFailed` (the test just
+  // above) and `scopesState !== 'current'` are two DIFFERENT ways
+  // evaluateScope (app/session.ts) can decide "not currently vouched
+  // for" (ADR-024 decision 12), and a component's own test file making
+  // only the first claim does not prove the second: a regression that
+  // dropped evaluateScope's `session.scopesState !== 'current'` check
+  // specifically (while leaving the `sessionFetchFailed` check intact)
+  // would leave this file green and be caught only by the shared
+  // session.test.ts.
+  it('renders disabled when the scope list itself is stale (scopesState !== "current"), even though the fetch succeeded and scopes includes fpp:command', () => {
+    const model = makeModel({ session: signedIn({ scopesState: 'unknown' }) })
+    renderControl(model)
+    expect(screen.getByRole('button', { name: 'Stop Playlist' })).toBeDisabled()
+  })
+
   it('renders disabled, never enabled, when signed out', () => {
     const model = makeModel({ session: null })
     renderControl(model)

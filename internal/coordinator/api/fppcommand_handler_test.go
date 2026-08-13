@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -54,12 +55,46 @@ func (d *dynamicObservationLister) setObs(obs []observation.Observation) {
 // what internal/coordinator/collector/fpp.SignalStatus produces (this
 // package deliberately does not import that package — see
 // fppcommand_handler.go's own doc comment — so this literal string is
-// this test file's own copy of the same wire signal name).
-func fppStatusObs(instanceID, value string, at time.Time) observation.Observation {
+// this test file's own copy of the same wire signal name). collectedAt is
+// explicit, never left to default to real wall-clock time (Step 7 seam C
+// review defect 2's own fence, evaluateFPPStatusEvidence, compares
+// CollectedAt against the dispatch instant, and a test running against a
+// FIXED clock — see fixedClock/testNow — cannot leave that to whatever
+// moment the Go runtime happens to construct this value at without making
+// the fence's pass/fail outcome a coincidence of wall-clock timing rather
+// than a deliberate test condition).
+func fppStatusObs(instanceID, value string, observedAt, collectedAt time.Time) observation.Observation {
 	return mustObs(observation.Measured(
 		observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
-		observation.SignalID("fpp.status"), value, at,
-		observation.WithValidFor(time.Hour),
+		observation.SignalID("fpp.status"), value, observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource("fpp-rest"),
+	))
+}
+
+// fppStatusObsUnknownAge is [fppStatusObs]'s unknown-observation-age
+// sibling: a value is present (collected after dispatch, so it passes the
+// pre-dispatch fence), but ObservedAt is nil — the retained-MQTT case
+// ([observation.MeasuredUnknownAge]'s own doc comment) — so
+// evaluateFPPStatusEvidence's o.StateAt(now) resolves to StateUnknownAge,
+// never StateCurrent, regardless of Value.
+func fppStatusObsUnknownAge(instanceID, value string, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.MeasuredUnknownAge(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
+		observation.SignalID("fpp.status"), value,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource("fpp-rest"),
+	))
+}
+
+// fppStatusObsFromSource is [fppStatusObs] with an explicit source,
+// for Step 7 seam C review defect 3's own tests: fpp-rest and fpp-mqtt
+// both emit fpp.status for the same resource, and which one a
+// confirmation check trusts must be this package's documented precedence
+// rule (precedence.go), never row order.
+func fppStatusObsFromSource(instanceID, value, source string, observedAt, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
+		observation.SignalID("fpp.status"), value, observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource(source),
 	))
 }
 
@@ -67,11 +102,22 @@ func fppStatusObs(instanceID, value string, at time.Time) observation.Observatio
 // deployment, a live) fppd's GET /api/command/... endpoint. Every request
 // this test's dispatch reaches is recorded so a test can assert exactly
 // one command was issued, never a retry and never a second one.
+//
+// requestTimes records real wall-clock time.Now() (never h.now(), which a
+// test typically freezes via Options.Clock) for each request — finding 10's
+// own need: proving the write-before-dispatch ORDER (the commands row, its
+// desired_state row, and the dispatch audit entry all land before FPP is
+// ever contacted) requires comparing two instants captured on a consistent
+// clock. Comparing a frozen test clock against this server's real
+// wall-clock hit time would not prove ordering at all — it would only
+// prove the frozen instant differs from whenever the test happened to run,
+// which is true regardless of correctness.
 type fakeFPPCommandServer struct {
-	mu       sync.Mutex
-	requests []string // recorded EscapedPath() of every request received
-	status   int
-	body     string
+	mu           sync.Mutex
+	requests     []string    // recorded EscapedPath() of every request received
+	requestTimes []time.Time // real wall-clock time.Now() when each request was received
+	status       int
+	body         string
 }
 
 func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.Server, *fakeFPPCommandServer) {
@@ -80,6 +126,7 @@ func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.S
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.requests = append(f.requests, r.URL.EscapedPath())
+		f.requestTimes = append(f.requestTimes, time.Now())
 		f.mu.Unlock()
 		w.WriteHeader(f.status)
 		_, _ = w.Write([]byte(f.body))
@@ -92,6 +139,17 @@ func (f *fakeFPPCommandServer) hitCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.requests)
+}
+
+// firstRequestTime returns the real wall-clock instant the first request
+// was received, or the zero Time if none has arrived yet.
+func (f *fakeFPPCommandServer) firstRequestTime() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requestTimes) == 0 {
+		return time.Time{}
+	}
+	return f.requestTimes[0]
 }
 
 // fppCommandTestSetup bundles a real store.Store (so h.deps.Commands is
@@ -193,11 +251,54 @@ func TestFPPCommandRefusedForbiddenViewerNamesScope(t *testing.T) {
 	}
 }
 
+// TestFPPCommandRejectsMissingIdempotencyKey is finding 8's own regression
+// test: nothing previously proved this ENDPOINT actually calls
+// [command.ValidateIdempotencyKey], only that the function itself works
+// (pkg/command's own tests). Without the call, a request with no
+// idempotencyKey defaults to the empty string, and two genuinely separate
+// commands with no key both collide on the empty-string UNIQUE
+// constraint — the second is reported as a REPLAY, dispatches nothing, and
+// answers "outcome":"confirmed" while nothing ever reached FPP. This test
+// asserts the FIRST line of defense: the endpoint refuses with 400 before
+// ever reaching the store or dispatching anything.
+func TestFPPCommandRejectsMissingIdempotencyKey(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", `{"action":"stopPlaylist"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (no idempotencyKey supplied); body: %s", resp.StatusCode, body)
+	}
+	if srv.hitCount() != 0 {
+		t.Errorf("FPP received %d requests, want 0 — a rejected request must dispatch nothing", srv.hitCount())
+	}
+	rows, err := setup.st.ListCommands(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list commands: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("commands rows = %d, want 0 — a rejected request must not create a commands row either", len(rows))
+	}
+}
+
 func TestFPPCommandAcceptedForOperator(t *testing.T) {
 	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow)})
+	// Collected AT testNow — the same instant [fixedClock] stamps this
+	// request's own dispatch at (h.now() never advances in this test) —
+	// which is deliberately NOT "before dispatch": under a frozen test
+	// clock, this is what "the collector re-polled after we dispatched"
+	// looks like. See TestFPPCommandDoesNotConfirmFromStalePreDispatchEvidence
+	// immediately below for the negative case this positive case used to
+	// be indistinguishable from (Step 7 seam C review defect 2).
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
@@ -214,10 +315,200 @@ func TestFPPCommandAcceptedForOperator(t *testing.T) {
 	m := decodeMap(t, body)
 	cmd, _ := m["command"].(map[string]any)
 	if cmd["outcome"] != "confirmed" {
-		t.Errorf("outcome = %v, want \"confirmed\" (fpp.status was already \"idle\")", cmd["outcome"])
+		t.Errorf("outcome = %v, want \"confirmed\" (fpp.status reads \"idle\" as of evidence collected at/after dispatch)", cmd["outcome"])
 	}
 	if srv.hitCount() != 1 {
 		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
+// TestFPPCommandDoesNotConfirmFromStalePreDispatchEvidence is Step 7 seam
+// C review defect 2's own reproduction, fixed: an observation already
+// reading "idle" — collected a full hour before this request ever
+// dispatched — must NOT confirm the command, no matter how strongly it
+// already agrees. Before this fix, checkFPPStatusOnce compared only
+// o.StateAt(now) == StateCurrent && o.Value == wantValue, with no
+// comparison against when the command was actually dispatched, so this
+// exact scenario confirmed in 179 microseconds against a live bench fppd
+// (see this task's report) — far too fast to have re-polled anything.
+// This test proves the SAME shape fails to confirm early: no fresh
+// evidence ever arrives, so it must wait out the full deadline and report
+// unconfirmed.
+func TestFPPCommandDoesNotConfirmFromStalePreDispatchEvidence(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// Already "idle" — but collected a full hour before dispatch (testNow
+	// is this request's own dispatch instant under the frozen clock).
+	setup.obs.setObs([]observation.Observation{
+		fppStatusObs("bench-fpp", "idle", testNow.Add(-time.Hour), testNow.Add(-time.Hour)),
+	})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	start := time.Now()
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — a reading from BEFORE dispatch must never confirm, even one that "+
+			"already agrees (this is exactly the false-confirm this fix closes)", cmd["outcome"])
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if !strings.Contains(reason, "predates dispatch") {
+		t.Errorf("outcomeReason = %q, want it to say the evidence predates dispatch", reason)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("handler returned after %v, want it to have waited out the ~120ms deadline rather than confirming instantly "+
+			"from stale evidence", elapsed)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
+// TestFPPCommandConfirmsAlreadyIdleOnceFreshEvidenceArrives is defect 2's
+// positive control, matching the task's own guidance: "a stop dispatched
+// to an already-idle daemon is legitimate and must still resolve, but it
+// must resolve on evidence that post-dates the dispatch, not on a stale
+// reading that happens to agree." The seeded observation starts stale and
+// pre-dispatch (exactly like the test above); a goroutine then delivers a
+// FRESH "idle" reading, collected at/after dispatch, partway through the
+// wait. This must confirm — proving the already-in-desired-state case
+// still resolves — but only once, from the fresh evidence, not from the
+// pre-existing stale one.
+func TestFPPCommandConfirmsAlreadyIdleOnceFreshEvidenceArrives(t *testing.T) {
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{
+		fppStatusObs("bench-fpp", "idle", testNow.Add(-time.Hour), testNow.Add(-time.Hour)),
+	})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	}()
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "confirmed" {
+		t.Fatalf("outcome = %v, want \"confirmed\" once fresh, post-dispatch evidence arrives", cmd["outcome"])
+	}
+}
+
+// --- Step 7 seam C review defect 3: source-blind confirmation was a coin
+// flip between fpp-rest and fpp-mqtt reporting fpp.status for the same
+// resource. This package's own documented precedence rule (precedence.go)
+// must decide it, deterministically, regardless of which candidate a
+// caller's slice happens to list first. ---
+
+func TestFPPCommandConfirmationUsesSourcePrecedenceRegardlessOfRowOrder(t *testing.T) {
+	// Same ObservedAt on both candidates, so tier-1's "later ObservedAt
+	// wins" cannot decide it either — this specifically exercises
+	// preferObservation's source tie-break ("fpp-rest beats fpp-mqtt",
+	// precedence.go), not merely "pick the fresher one."
+	rest := fppStatusObsFromSource("bench-fpp", "idle", "fpp-rest", testNow, testNow)
+	mqtt := fppStatusObsFromSource("bench-fpp", "playing", "fpp-mqtt", testNow, testNow)
+
+	for _, tc := range []struct {
+		name string
+		obs  []observation.Observation
+	}{
+		{"fpp-rest first", []observation.Observation{rest, mqtt}},
+		{"fpp-mqtt first", []observation.Observation{mqtt, rest}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+			setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+			setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+			setup.obs.setObs(tc.obs)
+			api := New(setup.deps(), Options{
+				Clock: fixedClock(testNow), Logger: testLogger(),
+				FPPCommandConfirmDeadline: 150 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+			})
+
+			operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+			token := mustIssueToken(t, setup.svc, operator.ID)
+
+			req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-"+tc.name), token)
+			resp, body := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+			}
+			m := decodeMap(t, body)
+			cmd, _ := m["command"].(map[string]any)
+			// fpp-rest reads "idle" (correct); fpp-mqtt reads "playing"
+			// (stale/wrong). Regardless of row order, fpp-rest must win —
+			// so this must ALWAYS confirm, never depend on which
+			// candidate the test listed first.
+			if cmd["outcome"] != "confirmed" {
+				t.Errorf("outcome = %v, want \"confirmed\" (fpp-rest, the higher-precedence source, reads \"idle\")", cmd["outcome"])
+			}
+			reason, _ := cmd["outcomeReason"].(string)
+			_ = reason // confirmed case carries no reason; nothing to assert here beyond outcome.
+		})
+	}
+}
+
+func TestFPPCommandConfirmationReasonNamesTheDecidingSource(t *testing.T) {
+	// The MISMATCH case: fpp-rest (higher precedence) reads "playing"
+	// (wrong); fpp-mqtt reads "idle" (would be right, but must NOT be
+	// trusted over fpp-rest). Must resolve unconfirmed, on fpp-rest's
+	// evidence, and the reason must name which source decided it
+	// (ADR-011: evidence carries provenance).
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{
+		fppStatusObsFromSource("bench-fpp", "playing", "fpp-rest", testNow, testNow),
+		fppStatusObsFromSource("bench-fpp", "idle", "fpp-mqtt", testNow, testNow),
+	})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — the higher-precedence source (fpp-rest) reads \"playing\", and "+
+			"the lower-precedence source's \"idle\" must NOT be allowed to confirm falsely", cmd["outcome"])
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if !strings.Contains(reason, "fpp-rest") {
+		t.Errorf("outcomeReason = %q, want it to name fpp-rest as the deciding source (ADR-011: evidence carries provenance)", reason)
 	}
 }
 
@@ -235,7 +526,7 @@ func TestFPPCommandDispatchedButStateNeverMovesIsUnconfirmed(t *testing.T) {
 	// fpp.status stays "playing" for the whole confirmation window: FPP
 	// accepted the command (200 "Stopped") but the state this endpoint
 	// asked for never actually arrives.
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow)})
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow, testNow)})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
@@ -271,6 +562,202 @@ func TestFPPCommandDispatchedButStateNeverMovesIsUnconfirmed(t *testing.T) {
 	}
 }
 
+// TestFPPCommandUnconfirmedWithNoObservationHasReason is the "no-observation"
+// path of evaluateFPPStatusEvidence: no fpp.status observation exists for
+// this instance at all (never polled, or polled by no collector this
+// coordinator has). v1.FPPCommandResult.outcomeReason's own doc comment and
+// api/openapi.yaml both claim outcomeReason is non-empty whenever the
+// outcome is not confirmed — this is one of three paths (the other two are
+// TestFPPCommandUnconfirmedWithStaleUnknownAgeEvidenceHasReason and the
+// dispatch-failure tests below) that were previously unprotected: only the
+// "evidence is current but shows the wrong value" case
+// (TestFPPCommandDispatchedButStateNeverMovesIsUnconfirmed) asserted a
+// reason at all.
+func TestFPPCommandUnconfirmedWithNoObservationHasReason(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// No observations seeded at all: setup.obs starts empty.
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — no fpp.status observation exists at all", cmd["outcome"])
+	}
+	if cmd["outcomeState"] != string(observation.StateNotCollected) {
+		t.Errorf("outcomeState = %v, want %q", cmd["outcomeState"], observation.StateNotCollected)
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if reason == "" {
+		t.Fatalf("outcomeReason is empty, want a non-empty, informative reason (ADR-020: absent evidence is stated, never omitted)")
+	}
+	if !strings.Contains(reason, "no fpp.status observation") {
+		t.Errorf("outcomeReason = %q, want it to say no fpp.status observation is recorded", reason)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
+// TestFPPCommandUnconfirmedWithStaleUnknownAgeEvidenceHasReason is the
+// "stale/unknown-age" path: a value is present, collected after dispatch
+// (so it passes the pre-dispatch fence), but its own observation time is
+// genuinely unknown (the retained-MQTT case) — evaluateFPPStatusEvidence's
+// o.StateAt(now) resolves to StateUnknownAge, never StateCurrent, and the
+// generic `default` branch (fmt.Sprintf("fpp.status evidence state is %s",
+// state)) is what must fire here, since o.Reason itself is empty for this
+// shape of observation.
+func TestFPPCommandUnconfirmedWithStaleUnknownAgeEvidenceHasReason(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObsUnknownAge("bench-fpp", "idle", testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — fpp.status's own observation time is unknown, which must never confirm even though Value already reads \"idle\"", cmd["outcome"])
+	}
+	if cmd["outcomeState"] != string(observation.StateUnknownAge) {
+		t.Errorf("outcomeState = %v, want %q", cmd["outcomeState"], observation.StateUnknownAge)
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if reason == "" {
+		t.Fatalf("outcomeReason is empty, want a non-empty, informative reason (ADR-020: absent evidence is stated, never omitted)")
+	}
+	if !strings.Contains(reason, "unknown_age") {
+		t.Errorf("outcomeReason = %q, want it to name the unknown_age state", reason)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
+// --- Finding 7: the dispatch-failure path had NO test at all, and could
+// be made to report success by flipping `confirmed = true` on
+// dispatchErr != nil without any test noticing. This sits directly on the
+// ADR-003 acceptance criterion and covers the single most likely real
+// failure: the FPP host is down or answering an error. ---
+
+// TestFPPCommandDispatchFailureUnconfirmedWithTransportReason covers FPP
+// being entirely unreachable: the fake server is closed before this
+// handler ever dispatches, so client.StopPlaylist's own HTTP request fails
+// with a transport-level error (connection refused), never a status code
+// at all.
+func TestFPPCommandDispatchFailureUnconfirmedWithTransportReason(t *testing.T) {
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	closedURL := fppSrv.URL
+	fppSrv.Close() // closed BEFORE any request — the endpoint is configured but unreachable.
+
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: closedURL}}
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the REQUEST succeeded; only the COMMAND's dispatch failed); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — FPP is unreachable, so dispatch itself failed and nothing was ever asked of it", cmd["outcome"])
+	}
+	if cmd["outcomeState"] != string(observation.StateCollectionFailed) {
+		t.Errorf("outcomeState = %v, want %q", cmd["outcomeState"], observation.StateCollectionFailed)
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if reason == "" {
+		t.Fatalf("outcomeReason is empty, want a reason naming the transport error")
+	}
+	if !strings.Contains(reason, "dispatching to FPP failed") {
+		t.Errorf("outcomeReason = %q, want it to say dispatching to FPP failed", reason)
+	}
+	if cmd["dispatchedAt"] == nil {
+		t.Errorf("dispatchedAt = %v, want a timestamp — dispatch WAS attempted (the client made a real HTTP request that failed), unlike TestFPPCommandDispatchNeverAttemptedLeavesDispatchedAtNull where fppcommand.New itself refuses to build a client", cmd["dispatchedAt"])
+	}
+}
+
+// TestFPPCommandDispatchFailureNonSuccessStatusReportsTransportReason
+// covers FPP answering with a real HTTP response that is not 2xx:
+// fppcommand.Client.StopPlaylist reports this as an error (see that
+// package's httpStatusError), so this handler's dispatchErr != nil branch
+// fires exactly as it does for the connection-refused case above — the
+// difference being dispatchedAt IS set here, since a real round-trip
+// happened; only the connection-refused case in the test above ever leaves
+// it meaningfully distinct (dispatch attempted vs. dispatch never even
+// reaching fppcommand.New). Both must end unconfirmed with a stated
+// reason naming the transport error.
+func TestFPPCommandDispatchFailureNonSuccessStatusReportsTransportReason(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusInternalServerError, "internal error")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — a 500 from FPP must never report success", cmd["outcome"])
+	}
+	if cmd["outcomeState"] != string(observation.StateCollectionFailed) {
+		t.Errorf("outcomeState = %v, want %q", cmd["outcomeState"], observation.StateCollectionFailed)
+	}
+	reason, _ := cmd["outcomeReason"].(string)
+	if reason == "" {
+		t.Fatalf("outcomeReason is empty, want a reason naming the transport error")
+	}
+	if !strings.Contains(reason, "dispatching to FPP failed") {
+		t.Errorf("outcomeReason = %q, want it to say dispatching to FPP failed", reason)
+	}
+	if cmd["dispatchedAt"] == nil {
+		t.Errorf("dispatchedAt = %v, want a timestamp — a real HTTP round-trip DID happen, even though FPP answered 500", cmd["dispatchedAt"])
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
 // TestFPPCommandConfirmsOnceEvidenceCatchesUp is the positive control for
 // the test above: the SAME "never confirms" shape, except fpp.status
 // flips to "idle" partway through the wait — proving the confirmation
@@ -281,7 +768,7 @@ func TestFPPCommandConfirmsOnceEvidenceCatchesUp(t *testing.T) {
 	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow)})
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow, testNow)})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
@@ -289,7 +776,7 @@ func TestFPPCommandConfirmsOnceEvidenceCatchesUp(t *testing.T) {
 
 	go func() {
 		time.Sleep(60 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow)})
+		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 	}()
 
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
@@ -314,7 +801,7 @@ func TestFPPCommandSucceedsWithAuditStoreFailing(t *testing.T) {
 	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow)})
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
@@ -369,10 +856,19 @@ func TestFPPCommandReplayDispatchesNothingAndReturnsOriginalResult(t *testing.T)
 	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow)})
+	// Deliberately UNCONFIRMED, not confirmed: fpp.status stays "playing"
+	// for the whole confirmation window, so the original command's own
+	// outcome carries a distinctive, non-constant reason
+	// ("observed fpp.status = playing ..."). A prior version of this test
+	// seeded an always-confirmed original, so hardcoding the replay path's
+	// decode to the fabricated constants confirmed/current/"" stayed green
+	// — this shape makes hardcoding those three constants fail instead,
+	// because "confirmed"/"current"/"" is not what the original actually
+	// produced.
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow, testNow)})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
-		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+		FPPCommandConfirmDeadline: 120 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
 	})
 
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
@@ -388,6 +884,13 @@ func TestFPPCommandReplayDispatchesNothingAndReturnsOriginalResult(t *testing.T)
 	}
 	m1 := decodeMap(t, body1)
 	cmd1, _ := m1["command"].(map[string]any)
+	if cmd1["outcome"] != "unconfirmed" {
+		t.Fatalf("original outcome = %v, want \"unconfirmed\" (this test's own setup: fpp.status never reaches \"idle\")", cmd1["outcome"])
+	}
+	origReason, _ := cmd1["outcomeReason"].(string)
+	if origReason == "" || !strings.Contains(origReason, "playing") {
+		t.Fatalf("original outcomeReason = %q, want a distinctive reason naming the observed \"playing\" value", origReason)
+	}
 
 	second := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("replay-key"), token)
 	resp2, body2 := doRawRequest(t, api.Handler, second)
@@ -408,6 +911,13 @@ func TestFPPCommandReplayDispatchesNothingAndReturnsOriginalResult(t *testing.T)
 	}
 	if cmd2["outcome"] != cmd1["outcome"] {
 		t.Errorf("replay outcome = %v, want the original result %v", cmd2["outcome"], cmd1["outcome"])
+	}
+	if cmd2["outcomeState"] != cmd1["outcomeState"] {
+		t.Errorf("replay outcomeState = %v, want the original result %v", cmd2["outcomeState"], cmd1["outcomeState"])
+	}
+	replayReason, _ := cmd2["outcomeReason"].(string)
+	if replayReason != origReason {
+		t.Errorf("replay outcomeReason = %q, want it to round-trip the original's reason %q verbatim", replayReason, origReason)
 	}
 
 	// Criterion 5: dispatch and outcome are separate, correlated audit
@@ -442,6 +952,415 @@ func TestFPPCommandReplayDispatchesNothingAndReturnsOriginalResult(t *testing.T)
 	}
 }
 
+// TestFPPCommandReplayConflictWhenTargetDiffers is Step 7 seam C review
+// defect 6's own reproduction, fixed: replaying "key" (originally
+// dispatched against fpp-garage) against a DIFFERENT instanceId
+// (fpp-roof) used to answer instanceId: "fpp-roof" (the REQUEST's own
+// path value) with fpp-garage's stored command id and outcome — a false
+// statement that fpp-roof was ever touched. Now refused as a 409
+// conflict, naming both the original and the requested target, and
+// dispatching nothing either way.
+func TestFPPCommandReplayConflictWhenTargetDiffers(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{
+		{InstanceID: "fpp-garage", Endpoint: fppSrv.URL},
+		{InstanceID: "fpp-roof", Endpoint: fppSrv.URL},
+	}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("fpp-garage", "idle", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	first := newFPPCommandRequest(t, "fpp-garage", stopPlaylistBody("shared-key"), token)
+	resp1, body1 := doRawRequest(t, api.Handler, first)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
+	}
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests after the first dispatch, want 1", srv.hitCount())
+	}
+	m1 := decodeMap(t, body1)
+	cmd1, _ := m1["command"].(map[string]any)
+
+	second := newFPPCommandRequest(t, "fpp-roof", stopPlaylistBody("shared-key"), token)
+	resp2, body2 := doRawRequest(t, api.Handler, second)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("replay-against-different-target status = %d, want 409; body: %s", resp2.StatusCode, body2)
+	}
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests after the conflicting replay, want still 1 — a conflict must dispatch nothing", srv.hitCount())
+	}
+	m2 := decodeMap(t, body2)
+	detail, _ := m2["detail"].(string)
+	if !strings.Contains(detail, "fpp-garage") || !strings.Contains(detail, "fpp-roof") {
+		t.Errorf("problem detail = %q, want it to name both the original target (fpp-garage) and the requested one (fpp-roof)", detail)
+	}
+	if !strings.Contains(detail, cmd1["id"].(string)) {
+		t.Errorf("problem detail = %q, want it to name the original command id %v", detail, cmd1["id"])
+	}
+	// And nothing about fpp-roof was ever claimed confirmed/dispatched —
+	// the response must not even superficially resemble a successful
+	// command result for fpp-roof.
+	if _, ok := m2["command"]; ok {
+		t.Errorf("conflict response unexpectedly carries a \"command\" object: %v", m2["command"])
+	}
+}
+
+// TestFPPCommandDispatchNeverAttemptedLeavesDispatchedAtNull is Step 7
+// seam C review defect 9's own reproduction, fixed: when
+// internal/coordinator/fppcommand.New itself fails (never an HTTP
+// request), dispatchedAt must be null, honoring
+// v1.FPPCommandResult.DispatchedAt's own documented "null only if dispatch
+// itself could not be attempted." Forced here via a configured Endpoint
+// fppcommand.New rejects outright (a URL with a path component).
+func TestFPPCommandDispatchNeverAttemptedLeavesDispatchedAtNull(t *testing.T) {
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	// fppcommand.New refuses any URL carrying a path beyond a bare
+	// trailing slash — see that package's own New doc comment — so this
+	// never reaches the network at all.
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: "http://127.0.0.1:1/some/path"}}
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 100 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the REQUEST succeeded; the COMMAND's dispatch is what never happened); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["dispatchedAt"] != nil {
+		t.Errorf("dispatchedAt = %v, want null — dispatch was never attempted (fppcommand.New itself failed)", cmd["dispatchedAt"])
+	}
+	if cmd["outcomeState"] != string(observation.StateCollectionFailed) {
+		t.Errorf("outcomeState = %v, want %q", cmd["outcomeState"], observation.StateCollectionFailed)
+	}
+}
+
+// TestFPPCommandOutcomeSurvivesClientDisconnect is Step 7 seam C review
+// defect 4's own reproduction, fixed: this handler's post-dispatch
+// bookkeeping (recording dispatch, confirming by evidence, recording the
+// outcome, and writing the outcome audit entry) must not be cancellable by
+// a client that walks away mid-request. Before this fix, all four were
+// bound to r.Context(): UpdateCommandOutcome failed with "context
+// canceled" (logged only, leaving the commands row permanently
+// state='dispatched' with no outcome), and the outcome audit entry was
+// lost outright. This test cancels the REQUEST's own context shortly
+// after dispatch (simulating an abandoned browser tab) and, despite that,
+// asserts the command still resolves to "confirmed" in the store, with a
+// real outcome audit entry — the fix's whole point.
+func TestFPPCommandOutcomeSurvivesClientDisconnect(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// Evidence arrives AFTER the client disconnects — proving the
+	// confirmation wait itself keeps running server-side, not merely that
+	// an already-decided outcome gets recorded.
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "playing", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 1 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	}()
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
+
+	// Cancel the REQUEST's own context shortly after dispatch (the fake
+	// FPP server answers instantly) but well before the 150ms fresh
+	// evidence arrives — simulating the client closing its tab mid-wait.
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		cancel()
+	}()
+
+	rec := httptest.NewRecorder()
+	api.Handler.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ServeHTTP still completes and writes a response even though the REQUEST's own "+
+			"context was canceled mid-wait); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "confirmed" {
+		t.Fatalf("outcome = %v, want \"confirmed\" — the client's own disconnect must not abort the server-side "+
+			"confirmation wait; body: %s", cmd["outcome"], body)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+
+	// The store itself, independent of what the (possibly-abandoned)
+	// response says, must show a fully resolved command — never stuck at
+	// state='dispatched' the way defect 4 left it.
+	rows, err := setup.st.ListCommands(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list commands: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d commands, want 1", len(rows))
+	}
+	if rows[0].State != "resolved" {
+		t.Errorf("commands row state = %q, want \"resolved\" (not stuck at \"dispatched\" — defect 4's exact failure mode)", rows[0].State)
+	}
+	if rows[0].ResolvedAt == nil {
+		t.Errorf("commands row resolved_at is nil, want it set")
+	}
+
+	// And the outcome audit entry itself was not lost — defect 4's other
+	// half.
+	entries, err := setup.svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var outcomeCount int
+	for _, e := range entries {
+		if e.CommandID == rows[0].ID && e.Kind == identity.AuditOutcome {
+			outcomeCount++
+		}
+	}
+	if outcomeCount != 1 {
+		t.Errorf("outcome audit entries = %d, want exactly 1 (defect 4: this used to be silently lost on a canceled context)", outcomeCount)
+	}
+}
+
+// auditedWriteTimingSpy wraps a real identity.Service and records the real
+// wall-clock instant ([time.Now], never h.now()) at which AuditedWrite
+// RETURNS — i.e. once its transaction (the commands row, desired_state row,
+// and dispatch audit entry) has actually committed. Comparing this against
+// [fakeFPPCommandServer.firstRequestTime] (also real wall-clock) is what
+// lets TestFPPCommandWritesDesiredStateAndDispatchAuditBeforeDispatchingToFPP
+// prove ACTUAL execution order rather than comparing a data field
+// ([identity.AuditEntry.Timestamp]) that is stamped once at the very top
+// of the handler regardless of what order the rest of the function later
+// executes in — a first attempt at this test compared that field and kept
+// passing even after the handler's dispatch and write steps were
+// physically reordered in the source, because the field's VALUE never
+// moved even though the WRITE that persists it did.
+type auditedWriteTimingSpy struct {
+	identity.Service
+	mu         sync.Mutex
+	returnedAt time.Time
+}
+
+func (s *auditedWriteTimingSpy) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error)) error {
+	err := s.Service.AuditedWrite(ctx, fn)
+	s.mu.Lock()
+	s.returnedAt = time.Now()
+	s.mu.Unlock()
+	return err
+}
+
+func (s *auditedWriteTimingSpy) auditedWriteReturnedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.returnedAt
+}
+
+// TestFPPCommandWritesDesiredStateAndDispatchAuditBeforeDispatchingToFPP is
+// finding 10's own regression test for ADR-024 decision 11's
+// write-before-dispatch rule: insert the commands row, record desired
+// state, and write the DISPATCH audit entry BEFORE dispatching to FPP —
+// never after. TestFPPCommandDispatchAndAuditAreAtomic already proves all
+// three artifacts exist together once a request completes, but proves
+// nothing about ORDER relative to the actual network call: a handler that
+// dispatched to FPP first and only recorded these three afterward would
+// still pass that test, since by the time the response is inspected every
+// write has already happened either way.
+func TestFPPCommandWritesDesiredStateAndDispatchAuditBeforeDispatchingToFPP(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, time.Now)
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	spy := &auditedWriteTimingSpy{Service: setup.svc}
+	deps := setup.deps()
+	deps.Identity = spy
+	// No observation seeded: the confirmation loop resolves unconfirmed
+	// quickly via the no-observation path.
+	api := New(deps, Options{
+		FPPCommandConfirmDeadline: 80 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+		Logger: testLogger(),
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("order-key"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	cmdID, _ := cmd["id"].(string)
+
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+	requestTime := srv.firstRequestTime()
+	if requestTime.IsZero() {
+		t.Fatalf("fake FPP server recorded no request time despite hitCount() == 1")
+	}
+	writeReturnedAt := spy.auditedWriteReturnedAt()
+	if writeReturnedAt.IsZero() {
+		t.Fatalf("AuditedWrite spy recorded no return time")
+	}
+
+	// 1. desired_state holds the expected row, correlated by command id.
+	desired, err := setup.st.GetDesiredState(context.Background(), "fpp", "bench-fpp", fppStatusSignal)
+	if err != nil {
+		t.Fatalf("get desired state: %v", err)
+	}
+	if desired.CommandID != cmdID {
+		t.Errorf("desired_state.command_id = %q, want %q", desired.CommandID, cmdID)
+	}
+
+	// 2. AuditedWrite (which commits the commands row, desired_state row,
+	// and the dispatch audit entry together) must have RETURNED before FPP
+	// was ever contacted — never after.
+	if writeReturnedAt.After(requestTime) {
+		t.Errorf("AuditedWrite returned at %s, AFTER the FPP request at %s — want it to precede dispatch "+
+			"(ADR-024 decision 11: write before dispatch, never dispatch before write)", writeReturnedAt, requestTime)
+	}
+}
+
+// TestFPPCommandDispatchAndAuditAreAtomic is Step 7 seam C review defect
+// 8's own proof: on a HEALTHY audit store, the commands row, its
+// desired_state row, and its DISPATCH audit entry all come into existence
+// together, via store.Tx.InsertCommand/SetDesiredState and one
+// AuditedWrite transaction — never the pre-fix shape (a separate
+// Store.InsertCommand followed by a separate, non-transactional
+// WriteAudit) where a crash between the two could leave a commands row
+// with no audit entry at all. This does not (and structurally cannot, in
+// a unit test) prove atomicity under an actual crash — that guarantee
+// comes from store.Store.InTx itself, already covered by
+// store/tx_test.go's TestInTxRollsBackOnError/TestInTxRollsBackOnPanic —
+// this test proves this HANDLER actually routes through that mechanism
+// for all three writes, rather than the old separate-calls shape, by
+// checking every artifact a healthy dispatch should leave behind.
+func TestFPPCommandDispatchAndAuditAreAtomic(t *testing.T) {
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["attributionDegraded"] != false {
+		t.Fatalf("attributionDegraded = %v, want false (the audit store is healthy in this test)", cmd["attributionDegraded"])
+	}
+
+	rows, err := setup.st.ListCommands(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list commands: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d commands, want 1", len(rows))
+	}
+
+	desired, err := setup.st.GetDesiredState(context.Background(), "fpp", "bench-fpp", fppStatusSignal)
+	if err != nil {
+		t.Fatalf("get desired state: %v", err)
+	}
+	if desired.CommandID != rows[0].ID {
+		t.Errorf("desired_state.command_id = %q, want %q", desired.CommandID, rows[0].ID)
+	}
+
+	entries, err := setup.svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var dispatchCount, outcomeCount int
+	for _, e := range entries {
+		if e.CommandID != rows[0].ID {
+			continue
+		}
+		switch e.Kind {
+		case identity.AuditDispatch:
+			dispatchCount++
+			// Assert the dispatch entry's own content, not merely that one
+			// exists: a garbage action string, a wrong target, or a dropped
+			// principal/form/credential/client address would all leave
+			// dispatchCount == 1 while the entry itself is unattributed.
+			if e.Action != "fpp.stop_playlist" {
+				t.Errorf("dispatch entry Action = %q, want %q", e.Action, "fpp.stop_playlist")
+			}
+			if e.Target != "bench-fpp" {
+				t.Errorf("dispatch entry Target = %q, want %q", e.Target, "bench-fpp")
+			}
+			if e.PrincipalID != operator.ID {
+				t.Errorf("dispatch entry PrincipalID = %q, want %q", e.PrincipalID, operator.ID)
+			}
+			if e.PrincipalName != operator.Name {
+				t.Errorf("dispatch entry PrincipalName = %q, want %q", e.PrincipalName, operator.Name)
+			}
+			if e.Form != identity.FormToken {
+				t.Errorf("dispatch entry Form = %q, want %q", e.Form, identity.FormToken)
+			}
+			if e.CredentialID == "" {
+				t.Errorf("dispatch entry CredentialID is empty, want the token's credential id recorded")
+			}
+		case identity.AuditOutcome:
+			outcomeCount++
+			if e.Action != "fpp.stop_playlist" {
+				t.Errorf("outcome entry Action = %q, want %q", e.Action, "fpp.stop_playlist")
+			}
+			if e.Target != "bench-fpp" {
+				t.Errorf("outcome entry Target = %q, want %q", e.Target, "bench-fpp")
+			}
+			if e.PrincipalID != operator.ID {
+				t.Errorf("outcome entry PrincipalID = %q, want %q", e.PrincipalID, operator.ID)
+			}
+			if e.PrincipalName != operator.Name {
+				t.Errorf("outcome entry PrincipalName = %q, want %q", e.PrincipalName, operator.Name)
+			}
+			if e.Form != identity.FormToken {
+				t.Errorf("outcome entry Form = %q, want %q", e.Form, identity.FormToken)
+			}
+			if e.CredentialID == "" {
+				t.Errorf("outcome entry CredentialID is empty, want the token's credential id recorded")
+			}
+		}
+	}
+	if dispatchCount != 1 {
+		t.Errorf("dispatch audit entries = %d, want exactly 1 (inserted atomically with the commands row via AuditedWrite)", dispatchCount)
+	}
+	if outcomeCount != 1 {
+		t.Errorf("outcome audit entries = %d, want exactly 1", outcomeCount)
+	}
+}
+
 // --- OpenAPI conformance for this endpoint's own response shape,
 // including the replay shape (whose "outcome" may differ in practice from
 // every other schema-checked response in openapi_test.go). ---
@@ -452,7 +1371,7 @@ func TestOpenAPIFPPCommandResponseMatchesRealResponse(t *testing.T) {
 	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow)})
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,

@@ -62,12 +62,38 @@ func syncFPPEndpointsConfig(ctx context.Context, st *store.Store, identitySvc id
 	obj, err := st.GetConfigObject(ctx, config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID)
 	switch {
 	case errors.Is(err, store.ErrConfigObjectNotFound):
-		return migrateFPPEndpointsFromEnv(ctx, identitySvc, envEndpoints, now)
+		return migrateFPPEndpointsFromEnv(ctx, identitySvc, envEndpoints, now, logger)
 	case err != nil:
 		return nil, fmt.Errorf("coordinator: read fpp.endpoints config object: %w", err)
 	}
 
+	// Defect 6 (Step 7 seam A review): handleGetFPPEndpointsConfig
+	// (internal/coordinator/api/config.go) already defends the read path
+	// against obj.CurrentRevision == 0 ("declared, nothing active" — see
+	// store.CreateConfigObject's own doc comment for how that state can
+	// exist) and a dangling revision pointer (GetConfigRevision naming a
+	// row this store does not hold). Before this fix the BOOT path ran the
+	// identical GetConfigRevision call with NO such defence, so either
+	// condition made this coordinator refuse to start — a store-integrity
+	// question turned into an availability outage, which constraint 13
+	// forbids ("the coordinator must start and stay up"). The boot path
+	// takes the SAFER outcome the read path cannot: log loudly and
+	// proceed as "no active configuration" (matching what a coordinator
+	// with nothing configured has always done) rather than exiting.
+	if obj.CurrentRevision == 0 {
+		logger.Warn("fpp.endpoints config object exists but has no active revision (current_revision == 0); " +
+			"treating this as no active fpp.endpoints configuration rather than refusing to start")
+		return nil, nil
+	}
+
 	rev, err := st.GetConfigRevision(ctx, config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID, obj.CurrentRevision)
+	if errors.Is(err, store.ErrConfigRevisionNotFound) {
+		logger.Warn("fpp.endpoints config object's active revision pointer names a revision this store does not hold "+
+			"(a store-integrity condition, not a normal startup state); treating this as no active fpp.endpoints "+
+			"configuration rather than refusing to start",
+			"current_revision", obj.CurrentRevision)
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("coordinator: read active fpp.endpoints config revision %d: %w", obj.CurrentRevision, err)
 	}
@@ -92,11 +118,54 @@ func syncFPPEndpointsConfig(ctx context.Context, st *store.Store, identitySvc id
 	return nil, fmt.Errorf("%w: %s", errFPPEndpointsDisagree, diffFPPEndpoints(storedEndpoints, envEndpoints))
 }
 
+// resolveAuthoritativeFPPEndpoints calls [syncFPPEndpointsConfig] and
+// returns cfg with FPPEndpoints OVERWRITTEN by the result — the single
+// assignment everything downstream (fppInstanceLister, the FPP collector
+// construction loop, api.Dependencies.Collectors, and the
+// SHOWMESH_FPP_MQTT_HOSTS cross-check) depends on to ever see the
+// store-authoritative list rather than the raw environment-parsed one. It
+// is pulled out of Run itself, which does not unit-test cleanly (it opens
+// real network listeners), specifically so this assignment has a seam a
+// test can call directly: TestResolveAuthoritativeFPPEndpointsUsesStoreOverEnv
+// (configsync_test.go) proves that with the environment unset and a
+// populated store, the returned cfg.FPPEndpoints is the store's list, not
+// empty — the exact acceptance criterion ("the migrated deployment still
+// collects from every host it collected from before") that deleting this
+// assignment used to silently defeat while every other test in the repo
+// stayed green.
+func resolveAuthoritativeFPPEndpoints(ctx context.Context, st *store.Store, identitySvc identity.Service, cfg config.Config, now func() time.Time, logger *slog.Logger) (config.Config, error) {
+	authoritativeFPPEndpoints, err := syncFPPEndpointsConfig(ctx, st, identitySvc, cfg.FPPEndpoints, now, logger)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.FPPEndpoints = authoritativeFPPEndpoints
+	// Defect 7 (Step 7 seam A review): once SHOWMESH_FPP_ENDPOINTS is
+	// removed (exactly what the migration warning above tells the
+	// operator to do), the store is the ONLY copy of the endpoint list —
+	// a restored or freshly created data volume then resolves to zero
+	// endpoints with what otherwise reads as a perfectly healthy startup
+	// (every other log line green, /readyz OK) and a dashboard that only
+	// says "not_configured" to someone already looking at it. INFO is the
+	// wrong level for a fact that means "this coordinator will collect
+	// from nothing" — raised to WARN in exactly that case; the non-zero
+	// case is unchanged.
+	if len(cfg.FPPEndpoints) == 0 {
+		logger.Warn("resolved authoritative fpp.endpoints configuration (RES-008 D1): zero endpoints configured. " +
+			"No FPP instances are configured and nothing will be collected. If this is unexpected, check that a " +
+			"data volume was not restored from an empty or wrong backup, and that PUT /api/v1/config/fpp.endpoints " +
+			"(or SHOWMESH_FPP_ENDPOINTS, on first boot) actually named your FPP hosts.")
+	} else {
+		logger.Info("resolved authoritative fpp.endpoints configuration (RES-008 D1)",
+			"fpp_endpoint_count", len(cfg.FPPEndpoints))
+	}
+	return cfg, nil
+}
+
 // migrateFPPEndpointsFromEnv performs the one-time SHOWMESH_FPP_ENDPOINTS
 // -> store migration (RES-008 D1) when no fpp.endpoints configuration
 // object exists yet. See [syncFPPEndpointsConfig]'s doc comment for the
 // two cases this covers (envEndpoints empty vs. non-empty).
-func migrateFPPEndpointsFromEnv(ctx context.Context, identitySvc identity.Service, envEndpoints []config.FPPEndpoint, now func() time.Time) ([]config.FPPEndpoint, error) {
+func migrateFPPEndpointsFromEnv(ctx context.Context, identitySvc identity.Service, envEndpoints []config.FPPEndpoint, now func() time.Time, logger *slog.Logger) ([]config.FPPEndpoint, error) {
 	if len(envEndpoints) == 0 {
 		// Nothing configured anywhere: matches today's pre-migration
 		// behavior exactly (no FPP collector runs).
@@ -147,6 +216,20 @@ func migrateFPPEndpointsFromEnv(ctx context.Context, identitySvc identity.Servic
 	if writeErr != nil {
 		return nil, fmt.Errorf("coordinator: migrate SHOWMESH_FPP_ENDPOINTS into the store: %w", writeErr)
 	}
+
+	// Defect 3b (Step 7 seam A review): this warning previously existed
+	// ONLY in syncFPPEndpointsConfig's identical-values branch, which by
+	// construction can never run on the boot that performs the migration
+	// (that branch only runs once a store configuration ALREADY exists).
+	// So an operator following this exact migration path — the one
+	// RES-008 D1 exists for — never saw the "you may remove this
+	// variable" guidance on the one boot where it first became true. It
+	// is logged here, once, on the migrating boot itself.
+	logger.Warn("migrated SHOWMESH_FPP_ENDPOINTS into the coordinator's store as fpp.endpoints revision 1 (RES-008 D1). " +
+		"The store is now authoritative — this variable is no longer read for anything and may be removed from your " +
+		"environment. Leaving it set is safe as long as it continues to match the store's active configuration; a later " +
+		"restart with a DIFFERENT value refuses to start rather than silently overriding the store.")
+
 	return envEndpoints, nil
 }
 

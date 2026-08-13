@@ -2587,6 +2587,176 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
+// CLAUDE.md DEFECT 2: before this block, runDiscovery/declareNode/
+// deleteNodeDeclaration had NO test asserting the actual HTTP method,
+// path, or request body — every one of the 331 tests already passing
+// could not have noticed a wrong path (`/discovery/runsXX`), a wrong
+// body key (`{labelX, notesX}`), or the missing-required `confirm: true`
+// on the delete. views/NodesList.test.tsx mocks all three at the '../api'
+// boundary (isolating its OWN branching, correctly — see that file's own
+// comment), which means nothing anywhere proved these methods issue the
+// request the server actually expects. Same style as the seam A block
+// immediately above: real path/method/body assertions against a real
+// node:http server, no store.connect() needed since none of these three
+// touch the read loop (see store.ts's own "Step 7 seam B" section
+// comment for why).
+describe('ApiStore: Step 7 seam B (RES-008 D2/D6) — discovery and declaration', () => {
+  it('runDiscovery() POSTs to /discovery/runs with no body and returns the run and proposals as-is', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        respondJson(res, 200, {
+          serverTime: '2026-08-12T22:00:00Z',
+          run: {
+            id: 'run-1', startedAt: '2026-08-12T22:00:00Z', finishedAt: '2026-08-12T22:00:01Z',
+            complete: true, reason: null, foundCount: 1,
+            initiatedByPrincipalId: 'p-1', initiatedByPrincipalName: 'admin-1',
+          },
+          proposals: [{ nodeId: 'shed-01', source: 'node' }],
+        })
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.runDiscovery()
+
+    expect(gotMethod).toBe('POST')
+    expect(gotPath).toBe('/discovery/runs')
+    // No body at all — client.ts only sets Content-Type/encodes a body
+    // when init.body !== undefined, and runDiscovery calls postJson with
+    // `undefined`. A stray `{}` or any other body here would be this
+    // method silently starting to send something the contract never
+    // asked for.
+    expect(gotBody).toBe('')
+    expect(resp.run.id).toBe('run-1')
+    expect(resp.proposals).toEqual([{ nodeId: 'shed-01', source: 'node' }])
+  })
+
+  it('runDiscovery() rejects on a 403 (missing config:write) rather than resolving with a fabricated run', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 403, {
+        type: 'https://showmesh.dev/problems/forbidden', title: 'Forbidden', status: 403,
+        detail: 'this action requires the config:write scope', serverTime: '2026-08-12T22:00:00Z',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.runDiscovery()).rejects.toThrow(/config:write/)
+  })
+
+  it('declareNode() POSTs the exact {label, notes} body to /nodes/{nodeId}/declaration', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        respondJson(res, 200, {
+          serverTime: '2026-08-12T22:00:00Z',
+          declaration: {
+            declared: true, label: 'Shed', notes: 'north fence',
+            declaredAt: '2026-08-12T22:00:00Z', declaredByPrincipalId: 'p-1', declaredByPrincipalName: 'admin-1',
+            discoveryState: 'present', discoveryReason: null, lastDiscoveryRunId: 'run-1',
+            lastDiscoveredAt: '2026-08-12T22:00:00Z', notSeenAsOfRunId: null, notSeenAsOfRunFinishedAt: null,
+          },
+        })
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.declareNode('shed-01', 'Shed', 'north fence')
+
+    expect(gotMethod).toBe('POST')
+    // encodeURIComponent(nodeId) — asserted with an id containing a
+    // character that would otherwise reveal a raw, unencoded interpolation.
+    expect(gotPath).toBe('/nodes/shed-01/declaration')
+    expect(JSON.parse(gotBody)).toEqual({ label: 'Shed', notes: 'north fence' })
+    expect(resp.declaration.declared).toBe(true)
+    expect(resp.declaration.label).toBe('Shed')
+  })
+
+  it('declareNode() percent-encodes a nodeId containing characters that are not URL-safe', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        respondJson(res, 200, {
+          serverTime: '2026-08-12T22:00:00Z',
+          declaration: {
+            declared: true, label: '', notes: '',
+            declaredAt: '2026-08-12T22:00:00Z', declaredByPrincipalId: 'p-1', declaredByPrincipalName: 'admin-1',
+            discoveryState: 'unknown', discoveryReason: 'no discovery run history is available',
+            lastDiscoveryRunId: null, lastDiscoveredAt: null, notSeenAsOfRunId: null, notSeenAsOfRunFinishedAt: null,
+          },
+        })
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.declareNode('node/with slash', '', '')
+
+    expect(gotPath).toBe('/nodes/node%2Fwith%20slash/declaration')
+  })
+
+  it('declareNode() rejects on a 500 (e.g. the audit-write same-transaction refusal) rather than resolving', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 500, makeProblem({ status: 500, detail: 'could not record this write in the audit log' }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.declareNode('shed-01', '', '')).rejects.toThrow(/audit log/)
+  })
+
+  it('deleteNodeDeclaration() sends DELETE with {"confirm":true} to /nodes/{nodeId}/declaration — never false, never omitted', async () => {
+    let gotMethod = ''
+    let gotPath = ''
+    let gotBody = ''
+    const s = await server((req, res) => {
+      gotMethod = req.method ?? ''
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        res.writeHead(204, { 'ShowMesh-API-Version': '1' })
+        res.end()
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.deleteNodeDeclaration('shed-01')
+
+    expect(gotMethod).toBe('DELETE')
+    expect(gotPath).toBe('/nodes/shed-01/declaration')
+    // The server REQUIRES this exact body (BUILD-PLAN Step 7 seam B B2):
+    // a `false`, an omitted key, or any other shape is a silent refusal
+    // this client must never risk sending.
+    expect(JSON.parse(gotBody)).toEqual({ confirm: true })
+  })
+
+  it('deleteNodeDeclaration() rejects on a 409 (e.g. confirm not honored) rather than resolving as if it succeeded', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 409, makeProblem({ status: 409, detail: 'declaration removal was not confirmed' }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.deleteNodeDeclaration('shed-01')).rejects.toThrow(/not confirmed/)
+  })
+})
+
 describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first write)', () => {
   it('POSTs the exact request shape (action, a minted idempotencyKey) and returns command as-is, never inferring success from the HTTP round trip alone', async () => {
     let gotMethod = ''
@@ -2663,6 +2833,61 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
     expect(seenKeys[0]).not.toBe(seenKeys[1])
   })
 
+  // The actual defect this project shipped (CLAUDE.md's DEFECT 1):
+  // `crypto.randomUUID()` is `[SecureContext]`-gated and is simply
+  // ABSENT — not thrown, not caught — on the plain http:// origin this
+  // UI deploys to (ADR-022, deploy/README.md's http://<host>:8081). Node
+  // exposes it unconditionally, so this test removes it from the global
+  // explicitly to simulate exactly what a real browser on that origin
+  // already does on its own, and proves the write still goes out with a
+  // well-formed v4 idempotency key via the getRandomValues fallback
+  // (uuid.ts) rather than throwing `TypeError: crypto.randomUUID is not
+  // a function` and never leaving the browser at all.
+  it('still sends a valid v4 idempotencyKey when crypto.randomUUID is unavailable (secure-context restriction)', async () => {
+    let gotBody: { idempotencyKey?: string } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, {
+            serverTime: '2026-08-12T22:00:00Z',
+            command: {
+              id: 'cmd-1', idempotencyKey: gotBody.idempotencyKey, action: 'fpp.stop_playlist',
+              instanceId: 'bench-fpp', replay: false, outcome: 'confirmed', outcomeState: 'current',
+              outcomeReason: '', attributionDegraded: false,
+              dispatchedAt: '2026-08-12T22:00:00Z', resolvedAt: '2026-08-12T22:00:00Z',
+            },
+          })
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    const originalRandomUUID = globalThis.crypto.randomUUID
+    // Assignment, not `delete`: Node's Crypto defines randomUUID on its
+    // PROTOTYPE, so `delete globalThis.crypto.randomUUID` silently no-ops
+    // (deleting a non-existent own property) and the real method keeps
+    // answering right through the "removed" API — see uuid.test.ts's
+    // withoutRandomUUID comment for the full explanation of why this
+    // would otherwise be a test that passes for the wrong reason.
+    // @ts-expect-error deliberately simulating a secure-context-gated
+    // absence, which TypeScript's lib.dom.d.ts does not model as optional.
+    globalThis.crypto.randomUUID = undefined
+    try {
+      await store.stopFPPPlaylist('bench-fpp')
+    } finally {
+      globalThis.crypto.randomUUID = originalRandomUUID
+    }
+
+    expect(gotBody.idempotencyKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    )
+  })
+
   it('rejects on a 403 (missing fpp:command) rather than resolving with a fabricated result', async () => {
     const s = await server((req, res) => {
       if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
@@ -2677,5 +2902,72 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
 
     const store = makeStore(s.baseUrl)
     await expect(store.stopFPPPlaylist('bench-fpp')).rejects.toThrow(/fpp:command/)
+  })
+
+  // Step 7 seam C review defect 1: stopFPPPlaylist must use
+  // FPP_COMMAND_REQUEST_TIMEOUT_MS (35s), never the store's own shorter
+  // default request budget — a command dispatch is a long request by
+  // design (the coordinator waits out its own confirmation deadline
+  // before answering) and sharing every other route's short snapshot-read
+  // timeout made the coordinator's honest "unconfirmed" outcome
+  // unreachable: this client aborted first, every time.
+  it('uses FPP_COMMAND_REQUEST_TIMEOUT_MS, not the store-wide default request budget, for this call', async () => {
+    // A mutable holder object, not a bare reassigned `let`: this file's
+    // pattern of a nested async closure assigning into an outer variable
+    // read much later (past an `await`) is what several tests below this
+    // one already do with a bare `let`, but TypeScript's control-flow
+    // narrowing for THIS particular shape (checked once inside a
+    // `waitFor` callback, called once several lines after) narrowed the
+    // variable to `never` at the call site despite the explicit
+    // `(() => void) | null` annotation — a false positive, not a real
+    // type error (this file's whole suite runs on esbuild's stripped
+    // transform, which does not type-check at all). Wrapping it in an
+    // object sidesteps the narrowing entirely rather than fighting it.
+    const release: { fn: (() => void) | null } = { fn: null }
+    const s = await server((req, res) => {
+      if (req.url === '/fpp/bench-fpp/commands' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          // Hold the response open until the test explicitly releases it,
+          // well after advancing past the store's own shorter default.
+          release.fn = () => {
+            respondJson(res, 200, {
+              serverTime: '2026-08-12T22:00:00Z',
+              command: {
+                id: 'cmd-1', idempotencyKey: 'k', action: 'fpp.stop_playlist',
+                instanceId: 'bench-fpp', replay: false, outcome: 'confirmed', outcomeState: 'current',
+                outcomeReason: '', attributionDegraded: false,
+                dispatchedAt: '2026-08-12T22:00:00Z', resolvedAt: '2026-08-12T22:00:00Z',
+              },
+            })
+          }
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    // A FakeClock (test-support/fake-clock.ts), same reasoning as the
+    // request-timeout reconnect test above: virtual time only advances
+    // when this test calls clock.advance(), so this cannot flake on real
+    // scheduling jitter. requestTimeoutMs: 40 is the store-WIDE default
+    // this call must NOT be bound by.
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, requestTimeoutMs: 40 })
+
+    const resultPromise = store.stopFPPPlaylist('bench-fpp')
+    await waitFor(() => release.fn !== null, { message: 'the POST was never received by the test server' })
+    if (release.fn === null) throw new Error('release.fn not set')
+
+    // Advance FAR past the store's own 40ms default (which would already
+    // have aborted a request bound by it) but still well under
+    // FPP_COMMAND_REQUEST_TIMEOUT_MS (35_000ms) — proving THIS call used
+    // the longer budget.
+    clock.advance(5_000)
+    release.fn()
+
+    const result = await resultPromise
+    expect(result.outcome).toBe('confirmed')
   })
 })

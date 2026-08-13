@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -161,13 +163,69 @@ func (h *handlers) handleGetFPPEndpointsConfigRevisions(w http.ResponseWriter, r
 	})
 }
 
-// fppEndpointsConfigPutRequest is PUT /api/v1/config/fpp.endpoints'
-// request body: a bare payload, no envelope — unlike a response, a write
-// request carries no serverTime for the client to be missing (contract
-// section 6.2's serverTime rule is a RESPONSE guarantee), so there is
-// nothing this envelope would add over the payload alone.
-type fppEndpointsConfigPutRequest struct {
-	Endpoints []v1.ConfigFPPEndpoint `json:"endpoints"`
+// decodeFPPEndpointsConfigPutBody implements PUT /api/v1/config/fpp.endpoints'
+// request-body contract precisely, replacing a bare
+// `struct{ Endpoints []v1.ConfigFPPEndpoint "json:\"endpoints\"" }` decode
+// that let three different malformed bodies all silently mean "wipe every
+// configured endpoint": `{}` (the key absent entirely), `{"endpoints":null}`
+// (a JSON null, which encoding/json accepts into a slice field as a no-op
+// with no error — the exact "a JSON null is not an absent key" defect class
+// CLAUDE.md names, one layer up from Step 5's `ma` field), and a typo'd key
+// like `{"endpoint":[...]}` (an unknown field a struct-based decode simply
+// drops). All three now produce a 400 naming the problem instead of a 200
+// that deletes every FPP instance this coordinator polls.
+//
+// Distinguishes three cases a single struct field cannot: ABSENT (the key
+// is missing entirely), NULL (the key is present holding a JSON `null`),
+// and PRESENT (the key holds an array, possibly empty) — a bare struct
+// field decodes ABSENT and NULL identically, both leaving the Go field at
+// its zero value, nil, which is exactly the ambiguity this function exists
+// to remove. PRESENT-BUT-EMPTY (`"endpoints": []`) is the only way to
+// deliberately configure zero endpoints (RES-008 D1 says nothing requires
+// at least one FPP instance — an operator decommissioning their last one
+// is legitimate), and it is accepted.
+//
+// Also rejects any top-level key other than "endpoints". This does NOT
+// conflict with ADR-020's additive-only, "clients ignore unknown fields"
+// rule: that rule binds a CLIENT reading a SERVER's RESPONSE (so a v1
+// client survives a future v1.1 coordinator adding a response field),
+// never a SERVER validating a REQUEST BODY it is about to act on. The two
+// directions are opposite on purpose — be permissive reading what this
+// coordinator itself already promised (responses), be strict validating
+// what an operator is asking this coordinator to DO (requests) — because a
+// server that silently ignores an unrecognized request field cannot tell
+// an operator's typo ("endpoint") from a deliberate zero-endpoint payload
+// ("endpoints": []), which is exactly how this defect happened.
+func decodeFPPEndpointsConfigPutBody(body io.Reader) ([]config.FPPEndpoint, error) {
+	var top map[string]json.RawMessage
+	if err := json.NewDecoder(body).Decode(&top); err != nil {
+		return nil, fmt.Errorf(`request body must be a JSON object matching {"endpoints":[{"id":string,"url":string},...]}: %w`, err)
+	}
+
+	for key := range top {
+		if key != "endpoints" {
+			return nil, fmt.Errorf(`unknown field %q; the only accepted top-level field is "endpoints"`, key)
+		}
+	}
+
+	endpointsRaw, present := top["endpoints"]
+	if !present {
+		return nil, errors.New(`"endpoints" is required and was absent; pass an empty array ("endpoints": []) to deliberately configure zero endpoints`)
+	}
+	if bytes.Equal(bytes.TrimSpace(endpointsRaw), []byte("null")) {
+		return nil, errors.New(`"endpoints" must not be null; pass an empty array ("endpoints": []) to deliberately configure zero endpoints`)
+	}
+
+	var wire []v1.ConfigFPPEndpoint
+	if err := json.Unmarshal(endpointsRaw, &wire); err != nil {
+		return nil, fmt.Errorf(`"endpoints" must be an array of {"id":string,"url":string}: %w`, err)
+	}
+
+	endpoints := make([]config.FPPEndpoint, 0, len(wire))
+	for _, e := range wire {
+		endpoints = append(endpoints, config.FPPEndpoint{ID: e.ID, URL: e.URL})
+	}
+	return endpoints, nil
 }
 
 // handlePutFPPEndpointsConfig serves PUT /api/v1/config/fpp.endpoints:
@@ -177,9 +235,28 @@ type fppEndpointsConfigPutRequest struct {
 // this runs the request already carries an authenticated principal holding
 // config:write and has passed decision 6's CSRF check.
 //
+// Two refusals run BEFORE any of that, both Step 7 seam A review findings,
+// both refusing at the moment of the mistake rather than after a restart
+// that never completes:
+//
+//   - Defect 3a: if [Dependencies.FPPEndpointsEnvVarSet] is true, this
+//     write is refused with 409 outright, with no body read at all — a
+//     write accepted while SHOWMESH_FPP_ENDPOINTS is still set cannot
+//     survive this coordinator's own disagreement rule
+//     (internal/coordinator/configsync.go) on the very next restart, so
+//     accepting it now and refusing to boot later is strictly worse than
+//     refusing it now, while this coordinator is up and the operator can
+//     read why.
+//   - Defect 4: once decoded and shape-validated, the proposed endpoint
+//     list is cross-checked against [Dependencies.FPPMQTTHostIDs] with the
+//     SAME rule ([config.ValidateFPPMQTTHostIDs]) startup enforces
+//     fatally, naming the offending instance id — dropping or renaming an
+//     id SHOWMESH_FPP_MQTT_HOSTS still references would otherwise be
+//     accepted with 200 and refuse to boot on the next restart.
+//
 // ADR-009 requires invalid configuration be REJECTED BEFORE ACTIVATION,
 // and this function's ordering is what makes that literally true: decoding
-// and [config.ValidateFPPEndpoints] both run and can both fail BEFORE
+// and both validation passes all run and can all fail BEFORE
 // [identity.Service.AuditedWrite] is ever called, so a rejected write never
 // opens a transaction and never leaves a config_revisions row behind — the
 // "rejected write leaves no revision behind" half of this seam's A1
@@ -197,17 +274,17 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	now := h.now()
 	ac := authFromContext(r.Context())
 
-	var req fppEndpointsConfigPutRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxConfigRequestBodyBytes+1))
-	if err := dec.Decode(&req); err != nil {
-		writeProblem(w, h.logger, now, invalidParameterProblem(
-			`request body must be JSON matching {"endpoints":[{"id":string,"url":string},...]}`))
+	// Defect 3a, checked first and before any body is read: see this
+	// function's own doc comment.
+	if h.deps.FPPEndpointsEnvVarSet {
+		writeProblem(w, h.logger, now, fppEndpointsEnvVarSetProblem())
 		return
 	}
 
-	endpoints := make([]config.FPPEndpoint, 0, len(req.Endpoints))
-	for _, e := range req.Endpoints {
-		endpoints = append(endpoints, config.FPPEndpoint{ID: e.ID, URL: e.URL})
+	endpoints, err := decodeFPPEndpointsConfigPutBody(io.LimitReader(r.Body, maxConfigRequestBodyBytes+1))
+	if err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
 	}
 
 	// ADR-009: rejected before activation. Nothing below this point has
@@ -215,6 +292,13 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	// been called — so a validation failure here leaves the store
 	// untouched.
 	if err := config.ValidateFPPEndpoints(endpoints); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
+	}
+
+	// Defect 4, run only once the list is shape-valid: see this function's
+	// own doc comment.
+	if err := config.ValidateFPPMQTTHostIDs(h.deps.FPPMQTTHostIDs, endpoints); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 		return
 	}

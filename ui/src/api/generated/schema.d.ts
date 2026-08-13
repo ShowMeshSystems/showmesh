@@ -76,6 +76,25 @@ export interface paths {
         /** One node */
         get: operations["getNode"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/declaration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
         /**
          * Promote a node to declared, or update its label/notes (RES-008 D2, BUILD-PLAN Step 7 seam B)
          * @description A coordinator-local state change behind `config:write`. Declaring what hardware exists is configuration — ADR-024 decision 4 defines no narrower scope. Idempotent: promoting an already-declared node updates its label/notes without disturbing who first declared it or when. ADR-024 decision 11's same-transaction rule applies in full: the declaration write and its audit entry land in one transaction, or neither does — with the audit store failing, this operation is refused and the declaration is absent afterwards.
@@ -102,7 +121,7 @@ export interface paths {
         put?: never;
         /**
          * Run discovery and propose undeclared nodes (RES-008 D2/D6, BUILD-PLAN Step 7 seam B)
-         * @description Behind `config:write`. Reads what this coordinator already observes — agent hellos already in inventory, and configured FPP instances — and PROPOSES what is not currently declared; it never creates, modifies, or deletes a declaration's own identity (ADR-003: discovery proposes, an operator action promotes). Performs NO active probing of its own: no mDNS, no subnet sweep, no MultiSync discover ping, so it cannot find equipment that has never talked to ShowMesh. A run that fails partway is reported as a `500` and is recorded with `complete: false` and a reason — never a missing row and never a silent partial success.
+         * @description Behind `config:write`. Reads what this coordinator already observes — agent hellos already in inventory, and configured FPP instances — and PROPOSES what is not currently declared; it never creates, modifies, or deletes a declaration's own identity (ADR-003: discovery proposes, an operator action promotes). Performs NO active probing of its own: no mDNS, no subnet sweep, no MultiSync discover ping, so it cannot find equipment that has never talked to ShowMesh. A run that fails partway is reported as a `500` and is recorded with `complete: false` and a reason — never a missing row and never a silent partial success. Discovery runs are serialized: a second, overlapping request while one is already in progress on this coordinator is refused with `409`, never queued — see `components.responses.Conflict`'s own doc comment on why interleaving two runs is unsafe rather than merely wasteful.
          */
         post: operations["startDiscoveryRun"];
         delete?: never;
@@ -156,7 +175,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch a primitive FPP lifecycle command (Step 7 seam C)
-         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over GET at its own /api/command/... endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt. A replayed `idempotencyKey` dispatches nothing and returns the original command's result, flagged `replay: true`.
+         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over GET at its own /api/command/... endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt. A replayed `idempotencyKey` — reused against the SAME `action` and the SAME `instanceId` it was first used against — dispatches nothing and returns the original command's result, flagged `replay: true`. An `idempotencyKey` reused against a DIFFERENT `action` or a DIFFERENT `instanceId` is a `409` conflict, not a replay: see FPPCommandRequest.idempotencyKey and the `409` response below.
          */
         post: operations["dispatchFPPCommand"];
         delete?: never;
@@ -332,7 +351,10 @@ export interface paths {
         get: operations["getFPPEndpointsConfig"];
         /**
          * Write a new fpp.endpoints configuration revision (Step 7 seam A, RES-008 D1)
-         * @description Requires `config:write` (admin only). Validates the request body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write` (admin only). The request body's `endpoints` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero endpoints is an explicit empty array (`"endpoints": []`). No other top-level field is accepted; an unrecognized one (e.g. a typo'd `endpoint`) is rejected rather than silently ignored, unlike a response body, where an unknown field must be ignored (this is a request a client is asking this coordinator to ACT on, not a response whose shape this coordinator already promised — see `ConfigFPPEndpointsPayload`'s own description).
+         *     Validates the body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. Also refused before activation: an endpoint list that would drop an instance id `SHOWMESH_FPP_MQTT_HOSTS` still references, which this coordinator's own startup already enforces fatally — refusing it here means the mistake is refused at write time, not discovered as a refusal to boot on the next restart.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_ENDPOINTS` is still set in this coordinator's own process environment: a write accepted in that state cannot survive this coordinator's own env/store disagreement rule on its very next restart, so the refusal happens now, while this coordinator is up and the reason is readable, rather than after a restart that never completes.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPEndpointsConfig"];
         post?: never;
@@ -438,8 +460,9 @@ export interface components {
         };
         /**
          * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run — never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
-         *     `discoveryState` is one of four values: `present` (the most recent discovery run was complete and saw this node), `not_seen` (the most recent discovery run was complete and did NOT see this node — `discoveryReason`/`lastDiscoveryRunId`/`lastDiscoveredAt` describe THAT run, not this declaration's own possibly-older bookkeeping), `unknown` (either the most recent run did not complete — an incomplete run is never evidence of absence, so this is never `not_seen` — or no discovery run history is available at all, which covers both "never run" and "history pruned" identically since this API cannot and must not guess which), or `not_applicable` (`declared` is false).
-         *     `lastDiscoveryRunId` may name a run id that no longer resolves to any `DiscoveryRun` — `discovery_runs` is pruned by retention and a declaration's own last-seen pointer is not, so a dangling id is expected, not a bug, and it renders as `unknown` with a reason, never as blank.
+         *     `discoveryState` is one of four values: `present` (the most recent discovery run was complete and saw this node), `not_seen` (the most recent discovery run was complete and did NOT see this node — `discoveryReason` states why and `notSeenAsOfRunId`/ `notSeenAsOfRunFinishedAt` name THAT run specifically), `unknown` (either the most recent run did not complete — an incomplete run is never evidence of absence, so this is never `not_seen` — or no discovery run history is available at all, which covers both "never run" and "history pruned" identically since this API cannot and must not guess which), or `not_applicable` (`declared` is false).
+         *     `lastDiscoveryRunId`/`lastDiscoveredAt` are this declaration's OWN last-seen-by-discovery bookkeeping (the run that most recently DID see it, and when — null if it has never once been seen). They are NEVER repurposed to carry any other run's identity, including the run that just failed to see it: a field literally named `lastDiscoveredAt` asserting a time seconds old for a node that has actually been dark for a week would be exactly backwards. `lastDiscoveryRunId` may name a run id that no longer resolves to any `DiscoveryRun` — `discovery_runs` is pruned by retention and a declaration's own last-seen pointer is not, so a dangling id is expected, not a bug, and it renders as `unknown` (or `not_seen`, if a newer complete run has since run and also missed it) with a reason, never as blank.
+         *     `notSeenAsOfRunId`/`notSeenAsOfRunFinishedAt` name the run that did NOT see this declared node — populated ONLY when `discoveryState` is `not_seen`, both null otherwise. Added additively: an existing client that has never heard of these two fields keeps working unchanged, reading `discoveryReason`'s prose and `lastDiscoveryRunId`/`lastDiscoveredAt`'s own (unaffected) bookkeeping exactly as before.
          */
         NodeDeclaration: {
             declared: boolean;
@@ -455,6 +478,9 @@ export interface components {
             lastDiscoveryRunId: string | null;
             /** Format: date-time */
             lastDiscoveredAt: string | null;
+            notSeenAsOfRunId: string | null;
+            /** Format: date-time */
+            notSeenAsOfRunFinishedAt: string | null;
         };
         /** @description One discovery run's wire representation (RES-008 D6, BUILD-PLAN Step 7 seam B). `finishedAt` and `reason` are null while a run is still in progress; `reason` is also null for a run that completed successfully (`complete: true`) — it is populated only when `complete` is false and the run has finished (failed partway), never a missing row and never a silent partial success. */
         DiscoveryRun: {
@@ -481,10 +507,10 @@ export interface components {
             run: components["schemas"]["DiscoveryRun"];
             proposals: components["schemas"]["DiscoveryProposal"][];
         };
-        /** @description Body of POST /nodes/{nodeId}/declaration. Both fields are optional and default to empty — a bare `{}` promotes the named node to declared with no label or notes. Idempotent: re-declaring an already-declared node updates its label/notes without disturbing who first declared it or when. */
+        /** @description Body of POST /nodes/{nodeId}/declaration. Both fields are optional AND nullable — a bare `{}` (or an absent/null field) promotes the named node to declared with no label or notes on a BRAND-NEW declaration, or leaves that field's currently declared value UNCHANGED on an already-declared node. Idempotent: re-declaring an already-declared node with neither field present never disturbs its existing label/notes, or who first declared it, or when. An explicit empty string (`""`) still clears a field; only an absent key or an explicit `null` means "leave unchanged" — the same absent-versus-empty distinction as a JSON `null` never being an absent key, applied in reverse: here, ABSENCE is what must be representable and honored, because a client that cannot omit a field cannot ask for "unchanged" at all. */
         DeclareNodeRequest: {
-            label?: string;
-            notes?: string;
+            label?: string | null;
+            notes?: string | null;
         };
         NodeDeclarationResponse: {
             /** Format: date-time */
@@ -593,6 +619,7 @@ export interface components {
         FPPCommandRequest: {
             /** @enum {string} */
             action: "stopPlaylist";
+            /** @description Scoped to the exact (action, instanceId) pair it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action and instanceId is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action or a DIFFERENT instanceId is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
@@ -614,7 +641,12 @@ export interface components {
              * @enum {string}
              */
             outcome: "confirmed" | "unconfirmed" | "";
-            outcomeState: string;
+            /**
+             * @description pkg/observation's six-value evidence-state vocabulary — the state of the evidence this outcome was actually decided from (or, for a command a coordinator restart left dispatched and never resolved, the state a startup reconciliation pass decided it from — see this document's own note on outcomeReason). NEVER blank for a resolved command: a bare, unconstrained string here is exactly what let a coordinator restart leave outcomeState/outcomeReason as permanent empty strings, indistinguishable from the one narrow, accepted race a REPLAY response's outcome (not outcomeState) may legitimately be empty for — see FPPCommandResult.outcome's own description.
+             * @enum {string}
+             */
+            outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            /** @description A short, human-readable explanation. Non-empty whenever this response's own `command.outcome` is `"confirmed"` or `"unconfirmed"` (i.e. whenever this command has actually resolved) — the only value for which it may be empty is a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching `outcome`'s own narrow accepted-empty case exactly. A command a coordinator restart left stranded is resolved by a startup reconciliation pass before it can ever reach a client in that state — see outcomeState's own description — so that condition is never a second source of a blank reason. */
             outcomeReason: string;
             /** @description True when this command's dispatch or outcome audit entry could not be written. Stop Playlist is a member of ADR-024 decision 11's blackout/stop/power-off safety class, so the command proceeds regardless, with a degraded attribution record written to the coordinator's stderr instead of the audit log. */
             attributionDegraded: boolean;
@@ -731,7 +763,10 @@ export interface components {
             id: string;
             url: string;
         };
-        /** @description The "fpp.endpoints" configuration kind's payload: the body PUT /config/fpp.endpoints accepts, and the "payload" member of GET /config/fpp.endpoints' response. endpoints is never null — an empty configured-endpoints list is a real, valid state. */
+        /**
+         * @description The "fpp.endpoints" configuration kind's payload: the body PUT /config/fpp.endpoints accepts, and the "payload" member of GET /config/fpp.endpoints' response. endpoints is never null — an empty configured-endpoints list is a real, valid state, and it is the only way to deliberately configure zero endpoints; an absent or null "endpoints" key on a PUT is a `400`, never a silent wipe.
+         *     This schema is deliberately NOT closed (no `additionalProperties: false`) even though the PUT handler itself rejects an unrecognized top-level field: ADR-020 requires this published document stay additive-only-compatible for a client reading a RESPONSE (this schema also describes GET's "payload" member), and a closed schema here would apply to both directions at once. The request-side strictness is enforced by the coordinator's own handler, not by this schema.
+         */
         ConfigFPPEndpointsPayload: {
             endpoints: components["schemas"]["ConfigFPPEndpoint"][];
         };
@@ -774,16 +809,16 @@ export interface components {
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /**
-         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the eleven values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the twelve values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
-         *     Four of the eleven are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential).
+         *     Four of the twelve are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action or target (Step 7 seam C) — `detail` names which.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict";
             title: string;
             status: number;
             detail: string;
@@ -922,11 +957,24 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The path names a real route, but this request's method is not one that route serves. This document defines only `get` operations because every route in this API is read-only (contract section 2's "read-only means read-only"); a `POST`, `PUT`, `PATCH`, or `DELETE` to any path documented above returns this response rather than a `404`, and the `Allow` header names exactly the methods that path does serve. */
+        /**
+         * @description The path names a real route, but this request's method is not one that route serves. A method this document does not define for a path returns this response rather than a `404`, and the `Allow` header names exactly the methods that path does serve.
+         *     This description used to say that the document defined only `get` operations because every route was read-only. That stopped being true in Step 6, which added `POST /session` and `POST /bootstrap`, and stopped being true three times over in Step 7, which added the configuration, discovery and FPP command writes. What has NOT changed is the rule underneath it: no state change in this API is reachable by `GET` (ADR-024), so a `GET` remains safe to issue against any path here.
+         */
         MethodNotAllowed: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                 Allow: components["headers"]["Allow"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request itself is valid, but this coordinator's current state makes it unsafe or meaningless to act on right now — the identical request would succeed at a different moment, which is what distinguishes this from `InvalidParameter` (a property of the request itself). Every operation that returns this response names its own specific cause in `detail`: `PUT /config/fpp.endpoints` (Step 7 seam A) refuses because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own process environment (RES-008 D1) and the identical body would be accepted the moment the variable is removed and this coordinator restarts once; `POST /discovery/runs` (Step 7 seam B) refuses because a run is already in progress. */
+        Conflict: {
+            headers: {
+                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                 [name: string]: unknown;
             };
             content: {
@@ -1066,7 +1114,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
             cookie?: never;
         };
         requestBody?: {
@@ -1105,7 +1156,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -1170,6 +1224,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1260,6 +1315,16 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            /** @description `idempotencyKey` was already used for a command whose `action` or `instanceId` differs from this request's own — a conflict, not a replay (see this operation's own description). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };
@@ -1580,6 +1645,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

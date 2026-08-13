@@ -79,10 +79,24 @@ const DISCOVERY_STATE: Record<DiscoveryState, { tone: StatusTone; icon: string; 
   not_applicable: { tone: 'unknown', icon: '–', label: 'not declared' },
 }
 
+// discoveryState is typed as the closed DiscoveryState union at compile
+// time, but the value actually rendered here came off the wire (contract
+// ADR-020: within-a-major-version is additive-only, and clients must
+// tolerate an unknown value rather than assume the union TypeScript sees
+// is exhaustive at runtime). Indexing DISCOVERY_STATE directly and
+// dereferencing the result crashed this component — and, since nothing
+// caught it, unmounted the whole nodes list route — the moment a
+// coordinator ever adds a fifth verdict. CollectorStatusBadge above
+// already gets this right with `?? 'unknown'`; this brings the third
+// sibling renderer in line with the other two.
 export function DeclarationBadge({ declared, discoveryState }: { declared: boolean; discoveryState: DiscoveryState }) {
   if (!declared) {
     return <StatusBadge tone="unknown" icon="–" label="not declared" />
   }
-  const spec = DISCOVERY_STATE[discoveryState]
+  const spec = DISCOVERY_STATE[discoveryState] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized discovery state (${String(discoveryState)})`,
+  }
   return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }

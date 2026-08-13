@@ -26,9 +26,29 @@ type AuditRecord struct {
 	// convention.
 	ID int64
 
-	// RecordedAt is this Store's own clock at the moment of the write,
-	// exactly like [EventRecord.RecordedAt] — bookkeeping, not evidence,
-	// and ignored on input.
+	// RecordedAt, on OUTPUT (a row read back from the table), is when the
+	// insert actually happened.
+	//
+	// On INPUT this field is HONORED, unlike [EventRecord.RecordedAt]'s
+	// identical-looking field, which really is caller-ignored — the two
+	// diverge deliberately. A non-zero value is stored verbatim; a zero
+	// value (every caller that does not set it — [appendAuditEntry] itself
+	// checks with time.Time.IsZero) falls back to this Store's own clock,
+	// exactly as before. Step 7 seam A review defect 5: every production
+	// caller of [identity.Service.WriteAudit]/[AuditedWrite] already sets
+	// [identity.AuditEntry.Timestamp] to a request-scoped "now" specifically
+	// because a security record's timestamp is meant to mean something, and
+	// before this fix that value was silently discarded on the way into
+	// this table — a field every caller could see and set, with no effect,
+	// is a trap for the next caller that genuinely needs a non-now
+	// timestamp (e.g. a replayed or backfilled entry).
+	//
+	// [EventRecord.RecordedAt] is deliberately NOT changed by this fix: an
+	// event is this store's own observation of when a fact became known,
+	// which by definition cannot predate the write, while an audit entry
+	// attributes an action to a principal at a moment the CALLER is often
+	// better positioned to state than "whenever this INSERT happened to
+	// run".
 	RecordedAt time.Time
 
 	PrincipalID    string
@@ -69,6 +89,17 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 		params = "{}"
 	}
 
+	// Step 7 seam A review defect 5: rec.RecordedAt is honored when the
+	// caller set one (identity.AuditEntry.Timestamp, threaded through by
+	// identity/audit.go), and falls back to this Store's own clock only
+	// when it is the zero value — see AuditRecord.RecordedAt's doc
+	// comment for why this diverges from EventRecord's identical-looking,
+	// genuinely-caller-ignored field.
+	recordedAt := s.now()
+	if !rec.RecordedAt.IsZero() {
+		recordedAt = rec.RecordedAt
+	}
+
 	res, err := q.ExecContext(ctx, `
 		INSERT INTO audit_log (
 			recorded_at, principal_id, principal_name, form, credential_id,
@@ -76,7 +107,7 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 			kind, command_id, outcome, outcome_state, outcome_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		timeToDB(s.now()), rec.PrincipalID, rec.PrincipalName, rec.Form, rec.CredentialID,
+		timeToDB(recordedAt), rec.PrincipalID, rec.PrincipalName, rec.Form, rec.CredentialID,
 		rec.ClientAddr, rec.Action, rec.Target, params, rec.IdempotencyKey,
 		rec.Kind, rec.CommandID, rec.Outcome, rec.OutcomeState, rec.OutcomeReason,
 	)

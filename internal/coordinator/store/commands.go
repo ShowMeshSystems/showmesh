@@ -406,3 +406,46 @@ func (s *Store) ListCommands(ctx context.Context, limit int) ([]CommandRecord, e
 func (t *Tx) ListCommands(ctx context.Context, limit int) ([]CommandRecord, error) {
 	return listCommands(ctx, t.tx, limit)
 }
+
+func listUnresolvedCommands(ctx context.Context, q querier) ([]CommandRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT`+commandColumns+`FROM commands WHERE resolved_at IS NULL ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list unresolved commands: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []CommandRecord
+	for rows.Next() {
+		rec, err := scanCommand(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: list unresolved commands: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list unresolved commands: %w", err)
+	}
+	return out, nil
+}
+
+// ListUnresolvedCommands returns every command whose lifecycle never
+// reached resolution (resolved_at IS NULL — never dispatched, dispatched
+// but never confirmed, or confirmed but never durably recorded), oldest
+// first. This is Step 7 seam C review defect 5's own reconciliation
+// primitive: a row can end up here only because the process that was
+// handling it stopped existing before it finished (a crash, a kill, or
+// defect 4's now-fixed context-cancellation bug) — a command still
+// legitimately in flight from a LIVE request never appears here except in
+// the narrow instant right after this coordinator itself starts, before it
+// has served a single request; see [api.ReconcileStrandedFPPCommands]'s
+// own doc comment for why that makes "call this once, at startup" sound
+// rather than merely convenient.
+func (s *Store) ListUnresolvedCommands(ctx context.Context) ([]CommandRecord, error) {
+	guardNotInTx(ctx, "Store.ListUnresolvedCommands")
+	return listUnresolvedCommands(ctx, s.db)
+}
+
+// ListUnresolvedCommands is [Store.ListUnresolvedCommands]'s [Tx] form.
+func (t *Tx) ListUnresolvedCommands(ctx context.Context) ([]CommandRecord, error) {
+	return listUnresolvedCommands(ctx, t.tx)
+}

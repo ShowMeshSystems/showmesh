@@ -31,6 +31,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# This script's entire job is to supply the Go suite's dependencies (a
+# throwaway broker and credentials). SHOWMESH_REQUIRE_TEST_DEPS turns its
+# dependency skip (requireTestBroker) into a hard test failure instead — a
+# missing dependency under THIS script means the script itself failed to
+# supply it, which must never read as a quiet, green skip. Run by hand
+# with this unset, the skip stays the convenient default an unprepared
+# laptop gets.
+export SHOWMESH_REQUIRE_TEST_DEPS=true
+
 # Pinned to the exact version deploy/docker-compose.yml pins, same as
 # test-integration.sh and test-integration-fpp.sh, so this suite never
 # silently drifts onto a different Mosquitto build than the reference

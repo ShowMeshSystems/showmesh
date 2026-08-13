@@ -810,6 +810,65 @@ func TestAuditLogNeverUpdatedOnlyInserted(t *testing.T) {
 	}
 }
 
+// TestAppendAuditEntryHonorsCallerRecordedAt is Step 7 seam A review
+// defect 5's store-level regression test: a caller-supplied RecordedAt
+// must survive into the stored row rather than being silently replaced by
+// the Store's own clock. The Store's clock is fixed to a DIFFERENT instant
+// than the one passed in, so a test that regresses to "always use
+// s.now()" fails rather than passing by coincidence.
+func TestAppendAuditEntryHonorsCallerRecordedAt(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	ctx := context.Background()
+
+	// One hour before the store's clock — distinguishable from it, but
+	// safely inside DefaultMaxAuditAge (180 days) so the amortized
+	// on-insert prune pass this Store also runs does not immediately
+	// remove the row and produce a false "honored" failure.
+	caller := mustTime(t, "2025-12-31T23:00:00Z")
+	if _, err := st.AppendAuditEntry(ctx, AuditRecord{Kind: "admin", Action: "x", RecordedAt: caller}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	got, err := st.ListAuditEntries(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if !got[0].RecordedAt.Equal(caller) {
+		t.Errorf("RecordedAt = %v, want the caller-supplied %v (store clock was %v — this must not be it)",
+			got[0].RecordedAt, caller, clock.now())
+	}
+}
+
+// TestAppendAuditEntryDefaultsRecordedAtToStoreClockWhenUnset is the
+// control for TestAppendAuditEntryHonorsCallerRecordedAt: a caller that
+// leaves RecordedAt at its zero value (every pre-existing caller in this
+// codebase except the two Step 7 seam A call sites) gets the Store's own
+// clock, unchanged from before defect 5's fix.
+func TestAppendAuditEntryDefaultsRecordedAtToStoreClockWhenUnset(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	ctx := context.Background()
+
+	if _, err := st.AppendAuditEntry(ctx, AuditRecord{Kind: "admin", Action: "x"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	got, err := st.ListAuditEntries(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if !got[0].RecordedAt.Equal(clock.now()) {
+		t.Errorf("RecordedAt = %v, want the store's own clock %v (unset RecordedAt must still default)", got[0].RecordedAt, clock.now())
+	}
+}
+
 func TestPruneAuditByRowCount(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	st := openTestStore(t, clock, WithMaxAuditRows(2), WithMaxAuditAge(0))

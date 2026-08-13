@@ -56,7 +56,7 @@
  * observations within an FPP instance that remains present, never of the
  * instance itself (ADR-023's own scoping of that field).
  */
-import { ApiClient, type FetchLike } from './client'
+import { ApiClient, FPP_COMMAND_REQUEST_TIMEOUT_MS, type FetchLike } from './client'
 import { computeBackoffMs, DEFAULT_BACKOFF, type BackoffConfig } from './backoff'
 import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
 import {
@@ -74,6 +74,7 @@ import { IncompatibleVersionError, UnauthorizedError, isAbortError } from './err
 import { SSEParser, type SSEFrame } from './sse'
 import { sleep, waitUntilAborted } from './async-utils'
 import { clearStoredToken, setStoredToken } from './token'
+import { randomUUIDv4 } from './uuid'
 import type { components } from './generated/schema'
 
 type SchemaSnapshot = components['schemas']['Snapshot']
@@ -479,10 +480,14 @@ export class ApiStore {
   /**
    * `POST /api/v1/fpp/{instanceId}/commands` with `{"action":"stopPlaylist"}`
    * (Step 7 seam C, ADR-001/ADR-003) — this application's first write.
-   * Mints a fresh idempotency key per call via `crypto.randomUUID()`
-   * (RES-015 section 7.3: FPP supplies nothing a coordinator could derive
-   * one from, so the CALLER mints it — the same rule showmeshctl's own
-   * `stop-playlist` subcommand follows independently). Returns the
+   * Mints a fresh idempotency key per call via `randomUUIDv4()` (./uuid.ts)
+   * — NOT a bare `crypto.randomUUID()` call, which is secure-context-only
+   * and is simply absent (not thrown, not caught) on the plain `http://`
+   * origin this UI actually deploys to (ADR-022; see uuid.ts's own doc
+   * comment for the full story) — (RES-015 section 7.3: FPP supplies
+   * nothing a coordinator could derive one from, so the CALLER mints it —
+   * the same rule showmeshctl's own `stop-playlist` subcommand follows
+   * independently). Returns the
    * decoded `command` object as-is — including its own `outcome` field,
    * which is "confirmed" or "unconfirmed", NEVER inferred from this
    * call's own success: a resolved `Promise` here means the HTTP round
@@ -496,10 +501,16 @@ export class ApiStore {
   async stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
     const controller = this.beginSideCall()
     try {
+      // FPP_COMMAND_REQUEST_TIMEOUT_MS, never the default request budget
+      // every other call here uses (Step 7 seam C review defect 1): this
+      // is a long request by design, since the coordinator waits out its
+      // own confirmation deadline before answering — see that constant's
+      // own doc comment.
       const resp = await this.client.postJson<SchemaFPPCommandResponse>(
         `/fpp/${encodeURIComponent(instanceId)}/commands`,
-        { action: 'stopPlaylist', idempotencyKey: crypto.randomUUID() },
+        { action: 'stopPlaylist', idempotencyKey: randomUUIDv4() },
         controller.signal,
+        FPP_COMMAND_REQUEST_TIMEOUT_MS,
       )
       return resp.command
     } finally {

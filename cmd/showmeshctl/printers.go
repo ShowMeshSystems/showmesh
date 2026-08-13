@@ -361,6 +361,14 @@ func printDeclarationDetail(w io.Writer, d nodeDeclaration) {
 		_, _ = fmt.Fprintf(w, "  Discovery reason: %s\n", *d.DiscoveryReason)
 	}
 	_, _ = fmt.Fprintf(w, "  Last discovery run: %s (%s)\n", stringOrDash(d.LastDiscoveryRunID), timeOrDash(d.LastDiscoveredAt))
+	// DEFECT 8: printed ONLY when discoveryState is "not_seen", from its
+	// own separately named fields — never folded into "Last discovery
+	// run" above, which reports this declaration's OWN last-seen
+	// bookkeeping and must never be overwritten by the run that failed to
+	// see it.
+	if d.NotSeenAsOfRunID != nil {
+		_, _ = fmt.Fprintf(w, "  Not seen as of run: %s (finished %s)\n", *d.NotSeenAsOfRunID, timeOrDash(d.NotSeenAsOfRunFinishedAt))
+	}
 }
 
 // printDiscoveryRunResult renders the body of POST /api/v1/discovery/runs

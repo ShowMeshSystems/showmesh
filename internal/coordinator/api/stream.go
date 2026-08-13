@@ -376,6 +376,15 @@ func (h *Hub) render(ctx context.Context) {
 		// poison every subsequent tick either.
 		h.logger.Warn("stream hub: list node declarations failed", "error", err)
 	} else {
+		// DEFECT 4: a declared node with no inventory row must render, and
+		// keep rendering, through the change stream exactly as it does
+		// through GET /api/v1/nodes and the snapshot — see
+		// mergeDeclaredOnlyNodes' own doc comment. Without this, a client
+		// that fetched the snapshot (which already includes it, via
+		// handleSnapshot's own identical merge) would see it silently
+		// evicted the first time this hub ticks, because evictRendered
+		// below removes any "node:"+id key not present in views.
+		views = mergeDeclaredOnlyNodes(views, declByNodeID)
 		present := make(map[string]struct{}, len(views))
 		for _, nv := range views {
 			key := "node:" + nv.NodeID

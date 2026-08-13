@@ -303,6 +303,51 @@ func TestOpenAPIConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
+// TestOpenAPIDiscoveryResponsesMatchRealResponses is finding 15's own
+// regression test: seam B's three routes (POST /discovery/runs, POST
+// /nodes/{nodeId}/declaration, DELETE /nodes/{nodeId}/declaration) had NO
+// conformance coverage at all, following exactly the pattern
+// TestOpenAPIConfigResponsesMatchRealResponses already established for
+// seam A. Without it, renaming a field on the wire — or the actual defect
+// this test's own construction found, api/openapi.yaml documenting these
+// two POST/DELETE operations under `/nodes/{nodeId}` rather than the real
+// route `/nodes/{nodeId}/declaration` — broke no test in this package.
+func TestOpenAPIDiscoveryResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
+	deps, _, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nodes, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	runReq.Header.Set("Authorization", "Bearer "+token)
+	runResp, runBody := doRawRequest(t, api.Handler, runReq)
+	if runResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /discovery/runs: status = %d, want 200; body: %s", runResp.StatusCode, runBody)
+	}
+	assertMatchesSchema(t, c, "DiscoveryRunResponse", runBody)
+
+	declareReq := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/shed-01/declaration", `{"label":"Shed controller"}`, nil)
+	declareReq.Header.Set("Authorization", "Bearer "+token)
+	declareResp, declareBody := doRawRequest(t, api.Handler, declareReq)
+	if declareResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /nodes/shed-01/declaration: status = %d, want 200; body: %s", declareResp.StatusCode, declareBody)
+	}
+	assertMatchesSchema(t, c, "NodeDeclarationResponse", declareBody)
+
+	deleteReq := newJSONRequest(t, http.MethodDelete, "/api/v1/nodes/shed-01/declaration", `{"confirm":true}`, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+token)
+	deleteResp, deleteBody := doRawRequest(t, api.Handler, deleteReq)
+	if deleteResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE /nodes/shed-01/declaration: status = %d, want 204; body: %s", deleteResp.StatusCode, deleteBody)
+	}
+	if len(deleteBody) != 0 {
+		t.Errorf("DELETE /nodes/shed-01/declaration: body = %q, want empty (204 No Content)", deleteBody)
+	}
+}
+
 // TestOpenAPIBootstrapResponseMatchesRealResponse is this file's ADR-024
 // decision 9 sibling: POST /api/v1/bootstrap's success body is the same
 // SessionResponse shape POST /api/v1/session's own conformance test
@@ -582,7 +627,7 @@ const validEvidenceJSON = `{"signal":"node.hello","value":null,"unit":null,"stat
 // see mapNodeDeclaration's own doc comment in discovery.go for why this is
 // exactly what an undeclared node renders), used the same way
 // validEvidenceJSON is: hand-built, not server output.
-const validDeclarationJSON = `{"declared":false,"label":null,"notes":null,"declaredAt":null,"declaredByPrincipalId":null,"declaredByPrincipalName":null,"discoveryState":"not_applicable","discoveryReason":null,"lastDiscoveryRunId":null,"lastDiscoveredAt":null}`
+const validDeclarationJSON = `{"declared":false,"label":null,"notes":null,"declaredAt":null,"declaredByPrincipalId":null,"declaredByPrincipalName":null,"discoveryState":"not_applicable","discoveryReason":null,"lastDiscoveryRunId":null,"lastDiscoveredAt":null,"notSeenAsOfRunId":null,"notSeenAsOfRunFinishedAt":null}`
 
 var nodeResponseJSONWithExtraField = `{"serverTime":"2026-01-01T00:00:00Z","node":{"nodeId":"x","label":null,"platform":null,"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},"evidence":{"hello":` +
 	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `},"unexpectedField":"surprise"}`

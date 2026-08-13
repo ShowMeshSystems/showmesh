@@ -1291,6 +1291,76 @@ func TestWriteAndListAuditRoundTripsParams(t *testing.T) {
 	}
 }
 
+// TestWriteAuditHonorsCallerTimestamp is Step 7 seam A review defect 5's
+// identity-level regression test: WriteAudit must pass
+// AuditEntry.Timestamp through to the store rather than dropping it
+// (store.AppendAuditEntry then honors it — see that package's own
+// TestAppendAuditEntryHonorsCallerRecordedAt). The Service's own clock is
+// fixed to a DIFFERENT instant than the one passed in the entry, so a
+// regression to "the store always stamps its own now" fails rather than
+// passing by coincidence.
+func TestWriteAuditHonorsCallerTimestamp(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, _ := newTestService(t, clock)
+	ctx := context.Background()
+
+	// One hour before the service's clock — distinguishable from it, but
+	// safely inside the store's default 180-day audit retention window so
+	// the amortized on-insert prune pass does not immediately remove the
+	// row and produce a false "honored" failure (store's own
+	// TestAppendAuditEntryHonorsCallerRecordedAt hit exactly this).
+	caller := mustTime(t, "2025-12-31T23:00:00Z")
+	if err := svc.WriteAudit(ctx, AuditEntry{Kind: AuditAdmin, Action: "x", Timestamp: caller}); err != nil {
+		t.Fatalf("write audit: %v", err)
+	}
+
+	got, err := svc.ListAudit(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if !got[0].Timestamp.Equal(caller) {
+		t.Errorf("Timestamp = %v, want the caller-supplied %v (service clock was %v — this must not be it)",
+			got[0].Timestamp, caller, clock.t)
+	}
+}
+
+// TestAuditedWriteHonorsCallerTimestamp is TestWriteAuditHonorsCallerTimestamp
+// for AuditedWrite's own conversion, the identical fix applied at the
+// second call site.
+func TestAuditedWriteHonorsCallerTimestamp(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, _ := newTestService(t, clock)
+	ctx := context.Background()
+
+	// One hour before the service's clock — distinguishable from it, but
+	// safely inside the store's default 180-day audit retention window so
+	// the amortized on-insert prune pass does not immediately remove the
+	// row and produce a false "honored" failure (store's own
+	// TestAppendAuditEntryHonorsCallerRecordedAt hit exactly this).
+	caller := mustTime(t, "2025-12-31T23:00:00Z")
+	err := svc.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (AuditEntry, error) {
+		return AuditEntry{Kind: AuditAdmin, Action: "x", Timestamp: caller}, nil
+	})
+	if err != nil {
+		t.Fatalf("audited write: %v", err)
+	}
+
+	got, err := svc.ListAudit(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if !got[0].Timestamp.Equal(caller) {
+		t.Errorf("Timestamp = %v, want the caller-supplied %v (service clock was %v — this must not be it)",
+			got[0].Timestamp, caller, clock.t)
+	}
+}
+
 // TestAuditRecordsDispatchAndOutcomeAsSeparateEntries exercises ADR-024
 // decision 11's central shape end to end through the identity package's
 // own domain types, mirroring store's TestAuditLogNeverUpdatedOnlyInserted

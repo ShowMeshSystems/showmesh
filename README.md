@@ -14,23 +14,25 @@ ShowMesh is the layer that does — and, critically, the layer that is **never i
 
 ## Project status
 
-**Pre-alpha. Read-only. Not run against a live show.**
+**Pre-alpha. Not run against a live show.**
 
-Implementation began 2026-08-10. What exists is a working, tested, containerized read-only observability stack. What does not exist is any ability to change anything.
+Implementation began 2026-08-10. What exists is a working, tested, containerized observability stack, plus the first three write operations as of 2026-08-12.
 
 | | |
 |---|---|
-| **Works today** | Coordinator + agent over MQTT with capability advertisement, Last Will liveness, and SQLite inventory. Read-only FPP polling normalized into an observation model with provenance and freshness. A versioned public REST API with an SSE change stream. A CLI (`showmeshctl`) and a browser SPA, both as independent clients of that API. Docker Compose bundle. CI on Go 1.25/1.26, Linux + macOS, race detector, multi-arch image build, real-broker integration tests. |
-| **Does not exist** | Any write operation. Any command. Any show logic. Any audio code. GStreamer media pipelines. Device control providers. |
-| **Not verified** | Anything hardware- or network-dependent. The MultiSync wire protocol is proven against a containerized `fppd`, not against a real player, a real clock, or a real switch. No physical rig has been touched. |
+| **Works today** | Coordinator + agent over MQTT with capability advertisement, Last Will liveness, and SQLite inventory. Read-only FPP polling normalized into an observation model with provenance and freshness. A versioned public REST API with an SSE change stream. Authenticated principals, roles as scope bundles, and audit attribution. Three writes: FPP endpoint configuration, node discovery and declaration, and one native FPP lifecycle command confirmed by evidence rather than by an HTTP `200`. A CLI (`showmeshctl`) and a browser SPA, both as independent clients of that API. Docker Compose bundle. CI on Go 1.25/1.26, Linux + macOS, race detector, multi-arch image build, real-broker integration tests. |
+| **Does not exist** | Show macros. Any command beyond the one. Any show logic. Any audio code. GStreamer media pipelines. Device control providers. Any reconciler closing the gap between desired and observed state, deliberately, because that loop is ShowMesh becoming a second scheduler. |
+| **Not verified** | Anything hardware- or network-dependent. The MultiSync wire protocol is proven against a containerized `fppd`, not against a real player, a real clock, or a real switch. No physical rig has been touched, and no write has ever been pointed at the deployed fleet. |
 
 That gap is deliberate and documented, not a backlog that got away. The project uses an explicit **evidence ladder** — L0 assumption → L1 source-verified → L2 bench → L3 integrated → L4 resilient — and no claim is written down at a level it has not earned. Each research record in [`docs/research/`](docs/research/README.md) carries its current rung and the specific experiment that would raise it.
 
-### Why there is no write endpoint yet
+### What it took to earn the first write
 
-Every remaining roadmap item that *does* something rather than *shows* something is a write operation, and [ADR-021](docs/decisions/ADR-021-read-api-authentication-posture.md) barred the first one until a superseding record settled authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. That record is now [ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md), and implementing it is the next step. It lifts the bar and deliberately adds no write endpoint of its own.
+Every remaining roadmap item that *does* something rather than *shows* something is a write operation, and [ADR-021](docs/decisions/ADR-021-read-api-authentication-posture.md) barred the first one until a superseding record settled authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. That record is [ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md). It lifted the bar and deliberately added no write endpoint of its own; the next step spent it, on three.
 
 Two of its decisions say most of what the project is like. Writes always require an authenticated principal and **reads stay open by default**, because a credential problem must never cost an operator visibility of a running show: the failure is scoped to "you cannot act", not to a blank screen indistinguishable from a dead coordinator. And an authorization refusal is **not** treated as equivalent to coordinator loss. A coordinator outage is a transport failure, which is what fires a local fallback; a `403` is a successful conversation with a healthy coordinator, which fires nothing, so a stale token on a scheduler host would otherwise leave a macro's local steps unrun as well as its remote ones. Both corrections came from review, not from drafting.
+
+The first command is FPP's own `Stop Now`, and it is **not** reported successful because FPP answered `200`. [ADR-003](docs/decisions/ADR-003-desired-and-observed-state.md) requires evidence that observed state actually moved, against an explicit deadline, and an outcome that never arrives carries a state and a reason rather than a blank. The first implementation of that got it subtly wrong in a way worth knowing about: it compared the current observation to the desired value without checking the evidence post-dated the dispatch, so a command reported `confirmed` 179 microseconds after being sent. Since FPP starts playlists on its own schedule, that could have reported "stopped" over a running show.
 
 ---
 
@@ -88,7 +90,7 @@ open http://localhost:8081                 # Operator UI
 
 Or use the CLI, built from this repo — `showmeshctl nodes`, `showmeshctl fpp`, `showmeshctl events`, `showmeshctl watch`.
 
-> **Security posture, stated plainly:** by default the API is open to anyone who can reach the port, and the coordinator logs a warning saying so at startup. There are no write operations, so nothing reachable through it can change a device, a playlist, or a show. See [SECURITY.md](SECURITY.md) and [`deploy/README.md`](deploy/README.md) before exposing it beyond an isolated show VLAN.
+> **Security posture, stated plainly:** by default the API's **reads** are open to anyone who can reach the port, and the coordinator logs a warning saying so at startup. Its **writes** are not: since Step 6 every write requires an authenticated principal holding the named scope ([ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md)), and since Step 7 there are writes: configuration, node declaration, and one native FPP lifecycle command. Reads are open deliberately, so that a credential problem never costs an operator sight of their show; close them with `SHOWMESH_API_CLOSE_READS=true`. See [SECURITY.md](SECURITY.md) and [`deploy/README.md`](deploy/README.md) before exposing it beyond an isolated show VLAN.
 
 ### Building from source
 

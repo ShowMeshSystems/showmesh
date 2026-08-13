@@ -14,6 +14,32 @@ The closer a harness gets to real, the more convincing its false success looks.
 
 **Rule:** acceptance criteria get verified against the running stack, not against the suite.
 
+**Step 7 produced the same defect again, in the same file, by a different mechanism.** The Operator UI minted its idempotency key with `crypto.randomUUID()`. That method is **secure-context gated**: it exists on `localhost` and over HTTPS, and is `undefined` over plain `http://` to a bare IP. ShowMesh terminates no TLS, `deploy/README.md` documents the UI at `http://<host>:8081`, and the reference installation's operator uses a phone, which cannot reach it as `localhost`. So on the deployment this step targets, the only write control in the browser would throw `TypeError` and the command would never leave the page. Node and jsdom expose `randomUUID` unconditionally, so all 331 tests passed.
+
+Verified by loading the real UI over the machine's LAN address in Chrome and reading `window.isSecureContext` (`false`) and `typeof crypto.randomUUID` (`undefined`), which is the condition the suite cannot reproduce.
+
+**The corollary, found while writing the regression test:** `delete globalThis.crypto.randomUUID` does **not** remove it, because Node defines it on `Crypto.prototype` rather than as an own property, so `delete` on the instance silently no-ops. The first version of the test passed without ever exercising the fallback. A test double that fails to take effect is a test that passes for the wrong reason, and it is invisible unless you assert the fallback actually ran.
+
+**Rule:** before shipping a browser API, check whether it is gated on a secure context, and check what the deployment's real origin is. When you mock a built-in to prove a fallback, assert that the fallback ran, not merely that the call returned something.
+
+## A test can report success while never having run at all
+
+**Step 7.** `make test-integration-fpp` had been silently skipping its main test on every single run since Step 6 landed `allow_anonymous false`. The script never seeded a `password_file` or an `acl_file`, so its broker exited immediately on start; the wait loop timed out quietly; and `TestFPPSuccessPathThroughRealCoordinator` hit its own "no broker reachable" guard and **skipped rather than failed**. Two reviewers and the orchestrator each read that skip as expected. A missing `-count=1` then let a cached skip replay over the fix.
+
+So the FPP integration path, the one thing that could not be proven any other way, was effectively unverified from Step 6 until Step 7 found it, by running the script rather than reading it.
+
+This is the sharpest form of the project's recurring lesson. [A test's name is a claim](#a-tests-name-is-a-claim) assumes the test executes; this one did not, and reported success anyway. The reason it survived is that a skip *looks* like a considered decision, and a dependency guard is exactly the kind of considered decision a reviewer nods past.
+
+**Rule:** a test that guards on a dependency must fail, not skip, when a harness whose whole job is to supply that dependency is what invoked it. A script that starts a dependency must fail loudly when the dependency does not start. And a suite's skip count is a number somebody has to actually look at.
+
+## An unbounded write on a failure path evicts the evidence it exists to preserve
+
+**Step 7, seam 0.** The credential-resolution failure path wrote an audit row on **every request on every route**, with no bound. A single browser holding a stale session cookie therefore generated a steady stream of rows that quietly pushed genuine attribution history out through retention.
+
+Nothing failed. Nothing logged. The audit log stayed the right size and stopped containing the answer. It was found by accident during a browser check, not by a test, because there is no assertion shaped like "the interesting rows are still here".
+
+**Rule:** before writing a record on a failure path, ask what an attacker, or a stuck client, can make that path do a million times. An append-only log under a retention policy is a fixed-size window, so an unbounded low-value write is an eviction primitive aimed at your own evidence.
+
 ## A test's name is a claim
 
 **Step 3.** The review pass broke production code deliberately to check which tests noticed, and found three that still passed with the behavior they asserted removed — one of them sitting on an acceptance criterion.
@@ -36,6 +62,25 @@ A retained MQTT delivery carries no valid observation time. `ObservedAt` is ther
 
 **Rule:** when a defect recurs, make the wrong thing unrepresentable rather than fixing the instance. There is now a test that panics if the wrong code path is ever taken.
 
+**Step 7 produced two more, in one step, on two different surfaces.** A configuration `PUT` whose body had no `endpoints` key wiped every configured FPP endpoint and answered `200`, because an absent key decoded to a nil slice and a nil slice validated as "zero endpoints, fine." A second `declare` with no `--label` erased the operator's existing label, because an absent field decoded to `""` and `""` overwrote. Same defect as `"ma": null` reading as a measured 0 mA, two layers up and pointing at data loss instead of a fabricated reading.
+
+The sharpest part: the first one was reachable by following the CLI's own documented workflow, which piped `config get --output json` back into `config set`. That round trip did not compose, so the recommended operator action was a silent wipe that then bricked the coordinator on its next restart.
+
+**Rule:** absent, `null`, and explicitly empty are three different things, and a write surface must distinguish all three. "Configure nothing" has to be something the operator can only say on purpose.
+
+## Absence of evidence is not evidence of absence, and this project has now decided it four times
+
+**Steps 3, 4, 5, and 7.** The same rule, rediscovered in four subsystems:
+
+- **Telemetry:** a missing `ma` key must not decode to a measured 0 mA.
+- **Observations:** only a complete poll may prune, because deleting a source's evidence the first time it goes quiet is far worse than a stale ghost.
+- **Inventory:** a discovery run must never delete a node it did not see, because powered-off equipment is normal outside display hours.
+- **Discovery completeness (Step 7):** `complete: true` is the *licence* to assert absence, so it must be earned. A run treated "no evidence yet, or evidence too old to trust" as "not observed" and finished complete anyway, so a 40 second broker outage, or a coordinator restart before retained state arrived, would flip every declared node in the installation to `not_seen`.
+
+That last one is the subtle version, and worth the extra sentence: the code correctly refused to delete anything, and still manufactured absence, because it asserted a negative on a run whose evidence source was not working.
+
+**Rule:** before a subsystem reports that something is gone, ask what it would report if its own source of truth were down. If the answer is the same, it is not reporting absence, it is reporting its own blindness.
+
 ## A test can be a coin flip, and platform is the usual disguise
 
 **Step 4.** `TestSlowSSEConsumerGetsResetAndDisconnected` failed 15% of the time on Linux and never on macOS. The cause was neither slowness nor socket buffers: it was **frames per render pass**. An MQTT burst arrives one message at a time, each poke of the hub renders separately, and the two kernels schedule that differently.
@@ -43,6 +88,32 @@ A retained MQTT delivery carries no valid observation time. `ObservedAt` is ther
 Worth knowing before designing any back-pressure test: **"the client stops reading" barely creates back-pressure at all.** Measured at 4.0 MB into the kernel on Linux and 1.5 MB on macOS before a single write blocks.
 
 **Rule:** when a test needs an overflow, construct it structurally. Do not race a kernel, and do not grow the burst until it usually works.
+
+## A client that gives up before the server answers deletes an outcome from existence
+
+**Step 7.** The coordinator holds an unconfirmed command response for its full 20 second confirmation deadline. `showmeshctl` defaulted to a 10 second timeout and the browser to 15. So the `unconfirmed` outcome, and the CLI's own exit code for it, were **unreachable at default settings**: the code compiled, its tests passed against instant fakes, and no operator could ever see it.
+
+The second half is worse than the dead code. The operator was told a **transport failure** ("coordinator unreachable, timeout") for what was a successful conversation with a healthy coordinator that answered honestly. That is [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7's inversion, arriving somewhere nobody was looking for it, and it is the fourth recorded variant of the same shape.
+
+**Rule:** when one side of a contract waits and the other side times out, the two numbers are a single design decision and must be written down as one. Derive the client budget from the server's deadline, and put a test on the relationship, not on either number.
+
+## Confirming that a value equals what you wanted is not evidence that anything happened
+
+**Step 7.** The first FPP command implementation confirmed by asking "does the current observation equal the desired value?" It never asked whether that observation post-dated the dispatch, and observations stay `current` for 45 seconds. Measured against a live coordinator: a command reported `confirmed` **179 microseconds** after its own `dispatchedAt`, which is far too fast to have collected anything.
+
+FPP is the authoritative scheduler and starts playlists on its own ([ADR-001](../decisions/ADR-001-fpp-is-authoritative.md)), so this is not a contrived race. Collector records `idle`; FPP's schedule starts the show; the operator presses Stop; FPP answers `200` and playback continues; confirmation reads the stale `idle` and reports success while the show is running.
+
+[ADR-003](../decisions/ADR-003-desired-and-observed-state.md) asks for evidence that observed state **moved**. A reading that happens to agree is a coincidence, and the two are indistinguishable unless you compare timestamps.
+
+**Rule:** confirmation by evidence means evidence obtained after the thing you are confirming. Compare the evidence's collection time to the dispatch instant, and treat an already-satisfied desired state as still needing a fresh observation.
+
+## Resolving a rule "in one place" only works if every reader goes through it
+
+**Step 7.** `precedence.go` holds this project's rule for reconciling two collector sources reporting the same signal, and its doc comment says that resolving there rather than at each call site is what makes the rule "impossible to apply inconsistently between endpoints." The FPP command's confirmation path, one file over, iterated the raw observation list and returned on the first matching row.
+
+Since schema v4 the observations key includes `source`, so that list legitimately holds more than one row per signal, in unspecified order. A retained MQTT delivery carries no valid observation time and reads `unknown_age`; if it came first, a genuinely confirmed command reported unconfirmed for the whole deadline. If an MQTT row read `idle` while REST read `playing`, it confirmed falsely. Which one won was **nondeterministic**.
+
+**Rule:** a shared rule is only shared where it is called. When you write "this is the one place X is decided," add the test that fails when a second place decides it.
 
 ## A behavior verified only on macOS is not verified for this project
 

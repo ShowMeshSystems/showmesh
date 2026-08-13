@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -68,6 +69,17 @@ type handlers struct {
 	// doc comments in api.go.
 	fppCommandConfirmDeadline time.Duration
 	fppCommandPollInterval    time.Duration
+
+	// discoveryRunInFlight serializes POST /api/v1/discovery/runs
+	// (discovery.go's handleStartDiscoveryRun): a second concurrent run is
+	// refused with a 409, never queued — see that handler's own doc
+	// comment for why interleaving, not merely double-counting, is the
+	// failure this guards against. An in-process atomic is sufficient
+	// because this coordinator is a single process (ADR-012); it is a
+	// struct field (not a package var) because one *handlers is
+	// constructed per [New] call and tests build several independent APIs
+	// in one process.
+	discoveryRunInFlight atomic.Bool
 }
 
 func (h *handlers) now() time.Time { return h.clock() }
@@ -104,6 +116,10 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "fetch node declarations", err)
 		return
 	}
+	// DEFECT 4: a declared node with no inventory row (never once said
+	// hello) must still appear here — see mergeDeclaredOnlyNodes' own doc
+	// comment.
+	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun))
@@ -130,13 +146,15 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list nodes", err)
 		return
 	}
+	declByNodeID, latestRun, err := fetchDeclarationContext(r.Context(), h.deps.Discovery)
+	if err != nil {
+		h.writeInternalError(w, now, "fetch node declarations", err)
+		return
+	}
+	// DEFECT 4: see handleNodes' identical call for why.
+	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
-			declByNodeID, latestRun, err := fetchDeclarationContext(r.Context(), h.deps.Discovery)
-			if err != nil {
-				h.writeInternalError(w, now, "fetch node declarations", err)
-				return
-			}
 			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun)})
 			return
 		}
@@ -416,6 +434,8 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "fetch node declarations", err)
 		return
 	}
+	// DEFECT 4: see handleNodes' identical call for why.
+	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun))

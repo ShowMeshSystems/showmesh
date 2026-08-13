@@ -126,8 +126,20 @@ type nodeDeclaration struct {
 	DiscoveryState  string  `json:"discoveryState"`
 	DiscoveryReason *string `json:"discoveryReason"`
 
+	// LastDiscoveryRunID/LastDiscoveredAt are this declaration's OWN
+	// last-seen-by-discovery bookkeeping (null if it has never once been
+	// seen) — never the identity of a run that did NOT see it. See
+	// NotSeenAsOfRunID/NotSeenAsOfRunFinishedAt below for that (DEFECT 8).
 	LastDiscoveryRunID *string    `json:"lastDiscoveryRunId"`
 	LastDiscoveredAt   *time.Time `json:"lastDiscoveredAt"`
+
+	// NotSeenAsOfRunID/NotSeenAsOfRunFinishedAt name the run that did NOT
+	// see this declared node — populated only when DiscoveryState is
+	// "not_seen". Decoded unconditionally rather than treated as required,
+	// matching this file's existing tolerance of an older coordinator that
+	// predates them (both simply stay nil).
+	NotSeenAsOfRunID         *string    `json:"notSeenAsOfRunId"`
+	NotSeenAsOfRunFinishedAt *time.Time `json:"notSeenAsOfRunFinishedAt"`
 }
 
 // discoveryRun is one discovery_runs row (BUILD-PLAN Step 7 seam B).
@@ -158,9 +170,17 @@ type discoveryRunResponse struct {
 }
 
 // declareNodeRequest is the body of POST /api/v1/nodes/{nodeId}/declaration.
+// Label/Notes are *string, matching internal/coordinator/api/v1's own
+// DeclareNodeRequest (DEFECT 6): nil/omitted leaves that field's currently
+// declared value UNCHANGED; a non-nil pointer, including one pointing at
+// "", sets it. cmd_discovery.go's cmdDeclare only ever sets a field when
+// the corresponding --label/--notes flag was ACTUALLY passed on this
+// invocation — see its own doc comment — so this type can represent, and
+// this program can now issue, the "leave this field alone" request a
+// second `showmeshctl declare` with no flags needs.
 type declareNodeRequest struct {
-	Label string `json:"label"`
-	Notes string `json:"notes"`
+	Label *string `json:"label,omitempty"`
+	Notes *string `json:"notes,omitempty"`
 }
 
 // nodeDeclarationResponse is the body of POST /api/v1/nodes/{nodeId}/declaration.

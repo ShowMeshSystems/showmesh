@@ -176,10 +176,14 @@ type Node struct {
 //     node. DiscoveryReason is null; LastDiscoveryRunID/LastDiscoveredAt
 //     name which run and when.
 //   - "not_seen": the most recent discovery run was complete and did NOT
-//     see this node. DiscoveryReason, LastDiscoveryRunID, and
-//     LastDiscoveredAt describe that run — never this declaration's own
-//     (possibly older, possibly pruned) last-seen bookkeeping, which is
-//     exactly what "not seen by the CURRENT most recent run" means.
+//     see this node. DiscoveryReason names why, and NotSeenAsOfRunID/
+//     NotSeenAsOfRunFinishedAt name THAT run specifically —
+//     LastDiscoveryRunID/LastDiscoveredAt are NEVER overwritten with that
+//     run's own identity here: they keep reporting this declaration's own
+//     last-seen bookkeeping (or null if it has never once been seen), so a
+//     field named "lastDiscoveredAt" never reports a time seconds old for a
+//     node that has actually been dark for a week (BUILD-PLAN Step 7 seam B
+//     review finding, DEFECT 8).
 //   - "unknown": either the most recent discovery run did not complete
 //     (still running, or ended with complete=false) — an incomplete run is
 //     not evidence of absence, so this is never "not_seen" — or no
@@ -211,14 +215,32 @@ type NodeDeclaration struct {
 	DiscoveryState  string  `json:"discoveryState"`
 	DiscoveryReason *string `json:"discoveryReason"`
 
+	// LastDiscoveryRunID/LastDiscoveredAt are THIS DECLARATION's OWN
+	// last-seen-by-discovery bookkeeping — the run that most recently DID
+	// see it, and when — null if it has never once been seen. They are
+	// NEVER repurposed to carry any OTHER run's identity or timestamp,
+	// including the run that just failed to see it (that is
+	// NotSeenAsOfRunID/NotSeenAsOfRunFinishedAt below): a field named
+	// "lastDiscoveredAt" asserting a time seconds old for a node dark for a
+	// week is precisely the defect this split fixes.
+	//
 	// LastDiscoveryRunID may name a run id that no longer resolves to any
 	// [DiscoveryRun] — discovery_runs is pruned by retention and
 	// node_declarations is not, so a dangling id is expected, not a bug
 	// (RES-008 D2/D6, migrations.go's schemaV6 doc comment). A client must
-	// never treat this as evidence of anything on its own; DiscoveryState
-	// is what to read.
+	// never treat either field as evidence of anything on its own;
+	// DiscoveryState is what to read.
 	LastDiscoveryRunID *string `json:"lastDiscoveryRunId"`
 	LastDiscoveredAt   *string `json:"lastDiscoveredAt"`
+
+	// NotSeenAsOfRunID/NotSeenAsOfRunFinishedAt name the run that did NOT
+	// see this declared node — populated ONLY when DiscoveryState is
+	// "not_seen". Added additively (ADR-020): an existing client that has
+	// never heard of these two fields keeps working unchanged, reading
+	// DiscoveryReason's prose and LastDiscoveryRunID/LastDiscoveredAt's own
+	// (unaffected, possibly older) bookkeeping exactly as before.
+	NotSeenAsOfRunID         *string `json:"notSeenAsOfRunId"`
+	NotSeenAsOfRunFinishedAt *string `json:"notSeenAsOfRunFinishedAt"`
 }
 
 // DiscoveryRun is one discovery_runs row's wire representation, per
@@ -263,12 +285,26 @@ type DiscoveryRunResponse struct {
 }
 
 // DeclareNodeRequest is the body of POST /api/v1/nodes/{nodeId}/declaration.
-// Both fields are optional and default to empty — a bare {} promotes
-// nodeId to declared with no label or notes, matching
-// [store.Store.DeclareNode]'s own idempotent create-or-update semantics.
+// Both fields are optional AND nullable — a bare {} (or an absent/null
+// field) promotes nodeId to declared with no label or notes on a BRAND-NEW
+// declaration, or leaves that field's currently declared value UNCHANGED
+// on an already-declared node, matching [store.Store.DeclareNode]'s
+// idempotent create-or-update semantics.
+//
+// A pointer, not a plain string, is DELIBERATE and load-bearing (DEFECT 6):
+// a plain string cannot distinguish "this field was not provided, leave it
+// alone" from "this field was provided as an explicit empty string, clear
+// it" — the same absent-versus-empty distinction as CLAUDE.md's "a JSON
+// null is not an absent key". Before this, a bare `showmeshctl declare
+// roof-01` with no --label flag sent `{"label":"","notes":""}`
+// unconditionally, silently erasing a previously set label on every
+// re-declare, and node_declarations has no revision history to recover
+// from that. An explicit `null` or an omitted key now means "leave
+// unchanged"; an explicit `""` still means "set to empty", exactly as
+// before.
 type DeclareNodeRequest struct {
-	Label string `json:"label"`
-	Notes string `json:"notes"`
+	Label *string `json:"label,omitempty"`
+	Notes *string `json:"notes,omitempty"`
 }
 
 // NodeDeclarationResponse is the body of POST /api/v1/nodes/{nodeId}/declaration.

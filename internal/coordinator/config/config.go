@@ -115,6 +115,30 @@ type Config struct {
 	// reads as a healthy empty system.
 	FPPEndpoints []FPPEndpoint
 
+	// FPPEndpointsEnvSet records whether SHOWMESH_FPP_ENDPOINTS is
+	// currently set in the PROCESS ENVIRONMENT this LoadConfigFrom call
+	// read from — independent of, and never overwritten alongside,
+	// FPPEndpoints itself (internal/coordinator's syncFPPEndpointsConfig
+	// overwrites FPPEndpoints with the store-authoritative list once the
+	// RES-008 D1 migration/disagreement rule has run; this field must
+	// keep naming the RAW environment fact so that later resolution can
+	// still ask "was the variable ever set" independent of what value the
+	// coordinator ended up using). Step 7 seam A's PUT
+	// /api/v1/config/fpp.endpoints handler is this field's consumer: it
+	// refuses the write with 409 while this is true, because a write that
+	// succeeds the coordinator cannot actually apply (the still-set
+	// variable will disagree with it on the very next restart — see
+	// configsync.go's errFPPEndpointsDisagree) is a worse failure than
+	// refusing it up front, while the coordinator is still up and the
+	// operator can still read why.
+	//
+	// "Set" is checked as non-empty, exactly like [checkAPITokenRetired]'s
+	// identical convention for SHOWMESH_API_TOKEN: a blank-but-present
+	// line in an operator's .env ("SHOWMESH_FPP_ENDPOINTS=") already means
+	// "nothing configured" everywhere else this variable is read, so it
+	// must not trip a refusal built for the non-empty case.
+	FPPEndpointsEnvSet bool
+
 	// --- Step 5 Seam B: the FPP MQTT collector (internal/coordinator/collector/fppmqtt) ---
 
 	// FPPMQTTBrokerURL is SHOWMESH_FPP_MQTT_BROKER_URL, e.g.
@@ -314,7 +338,8 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
-	fppEndpoints, err := parseFPPEndpoints(getEnvDefault(lookup, envFPPEndpoints, ""))
+	rawFPPEndpoints := getEnvDefault(lookup, envFPPEndpoints, "")
+	fppEndpoints, err := parseFPPEndpoints(rawFPPEndpoints)
 	if err != nil {
 		return Config{}, err
 	}
@@ -362,6 +387,10 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		DataDir:      getEnvDefault(lookup, EnvDataDir, DefaultDataDir),
 		LogLevel:     getEnvDefault(lookup, envLogLevel, defaultLogLevel),
 		FPPEndpoints: fppEndpoints,
+		// Non-empty, mirroring checkAPITokenRetired's "set" convention —
+		// see FPPEndpointsEnvSet's own doc comment for why blank-but-present
+		// must not count.
+		FPPEndpointsEnvSet: rawFPPEndpoints != "",
 
 		APIAllowedOrigins: parseAPIAllowedOrigins(getEnvDefault(lookup, envAPIAllowedOrigins, "")),
 

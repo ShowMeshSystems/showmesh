@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +83,35 @@ func offlineNodeView(id string) inventory.NodeView {
 	return v
 }
 
+// polledFPPView is a minimal FPPInstanceView with real, successful
+// collection evidence — what [fppInstanceObserved] (DEFECT 3) requires to
+// count an FPP instance as currently observed: LastPollAt set, LastPollError
+// nil.
+func polledFPPView(id string) FPPInstanceView {
+	pollAt := testNow
+	return FPPInstanceView{InstanceID: id, LastPollAt: &pollAt}
+}
+
+// neverPolledFPPView is what a freshly configured (or freshly restarted
+// coordinator's) FPP instance looks like BEFORE its first poll cycle
+// completes: LastPollAt nil. This is DEFECT 2's ambiguous-evidence case
+// applied to the FPP branch (fppInstanceEvidenceAmbiguous), never
+// DEFECT 3's "counts as observed" case.
+func neverPolledFPPView(id string) FPPInstanceView {
+	return FPPInstanceView{InstanceID: id}
+}
+
+// failedPollFPPView is what a genuinely unreachable (unplugged, network
+// down) FPP instance looks like: a poll DID complete, and it reported
+// collection_failed. This is real NEGATIVE evidence — the LivenessOffline
+// analog — and must remain free to support not_seen once a run completes
+// (DEFECT 3's whole point), unlike neverPolledFPPView above.
+func failedPollFPPView(id string) FPPInstanceView {
+	pollAt := testNow
+	errStr := "dial tcp: connection refused"
+	return FPPInstanceView{InstanceID: id, LastPollAt: &pollAt, LastPollError: &errStr}
+}
+
 // --- B1 acceptance criterion 1: 401 / 403 / accepted ---
 
 func TestStartDiscoveryRunAuthAndScope(t *testing.T) {
@@ -132,7 +163,10 @@ func TestStartDiscoveryRunAuthAndScope(t *testing.T) {
 
 func TestStartDiscoveryRunProposesUndeclaredObservedEntities(t *testing.T) {
 	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01"), liveNodeView("media-03")}}
-	fpp := &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01"}}}
+	// DEFECT 3: player-01 needs REAL collection evidence (a completed poll
+	// with no error) to count as observed — mere configuration (a bare
+	// FPPInstanceView{InstanceID: ...} with LastPollAt nil) no longer does.
+	fpp := &fakeFPPLister{views: []FPPInstanceView{polledFPPView("player-01")}}
 	deps, st, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nodes, fpp)
 	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
 	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
@@ -176,6 +210,20 @@ func TestStartDiscoveryRunProposesUndeclaredObservedEntities(t *testing.T) {
 	}
 	if run["complete"] != true {
 		t.Errorf("run.complete = %v, want true", run["complete"])
+	}
+
+	// ADR-003 / this file's own doc comment: a discovery run PROPOSES what
+	// it observes and NEVER declares on its own — only handlePromoteNode
+	// does. Assert the set of declarations is exactly what it was before
+	// this run (media-03 alone): a handler that declared shed-01 and
+	// player-01 as a side effect of proposing them would still pass every
+	// assertion above, since those only inspect the response body.
+	decls, err := st.ListNodeDeclarations(context.Background())
+	if err != nil {
+		t.Fatalf("list node declarations: %v", err)
+	}
+	if len(decls) != 1 || decls[0].NodeID != "media-03" {
+		t.Errorf("declarations after run = %+v, want only the pre-existing media-03 declaration (a discovery run proposes, it never declares)", decls)
 	}
 }
 
@@ -276,6 +324,86 @@ func TestDiscoveryRunNeverDeletesAnAbsentDeclaration(t *testing.T) {
 	}
 	if declaration["discoveryState"] != "not_seen" {
 		t.Errorf("declaration.discoveryState = %v, want \"not_seen\"", declaration["discoveryState"])
+	}
+}
+
+// --- DEFECT 1: a node promoted from a LIVE proposal must render present immediately ---
+
+// TestDeclareAfterDiscoveryRendersPresentImmediately drives the PRIMARY
+// workflow the review found broken: run discovery, THEN declare one of its
+// proposals — the reverse ordering from every OTHER test in this file
+// (which all declare first, then run discovery), and the ordering the UI
+// and CLI actually push an operator toward (NodesList.tsx's "Run
+// discovery" panel proposes, then "Declare"; `showmeshctl discover` then
+// `showmeshctl declare`). Confirmed to fail before the fix: with
+// handlePromoteNode's discoveryObservedNow re-check removed (or with
+// DeclareNode's INSERT hardcoding last_discovery_run_id to ” as it did
+// before DEFECT 1's store-layer fix), this test's own assertion on the
+// declare RESPONSE fails immediately — discoveryState is "not_seen", not
+// "present" — which is exactly the contradiction the review reported: a
+// node that discovery is the SOLE reason this coordinator knows about
+// renders "not seen by the most recent discovery run" the instant it is
+// declared.
+func TestDeclareAfterDiscoveryRendersPresentImmediately(t *testing.T) {
+	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
+	deps, _, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nodes, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	runReq.Header.Set("Authorization", "Bearer "+adminToken)
+	runResp, runBody := doRawRequest(t, api.Handler, runReq)
+	if runResp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery run status = %d, want 200; body: %s", runResp.StatusCode, runBody)
+	}
+	runResult := decodeMap(t, runBody)
+	proposals, _ := runResult["proposals"].([]any)
+	if len(proposals) != 1 {
+		t.Fatalf("proposals = %+v, want exactly 1 (shed-01)", proposals)
+	}
+
+	declareReq := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/shed-01/declaration", `{"label":"Shed controller"}`, nil)
+	declareReq.Header.Set("Authorization", "Bearer "+adminToken)
+	declareResp, declareBody := doRawRequest(t, api.Handler, declareReq)
+	if declareResp.StatusCode != http.StatusOK {
+		t.Fatalf("declare status = %d, want 200; body: %s", declareResp.StatusCode, declareBody)
+	}
+	declaration := decodeMap(t, declareBody)["declaration"].(map[string]any)
+	if declaration["discoveryState"] != "present" {
+		t.Fatalf(`declaration.discoveryState = %v immediately after declaring a node discovery just proposed, want "present" `+
+			`(got %v — a node this coordinator knows about SOLELY because discovery just proposed it must never render "not seen by the most recent discovery run")`,
+			declaration["discoveryState"], declaration)
+	}
+	if declaration["lastDiscoveryRunId"] != runResult["run"].(map[string]any)["id"] {
+		t.Errorf("declaration.lastDiscoveryRunId = %v, want the run just performed (%v)",
+			declaration["lastDiscoveryRunId"], runResult["run"].(map[string]any)["id"])
+	}
+}
+
+// TestDeclareWithNoDiscoveryHistoryRendersUnknownNeverPresentOrNotSeen is
+// the guard case the review named explicitly: a promotion made with NO
+// discovery run in history at all must render "unknown" with a stated
+// reason — never a fabricated "present" (nothing has ever confirmed this
+// node) and never "not_seen" (nothing has ever DISconfirmed it either).
+func TestDeclareWithNoDiscoveryHistoryRendersUnknownNeverPresentOrNotSeen(t *testing.T) {
+	deps, _, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nil, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	declareReq := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/shed-01/declaration", `{}`, nil)
+	declareReq.Header.Set("Authorization", "Bearer "+adminToken)
+	declareResp, declareBody := doRawRequest(t, api.Handler, declareReq)
+	if declareResp.StatusCode != http.StatusOK {
+		t.Fatalf("declare status = %d, want 200; body: %s", declareResp.StatusCode, declareBody)
+	}
+	declaration := decodeMap(t, declareBody)["declaration"].(map[string]any)
+	if declaration["discoveryState"] != "unknown" {
+		t.Fatalf("declaration.discoveryState = %v with no discovery run ever performed, want \"unknown\"", declaration["discoveryState"])
+	}
+	if declaration["discoveryReason"] == nil || declaration["discoveryReason"] == "" {
+		t.Errorf("declaration.discoveryReason = %v, want a stated reason", declaration["discoveryReason"])
 	}
 }
 
@@ -386,6 +514,38 @@ func TestPromoteNodeWithoutFailingAuditSucceeds(t *testing.T) {
 	if _, err := st.GetNodeDeclaration(context.Background(), "shed-01"); err != nil {
 		t.Fatalf("declaration missing after a successful promote: %v", err)
 	}
+
+	// Assert the audit entry's own content, not merely that a write
+	// succeeded: ADR-024's same-transaction rule is about attribution
+	// landing correctly, and a garbage action, wrong target, or dropped
+	// principal/form/credential/client address would all leave every
+	// assertion above passing.
+	entries, err := deps.Identity.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Action != "node.declare" || e.Target != "shed-01" {
+			continue
+		}
+		found = true
+		if e.PrincipalID != admin.ID {
+			t.Errorf("audit entry PrincipalID = %q, want %q", e.PrincipalID, admin.ID)
+		}
+		if e.PrincipalName != admin.Name {
+			t.Errorf("audit entry PrincipalName = %q, want %q", e.PrincipalName, admin.Name)
+		}
+		if e.Form != identity.FormToken {
+			t.Errorf("audit entry Form = %q, want %q (this request authenticated via bearer token)", e.Form, identity.FormToken)
+		}
+		if e.CredentialID == "" {
+			t.Errorf("audit entry CredentialID is empty, want the token's credential id recorded")
+		}
+	}
+	if !found {
+		t.Fatalf("no node.declare audit entry for shed-01 found among %d entries", len(entries))
+	}
 }
 
 // --- B3 acceptance criterion 5: an incomplete run renders unknown, never not_seen ---
@@ -430,40 +590,66 @@ func TestIncompleteRunRendersUnknownNeverNotSeen(t *testing.T) {
 
 // --- B3 acceptance criterion 6: a dangling last_discovery_run_id renders unknown, never blank ---
 
-func TestDanglingDiscoveryRunIDRendersUnknownNeverBlank(t *testing.T) {
+// TestAllDiscoveryHistoryPrunedRendersUnknownNeverBlank exercises the
+// "no discovery run history is available" branch (mapNodeDeclaration's
+// latestRun == nil case) — the ONE outcome that deliberately covers BOTH
+// "no run has ever been performed" AND "every run has been pruned"
+// identically, per that function's own doc comment ("this API cannot and
+// must not guess which"). TWO runs happen here, not one, specifically so
+// this is distinguishable from "this store coincidentally only ever ran
+// discovery once": the review's own finding was that a single-run setup
+// proves nothing that a "discovery has literally never run" setup would
+// not ALSO prove, since deleting the only row that has ever existed is
+// indistinguishable, at the DB level, from it never having existed. Two
+// runs plus a full prune closes that gap: the declaration's own last-known
+// evidence (declBefore) is real, non-trivial history built from an ACTUAL
+// run, not a zero value that happened to look the same either way.
+//
+// The genuinely different scenario — a declaration pointing at an OLDER,
+// now-pruned run while a NEWER complete run still exists — renders
+// not_seen, not unknown (mapNodeDeclaration never checks whether
+// LastDiscoveryRunID resolves to a live row; it only compares it against
+// the CURRENT latestRun.ID), and is covered separately by
+// TestNotSeenPreservesDanglingEvidenceWhileNamingTheRunThatMissedIt below.
+func TestAllDiscoveryHistoryPrunedRendersUnknownNeverBlank(t *testing.T) {
 	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
-	deps, st, storeDir := newTestDiscoveryDeps(t, fixedClock(testNow), nodes, nil)
+	clock := incrementingClock(testNow, time.Minute)
+	deps, st, storeDir := newTestDiscoveryDeps(t, clock, nodes, nil)
 	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
 	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
-	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
 	ctx := context.Background()
 
 	if _, err := st.DeclareNode(ctx, store.NodeDeclarationRecord{NodeID: "shed-01"}); err != nil {
 		t.Fatalf("declare node: %v", err)
 	}
 
-	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
-	runReq.Header.Set("Authorization", "Bearer "+adminToken)
-	runResp, runBody := doRawRequest(t, api.Handler, runReq)
-	if runResp.StatusCode != http.StatusOK {
-		t.Fatalf("discovery run status = %d, want 200; body: %s", runResp.StatusCode, runBody)
+	runDiscovery := func() {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("discovery run status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
 	}
+	runDiscovery() // run 1: sees shed-01.
+	runDiscovery() // run 2: also sees shed-01 — decl now points at run 2.
 
 	declBefore, err := st.GetNodeDeclaration(ctx, "shed-01")
 	if err != nil {
 		t.Fatalf("get node declaration: %v", err)
 	}
 	if declBefore.LastDiscoveryRunID == "" {
-		t.Fatalf("declaration has no LastDiscoveryRunID after a run that observed it")
+		t.Fatalf("declaration has no LastDiscoveryRunID after two runs that observed it")
 	}
 
-	// Simulate discovery_runs retention pruning every row — this
-	// declaration's own last_discovery_run_id becomes dangling by
-	// construction, exactly as migrations.go's schemaV6 doc comment
-	// describes ("discovery_runs is pruned by retention and
-	// node_declarations is not"). A second raw connection, matching
-	// installFailAuditTrigger's own pattern, since this package has no
-	// other way to reach the underlying *sql.DB.
+	// Simulate discovery_runs retention pruning EVERY row (both runs), not
+	// merely the one this declaration happens to point at — exactly as
+	// migrations.go's schemaV6 doc comment describes ("discovery_runs is
+	// pruned by retention and node_declarations is not"). A second raw
+	// connection, matching installFailAuditTrigger's own pattern, since
+	// this package has no other way to reach the underlying *sql.DB.
 	dbPath := filepath.Join(storeDir, "showmesh.db")
 	raw, err := sql.Open("sqlite", "file:"+dbPath)
 	if err != nil {
@@ -482,7 +668,7 @@ func TestDanglingDiscoveryRunIDRendersUnknownNeverBlank(t *testing.T) {
 	}
 	declaration := decodeMap(t, getBody)["node"].(map[string]any)["declaration"].(map[string]any)
 	if declaration["discoveryState"] != "unknown" {
-		t.Fatalf("discoveryState = %v, want \"unknown\" once the referenced run has been pruned", declaration["discoveryState"])
+		t.Fatalf("discoveryState = %v, want \"unknown\" once every discovery run has been pruned", declaration["discoveryState"])
 	}
 	if declaration["discoveryReason"] == nil || declaration["discoveryReason"] == "" {
 		t.Errorf("discoveryReason = %v, want a stated reason, never blank", declaration["discoveryReason"])
@@ -492,6 +678,101 @@ func TestDanglingDiscoveryRunIDRendersUnknownNeverBlank(t *testing.T) {
 	if declaration["lastDiscoveryRunId"] != declBefore.LastDiscoveryRunID {
 		t.Errorf("lastDiscoveryRunId = %v, want the (now-dangling) run id %q reported rather than blank",
 			declaration["lastDiscoveryRunId"], declBefore.LastDiscoveryRunID)
+	}
+}
+
+// TestNotSeenPreservesDanglingEvidenceWhileNamingTheRunThatMissedIt is the
+// review's own "genuine dangling case": a declaration pointing at a PRUNED
+// run while a NEWER, COMPLETE run exists and did not see it. This renders
+// not_seen (never unknown — a newer complete run's absence claim is real
+// evidence), and is DEFECT 8's own regression coverage: lastDiscoveryRunId/
+// lastDiscoveredAt must keep reporting the declaration's OWN (now-dangling,
+// pruned) last-seen bookkeeping, never the identity of the run that just
+// failed to see it — that run is named in notSeenAsOfRunId/
+// notSeenAsOfRunFinishedAt instead. Confirmed to fail before the fix: the
+// old code overwrote out.LastDiscoveryRunID/out.LastDiscoveredAt with
+// latestRun.ID/latestRun.FinishedAt in the not_seen branch, which this
+// test's lastDiscoveryRunId assertion below catches immediately (it would
+// report run 2's id, not run 1's).
+func TestNotSeenPreservesDanglingEvidenceWhileNamingTheRunThatMissedIt(t *testing.T) {
+	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
+	clock := incrementingClock(testNow, time.Minute)
+	deps, st, storeDir := newTestDiscoveryDeps(t, clock, nodes, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
+	ctx := context.Background()
+
+	if _, err := st.DeclareNode(ctx, store.NodeDeclarationRecord{NodeID: "shed-01"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	// Run 1: shed-01 is observed. decl.LastDiscoveryRunID = run1.ID.
+	run1Req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	run1Req.Header.Set("Authorization", "Bearer "+adminToken)
+	run1Resp, run1Body := doRawRequest(t, api.Handler, run1Req)
+	if run1Resp.StatusCode != http.StatusOK {
+		t.Fatalf("run 1 status = %d, want 200; body: %s", run1Resp.StatusCode, run1Body)
+	}
+	run1ID, _ := decodeMap(t, run1Body)["run"].(map[string]any)["id"].(string)
+	declAfterRun1, err := st.GetNodeDeclaration(ctx, "shed-01")
+	if err != nil {
+		t.Fatalf("get node declaration after run 1: %v", err)
+	}
+	if declAfterRun1.LastDiscoveryRunID != run1ID {
+		t.Fatalf("declaration.LastDiscoveryRunID = %q after run 1, want %q", declAfterRun1.LastDiscoveryRunID, run1ID)
+	}
+
+	// Prune run 1's row specifically — its id is now dangling — BEFORE
+	// run 2 happens, mirroring retention pruning an old run while newer
+	// ones keep landing.
+	dbPath := filepath.Join(storeDir, "showmesh.db")
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw connection: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.ExecContext(ctx, `DELETE FROM discovery_runs WHERE id = ?`, run1ID); err != nil {
+		t.Fatalf("prune run 1: %v", err)
+	}
+
+	// shed-01 goes offline; run 2 does NOT observe it, so decl's own
+	// LastDiscoveryRunID stays at the now-dangling run1ID.
+	nodes.setViews([]inventory.NodeView{offlineNodeView("shed-01")})
+	run2Req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	run2Req.Header.Set("Authorization", "Bearer "+adminToken)
+	run2Resp, run2Body := doRawRequest(t, api.Handler, run2Req)
+	if run2Resp.StatusCode != http.StatusOK {
+		t.Fatalf("run 2 status = %d, want 200; body: %s", run2Resp.StatusCode, run2Body)
+	}
+	run2ID, _ := decodeMap(t, run2Body)["run"].(map[string]any)["id"].(string)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/shed-01", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminToken)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	declaration := decodeMap(t, getBody)["node"].(map[string]any)["declaration"].(map[string]any)
+
+	if declaration["discoveryState"] != "not_seen" {
+		t.Fatalf("discoveryState = %v, want \"not_seen\" (run 2 is complete and did not see shed-01)", declaration["discoveryState"])
+	}
+	// DEFECT 8: lastDiscoveryRunId/lastDiscoveredAt are THIS DECLARATION's
+	// own (dangling, pruned) evidence — run 1 — never run 2's identity.
+	if declaration["lastDiscoveryRunId"] != run1ID {
+		t.Errorf("lastDiscoveryRunId = %v, want the declaration's OWN dangling run id %q, never the run that just missed it",
+			declaration["lastDiscoveryRunId"], run1ID)
+	}
+	if declaration["lastDiscoveredAt"] == nil {
+		t.Errorf("lastDiscoveredAt = nil, want the declaration's own (dangling) last-seen time, never blank")
+	}
+	// The run that DID fail to see it is named separately.
+	if declaration["notSeenAsOfRunId"] != run2ID {
+		t.Errorf("notSeenAsOfRunId = %v, want the run that just missed it (%q)", declaration["notSeenAsOfRunId"], run2ID)
+	}
+	if declaration["notSeenAsOfRunFinishedAt"] == nil {
+		t.Errorf("notSeenAsOfRunFinishedAt = nil, want run 2's finish time")
 	}
 }
 
@@ -516,5 +797,522 @@ func TestUndeclaredNodeRendersNotApplicable(t *testing.T) {
 	}
 	if declaration["discoveryState"] != "not_applicable" {
 		t.Errorf("discoveryState = %v, want \"not_applicable\"", declaration["discoveryState"])
+	}
+}
+
+// --- DEFECT 2: ambiguous evidence (a broker outage) must never manufacture absence ---
+
+// TestAmbiguousLivenessDuringARunLeavesItIncompleteRatherThanManufacturingAbsence
+// is the review's own broker-outage scenario: a node's evidence ages past
+// its staleness window (LivenessUnknown — NO evidence either way), not a
+// last-will "offline" (LivenessOffline — real evidence of absence). Before
+// the fix, this test's run.complete assertion fails (the old code treated
+// LivenessUnknown identically to LivenessOffline and finished complete=true
+// unconditionally), and the declaration's discoveryState assertion
+// ALSO fails once that complete=true run is read back — it renders
+// not_seen for equipment nobody has any evidence is actually gone.
+func TestAmbiguousLivenessDuringARunLeavesItIncompleteRatherThanManufacturingAbsence(t *testing.T) {
+	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
+	clock := incrementingClock(testNow, time.Minute)
+	deps, st, _ := newTestDiscoveryDeps(t, clock, nodes, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
+	ctx := context.Background()
+
+	if _, err := st.DeclareNode(ctx, store.NodeDeclarationRecord{NodeID: "shed-01"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	// Run 1: shed-01 is genuinely online — establish real prior evidence.
+	run1Req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	run1Req.Header.Set("Authorization", "Bearer "+adminToken)
+	run1Resp, run1Body := doRawRequest(t, api.Handler, run1Req)
+	if run1Resp.StatusCode != http.StatusOK {
+		t.Fatalf("run 1 status = %d, want 200; body: %s", run1Resp.StatusCode, run1Body)
+	}
+
+	// A broker outage: shed-01's heartbeat ages past staleness with NO
+	// fresh last-will either way — LivenessUnknown, not LivenessOffline.
+	unknownView := liveNodeView("shed-01")
+	unknownView.Liveness = inventory.LivenessUnknown
+	unknownView.LivenessReason = "health evidence is past the staleness window (broker outage simulation)"
+	nodes.setViews([]inventory.NodeView{unknownView})
+
+	run2Req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	run2Req.Header.Set("Authorization", "Bearer "+adminToken)
+	run2Resp, run2Body := doRawRequest(t, api.Handler, run2Req)
+	if run2Resp.StatusCode != http.StatusOK {
+		t.Fatalf("run 2 status = %d, want 200; body: %s", run2Resp.StatusCode, run2Body)
+	}
+	run2 := decodeMap(t, run2Body)["run"].(map[string]any)
+	if run2["complete"] != false {
+		t.Fatalf("run 2 (all evidence ambiguous) complete = %v, want false — an ambiguous-evidence run must never claim it may assert absence", run2["complete"])
+	}
+	reason, _ := run2["reason"].(string)
+	if reason == "" {
+		t.Errorf("run 2 reason = %q, want a stated reason", reason)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/shed-01", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminToken)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	declaration := decodeMap(t, getBody)["node"].(map[string]any)["declaration"].(map[string]any)
+	if declaration["discoveryState"] != "unknown" {
+		t.Fatalf(`discoveryState = %v after a broker-outage run, want "unknown" (NEVER "not_seen" — nothing has confirmed shed-01 is actually gone)`,
+			declaration["discoveryState"])
+	}
+}
+
+// TestGenuinelyOfflineNodeStillRendersNotSeenAfterTheFix confirms DEFECT 2's
+// fix did not overcorrect: a node with REAL evidence of absence (a last-will
+// "online: false" — LivenessOffline, not LivenessUnknown) must still
+// support not_seen once a run completes. This is Step 5's pruning rule's
+// entire point ("a genuinely powered-off node must still report not_seen"),
+// restated here as the control for the ambiguous-evidence test above.
+func TestGenuinelyOfflineNodeStillRendersNotSeenAfterTheFix(t *testing.T) {
+	nodes := &fakeNodeLister{views: []inventory.NodeView{liveNodeView("shed-01")}}
+	clock := incrementingClock(testNow, time.Minute)
+	deps, st, _ := newTestDiscoveryDeps(t, clock, nodes, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
+	ctx := context.Background()
+
+	if _, err := st.DeclareNode(ctx, store.NodeDeclarationRecord{NodeID: "shed-01"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	runDiscovery := func() map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("discovery run status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		return decodeMap(t, body)["run"].(map[string]any)
+	}
+	runDiscovery()
+
+	nodes.setViews([]inventory.NodeView{offlineNodeView("shed-01")})
+	run2 := runDiscovery()
+	if run2["complete"] != true {
+		t.Fatalf("run 2 (genuinely offline, real evidence) complete = %v, want true", run2["complete"])
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/shed-01", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminToken)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	declaration := decodeMap(t, getBody)["node"].(map[string]any)["declaration"].(map[string]any)
+	if declaration["discoveryState"] != "not_seen" {
+		t.Errorf("discoveryState = %v, want \"not_seen\" for equipment with real evidence of being offline", declaration["discoveryState"])
+	}
+}
+
+// --- DEFECT 3: an FPP instance counts as observed only on actual collection evidence ---
+
+// TestNeverPolledFPPInstanceDoesNotCountAsObserved is DEFECT 3's own
+// regression: apiwiring's fppInstanceLister returns a view for every
+// CONFIGURED FPP endpoint, synthesizing not_collected placeholders when the
+// store holds nothing — before the fix, that alone was enough to count as
+// "observed" on every run. neverPolledFPPView (LastPollAt nil) is exactly
+// that placeholder shape. Confirmed to fail before the fix: player-01 would
+// appear as a proposal and inflate foundCount to 1.
+func TestNeverPolledFPPInstanceDoesNotCountAsObserved(t *testing.T) {
+	fpp := &fakeFPPLister{views: []FPPInstanceView{neverPolledFPPView("player-01")}}
+	deps, _, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nil, fpp)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	result := decodeMap(t, body)
+	proposals, _ := result["proposals"].([]any)
+	if len(proposals) != 0 {
+		t.Fatalf("proposals = %+v, want none — an instance that has never been successfully polled is configuration, not evidence", proposals)
+	}
+	run := result["run"].(map[string]any)
+	if run["foundCount"] != float64(0) {
+		t.Errorf("run.foundCount = %v, want 0", run["foundCount"])
+	}
+	// player-01 is not DECLARED here, so its ambiguous evidence blocks no
+	// absence claim (nothing renders not_seen for an undeclared entity
+	// either way) — this run is free to finish complete=true. See
+	// TestDeclaredNeverPolledFPPInstanceLeavesRunIncomplete below for the
+	// declared case, where ambiguous evidence DOES have an absence claim
+	// riding on it and must block completeness.
+	if run["complete"] != true {
+		t.Errorf("run.complete = %v, want true (nothing declared has ambiguous evidence)", run["complete"])
+	}
+}
+
+// TestDeclaredNeverPolledFPPInstanceLeavesRunIncomplete is DEFECT 2's own
+// extension to the FPP branch, named in this seam's own report rather than
+// the review's numbered findings: a DECLARED FPP instance with no poll
+// evidence yet (e.g. immediately after a coordinator restart, before the
+// FPP collector's first cycle completes) must not be able to render
+// not_seen off a run that never actually checked it either way — the exact
+// same failure DEFECT 2 fixes for nodes, reachable here through DEFECT 3's
+// own fix (fppInstanceObserved requiring real evidence) once ambiguous
+// evidence is distinguished from negative evidence.
+func TestDeclaredNeverPolledFPPInstanceLeavesRunIncomplete(t *testing.T) {
+	fpp := &fakeFPPLister{views: []FPPInstanceView{neverPolledFPPView("player-01")}}
+	deps, st, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nil, fpp)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if _, err := st.DeclareNode(context.Background(), store.NodeDeclarationRecord{NodeID: "player-01"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	run := decodeMap(t, body)["run"].(map[string]any)
+	if run["complete"] != false {
+		t.Fatalf("run.complete = %v, want false — player-01 is declared and has never been polled, so this run has no evidence to assert its absence with", run["complete"])
+	}
+}
+
+// TestUnreachableFPPInstanceRendersNotSeenOnceConfirmed is DEFECT 3's
+// control: a genuinely unreachable FPP instance (a poll DID complete and
+// DID fail — real negative evidence) must still support not_seen, exactly
+// like an unplugged FPP that the review's own example named. This is what
+// distinguishes fppInstanceEvidenceAmbiguous (LastPollAt nil) from a
+// failed poll (LastPollAt set, LastPollError set): only the former blocks
+// a run's completeness.
+func TestUnreachableFPPInstanceRendersNotSeenOnceConfirmed(t *testing.T) {
+	fpp := &fakeFPPLister{views: []FPPInstanceView{polledFPPView("player-01")}}
+	clock := incrementingClock(testNow, time.Minute)
+	deps, st, _ := newTestDiscoveryDeps(t, clock, nil, fpp)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
+	ctx := context.Background()
+
+	if _, err := st.DeclareNode(ctx, store.NodeDeclarationRecord{NodeID: "player-01"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	runDiscovery := func() map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("discovery run status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		return decodeMap(t, body)["run"].(map[string]any)
+	}
+	runDiscovery() // player-01 is reachable and confirmed.
+
+	fpp.views = []FPPInstanceView{failedPollFPPView("player-01")}
+	run2 := runDiscovery()
+	if run2["complete"] != true {
+		t.Fatalf("run 2 (a completed, failed poll — real negative evidence) complete = %v, want true", run2["complete"])
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/player-01", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminToken)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	declaration := decodeMap(t, getBody)["node"].(map[string]any)["declaration"].(map[string]any)
+	if declaration["discoveryState"] != "not_seen" {
+		t.Errorf("discoveryState = %v, want \"not_seen\" for an FPP instance confirmed unreachable", declaration["discoveryState"])
+	}
+}
+
+// --- DEFECT 4: a declared node with no inventory row still renders, and is deletable ---
+
+// TestDeclaredNodeNeverObservedAppearsInListingsAndCanBeDeleted covers the
+// review's reachability finding: promoting an FPP-sourced (or any)
+// proposal that has no corresponding [NodeLister]/[FPPLister] entry used
+// to vanish from every surface with no way back except a direct
+// DELETE/curl call. ghost-01 here is declared directly (bypassing
+// discovery, matching how an FPP instance id declaration behaves — it is
+// never returned by [NodeLister] at all) and must still appear on both
+// GET /api/v1/nodes and GET /api/v1/nodes/{nodeId}, honestly flagged as
+// never observed, and remain deletable through the ordinary endpoint.
+func TestDeclaredNodeNeverObservedAppearsInListingsAndCanBeDeleted(t *testing.T) {
+	deps, st, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nil, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if _, err := st.DeclareNode(context.Background(), store.NodeDeclarationRecord{NodeID: "ghost-01", Label: "Never said hello"}); err != nil {
+		t.Fatalf("declare node: %v", err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	listReq.Header.Set("Authorization", "Bearer "+adminToken)
+	listResp, listBody := doRawRequest(t, api.Handler, listReq)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body: %s", listResp.StatusCode, listBody)
+	}
+	nodesList := decodeMap(t, listBody)["nodes"].([]any)
+	var found map[string]any
+	for _, n := range nodesList {
+		nm := n.(map[string]any)
+		if nm["nodeId"] == "ghost-01" {
+			found = nm
+		}
+	}
+	if found == nil {
+		t.Fatalf("ghost-01 (declared, never observed) is absent from GET /api/v1/nodes: %+v", nodesList)
+	}
+	decl := found["declaration"].(map[string]any)
+	if decl["declared"] != true {
+		t.Errorf("ghost-01 declaration.declared = %v, want true", decl["declared"])
+	}
+	cp := found["controlPlane"].(map[string]any)
+	if cp["state"] != "unknown" {
+		t.Errorf("ghost-01 controlPlane.state = %v, want \"unknown\" (never a fabricated \"offline\")", cp["state"])
+	}
+	if cp["reason"] == nil || cp["reason"] == "" {
+		t.Errorf("ghost-01 controlPlane.reason = %v, want a stated reason", cp["reason"])
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/ghost-01", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminToken)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET ghost-01 status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+
+	// And it remains reachable by the ordinary delete endpoint — the "no
+	// way back" half of the defect.
+	delReq := newJSONRequest(t, http.MethodDelete, "/api/v1/nodes/ghost-01/declaration", `{"confirm":true}`, nil)
+	delReq.Header.Set("Authorization", "Bearer "+adminToken)
+	delResp, delBody := doRawRequest(t, api.Handler, delReq)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204; body: %s", delResp.StatusCode, delBody)
+	}
+	if _, err := st.GetNodeDeclaration(context.Background(), "ghost-01"); err == nil {
+		t.Fatalf("ghost-01's declaration still exists after a confirmed delete")
+	}
+}
+
+// --- DEFECT 6: absent label/notes must never overwrite what is already declared ---
+
+func TestReDeclareWithAbsentFieldsPreservesExistingLabelAndNotes(t *testing.T) {
+	deps, _, _ := newTestDiscoveryDeps(t, fixedClock(testNow), nil, nil)
+	admin := mustCreatePrincipal(t, deps.Identity, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, deps.Identity, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	first := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/roof-01/declaration",
+		`{"label":"Roof controller — 2 strings","notes":"west side"}`, nil)
+	first.Header.Set("Authorization", "Bearer "+adminToken)
+	firstResp, firstBody := doRawRequest(t, api.Handler, first)
+	if firstResp.StatusCode != http.StatusOK {
+		t.Fatalf("first declare status = %d, want 200; body: %s", firstResp.StatusCode, firstBody)
+	}
+
+	// A second declare with NEITHER field present — confirmed to fail
+	// before the fix: the old handler decoded a missing "label"/"notes"
+	// key to Go's zero value "" indistinguishably from an explicit "",
+	// and unconditionally wrote it, erasing the label set above.
+	second := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/roof-01/declaration", `{}`, nil)
+	second.Header.Set("Authorization", "Bearer "+adminToken)
+	secondResp, secondBody := doRawRequest(t, api.Handler, second)
+	if secondResp.StatusCode != http.StatusOK {
+		t.Fatalf("second declare status = %d, want 200; body: %s", secondResp.StatusCode, secondBody)
+	}
+	decl := decodeMap(t, secondBody)["declaration"].(map[string]any)
+	if decl["label"] != "Roof controller — 2 strings" {
+		t.Errorf("label after a re-declare with no --label = %v, want the ORIGINAL label preserved", decl["label"])
+	}
+	if decl["notes"] != "west side" {
+		t.Errorf("notes after a re-declare with no --notes = %v, want the ORIGINAL notes preserved", decl["notes"])
+	}
+
+	// An explicit null is the same as absent.
+	third := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/roof-01/declaration", `{"label":null}`, nil)
+	third.Header.Set("Authorization", "Bearer "+adminToken)
+	thirdResp, thirdBody := doRawRequest(t, api.Handler, third)
+	if thirdResp.StatusCode != http.StatusOK {
+		t.Fatalf("third declare status = %d, want 200; body: %s", thirdResp.StatusCode, thirdBody)
+	}
+	declThird := decodeMap(t, thirdBody)["declaration"].(map[string]any)
+	if declThird["label"] != "Roof controller — 2 strings" {
+		t.Errorf("label after an explicit null = %v, want the ORIGINAL label preserved", declThird["label"])
+	}
+
+	// An explicit empty string DOES clear it — the distinction this fix exists to make representable.
+	fourth := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/roof-01/declaration", `{"label":""}`, nil)
+	fourth.Header.Set("Authorization", "Bearer "+adminToken)
+	fourthResp, fourthBody := doRawRequest(t, api.Handler, fourth)
+	if fourthResp.StatusCode != http.StatusOK {
+		t.Fatalf("fourth declare status = %d, want 200; body: %s", fourthResp.StatusCode, fourthBody)
+	}
+	declFourth := decodeMap(t, fourthBody)["declaration"].(map[string]any)
+	if declFourth["label"] != nil {
+		t.Errorf("label after an explicit empty string = %v, want cleared (null on the wire — nonEmptyStrPtr)", declFourth["label"])
+	}
+	if declFourth["notes"] != "west side" {
+		t.Errorf("notes after a label-only request = %v, want unchanged", declFourth["notes"])
+	}
+}
+
+// --- DEFECT 7a: concurrent discovery runs are refused, never queued ---
+
+// blockingNodeLister is [NodeLister] whose Snapshot blocks until released,
+// closing entered exactly once on first entry — used to guarantee a
+// discovery run is genuinely IN FLIGHT (past the concurrency guard, deep
+// inside handleStartDiscoveryRun) before this test issues a second,
+// overlapping request, rather than racing goroutine scheduling the way
+// CLAUDE.md's own standing lesson warns against.
+type blockingNodeLister struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingNodeLister) Snapshot(context.Context, time.Time) ([]inventory.NodeView, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil, nil
+}
+
+// TestConcurrentDiscoveryRunsAreRefusedNotQueued is confirmed to fail
+// before the fix: with handleStartDiscoveryRun's discoveryRunInFlight
+// guard removed, the second, overlapping request proceeds normally and
+// this test's 409 assertion fails (it observes 200 instead).
+func TestConcurrentDiscoveryRunsAreRefusedNotQueued(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := identity.NewService(st, fixedClock(testNow), filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
+	blocker := &blockingNodeLister{entered: make(chan struct{}), release: make(chan struct{})}
+	deps := Dependencies{
+		Nodes: blocker, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		Identity: svc, Discovery: st,
+	}
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// The first request runs in its own goroutine and blocks inside
+	// Nodes.Snapshot until released below. httptest.NewRecorder plus a
+	// manual body read here, deliberately NOT doRawRequest/t.Fatalf: a
+	// background goroutine must never call a *testing.T failure method
+	// (see the testing package's own documented restriction), so any
+	// assertion on the first response happens after this goroutine hands
+	// its result back over firstStatus.
+	firstStatus := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		rec := httptest.NewRecorder()
+		api.Handler.ServeHTTP(rec, req)
+		_, _ = io.ReadAll(rec.Result().Body)
+		firstStatus <- rec.Result().StatusCode
+	}()
+
+	select {
+	case <-blocker.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first discovery run never reached Nodes.Snapshot")
+	}
+
+	// Second request, issued while the first is provably still in flight.
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	secondReq.Header.Set("Authorization", "Bearer "+adminToken)
+	secondResp, secondBody := doRawRequest(t, api.Handler, secondReq)
+	if secondResp.StatusCode != http.StatusConflict {
+		t.Fatalf("second (overlapping) discovery run status = %d, want 409; body: %s", secondResp.StatusCode, secondBody)
+	}
+	problem := decodeMap(t, secondBody)
+	if problem["type"] != ProblemTypeConflict {
+		t.Errorf("second run problem type = %v, want %q", problem["type"], ProblemTypeConflict)
+	}
+
+	close(blocker.release)
+	select {
+	case status := <-firstStatus:
+		if status != http.StatusOK {
+			t.Fatalf("first discovery run status = %d, want 200", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first discovery run never finished after being released")
+	}
+
+	// A THIRD run, issued only after the first has fully finished, must
+	// succeed — proving the guard releases rather than wedging the
+	// endpoint permanently.
+	thirdReq := httptest.NewRequest(http.MethodPost, "/api/v1/discovery/runs", nil)
+	thirdReq.Header.Set("Authorization", "Bearer "+adminToken)
+	thirdResp, thirdBody := doRawRequest(t, api.Handler, thirdReq)
+	if thirdResp.StatusCode != http.StatusOK {
+		t.Fatalf("run after the first finished status = %d, want 200; body: %s", thirdResp.StatusCode, thirdBody)
+	}
+}
+
+// --- DEFECT 7c: ListDiscoveryRuns' latest-run ordering has a deterministic tiebreaker ---
+
+// TestLatestDiscoveryRunTiebreaksOnInsertionOrder confirms
+// store.Store.ListDiscoveryRuns' `ORDER BY started_at DESC, rowid DESC`
+// resolves an exact started_at tie deterministically: the run inserted
+// SECOND (rowid is strictly insertion-ordered) is "the most recent run",
+// regardless of what an identical clock reading would otherwise leave
+// unspecified. Drives the real store directly — this is a SQL ordering
+// guarantee, not something an HTTP round trip through this package would
+// exercise any more precisely.
+func TestLatestDiscoveryRunTiebreaksOnInsertionOrder(t *testing.T) {
+	dir := t.TempDir()
+	// A clock that never advances: every run in this test shares the exact
+	// same started_at, so ONLY the tiebreaker can distinguish them.
+	frozen := fixedClock(testNow)
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(frozen))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	if _, err := st.StartDiscoveryRun(ctx, store.DiscoveryRunRecord{ID: "run-a"}); err != nil {
+		t.Fatalf("start run-a: %v", err)
+	}
+	if err := st.FinishDiscoveryRun(ctx, "run-a", true, "", 0); err != nil {
+		t.Fatalf("finish run-a: %v", err)
+	}
+	if _, err := st.StartDiscoveryRun(ctx, store.DiscoveryRunRecord{ID: "run-b"}); err != nil {
+		t.Fatalf("start run-b: %v", err)
+	}
+	if err := st.FinishDiscoveryRun(ctx, "run-b", true, "", 0); err != nil {
+		t.Fatalf("finish run-b: %v", err)
+	}
+
+	runs, err := st.ListDiscoveryRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("list discovery runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("ListDiscoveryRuns(limit=1) returned %d rows, want 1", len(runs))
+	}
+	if runs[0].ID != "run-b" {
+		t.Errorf("latest run = %q, want %q (inserted second, identical started_at)", runs[0].ID, "run-b")
 	}
 }

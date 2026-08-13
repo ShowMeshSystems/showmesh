@@ -26,4 +26,14 @@ export const PROBLEM_TYPE = {
   csrfRejected: 'https://showmesh.dev/problems/csrf-rejected',
   tooManyRequests: 'https://showmesh.dev/problems/too-many-requests',
   credentialInUrl: 'https://showmesh.dev/problems/credential-in-url',
+  // Step 7 seam A: PUT /config/fpp.endpoints refused (409) because
+  // SHOWMESH_FPP_ENDPOINTS is still set in the coordinator's own process
+  // environment (RES-008 D1). No dedicated error class dispatches on this
+  // the way ForbiddenError/CSRFRejectedError do — the coordinator's
+  // `detail` text is already the full actionable message (names the
+  // variable, states the remedy), so the generic ApiError path
+  // (describeApiError in app/session.ts) already renders it correctly.
+  // This entry exists so PROBLEM_TYPE stays what its own doc comment
+  // claims: every class this coordinator currently produces.
+  conflict: 'https://showmesh.dev/problems/conflict',
 } as const

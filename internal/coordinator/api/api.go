@@ -73,6 +73,40 @@ type Dependencies struct {
 	// internal error, matching this package's standing "an unwired
 	// dependency is not this API failing" posture.
 	Discovery DeclarationStore
+
+	// FPPEndpointsEnvVarSet is whether SHOWMESH_FPP_ENDPOINTS is currently
+	// set in the coordinator PROCESS's environment — internal/coordinator's
+	// Run computes it once, from the same already-loaded
+	// [config.Config.FPPEndpointsEnvSet] that decided the migration and
+	// disagreement rule at startup (internal/coordinator/configsync.go),
+	// and passes the plain bool through here. This package deliberately
+	// has no access to os.Getenv anywhere: reading the environment is
+	// config's job, not the API's, and threading the fact through as data
+	// (rather than this package doing its own lookup) is what keeps that
+	// boundary real rather than a naming convention. Consumed by
+	// handlePutFPPEndpointsConfig (config.go) for Step 7 seam A review
+	// defect 3a: a write is refused with 409 while this is true, because
+	// it cannot survive this coordinator's own next restart (see that
+	// handler's doc comment). The zero value (false) is the same posture
+	// as every other unwired dependency in this struct: "nothing told
+	// this API otherwise", so no refusal fires — correct for tests and
+	// for any embedder that has not wired it in.
+	FPPEndpointsEnvVarSet bool
+
+	// FPPMQTTHostIDs is SHOWMESH_FPP_MQTT_HOSTS's parsed instance-id ->
+	// host-name mapping ([config.Config.FPPMQTTHosts]), threaded through
+	// for the identical "this package does not read the environment or
+	// config package state on its own" reason [FPPEndpointsEnvVarSet]
+	// documents. Consumed by handlePutFPPEndpointsConfig for Step 7 seam A
+	// review defect 4: a PUT is refused with 400 when the proposed
+	// endpoint list would drop an id this map still references, naming
+	// that id, rather than accepting 200 and refusing to boot on the next
+	// restart against [config.ValidateFPPMQTTHostIDs]'s identical rule.
+	// A nil/empty map (the zero value, and every existing test's default)
+	// means the cross-check has nothing to enforce — identical to how an
+	// unset SHOWMESH_FPP_MQTT_HOSTS behaves everywhere else in this
+	// codebase.
+	FPPMQTTHostIDs map[string]string
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -187,6 +221,18 @@ func (noCommandStore) SetDesiredState(context.Context, store.DesiredStateRecord)
 
 func (noCommandStore) UpdateCommandOutcome(context.Context, string, store.CommandOutcomeUpdate) error {
 	return errCommandStoreNotConfigured
+}
+
+// ListUnresolvedCommands answers empty-and-successful, not an error,
+// unlike this type's write methods above: [ReconcileStrandedFPPCommands]
+// (Step 7 seam C review defect 5) is a best-effort startup sweep, and a
+// coordinator that has not wired a CommandStore in at all has no commands
+// table to sweep — "nothing to reconcile" is the honest, successful answer
+// for that case, matching every other no-op LISTER in this file
+// (noObservationLister, noEventReader, ...), not this type's own write
+// methods, which correctly refuse loudly.
+func (noCommandStore) ListUnresolvedCommands(context.Context) ([]store.CommandRecord, error) {
+	return nil, nil
 }
 
 // noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads

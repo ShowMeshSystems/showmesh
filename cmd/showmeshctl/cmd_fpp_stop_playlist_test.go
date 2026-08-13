@@ -174,3 +174,75 @@ func TestCmdFPPStopPlaylistRequiresInstanceID(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitUsage for a missing instance-id argument", code)
 	}
 }
+
+// --- Step 7 seam C review defect 1: this subcommand's own request budget
+// must never be smaller than what the coordinator's own confirmation
+// deadline needs, regardless of --timeout's global default. ---
+
+// TestEffectiveStopPlaylistTimeoutNeverBelowMinimum is the fast, pure half
+// of defect 1's guard (the slow, real half is
+// test/integration's TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline,
+// which runs the real coordinator and this real binary together). This
+// test alone cannot catch minStopPlaylistClientTimeout itself being set
+// too small relative to the SERVER's default — no unit test can, since the
+// two are two independent literals by design (see that constant's own doc
+// comment) — it only proves --timeout can never override the constant
+// downward, which is this function's entire job.
+func TestEffectiveStopPlaylistTimeoutNeverBelowMinimum(t *testing.T) {
+	cases := []struct {
+		name string
+		flag time.Duration
+		want time.Duration
+	}{
+		{"global default (10s) is raised to the minimum", 10 * time.Second, minStopPlaylistClientTimeout},
+		{"zero is raised to the minimum", 0, minStopPlaylistClientTimeout},
+		{"exactly the minimum is left alone", minStopPlaylistClientTimeout, minStopPlaylistClientTimeout},
+		{"an explicit larger value is honored, never clamped down", 5 * time.Minute, 5 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := effectiveStopPlaylistTimeout(tc.flag)
+			if got != tc.want {
+				t.Errorf("effectiveStopPlaylistTimeout(%v) = %v, want %v", tc.flag, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCmdFPPStopPlaylistSurvivesAResponseSlowerThanTheExplicitTimeoutFlag
+// is this defect's own reproduction, fixed, kept fast by using an
+// explicit small --timeout rather than waiting out the real 35s minimum:
+// with --timeout set to 200ms (well below
+// [minStopPlaylistClientTimeout]), a fake coordinator that takes 400ms to
+// answer must still be reached successfully. Before this fix, this
+// subcommand used --timeout directly as both the *http.Client's own
+// Timeout and the request context's deadline, so a 400ms response against
+// a 200ms budget would abort as a bare transport timeout — exactly what a
+// real coordinator's confirmation wait does routinely against the old 10s
+// global default. Broken to verify: reverting effectiveStopPlaylistTimeout
+// to `return flagTimeout` (ignoring the minimum entirely) makes this test
+// fail with a context-deadline-exceeded transport error instead of
+// "confirmed" — see this task's report.
+func TestCmdFPPStopPlaylistSurvivesAResponseSlowerThanTheExplicitTimeoutFlag(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-12T22:00:00Z","command":{
+			"id":"cmd-slow","idempotencyKey":"k","action":"fpp.stop_playlist","instanceId":"bench-fpp",
+			"replay":false,"outcome":"confirmed","outcomeState":"current","outcomeReason":"",
+			"attributionDegraded":false,"dispatchedAt":"2026-08-12T22:00:00Z","resolvedAt":"2026-08-12T22:00:01Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"stop-playlist", "--server", ts.URL, "--timeout", "200ms", "bench-fpp"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; a 400ms-slow response must survive a 200ms --timeout flag, because this "+
+			"subcommand's own minimum overrides too-small values (ADR-003/defect 1); stdout=%s stderr=%s",
+			code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "confirmed") {
+		t.Errorf("stdout = %q, want it to report \"confirmed\"", stdout.String())
+	}
+}

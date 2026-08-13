@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -16,6 +17,56 @@ import (
 // has no caller"). It is also this contract's honest client: a `200`
 // from the coordinator is never printed or exited as unqualified success
 // (ADR-003) — see [reportFPPCommandResult].
+
+// minStopPlaylistClientTimeout is this subcommand's OWN minimum request
+// budget, overriding --timeout's global default (10s) when it is smaller.
+// Step 7 seam C review defect 1: the coordinator's own default
+// confirmation deadline (internal/coordinator/api's
+// defaultFPPCommandConfirmDeadline, 20s) already exceeds --timeout's
+// 10s default, so this subcommand — unlike a plain snapshot read, which
+// really is fast — used to abort via context deadline before the
+// coordinator could ever answer "unconfirmed" with a reason, reporting a
+// bare transport-timeout failure (exit 2, "coordinator unreachable ...
+// timeout") for what was a successful conversation with a healthy
+// coordinator. That is precisely the inverted failure direction ADR-024
+// decision 7 exists to name.
+//
+// This is a SECOND, independently chosen literal — this program
+// deliberately does not import pkg/command for its own minting/decoding
+// (see importgraph_test.go's forbiddenImports comment; this constant is
+// exactly that same independence applied to a number instead of a wire
+// type), so it cannot be DERIVED from
+// command.DefaultFPPCommandConfirmDeadline the way
+// internal/coordinator/api's own default now is (api.go). It is instead
+// RECONCILED against the server's real value the only way two
+// independent literals safely can be: test/integration's
+// TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline runs the real
+// coordinator (with its real default) and this real binary together and
+// fails if this value is ever too small for that default again — a unit
+// test comparing two hand-copied literals could not catch the two
+// silently disagreeing, only that one can. See
+// [effectiveStopPlaylistTimeout]'s own unit test for the fast, purely
+// arithmetic half of this guarantee: that THIS number, whatever it is
+// set to, is never overridden downward by a smaller --timeout.
+//
+// 35s = the coordinator's 20s default confirmation deadline + a 15s
+// margin for the round trip itself (SHOWMESH HYPOTHESIS, NOT MEASURED —
+// mirrors pkg/command.ClientTimeoutMargin's identical reasoning and
+// value, chosen independently here for the reason above).
+const minStopPlaylistClientTimeout = 35 * time.Second
+
+// effectiveStopPlaylistTimeout returns the request budget this subcommand
+// actually uses: flagTimeout (the --timeout flag) when it is already at
+// least [minStopPlaylistClientTimeout], and minStopPlaylistClientTimeout
+// otherwise. An operator who explicitly asks for MORE than the minimum
+// (e.g. a slow or high-latency link) is still honored; only a budget too
+// small to ever observe the server's own deadline is raised.
+func effectiveStopPlaylistTimeout(flagTimeout time.Duration) time.Duration {
+	if flagTimeout < minStopPlaylistClientTimeout {
+		return minStopPlaylistClientTimeout
+	}
+	return flagTimeout
+}
 
 // cmdFPPStopPlaylist implements "showmeshctl fpp stop-playlist
 // <instance-id>": POST /api/v1/fpp/{instanceId}/commands with
@@ -52,11 +103,20 @@ func cmdFPPStopPlaylist(args []string, stdout, stderr io.Writer, clock func() ti
 	}
 	instanceID := rest[0]
 
-	c, err := newRequestClient(g)
+	// This request's own timeout, never the bare --timeout flag value: a
+	// command dispatch is a long request by design (it waits out the
+	// coordinator's own confirmation deadline) and must not share a
+	// snapshot read's short budget — see [effectiveStopPlaylistTimeout]'s
+	// own doc comment (Step 7 seam C review defect 1). Applied to BOTH the
+	// underlying *http.Client's own Timeout and the request context's
+	// deadline, matching newRequestClient's identical pairing for every
+	// other subcommand.
+	timeout := effectiveStopPlaylistTimeout(g.timeout)
+	c, err := newClient(g.server, g.token, &http.Client{Timeout: timeout})
 	if err != nil {
 		return reportError(stderr, "fpp stop-playlist", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	key, err := newIdempotencyKey()

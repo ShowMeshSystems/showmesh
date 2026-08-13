@@ -28,6 +28,12 @@ import (
 // and ADR-003 (a 200 from FPP is not success; confirmation is by
 // evidence, against an explicit deadline). See this task's report for the
 // full accounting against every acceptance criterion.
+//
+// This version is the review-fix pass: defects 2, 3, 4, 6, 8, and 9 all
+// live in this file (defect 1 lives partly in api.go/pkg/command, defect 5
+// lives in fppcommand_reconcile.go, defect 7 lives in
+// internal/coordinator/fppcommand and collector/fpp's import-graph test).
+// See this task's report for the design choice behind each.
 
 // scopeFPPCommand exists only so api.go's route registration can take its
 // address: [handlers.writeGuard] takes *identity.Scope (nil means "any
@@ -77,6 +83,17 @@ const (
 // gets a decode error rather than this handler reading an unbounded body).
 const maxFPPCommandRequestBodyBytes = 4 << 10 // 4 KiB
 
+// dbWriteTimeout bounds each individual piece of post-dispatch
+// bookkeeping (a commands-row update, an outcome audit entry) once it is
+// no longer tied to the client's own request context — see bgCtx's own
+// comment in [handlers.handleFPPCommand] (Step 7 seam C review defect 4).
+// "Not cancellable by an abandoned client" must not silently become
+// "capable of hanging forever" if the store is ever wedged; each write
+// gets its own short, independent deadline instead of inheriting nothing.
+// SHOWMESH HYPOTHESIS, NOT MEASURED: chosen only to be comfortably larger
+// than one local SQLite write.
+const dbWriteTimeout = 10 * time.Second
+
 // commandResultPayload is what this handler stores in
 // store.CommandRecord.ResultJSON and returns to a replay as the record of
 // what actually happened — ARCHITECTURE section 8.1's "result", captured
@@ -89,6 +106,41 @@ type commandResultPayload struct {
 	Body       string `json:"body,omitempty"`
 }
 
+// fppStopPlaylistCommandRecord builds the commands-table row for env.
+// Factored out so both the transactional path and the safety-class
+// degraded fallback (defect 8; see [handlers.handleFPPCommand]) build the
+// IDENTICAL row rather than two copies of this struct literal that could
+// silently drift apart from each other.
+func fppStopPlaylistCommandRecord(env command.Envelope) store.CommandRecord {
+	return store.CommandRecord{
+		ID:                  env.ID,
+		IdempotencyKey:      env.IdempotencyKey,
+		Action:              env.Action,
+		TargetKind:          env.Target.Kind,
+		TargetID:            env.Target.ID,
+		IssuerPrincipalID:   env.Issuer.PrincipalID,
+		IssuerPrincipalName: env.Issuer.PrincipalName,
+		ConfirmationMethod:  string(env.ConfirmationMethod),
+		DeadlineAt:          env.Deadline,
+		State:               "pending",
+	}
+}
+
+// fppStopPlaylistDesiredState builds the desired_state row env's dispatch
+// asks for. Same factoring reason as [fppStopPlaylistCommandRecord].
+func fppStopPlaylistDesiredState(env command.Envelope, now time.Time) store.DesiredStateRecord {
+	return store.DesiredStateRecord{
+		ResourceKind:           env.Target.Kind,
+		ResourceID:             env.Target.ID,
+		Signal:                 fppStatusSignal,
+		Value:                  fppStatusValueIdle,
+		RequestedAt:            now,
+		RequestedByPrincipalID: env.Issuer.PrincipalID,
+		CommandID:              env.ID,
+		DeadlineAt:             env.Deadline,
+	}
+}
+
 // handleFPPCommand serves POST /api/v1/fpp/{instanceId}/commands, behind
 // writeGuard(&identity.ScopeFPPCommand, ...) — so by the time this method
 // runs, ADR-024 decision 4's scope check and decision 6's CSRF check have
@@ -98,21 +150,29 @@ type commandResultPayload struct {
 // The order below is ADR-024 decision 11's, and it is NOT the same order
 // seam A's coordinator-local configuration write follows:
 //
-//  1. Mint the command id, insert the commands row. A duplicate
-//     idempotency key stops here — see [handlers.handleFPPCommandReplay].
-//  2. Record the desired state (ADR-003's split, expressed in storage).
-//  3. Write the DISPATCH audit entry BEFORE dispatching — decision 11's
-//     write-before-dispatch rule for a command sent outward. This is
-//     NEVER identity.Service.AuditedWrite: dispatch is network I/O and
-//     must never run inside a transaction (store/tx.go's own rule).
-//  4. Dispatch to FPP via internal/coordinator/fppcommand.
-//  5. Confirm by evidence against the deadline, then write the OUTCOME as
+//  1. Mint the command id.
+//  2. Insert the commands row, record the desired state (ADR-003's split,
+//     expressed in storage), and write the DISPATCH audit entry BEFORE
+//     dispatching — decision 11's write-before-dispatch rule for a
+//     command sent outward — ALL THREE IN ONE TRANSACTION when the audit
+//     store is healthy (Step 7 seam C review defect 8: a crash between
+//     the insert and the dispatch audit entry must never leave a commands
+//     row with no audit record, and store.Tx.InsertCommand/SetDesiredState
+//     exist for exactly this). A duplicate idempotency key stops here —
+//     see [handlers.handleFPPCommandReplay]. On an AUDIT-WRITE failure
+//     specifically (never any other failure), Stop Playlist's safety-class
+//     exemption (decision 11: blackout/stop/power-off proceed regardless)
+//     means the transaction's rollback of the state change is NOT
+//     acceptable, so this handler falls back to inserting and recording
+//     desired state without a transaction, with degraded attribution —
+//     the identical posture this handler always used before this fix, now
+//     reached only when the atomic path could not be taken.
+//  3. Dispatch to FPP via internal/coordinator/fppcommand — deliberately
+//     OUTSIDE any transaction (network I/O must never run inside one;
+//     store/tx.go's own rule).
+//  4. Confirm by evidence against the deadline, then write the OUTCOME as
 //     a separate, correlated audit entry — never by mutating the dispatch
 //     row (audit_log has no update path, by design).
-//
-// Stop Playlist is a member of decision 11's blackout/stop/power-off
-// safety class: an audit-write failure at step 3 or step 5 does NOT
-// refuse or abort this command — see [handlers.writeSafetyClassAudit].
 func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -190,72 +250,105 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 	deadline := now.Add(h.fppCommandConfirmDeadline)
 	env.Deadline = &deadline
 
-	// --- 1. Insert the command row; a duplicate idempotency key stops here. ---
-	_, err = h.deps.Commands.InsertCommand(ctx, store.CommandRecord{
-		ID:                  env.ID,
-		IdempotencyKey:      env.IdempotencyKey,
-		Action:              env.Action,
-		TargetKind:          env.Target.Kind,
-		TargetID:            env.Target.ID,
-		IssuerPrincipalID:   issuerID,
-		IssuerPrincipalName: issuerName,
-		ConfirmationMethod:  string(env.ConfirmationMethod),
-		DeadlineAt:          env.Deadline,
-		State:               "pending",
-	})
-	var dup *store.DuplicateCommandError
-	if errors.As(err, &dup) {
-		h.handleFPPCommandReplay(w, r, now, dup.Existing, instanceID)
-		return
-	}
-	if err != nil {
-		h.writeInternalError(w, now, "insert fpp command", err)
-		return
-	}
-
-	// --- 2. Record the desired state. Best-effort: desired_state is
-	// advisory bookkeeping with no reconciler (store's own standing
-	// rule), and Stop Playlist's safety class means nothing past this
-	// point may refuse the command over a failure here. ---
-	if _, err := h.deps.Commands.SetDesiredState(ctx, store.DesiredStateRecord{
-		ResourceKind: string(observation.ResourceFPP), ResourceID: instanceID, Signal: fppStatusSignal,
-		Value: fppStatusValueIdle, RequestedAt: now,
-		RequestedByPrincipalID: issuerID, CommandID: env.ID, DeadlineAt: &deadline,
-	}); err != nil {
-		h.logWarn("failed to record desired state for fpp command", "commandId", env.ID, "error", err)
-	}
-
-	// --- 3. Write the DISPATCH audit entry BEFORE dispatching. ---
-	dispatchDegraded := h.writeSafetyClassAudit(ctx, now, identity.AuditEntry{
+	dispatchEntry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: issuerID, PrincipalName: issuerName,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: env.Action, Target: instanceID, IdempotencyKey: env.IdempotencyKey,
 		Kind: identity.AuditDispatch, CommandID: env.ID,
+	}
+
+	// --- 1-2. Insert, record desired state, and write the dispatch audit
+	// entry — atomically when the audit store is healthy (defect 8). ---
+	var dispatchDegraded bool
+	auditErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		if _, err := tx.InsertCommand(ctx, fppStopPlaylistCommandRecord(env)); err != nil {
+			return identity.AuditEntry{}, err
+		}
+		if _, err := tx.SetDesiredState(ctx, fppStopPlaylistDesiredState(env, now)); err != nil {
+			// desired_state is advisory bookkeeping with no reconciler
+			// (store's own standing rule): a failure here must never cost
+			// the command its own row or its dispatch audit entry, so
+			// this does NOT return an error (which would roll back the
+			// whole transaction) — it only logs.
+			h.logWarn("failed to record desired state for fpp command", "commandId", env.ID, "error", err)
+		}
+		return dispatchEntry, nil
 	})
 
-	// --- 4. Dispatch. ---
+	var dup *store.DuplicateCommandError
+	switch {
+	case errors.As(auditErr, &dup):
+		h.handleFPPCommandReplay(w, r, now, dup.Existing, instanceID, env.Action)
+		return
+	case errors.Is(auditErr, identity.ErrAuditWrite):
+		// Safety-class exemption (ADR-024 decision 11): the transactional
+		// attempt above rolled back IN FULL — its own audit append is what
+		// failed, and store.Store.InTx rolls back the entire transaction
+		// on any error, including tx.InsertCommand's own effect. Redo the
+		// insert and desired-state write through the plain,
+		// non-transactional store methods, and proceed with degraded
+		// attribution: the exact posture this handler always used before
+		// this fix, now reached only when the atomic path could not be
+		// taken.
+		rec, err := h.deps.Commands.InsertCommand(ctx, fppStopPlaylistCommandRecord(env))
+		if errors.As(err, &dup) {
+			h.handleFPPCommandReplay(w, r, now, dup.Existing, instanceID, env.Action)
+			return
+		}
+		if err != nil {
+			h.writeInternalError(w, now, "insert fpp command", err)
+			return
+		}
+		_ = rec
+		if _, err := h.deps.Commands.SetDesiredState(ctx, fppStopPlaylistDesiredState(env, now)); err != nil {
+			h.logWarn("failed to record desired state for fpp command", "commandId", env.ID, "error", err)
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr)
+		dispatchDegraded = true
+	case auditErr != nil:
+		h.writeInternalError(w, now, "insert fpp command", auditErr)
+		return
+	}
+
+	// --- 3. Dispatch — deliberately OUTSIDE any transaction (network I/O
+	// must never run inside one; store's own standing rule). ---
+	dispatchAttemptedAt := h.now()
 	var (
-		outcome     fppcommand.Outcome
-		dispatchErr error
+		outcome      fppcommand.Outcome
+		dispatchErr  error
+		dispatchedAt *time.Time // nil unless dispatch was actually ATTEMPTED — defect 9
 	)
 	client, cerr := fppcommand.New(target.Endpoint, fppcommand.Options{})
 	if cerr != nil {
 		dispatchErr = fmt.Errorf("building fpp command client: %w", cerr)
 	} else {
+		dispatchedAt = &dispatchAttemptedAt
 		outcome, dispatchErr = client.StopPlaylist(ctx)
 	}
 
-	dispatchedAt := h.now()
+	// bgCtx carries none of r.Context()'s cancellation past this point
+	// (Step 7 seam C review defect 4): the command has already been
+	// dispatched (or the attempt already made), so a client that simply
+	// closes its tab must not be able to sever the RECORD of what
+	// happened — that is precisely how a resolved command turns into
+	// defect 5's "stranded, blank forever" shape, for the routine case of
+	// an abandoned browser tab rather than a coordinator crash. This is
+	// deliberately NOT context.Background(): every write below still gets
+	// its own short, bounded deadline via dbWriteTimeout — "not
+	// cancellable by an abandoned client" must not become "capable of
+	// hanging forever" if the store is ever wedged.
+	bgCtx := context.WithoutCancel(ctx)
+
 	dispatchState := "dispatched"
 	prelimResult, _ := json.Marshal(commandResultPayload{StatusCode: outcome.StatusCode, Body: outcome.Body})
 	prelimResultStr := string(prelimResult)
-	if err := h.deps.Commands.UpdateCommandOutcome(ctx, env.ID, store.CommandOutcomeUpdate{
-		DispatchedAt: &dispatchedAt, State: &dispatchState, ResultJSON: &prelimResultStr,
+	if err := h.updateCommandOutcomeBounded(bgCtx, env.ID, store.CommandOutcomeUpdate{
+		DispatchedAt: dispatchedAt, State: &dispatchState, ResultJSON: &prelimResultStr,
 	}); err != nil {
 		h.logWarn("failed to record fpp command dispatch", "commandId", env.ID, "error", err)
 	}
 
-	// --- 5. Confirm by evidence, or report the dispatch failure directly. ---
+	// --- 4. Confirm by evidence, or report the dispatch failure directly. ---
 	var (
 		confirmed     bool
 		outcomeState  string
@@ -265,7 +358,12 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 		outcomeState = string(observation.StateCollectionFailed)
 		outcomeReason = "dispatching to FPP failed: " + dispatchErr.Error()
 	} else {
-		confirmed, outcomeState, outcomeReason = h.confirmFPPStatus(ctx, instanceID, fppStatusValueIdle)
+		// notBefore = dispatchAttemptedAt (Step 7 seam C review defect 2):
+		// confirmation must rest on evidence collected no earlier than the
+		// moment this handler attempted dispatch, never on a stale reading
+		// that merely happens to agree — see confirmFPPStatus's own doc
+		// comment and evaluateFPPStatusEvidence for the full reasoning.
+		confirmed, outcomeState, outcomeReason = h.confirmFPPStatus(bgCtx, instanceID, fppStatusValueIdle, dispatchAttemptedAt)
 	}
 
 	outcomeWord := "unconfirmed"
@@ -277,7 +375,7 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 	resolvedState := "resolved"
 	finalResult, _ := json.Marshal(commandResultPayload{Outcome: outcomeWord, StatusCode: outcome.StatusCode, Body: outcome.Body})
 	finalResultStr := string(finalResult)
-	if err := h.deps.Commands.UpdateCommandOutcome(ctx, env.ID, store.CommandOutcomeUpdate{
+	if err := h.updateCommandOutcomeBounded(bgCtx, env.ID, store.CommandOutcomeUpdate{
 		ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
 		OutcomeState: &outcomeState, OutcomeReason: &outcomeReason,
 	}); err != nil {
@@ -286,7 +384,7 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 
 	// --- Outcome audit entry: a SEPARATE, correlated entry — never a
 	// mutation of the dispatch row above. ---
-	outcomeDegraded := h.writeSafetyClassAudit(ctx, resolvedAt, identity.AuditEntry{
+	outcomeDegraded := h.writeSafetyClassAuditBounded(bgCtx, resolvedAt, identity.AuditEntry{
 		Timestamp: resolvedAt, PrincipalID: issuerID, PrincipalName: issuerName,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: env.Action, Target: instanceID, IdempotencyKey: env.IdempotencyKey,
@@ -294,7 +392,7 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 		Outcome: outcomeWord, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
 	})
 
-	dispatchedAtStr := formatTime(dispatchedAt)
+	dispatchedAtStr := formatTimePtr(dispatchedAt)
 	resolvedAtStr := formatTime(resolvedAt)
 	jsonWrite(w, v1.FPPCommandResponse{
 		ServerTime: formatTime(h.now()),
@@ -302,7 +400,7 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 			ID: env.ID, IdempotencyKey: env.IdempotencyKey, Action: env.Action, InstanceID: instanceID,
 			Replay: false, Outcome: outcomeWord, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
 			AttributionDegraded: dispatchDegraded || outcomeDegraded,
-			DispatchedAt:        &dispatchedAtStr,
+			DispatchedAt:        dispatchedAtStr,
 			ResolvedAt:          &resolvedAtStr,
 		},
 	})
@@ -317,6 +415,15 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 // correlated by existing.ID, never a mutation of the original dispatch or
 // outcome entries.
 //
+// requestedAction is this request's own action (env.Action, the internal
+// "fpp.stop_playlist"-shaped identifier, not the wire's "stopPlaylist").
+// Step 7 seam C review defect 6: idempotencyKey alone is not enough — a
+// key reused against a DIFFERENT action or a DIFFERENT target
+// (instanceID) is a CONFLICT, not a replay, and answering it as a replay
+// would report a stored outcome under a target this request never
+// actually named. That check happens FIRST, before anything below reads
+// existing as if it belonged to this request.
+//
 // existing.Outcome is decoded from existing.ResultJSON — see
 // [commandResultPayload] — and may be empty in one narrow, accepted race:
 // two concurrent requests presenting the SAME idempotency key both reach
@@ -329,7 +436,17 @@ func (h *handlers) handleFPPCommand(w http.ResponseWriter, r *http.Request) {
 // OutcomeReason empty, DispatchedAt/ResolvedAt nil), per ADR-020's
 // "absence of evidence is stated, never omitted" — an empty Outcome is
 // not a bug, it is the true, current state of a command still in flight.
-func (h *handlers) handleFPPCommandReplay(w http.ResponseWriter, r *http.Request, now time.Time, existing store.CommandRecord, instanceID string) {
+// This race is deliberately indistinguishable, by design, from the
+// permanent blankness a coordinator restart could otherwise leave behind
+// — see fppcommand_reconcile.go's own doc comment for why a startup
+// sweep is what keeps the two from staying identical forever.
+func (h *handlers) handleFPPCommandReplay(w http.ResponseWriter, r *http.Request, now time.Time, existing store.CommandRecord, instanceID, requestedAction string) {
+	if existing.Action != requestedAction || existing.TargetID != instanceID {
+		writeProblem(w, h.logger, now, fppCommandReplayConflictProblem(
+			existing.ID, existing.Action, existing.TargetID, requestedAction, instanceID))
+		return
+	}
+
 	ac := authFromContext(r.Context())
 	degraded := h.writeSafetyClassAudit(r.Context(), now, identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
@@ -353,12 +470,14 @@ func (h *handlers) handleFPPCommandReplay(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// confirmFPPStatus polls [ObservationLister] for fppStatusSignal on (fpp,
-// instanceID) every h.fppCommandPollInterval until it observes wantValue
-// as StateCurrent, or h.fppCommandConfirmDeadline elapses — ADR-003:
-// confirmation is by evidence against an explicit deadline, never a
-// synchronous assumption that a 200 from FPP means the state actually
-// moved.
+// confirmFPPStatus polls [evaluateFPPStatusEvidence] for fppStatusSignal on
+// (fpp, instanceID) every h.fppCommandPollInterval until it observes
+// wantValue as StateCurrent on evidence collected no earlier than
+// notBefore, or h.fppCommandConfirmDeadline elapses — ADR-003: confirmation
+// is by evidence against an explicit deadline, never a synchronous
+// assumption that a 200 from FPP means the state actually moved, and
+// (Step 7 seam C review defect 2) never a pre-existing reading that merely
+// happens to already agree.
 //
 // The wait itself is bound by REAL wall-clock time (time.Now/time.Ticker),
 // deliberately independent of h.now() (which a test fixes at one instant
@@ -368,13 +487,19 @@ func (h *handlers) handleFPPCommandReplay(w http.ResponseWriter, r *http.Request
 // to evaluate an observation's OWN freshness ([observation.Observation.StateAt]),
 // matching every other handler in this package's identical use of h.now()
 // for that purpose.
-func (h *handlers) confirmFPPStatus(ctx context.Context, instanceID, wantValue string) (confirmed bool, outcomeState, outcomeReason string) {
+//
+// ctx no longer carries the inbound request's own cancellation as of Step
+// 7 seam C review defect 4 (the caller passes bgCtx) — the ctx.Done()
+// branch below is retained as a defensive fallback for any future caller
+// that does pass a context capable of ending on its own, but is not
+// reachable from this handler's own production call site any more.
+func (h *handlers) confirmFPPStatus(ctx context.Context, instanceID, wantValue string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	deadline := time.Now().Add(h.fppCommandConfirmDeadline)
 	ticker := time.NewTicker(h.fppCommandPollInterval)
 	defer ticker.Stop()
 
 	for {
-		confirmed, outcomeState, outcomeReason = h.checkFPPStatusOnce(ctx, instanceID, wantValue)
+		confirmed, outcomeState, outcomeReason = h.checkFPPStatusOnce(ctx, instanceID, wantValue, notBefore)
 		if confirmed {
 			return true, outcomeState, outcomeReason
 		}
@@ -394,36 +519,113 @@ func (h *handlers) confirmFPPStatus(ctx context.Context, instanceID, wantValue s
 }
 
 // checkFPPStatusOnce is one evidence check: the current fppStatusSignal
-// observation for (fpp, instanceID), evaluated against wantValue.
-func (h *handlers) checkFPPStatusOnce(ctx context.Context, instanceID, wantValue string) (confirmed bool, outcomeState, outcomeReason string) {
+// observation for (fpp, instanceID), evaluated against wantValue and
+// notBefore — see [evaluateFPPStatusEvidence].
+func (h *handlers) checkFPPStatusOnce(ctx context.Context, instanceID, wantValue string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+	return evaluateFPPStatusEvidence(ctx, h.deps.Observations, instanceID, wantValue, notBefore, h.now())
+}
+
+// evaluateFPPStatusEvidence is Step 7 seam C review defects 2 and 3's
+// shared evidence check, factored to a package-level function (rather than
+// a method on [handlers]) specifically so fppcommand_reconcile.go's
+// startup sweep can call it too, against the exact same rule the live
+// confirmation loop uses.
+//
+// Defect 2: an observation is only usable to confirm THIS dispatch when it
+// was COLLECTED no earlier than notBefore. A value that already read
+// wantValue before the command was ever dispatched — FPP's own schedule
+// having independently reached the same state, or simply a stale row that
+// has not been re-polled — must never confirm a command whose actual
+// effect it cannot possibly reflect. This is deliberately checked against
+// CollectedAt (when the collector recorded this row — always set), not
+// ObservedAt (when the condition was true according to the source, nil for
+// a retained MQTT delivery): CollectedAt is this coordinator's own
+// bookkeeping of when it last asked, which is exactly "did we re-poll
+// since we dispatched," and using ObservedAt instead would make a
+// retained-MQTT observation (ObservedAt always nil) impossible to fence at
+// all.
+//
+// Defect 3: fpp-rest and fpp-mqtt both emit fpp.status for the same
+// resource; [ObservationLister] carries no ordering guarantee across
+// sources sharing a (resource, signal) pair (schemaV4's primary key is
+// (resource_kind, resource_id, signal, source)), so evaluating "the first
+// matching row" was a coin flip between two collectors' independent
+// answers. This function instead resolves every candidate for (fpp,
+// instanceID, fppStatusSignal) via [ResolveObservations] — this package's
+// own documented precedence rule (precedence.go) for exactly this
+// situation — down to the single evidentiary winner, and its
+// outcomeReason names which source produced the verdict, per ADR-011:
+// evidence carries provenance.
+func evaluateFPPStatusEvidence(ctx context.Context, lister ObservationLister, instanceID, wantValue string, notBefore, now time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	kind := observation.ResourceFPP
 	sig := observation.SignalID(fppStatusSignal)
-	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{
+	obs, err := lister.ListObservations(ctx, ObservationFilter{
 		ResourceKind: &kind, ResourceID: &instanceID, Signal: &sig,
 	})
 	if err != nil {
 		return false, string(observation.StateCollectionFailed), "reading fpp.status for confirmation: " + err.Error()
 	}
 
-	now := h.now()
+	var candidates []observation.Observation
 	for _, o := range obs {
 		if o.Resource.Kind != kind || o.Resource.ID != instanceID || o.Signal != sig {
 			continue
 		}
-		state := o.StateAt(now)
-		if state == observation.StateCurrent {
-			if o.Value == wantValue {
-				return true, string(state), ""
-			}
-			return false, string(state), fmt.Sprintf("observed fpp.status = %v, want %q", o.Value, wantValue)
-		}
-		reason := o.Reason
-		if reason == "" {
-			reason = fmt.Sprintf("fpp.status evidence state is %s", state)
-		}
-		return false, string(state), reason
+		candidates = append(candidates, o)
 	}
-	return false, string(observation.StateNotCollected), "no fpp.status observation is recorded for this instance yet"
+	if len(candidates) == 0 {
+		return false, string(observation.StateNotCollected), "no fpp.status observation is recorded for this instance yet"
+	}
+
+	// ResolveObservations groups by (Resource, Signal); every candidate
+	// here already shares that exact triple (the loop above filtered to
+	// it), so this always resolves to exactly one winner.
+	resolved := ResolveObservations(candidates)
+	o := resolved[0]
+	source := o.Source
+	if source == "" {
+		source = "unknown source"
+	}
+
+	if o.CollectedAt.Before(notBefore) {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no fpp.status observation has been collected since this command was dispatched at %s (most recent "+
+				"evidence is from %s, source %s, and predates dispatch — a pre-dispatch reading can never confirm "+
+				"this command, ADR-003, even one that already happens to agree)",
+			notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), source)
+	}
+
+	state := o.StateAt(now)
+	if state == observation.StateCurrent {
+		if o.Value == wantValue {
+			return true, string(state), ""
+		}
+		return false, string(state), fmt.Sprintf("observed fpp.status = %v (source %s), want %q", o.Value, source, wantValue)
+	}
+	reason := o.Reason
+	if reason == "" {
+		reason = fmt.Sprintf("fpp.status evidence state is %s", state)
+	}
+	return false, string(state), fmt.Sprintf("%s (source %s)", reason, source)
+}
+
+// updateCommandOutcomeBounded wraps h.deps.Commands.UpdateCommandOutcome
+// with its own dbWriteTimeout, derived from parent (bgCtx in production —
+// see [handlers.handleFPPCommand]'s own comment on why post-dispatch
+// bookkeeping is no longer bound by the client's request context).
+func (h *handlers) updateCommandOutcomeBounded(parent context.Context, id string, upd store.CommandOutcomeUpdate) error {
+	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
+	defer cancel()
+	return h.deps.Commands.UpdateCommandOutcome(ctx, id, upd)
+}
+
+// writeSafetyClassAuditBounded is [handlers.writeSafetyClassAudit] with
+// its own dbWriteTimeout applied to parent, for the identical reason
+// [updateCommandOutcomeBounded] exists.
+func (h *handlers) writeSafetyClassAuditBounded(parent context.Context, now time.Time, entry identity.AuditEntry) (degraded bool) {
+	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
+	defer cancel()
+	return h.writeSafetyClassAudit(ctx, now, entry)
 }
 
 // writeSafetyClassAudit writes entry via h.deps.Identity.WriteAudit and
@@ -431,27 +633,37 @@ func (h *handlers) checkFPPStatusOnce(ctx context.Context, instanceID, wantValue
 // blackout/stop/power-off safety class, which Stop Playlist is a member
 // of: unlike [handlers.writeAuditOrFail] (auth.go), which REFUSES the
 // write it protects on an audit-write failure, this method never blocks
-// its caller. On failure it writes a best-effort, human-readable line to
-// os.Stderr — never to h.logger alone, whose own destination this
-// coordinator controls no more durably than it controls audit_log's, and
-// decision 11's exemption exists precisely for the case where NEITHER may
-// be trusted (disk exhaustion is the named trigger) — carrying everything
-// the audit entry would have, and returns true so the caller can flag the
-// command's own wire response as attribution-degraded rather than
-// silently absorbing the gap.
+// its caller. On failure it calls [handlers.reportDegradedAttribution] and
+// returns true so the caller can flag the command's own wire response as
+// attribution-degraded rather than silently absorbing the gap.
 func (h *handlers) writeSafetyClassAudit(ctx context.Context, now time.Time, entry identity.AuditEntry) (degraded bool) {
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"showmesh: DEGRADED ATTRIBUTION (audit write failed; command proceeded anyway per ADR-024 decision 11's "+
-				"blackout/stop/power-off safety class) time=%s principal=%s(%s) action=%s target=%s commandId=%s "+
-				"kind=%s idempotencyKey=%s error=%v\n",
-			now.Format(time.RFC3339), entry.PrincipalName, entry.PrincipalID, entry.Action, entry.Target,
-			entry.CommandID, entry.Kind, entry.IdempotencyKey, err)
-		h.logWarn("audit write failed for a safety-class command; proceeding with degraded attribution",
-			"error", err, "commandId", entry.CommandID, "kind", entry.Kind)
+		h.reportDegradedAttribution(now, entry, err)
 		return true
 	}
 	return false
+}
+
+// reportDegradedAttribution is the best-effort, human-readable stderr line
+// ADR-024 decision 11's safety-class exemption writes when an audit write
+// fails and the command proceeds anyway — never to h.logger alone, whose
+// own destination this coordinator controls no more durably than it
+// controls audit_log's, and decision 11's exemption exists precisely for
+// the case where NEITHER may be trusted (disk exhaustion is the named
+// trigger). Factored out of [handlers.writeSafetyClassAudit] so the
+// dispatch-side degraded fallback in [handlers.handleFPPCommand] (Step 7
+// seam C review defect 8's AuditedWrite fallback path, which fails before
+// entry is ever handed to WriteAudit at all) can report the identical line
+// rather than a second, drifted copy of it.
+func (h *handlers) reportDegradedAttribution(now time.Time, entry identity.AuditEntry, err error) {
+	fmt.Fprintf(os.Stderr,
+		"showmesh: DEGRADED ATTRIBUTION (audit write failed; command proceeded anyway per ADR-024 decision 11's "+
+			"blackout/stop/power-off safety class) time=%s principal=%s(%s) action=%s target=%s commandId=%s "+
+			"kind=%s idempotencyKey=%s error=%v\n",
+		now.Format(time.RFC3339), entry.PrincipalName, entry.PrincipalID, entry.Action, entry.Target,
+		entry.CommandID, entry.Kind, entry.IdempotencyKey, err)
+	h.logWarn("audit write failed for a safety-class command; proceeding with degraded attribution",
+		"error", err, "commandId", entry.CommandID, "kind", entry.Kind)
 }
 
 // logWarn is a small nil-safe wrapper: several call sites in this file
