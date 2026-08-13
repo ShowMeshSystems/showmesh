@@ -393,12 +393,98 @@ Review then runs as it did for Step 6: a constraint review and a test-honesty re
 
 **Out of scope:** show macros and everything they force, including ADR-024 decision 7's fallback trigger; controlled devices; audio; and every command beyond the one.
 
+## Step 8: The primitive command vocabulary
+
+Status: not started. Specified 2026-08-13.
+
+**Goal:** Step 7 shipped one command and proved the whole path around it. This step fills out the primitive vocabulary, so that the macro step has something real to sequence and so that ARCHITECTURE Phase 1's "native FPP lifecycle commands" means more than one of them.
+
+**Why this comes before macros, decided 2026-08-13 after the alternative was raised by the owner.** [ADR-004](../decisions/ADR-004-layered-commands-and-fallback.md)'s formulation is primitives, then show macros, then reduced local fallback. A macro is a sequence of primitives and there is currently exactly one, the deliberately safe zero-argument stop. The first macro would therefore be either a sequence of one, or the primitives would get built inside the macro step. **The second is what actually happens, and Step 7 is the evidence**: it was specified as one write and shipped three, because the writes exercised rules that could not cover each other. The macro step already carries the FPP plugin, [RES-015](../research/RES-015-fpp-plugin-distribution-model.md)'s distribution question, ADR-024 decision 7, ADR-004's per-macro fallback definitions, and macro definitions as configuration objects. Adding the primitive vocabulary on top of that makes it unreviewable, which is the one thing this project's review-heavy build workflow cannot absorb.
+
+**The cost of this ordering, stated so it is not discovered later:** [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7's fallback trigger stays outstanding for one more step. That is tolerable only because it attaches by name to the first consumer of `show:macro:run`, so it cannot drift silently; it is Step 9's first-class obligation rather than a loose end.
+
+### Deliverables
+
+- **FPP's actual command list and its argument encoding, captured from the bench `fppd` before any command is named in this specification.** This is a deliverable, not a preliminary. Step 7's plan named the command `Stop Playlist`, and FPP has no command by that name; it named the confirmation signal `fpp.status.player_state`, and the collector does not emit that. Both read as entirely plausible until something ran, and both cost implementation time to work around. **A plan may name an external system's vocabulary only from that system's own output.** The command list this step ships follows from the capture; the capture does not follow from the list.
+- **Argument support in `internal/coordinator/fppcommand`.** `Client.Invoke` today takes a command name and nothing else, building `/api/command/{name}` from a path-escaped name. Every command beyond the zero-argument stop needs argument encoding, and that encoding must match what the capture shows rather than what seems reasonable.
+- **The primitives themselves**, chosen from the capture under the observability filter below.
+- **A confirmation predicate and deadline per primitive.** These are not one rule. Stop confirms on a transition to idle; a start confirms on a transition into playing, and arguably on the playlist identity as well. Each is its own evidence question.
+- **Idempotency and replay for parameterized commands.** Step 7 proved replay for a command carrying no parameters. A replayed key whose parameters differ from the original is a new question this step has to answer rather than inherit.
+- **A `showmeshctl` subcommand and a UI control per primitive**, under the existing import-graph test and the existing scope-list gating that renders `unknown` rather than enabled.
+- **`api/openapi.yaml` additively**, conformance-tested in both directions, UI types regenerated, CI diff check green.
+
+### The filter on which primitives ship
+
+**Only a command whose effect is observable through a signal the collector already collects.** Anything else ships the dispatch half of [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) and calls it done, which Step 7 explicitly refused to do and which this step must not quietly reintroduce under the pressure of a longer command list. Where a command's effect is not currently visible, the honest options are that the collector grows the signal inside this step, or the command waits for a step that grows it. A command shipped without a confirmation path is not a smaller version of this step's work; it is a different and worse thing.
+
+### The direction reverses in this step
+
+Every write this project has shipped points at the show stopping, or at configuration. **A start command is the first thing ShowMesh can do that makes the show do something**, and it is the first command whose failure mode is the display running when it should not be.
+
+This is where Step 7's confirmation lesson bites hardest. A stop dispatched into a running show could report success off a pre-dispatch `idle` reading; a start has the exact mirror, because FPP is the authoritative scheduler and may start a playlist on its own between the dispatch and the poll. Confirmation must rest on evidence that post-dates the dispatch and shows the state *moved*, never on the current value matching the desired one. The same rule, one file over, is why confirmation reads through `ResolveObservations` rather than the first matching row.
+
+A second question this step must answer rather than discover: what a start means when issued against a host already playing something else. That is a real operator situation and the answer is a decision, not an implementation detail.
+
+### Decisions settled before the step starts
+
+Both were taken by the owner on 2026-08-13, and both are recorded here rather than amended into ADR-024, because neither changes a durable constraint: one re-affirms an existing deferral and the other declines to add a distinction the record already permits.
+
+- **Target-scoped authorization is not implemented, and the deferral is no longer waiting on a consumer.** ADR-024 decision 4 delivers authorization by action and explicitly not by target, leaving ARCHITECTURE §10.4 partially satisfied, and its supersession clause says a future record must revisit this "once there is a consumer to design its taxonomy against." The owner's decision is that this installation has no such need and will not acquire one: it is one operator on hardware they own, and a second person helping would be trusted with full control rather than issued a narrowed grant. **The trigger is therefore declined rather than unmet.** It is revisited only if a genuinely multi-crew deployment asks for it, which is a feature request rather than an architectural gap. Recording it this way matters because Step 9 fires ADR-024's own stated trigger, and a future session reading that clause would otherwise reopen a question that has been answered.
+- **`fpp:command` stays a single scope covering every primitive**, rather than splitting the safe direction from the show-affecting one. The deciding argument is that the role name already carries the meaning: `operator` means the principal operates the show, and starting it is operating it. The scope is held only by `operator` and `admin`, both of which should hold every command; `viewer` holds no write scope and `scheduler` holds only `show:macro:run`, so nothing gains a capability its role does not already imply. The concern this was weighed against, that adding a start command silently widens an existing grant, does not survive that check.
+
+### Acceptance criteria
+
+- Every primitive shipped is confirmed through a collector signal against the bench `fppd`, and a primitive whose effect does not appear within its deadline is reported unconfirmed with a stated reason, never as successful.
+- **A start issued against a host already in the target state is confirmed only on post-dispatch evidence.** This is the mirror of Step 7's 179 microsecond defect and is the criterion most likely to pass falsely, so it is verified by timing the confirmation against the dispatch rather than by reading the code.
+- FPP's argument encoding is proven against the bench `fppd` rather than asserted, and the command list in the shipped code matches the capture recorded in this step.
+- A replayed idempotency key on a parameterized command dispatches nothing, returns the original result, and writes an audit entry marked as a replay. A replay whose parameters differ from the original is handled by a stated rule rather than by whichever branch happens to run.
+- The collector's read-only posture is unchanged by the widened command surface, proven rather than assumed, including the existing test that fails if the two clients are ever merged.
+- Every criterion above is verified against a running coordinator, not against the test suite.
+
+**Bound by:** [ADR-001](../decisions/ADR-001-fpp-is-authoritative.md) above all, since every primitive here is FPP's own command invoked by ShowMesh rather than ShowMesh scheduling anything; plus ADR-003, ADR-011, ADR-014, ADR-020, ADR-023, ADR-024.
+
+**The target problem is unchanged from Step 7 and is not relaxed by familiarity.** No write, no command, no restart, no settings change, and no MQTT publish against the deployed fleet. Every primitive in this step is developed and demonstrated against `bench/fpp-multisync/`'s containerized `fppd`. `make test-integration-fpp` stays load-bearing.
+
+**Out of scope:** show macros and everything they force, including ADR-024 decision 7; the FPP plugin; controlled devices; audio; target-scoped authorization, per the decision above.
+
+## Step 9: Show macros and the FPP plugin
+
+Status: not started. **Specification blocked** on the RES-008 prerequisite below.
+
+**Goal:** the first show macro, and with it the first ShowMesh code running on an FPP host. This is where ADR-004's three-part model is finally complete: primitives from Steps 7 and 8, macros here, and the reduced local fallback that every critical macro must define.
+
+**Prerequisite before this step can be specified.** [RES-008](../research/RES-008-configuration-model.md) section 3's survey describes the repository at schema v5 and states that no configuration table exists. Step 7 implemented D1 and D2 and landed schema v6, so that survey is now stale, and the record's own closing instruction says a stale survey claiming there is no configuration table "would be worse than no survey". Re-running it is the first task, not a formality: a macro definition is a configuration object, so this step is built directly on what that section describes.
+
+### Deliverables
+
+- **Macro definitions as versioned configuration objects**, under RES-008 section 4's decisions and ADR-009's revision, validation, export, and rollback rules.
+- **`show:macro:run`**, the scope ADR-024 decision 4 defined with no consumer for exactly this moment.
+- **ADR-004's reduced local fallback, defined per critical macro**, with any step touching a coordinator-hosted provider labelled coordinator-required per [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md).
+- **[ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7's fallback trigger, discharged.** A `401` or `403` from a healthy coordinator fires no ADR-004 fallback, because a fallback detects a transport failure and an authorization refusal is a successful conversation. So the first macro definition must specify behaviour for a refusal, the node policy must treat it as coordinator-unavailable-to-this-caller, and it must be distinguishable in evidence from a network fault. This obligation has been outstanding since Step 7 and attaches here by name.
+- **The FPP plugin**, per RES-015. That record establishes on two independent grounds that FPP's native command mechanism cannot discharge decision 7, so there is no version of this step that does not ship ShowMesh-authored code onto an FPP host.
+
+### Developed against the container, by owner's decision 2026-08-13
+
+The plugin is developed and demonstrated against `bench/fpp-multisync/`'s containerized `fppd`, not against the deployed fleet. The reasoning is the owner's and is the same one that has governed the bench since Step 1: a working system in a controlled environment first, and differences between the container and real hardware addressed when the plugin lands on hardware.
+
+**What that licenses, and what it does not.** It licenses the plugin mechanism, the callback boundary, the refusal semantics, the macro path end to end, and decision 7's fallback behaviour, all at bench level. It does **not** license the on-host install path, filesystem permissions, packaging, or FPP version compatibility across the fleet: RES-015 records that every one of its acceptance criteria still needs the bench Pi, and the deployed fleet is not uniform, running 9.4 on two hosts and a master-branch build on the third. **This step therefore completes without raising RES-015 above L1**, and the on-host criteria are a stated deferral carried into whichever step first installs the plugin on real hardware, rather than something discovered at that point.
+
+### Accepted risk, recorded rather than mitigated
+
+The plugin needs a ShowMesh credential on an FPP host, and RES-015 section 7.4 establishes that **an FPP host cannot keep a secret from anyone who can reach it.** That credential holds `fpp:command` in full, because Step 8 declined both target scoping and a scope split. So anyone with access to any FPP host has the command authority of that credential across the fleet.
+
+This is accepted, not overlooked. The installation is single-operator on owned hardware on an isolated show network, which is the same reasoning `SECURITY.md` already records for accepting cleartext on the show LAN for commands and telemetry. It is written here so that the day this software runs somewhere with a crew, the accepted risk is findable rather than reconstructed. **This is the point at which ADR-024's supersession trigger for target-scoped authorization fires, and it is deliberately declined** under Step 8's recorded decision.
+
+**Bound by:** ADR-001, ADR-003, ADR-004, ADR-009, ADR-011, ADR-014, ADR-016, ADR-020, ADR-024, RES-008, RES-015.
+
+**Out of scope:** controlled devices and providers; audio; the deployed fleet.
+
 ## Not yet sequenced
 
 These deliberately come later, and why:
 
-- **Show macros, and the obligation Step 7 does not discharge.** Step 7 ships one primitive command and no macro, so [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7 remains outstanding and attaches here, to the first consumer of `show:macro:run`. It is recorded because it is a correction that would otherwise survive only as prose in an ADR nobody rereads: a `401` or `403` from a healthy coordinator fires no [ADR-004](../decisions/ADR-004-layered-commands-and-fallback.md) local fallback, because a fallback detects a transport failure and an authorization refusal is a successful conversation. So the first macro definition must specify behaviour for a refusal, the FPP plugin and node policy must treat it as coordinator-unavailable-to-this-caller, and it must be distinguishable in evidence from a network fault. This step also depends on [RES-008](../research/RES-008-configuration-model.md), since a macro definition is a configuration object with revisions, and on [RES-015](../research/RES-015-fpp-plugin-distribution-model.md) if the refusal has to be handled on the FPP host. Both are being researched during Step 7 so this step is not gated on them.
-- **Operator UI write operations beyond the first.** Controls, overrides, and macro invocation follow Step 7, which supplies one command and the model behind it.
+- **Show macros are now Step 9**, sequenced on 2026-08-13 and no longer in this list. ADR-024 decision 7 remains outstanding and is that step's first-class obligation rather than a floating one.
+- **Operator UI write operations beyond the first.** Controls, overrides, and macro invocation arrive with the steps that supply the behaviour behind them: per-primitive controls in Step 8, macro invocation in Step 9. Nothing renders a control for a capability no code implements, which is the Step 3 rule about placeholder fields applied to the write surface.
 - **Controlled devices and control providers.** [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md) settles the model; the metadata contract and the metadata-generated-surface hypothesis are unresearched in [RES-014](../research/RES-014-control-provider-model.md), and the first provider (projectors, `pkg/pjlink`) also depends on RES-012 bench work.
 - **Audio engine and audio node.** The architecture is decided ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md), [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md), [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md), [AUDIO-ENGINE.md](../architecture/AUDIO-ENGINE.md)) and entirely unverified. It is not sequenced because [RES-007](../research/RES-007-audio-node-architecture.md) is critical-risk at L0, the multichannel interface the design depends on has not been purchased, and nothing here can be raised above L0 by unit tests: whether GStreamer holds LTC sample-aligned to program, and what drift a free-running node accumulates over a show, are bench facts. The first task is the RES-007 prototype on the intended host and interface, and sequencing follows its result. ADR-018 is also a purchasing constraint — at least three output channels from one clock — and should inform the interface selection before it happens.
 - **Resolume adapter.** Blocked on RES-001 bench work (Resolume SMPTE and clip-launch behavior is still L0/L1).

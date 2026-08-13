@@ -54,7 +54,13 @@ Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), 3 (read-o
 
 **What Step 7 does not do.** There is no reconciler closing the gap between desired and observed state, and `desired_state`'s own comment says why: that loop is ShowMesh becoming a second scheduler, which ADR-001 forbids. There are no macros, so ADR-024 decision 7's fallback trigger is still outstanding and still attaches to the first consumer of `show:macro:run`. A configuration change does not hot-reload; a restart is required, and the API response and the UI both say so at the point of use. And nothing here verifies anything about a running show: every FPP interaction in this step was against `bench/fpp-multisync`'s containerized `fppd`, never the deployed fleet, because `falcon/player/<host>/command/run` is a topic FPP acts on.
 
-**The next action is Step 8**, the agent's GStreamer pipeline supervision for a test pattern to an NDI sink into Resolume, which is not yet specified. Also available and unchanged in priority: RES-002's bench capture, still the highest-risk research record in the project and still needing the physical rig, and `pkg/pjlink` at L1.
+**The next action is Step 8, the primitive command vocabulary, specified 2026-08-13 and not started.** Step 9 is show macros and the FPP plugin, whose specification is blocked on re-running RES-008 section 3 against schema v6.
+
+**Step 8 was something else until 2026-08-13, and the correction is worth knowing.** This block, CLAUDE.md, and the build order all named Step 8 as the agent's GStreamer pipeline supervision into an NDI sink, while BUILD-PLAN's own "not yet sequenced" section listed that identical work as blocked on RES-004 (unresearched, L0), RES-005 (unresearched, L0), and RES-006 (L1). Three documents pointed at a step the fourth said could not start, and the fourth was the status authority. It is now sequenced after the bench that raises those records, because it is a step whose product is evidence rather than shipped supervision code.
+
+Primitives come before macros for a reason Step 7 supplies the evidence for: a macro is a sequence of primitives, exactly one exists, and if macros went first the primitives would get built inside that step. Step 7 was specified as one write and shipped three for the same reason. Two decisions were settled on 2026-08-13 before Step 8 could be specified, both recorded in its BUILD-PLAN section: **target-scoped authorization is declined rather than deferred**, so ADR-024's supersession trigger firing in Step 9 is a question already answered rather than a gap; and **`fpp:command` stays one scope**, because `operator` means the principal operates the show and starting it is operating it.
+
+Also available and unchanged in priority: RES-002's bench capture and `pkg/pjlink` at L1.
 
 Step 5 detail follows.
 
@@ -144,6 +150,34 @@ The third-party product name discussed under "Conflicts found" in the audio sess
 
 ---
 
+## 2026-08-13 (Steps 8 and 9 sequenced, and a contradiction between four documents resolved)
+
+**Goal:** close Step 7 in the repository rather than only in the working tree, then decide what comes next. No implementation.
+
+**Completed:** the Step 7 loose-end work committed (`14e0e35`), and Steps 8 and 9 specified in BUILD-PLAN.
+
+**The contradiction, because finding it was most of the work.** BUILD-LOG's current-state block, CLAUDE.md's prose, and CLAUDE.md's build order all said the next action was Step 8, the agent's GStreamer pipeline supervision into an NDI sink. BUILD-PLAN's "not yet sequenced" section listed that same work as **blocked** on RES-004 (unresearched, L0, critical), RES-005 (unresearched, L0, critical), and RES-006 (L1). All three were checked and all three still read that way. So three documents named a next action that the fourth said could not start, and CLAUDE.md's own rule says BUILD-PLAN wins any disagreement about a step. The working convention that architecture-critical claims need L3 before adoption says the same thing independently. That work is now sequenced after the bench that raises those records, and is described as a bench step whose product is evidence rather than an implementation step.
+
+**Step 8 is the primitive command vocabulary, and the ordering was the owner's correction.** The first proposal was macros. The owner pointed out that Step 7 shipped one command out of a family, and that finishing the commands was the alternative. That is the better order, and ADR-004's own formulation says so: primitives, then macros, then reduced local fallback. A macro is a sequence of primitives and exactly one exists, the deliberately safe zero-argument stop, so the first macro would be a sequence of one or the primitives would get built inside the macro step. **Step 7 is the evidence for the second outcome**, having been specified as one write and shipped three. The macro step separately carries the plugin, RES-015's distribution question, ADR-024 decision 7, ADR-004's per-macro fallback definitions, and macro definitions as configuration objects, which is already more than one reviewable step.
+
+**Two authorization decisions settled before Step 8 could be specified, both by the owner.**
+
+**Target-scoped authorization is declined, not deferred.** ADR-024 decision 4 delivers authorization by action and explicitly not by target, leaving ARCHITECTURE §10.4 partially satisfied, and its supersession clause says a future record must revisit it "once there is a consumer to design its taxonomy against." Step 9's plugin credential technically is that consumer, since RES-015 §7.4 establishes that an FPP host cannot keep a secret from anyone who can reach it. The owner's decision is that this installation has no such need and will not acquire one: one operator, owned hardware, and a second person helping would be trusted with full control rather than issued a narrowed grant. **The distinction between declined and unmet is the whole point of recording it.** A future session reading ADR-024's supersession clause in Step 9 would otherwise see a stated trigger fire and reopen a question that has an answer. No ADR amendment, because re-affirming an existing deferral changes no constraint.
+
+**`fpp:command` stays a single scope.** The alternative weighed was splitting the safe direction from the show-affecting one, so that Step 9's plugin credential could hold stop without holding start. The owner's argument against is that the role name already carries the meaning: `operator` means the principal operates the show, and starting it is operating it. The concern this was weighed against, that adding a start command silently widens every existing grant, does not survive a check of who holds the scope: only `operator` and `admin`, both of which should hold every command, while `viewer` holds no write scope and `scheduler` holds only `show:macro:run`. Nothing gains a capability its role did not already imply.
+
+**Step 9 ships the plugin against the container, by the owner's decision**, on the same reasoning that has governed the bench since Step 1: a working system in a controlled environment first, hardware differences addressed when it lands there. Recorded with its limits rather than as a blanket, because RES-015 says every one of its acceptance criteria needs the bench Pi and the deployed fleet is not uniform. So Step 9 completes without raising RES-015 above L1, and the on-host install path, permissions, packaging, and cross-version compatibility are a stated deferral rather than a discovery.
+
+**One accepted risk written into Step 9 rather than mitigated.** The plugin credential holds `fpp:command` in full and lives on a host that cannot keep it secret, so anyone reaching any FPP host has fleet-wide command authority. Accepted on the same grounds `SECURITY.md` already accepts cleartext on the show LAN. It is recorded so that the day this software runs somewhere with a crew, the accepted risk is findable rather than reconstructed.
+
+**Documentation corrected.** BUILD-PLAN's Step 7 status now records the 08-13 repair, having read as though nothing had changed since the 08-12 verification. RES-008's status line no longer claims every decision it exists to make is undecided, which stopped being true when its own section 6a was written on 08-12 and was wrong once D1 and D2 shipped as code; its section 3 is marked stale at schema v6, with the re-run named as a blocking prerequisite for Step 9 per the record's own instruction that a stale survey claiming there is no configuration table is worse than no survey. The research tracker row is resynced.
+
+**Deferred:** RES-002's bench captures, by the owner, to Sunday 2026-08-16. Not a blocker for Steps 8 or 9.
+
+**Verification gates:** `gofmt`, `go vet`, and the full `go test ./...` clean before the commit; UI typecheck and 351 tests clean. No new code, so no acceptance criterion was touched.
+
+---
+
 ## 2026-08-13 (The startup migration's failure direction)
 
 **Goal:** fix the one Step 7 finding that was raised in review, judged correct, and left alone anyway: the `SHOWMESH_FPP_ENDPOINTS` to store migration failed closed on its audit write, so an unwritable `audit_log` meant the coordinator would not start at all. The owner agreed with the reviewer that this is the wrong failure direction.
@@ -176,7 +210,7 @@ Then, per the standing rule that the suite proves nothing on its own, **against 
 
 The second pass, after the review, bootstrapped a real administrator with the `bootstrap` subcommand and minted a real API token so the two corrected messages could be read the way an operator reads them. In the deferred state, `GET /api/v1/config/fpp.endpoints` returns the `404` that states the deferral and points at `GET /api/v1/fpp`, and `PUT` returns the `409` titled *"the startup migration of SHOWMESH_FPP_ENDPOINTS was deferred"* whose detail begins *"Do NOT remove SHOWMESH_FPP_ENDPOINTS yet"*. The control was run in the same session: with the trigger dropped and the coordinator restarted, `GET` returns revision 1 from `env_migration` with both endpoints, and `PUT`'s refusal reverts to the standard remedy. `/readyz` is 503 throughout because no broker was running in the scratch environment, which is correct and unrelated.
 
-**Not verified:** anything about a running show. No live fleet, no MQTT publish, no broker. Step 8 is still the next action and is still unspecified.
+**Not verified:** anything about a running show. No live fleet, no MQTT publish, no broker. Step 8 was still unspecified at the time of this entry, and was specified later the same day; see the entry above, which also changes what Step 8 is.
 
 ---
 
