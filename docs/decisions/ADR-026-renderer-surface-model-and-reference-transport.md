@@ -130,6 +130,12 @@ stops being true, this decision has been over-applied.
 The day-0 reference profile is one logical surface per x86 renderer node, 40
 frames per second, NDI output, on Dell OptiPlex Micro 7040-class hardware.
 
+**"Day-0" means mid-September 2026**, the date the operator must be able to
+control a real show, chosen deliberately ahead of the Halloween show's 17
+October opening so that faults surface with slack. It is not Halloween, and
+source drafts that wrote "day-0/Halloween" as one phrase understated the
+constraint by six weeks.
+
 **No part of that has been measured.** It is the profile the bench exists to
 validate, and until RES-004 runs it must be described everywhere as intended
 rather than supported, including in ARCHITECTURE §4.4.

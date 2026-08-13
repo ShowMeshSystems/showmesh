@@ -10,7 +10,9 @@ A renderer node supports one or more independent logical surfaces. Each surface 
 
 The renderer models logical surfaces, not physical projectors. A surface may feed one projector, or a single combined surface may feed a projector pair downstream in Resolume or the physical video path. That mapping is deployment configuration and does not enter the renderer object model.
 
-The day-0/Halloween reference profile is:
+**"Day-0" is mid-September 2026, not Halloween, and the two are six weeks apart.** The operator's dates, recorded 2026-08-13: ShowMesh must be able to control a real show from **mid-September**, deliberately early so bugs surface with slack before it matters; the Halloween show opens **17 October 2026**. Day-0 is the constraint and Halloween is the show it protects. Earlier drafts wrote "day-0/Halloween" as a single phrase, which reads as a late-October deadline and is wrong in the dangerous direction.
+
+The day-0 reference profile is:
 
 - one logical surface per x86 renderer node (`N=1`);
 - 40 frames per second;
