@@ -8,9 +8,9 @@ Status: planned · Risk: high · Verification: L1 for the constraint survey belo
 
 **The status line above was corrected on 2026-08-13.** It previously read "every decision this record exists to make is still undecided", which stopped being true the moment section 6a was written on 2026-08-12 and was badly wrong once D1 and D2 shipped as code in Step 7. Recorded rather than silently edited, because a status line that understates what has been decided invites the decisions to be made a second time and differently.
 
-Surveyed 2026-08-12, against the repository at Step 6 complete (schema v5). Worked then, ahead of its place in the queue, because the step after next introduces show macros and a macro definition is a configuration object.
+First surveyed 2026-08-12 against the repository at Step 6 complete (schema v5). Worked then, ahead of its place in the queue, because the step after next introduces show macros and a macro definition is a configuration object.
 
-**Section 3 is now stale, by this record's own closing instruction, and re-running it is a prerequisite for specifying the macro step.** The survey describes schema v5 and states that no configuration table exists. Step 7 implemented D1 and D2 and landed schema v6, so section 3.1's table of ten observed-state tables and its central finding are both out of date. The record already warned that "a stale survey that still says there is no configuration table would be worse than no survey"; that condition is now met. The re-run belongs to the macro step's specification and has not been done.
+**Section 3 was re-surveyed on 2026-08-13 against schema v6**, discharging this record's own closing instruction to re-run it before the macro step is specified. The 2026-08-12 survey is preserved as section 3a, because sections 4 and 6a were written against it. The re-run reversed that survey's central finding, a configuration table now exists, and surfaced one item that blocks the macro step directly: **there is still no mechanism by which an ADR-004 reduced local fallback could reach the node that would execute it.** See the note at the end of section 3.2.
 
 ## 1. Decision to make
 
@@ -20,24 +20,52 @@ Define authoritative runtime configuration, portable representation, revisioning
 
 The coordinator owns authoritative runtime configuration. Versioned YAML or JSON bundles provide backup and review. Nodes cache only the verified subset needed for assigned work and reduced local fallback.
 
-## 3. What is already constrained (survey, 2026-08-12)
+## 3. What is already constrained (survey)
+
+**Re-surveyed 2026-08-13 against schema v6, after Step 7 implemented D1 and D2.** The original survey was taken on 2026-08-12 against schema v5 and is preserved as section 3a below, because several of its findings were the *reason* for decisions D1 through D6 and deleting them would leave those decisions looking unmotivated. Everything in section 3.1 through 3.3 now describes the repository as it actually is; section 3a describes what it was when the decisions were taken.
+
+This re-run was performed because this record's own closing instruction requires it before the macro step is specified, on the stated ground that a stale survey claiming there is no configuration table would be worse than no survey. That condition had been met.
 
 ### 3.1 What exists in code today
 
-**Fact.** `internal/coordinator/store/migrations.go` defines five forward-only migrations applied in one transaction, with downgrade refused (`ErrSchemaTooNew`). Ten tables exist through schema v5, and every one of them is observed state, history, or identity:
+**Fact.** `internal/coordinator/store/migrations.go` defines six forward-only migrations applied in one transaction, with downgrade refused (`ErrSchemaTooNew`). Seventeen tables exist through schema v6. The v5 set is unchanged and remains observed state, history, or identity; **schema v6 added the first six tables in this project that are none of those things.**
 
-| Table | Class |
-|---|---|
-| `nodes`, `node_lwt`, `node_health` | Observed. Populated from agent hellos, Last Will, and heartbeats. |
-| `observations` | Observed. Latest-only per `(resource_kind, resource_id, signal, source)`. |
-| `events`, `audit_log` | History. Append-only, with retention bounds in `store/retention.go`. |
-| `principals`, `principal_tokens`, `principal_sessions`, `bootstrap` | Identity. |
+| Table | Class | Schema |
+|---|---|---|
+| `nodes`, `node_lwt`, `node_health` | Observed. Populated from agent hellos, Last Will, and heartbeats. | v1–v2 |
+| `observations` | Observed. Latest-only per `(resource_kind, resource_id, signal, source)`. | v3–v4 |
+| `events`, `audit_log` | History. Append-only, with retention bounds in `store/retention.go`. | v3, v5 |
+| `principals`, `principal_tokens`, `principal_sessions`, `bootstrap` | Identity. | v5 |
+| `config_objects`, `config_revisions` | **Configuration.** The generic object plus immutable revision mechanism. | v6 |
+| `node_declarations`, `discovery_runs` | **Declared inventory**, and the record of the runs that seed it. | v6 |
+| `commands` | **Command journal.** The ARCHITECTURE §8.1 envelope, persisted. | v6 |
+| `desired_state` | **Desired state**, per ADR-003's split. | v6 |
 
-**Fact. There is no configuration table, no desired-state table, no assignments table, no controlled-device table, no macro table, and no revision table.** Verified three ways: the `CREATE TABLE` set above is complete across the repository; the store package writes to nothing else; and every occurrence of "desired" in Go source is a doc comment, never code. `pkg/command/` is a doc-only stub, so the ARCHITECTURE §8.1 envelope, including its `requested revision` field, is unimplemented.
+**Fact. The central finding of the 2026-08-12 survey has been reversed: a configuration table now exists, and so do a revision table, a desired-state table, and a command journal.** What still does not exist: **no assignments table, no controlled-device table, and no macro table.** `pkg/command/` is no longer a doc-only stub; the §8.1 envelope is implemented, including `RequestedRevision`, `Params`, `Target`, `Deadline`, and `ConfirmationMethod`, and `commands` persists all of it.
 
-**Fact.** There is no YAML export or import code. `gopkg.in/yaml.v3` is a direct dependency whose only consumer is the OpenAPI conformance test. ADR-009's portable-bundle half is entirely unbuilt.
+**Fact. Configuration is generic, not per-type, and this is the single most important thing for the macro step to know.** `config_objects` is keyed `(kind, id)` and `config_revisions` is keyed `(kind, object_id, revision)` with the payload held as `payload_json`. So a new configuration type is a new `kind` string and a payload schema, not a new table. **A macro definition is therefore already storable** under this mechanism, and the macro step's configuration work is a payload schema, a validator, and a surface, rather than a schema migration.
 
-**Fact, and the sharpest finding in the survey.** All coordinator configuration is supplied as environment variables read once at startup by `internal/coordinator/config`. Among them, `SHOWMESH_FPP_ENDPOINTS` is a genuine operator-authored inventory decision, which FPP hosts exist and where they are, parsed into `[]FPPEndpoint`. **It lives entirely outside ADR-009's authoritative store**, with no revision, no validation history, no export, and no rollback beyond editing `.env` and restarting the container. The coordinator has configuration and zero configuration rows, and that happened without anybody deciding it. Now decided against: see D1 in section 6a.
+**Fact.** Exactly one `kind` exists today: `fpp.endpoints`. It is the D1 migration's product, so the generic mechanism currently has a single, real consumer, which is enough to have exercised it and not enough to have proven it against a second shape.
+
+**Fact.** A revision is an **integer, monotonic per object**, with `config_objects.current_revision` naming the active one. Revision rows carry `created_at`, the creating principal's id and name, a `source`, and a free-text `note`. This answers, in code, two things ADR-009 left open by omission: what a revision identifies (one object of one kind) and how revisions are named (an integer, which satisfies ADR-008's requirement that the `cmd` envelope's `revision` be short, stable, and JSON-safe). Immutability is by convention and primary key rather than by a database constraint: nothing rewrites a revision row, and the `(kind, object_id, revision)` key means a rewrite would have to be a deliberate `UPDATE`.
+
+**Fact. `SHOWMESH_FPP_ENDPOINTS` no longer lives outside the store, but the environment variable has not gone away, and its migration has three outcomes rather than two.** `internal/coordinator/configsync.go` migrates the variable into `fpp.endpoints` on first boot; thereafter the store is authoritative and the variable being set produces a refusal on write, so the two cannot silently disagree. The third outcome is the deferral recorded in section 11: if the migration's transaction cannot be written, nothing is persisted, the coordinator starts and collects from the variable exactly as it did before D1, and it retries next boot. **A future consumer of this mechanism must not assume that a configured system has a configuration row**, which is the opposite of what the pre-D1 architecture implied.
+
+**Fact.** There is still no YAML export or import code. `gopkg.in/yaml.v3` remains a direct dependency whose only consumer is the OpenAPI conformance test. **ADR-009's portable-bundle half is entirely unbuilt**, unchanged by Step 7, so D4's opt-in secret export has a decision and no mechanism.
+
+**Fact.** Secrets in configuration are still `MQTTPassword` and `FPPMQTTPassword`, redacted by `Config.LogValue`, with `Validate` still rejecting userinfo in FPP endpoint URLs at load. The log half of the secret rule is implemented and tested; the export half still has no mechanism because there is still no export.
+
+**Fact.** `internal/agent/config` still reads a node's capability set from `SHOWMESH_NODE_CAPABILITIES`. **A node's capabilities remain node-local environment configuration**, and the coordinator still authors nothing about them. D2's declaration mechanism covers a node's *identity and inventory membership*, not its capabilities, so this is unchanged by Step 7.
+
+**Fact. There is still no cached fallback subset on the agent.** `internal/agent/agent.go` records its absence explicitly. ADR-025 decided the trust model, signing rather than checksumming, and Step 7 implemented none of it. **So reduced local fallback still cannot work for anything, for any macro, under any condition**, which is a first-order constraint on the macro step rather than a footnote: ADR-004 requires every critical macro to define what runs locally when the coordinator is unreachable, and the mechanism that would carry that definition to a node does not exist. There is also still no ADR-008 topic that distributes configuration.
+
+### 3a. The 2026-08-12 survey, preserved
+
+Kept because sections 6a and 4 were written against it, and a decision whose stated reason has been edited away reads as arbitrary.
+
+**As of schema v5, on 2026-08-12:** five forward-only migrations, ten tables, every one of them observed state, history, or identity. **There was no configuration table, no desired-state table, no assignments table, no controlled-device table, no macro table, and no revision table.** Verified three ways: the `CREATE TABLE` set was complete across the repository; the store package wrote to nothing else; and every occurrence of "desired" in Go source was a doc comment, never code. `pkg/command/` was a doc-only stub, so the ARCHITECTURE §8.1 envelope, including its `requested revision` field, was unimplemented.
+
+**The sharpest finding of that survey**, and the one D1 answers: all coordinator configuration was supplied as environment variables read once at startup by `internal/coordinator/config`. Among them, `SHOWMESH_FPP_ENDPOINTS` was a genuine operator-authored inventory decision, which FPP hosts exist and where they are, parsed into `[]FPPEndpoint`. **It lived entirely outside ADR-009's authoritative store**, with no revision, no validation history, no export, and no rollback beyond editing `.env` and restarting the container. The coordinator had configuration and zero configuration rows, and that happened without anybody deciding it. Decided against by D1, and implemented in Step 7.
 
 **Fact.** Secrets in configuration today are `MQTTPassword` and `FPPMQTTPassword`. `Config.LogValue` redacts both and runs both broker URLs through `redactURLUserinfo`; `Validate` rejects userinfo in FPP endpoint URLs at load. The log half of the secret rule is implemented and tested. The export half has no mechanism because there is no export.
 
@@ -55,6 +83,10 @@ The coordinator owns authoritative runtime configuration. Versioned YAML or JSON
 - **ADR-004** fixes that each critical macro defines a reduced local fallback and explicitly identifies coordinator-required steps, that macro execution must be persisted, idempotent, observable, and compensatable, and that local fallback must report its degradation when connectivity returns. **ADR-019 is emphatic that the exceptions must be recorded in the macro definitions rather than left implicit**, on the stated ground that ADR-004's purpose is protecting the show rather than populating a field. Nothing about a macro's representation is fixed anywhere.
 - **ADR-008** fixes the v1 topic set, which contains **no configuration-distribution topic**, and puts a `revision` in the `cmd` envelope. So a revision identifier must be short, stable, and JSON-safe.
 - **ADR-020** makes the contract additive-only within a major version, so configuration and macro surfaces can arrive in v1, but forbids shipping a field no code computes.
+
+**What Step 7 closed in code, added 2026-08-13.** Three of the openings above are now answered by an implementation rather than by a decision, which is a weaker kind of settled and should be read as such: an implementation can be changed by anyone, where an ADR cannot. ADR-009's unstated question of *what a revision identifies and how revisions are named* is answered by `config_revisions` as "one object of one kind, numbered by a monotonic integer". ADR-003's *representation of desired state* is answered by the `desired_state` table, deliberately minimally: it exists so the split is expressible and so a command's confirmation has a recorded target, and its own doc comment says that closing the gap between desired and observed would make ShowMesh a second scheduler, which ADR-001 forbids. And ARCHITECTURE §8.1's envelope is implemented in `pkg/command` and persisted in `commands`. **None of these three has an ADR behind its specific shape**, so the macro step is free to find them wrong, and should say so rather than working around them.
+
+**What remains open and now blocks the macro step directly.** ADR-004 requires every critical macro to define a reduced local fallback, and section 3.1 establishes that the agent has no cache and ADR-008 has no configuration-distribution topic, so **there is no mechanism by which a fallback definition reaches the node that would execute it.** ADR-025 decided that mechanism's trust model and nothing has built it. This is not a detail the macro step can defer: a macro definition containing a fallback that provably cannot be delivered is a field no code computes, which ADR-020 forbids shipping. The macro step must therefore either build the distribution path, or scope its first macro to one with no critical fallback and say so explicitly.
 
 ### 3.3 Three inconsistencies between accepted documents
 
@@ -175,4 +207,4 @@ This does not weaken D1's single-source-of-truth requirement, which is the conce
 
 The retry is deliberately boot-only. Nothing re-attempts the migration while the process runs, so an operator who frees the disk must restart; that is a recorded limitation, tolerable only because the state is visible on the API rather than in one startup log line.
 
-Revalidate whenever the schema, persistence layer, migration engine, or trust model changes, and **re-run the section 3 survey against the repository before the macro step is specified**, because it is a snapshot of code that is still moving. In particular D1 and D2 both change section 3.1's findings the moment they are implemented, and a stale survey that still says "there is no configuration table" would be worse than no survey.
+Revalidate whenever the schema, persistence layer, migration engine, or trust model changes, and **re-run the section 3 survey against the repository before any step that builds on it**, because it is a snapshot of code that is still moving. That instruction has now fired once and was honoured: D1 and D2 shipped in Step 7, which reversed section 3.1's central finding, and the survey was re-run on 2026-08-13 before the macro step was specified. **The rule stands rather than being discharged**, and the next trigger is the agent fallback cache and its distribution path, since section 3.1 records both as absent and the macro step cannot ship a critical fallback without them.

@@ -417,6 +417,13 @@ Status: not started. Specified 2026-08-13.
 
 **Only a command whose effect is observable through a signal the collector already collects.** Anything else ships the dispatch half of [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) and calls it done, which Step 7 explicitly refused to do and which this step must not quietly reintroduce under the pressure of a longer command list. Where a command's effect is not currently visible, the honest options are that the collector grows the signal inside this step, or the command waits for a step that grows it. A command shipped without a confirmation path is not a smaller version of this step's work; it is a different and worse thing.
 
+**The filter's exclusions are a deliverable, not a silent omission**, by the owner's decision on 2026-08-13. Every command in the capture that this step does **not** ship must be listed with the reason it was excluded, split into the two cases that have different owners:
+
+- **Excluded because ShowMesh does not collect the signal yet.** These are ShowMesh's own work and are candidates for a later step, so each one records which signal would confirm it and where that signal would come from.
+- **Excluded because FPP does not expose the effect at all.** These need upstream FPP work and are **out of scope for the foreseeable future**, which is the owner's standing position. Recording them is what makes that a decision rather than an oversight.
+
+This exists because the filter is a rule about *absence*, and this project's recurring defect is absence stated as nothing at all. The same argument that makes an unsupported observation carry a state and a reason rather than being omitted from the API applies to a command the operator might reasonably expect to find and does not. The list belongs in the step's own record and should be readable by someone deciding whether a future step is worth it.
+
 ### The direction reverses in this step
 
 Every write this project has shipped points at the show stopping, or at configuration. **A start command is the first thing ShowMesh can do that makes the show do something**, and it is the first command whose failure mode is the display running when it should not be.
@@ -449,11 +456,22 @@ Both were taken by the owner on 2026-08-13, and both are recorded here rather th
 
 ## Step 9: Show macros and the FPP plugin
 
-Status: not started. **Specification blocked** on the RES-008 prerequisite below.
+Status: not started. Its RES-008 prerequisite was discharged on 2026-08-13; **one open question, below, must be answered before the step can be specified.**
 
 **Goal:** the first show macro, and with it the first ShowMesh code running on an FPP host. This is where ADR-004's three-part model is finally complete: primitives from Steps 7 and 8, macros here, and the reduced local fallback that every critical macro must define.
 
-**Prerequisite before this step can be specified.** [RES-008](../research/RES-008-configuration-model.md) section 3's survey describes the repository at schema v5 and states that no configuration table exists. Step 7 implemented D1 and D2 and landed schema v6, so that survey is now stale, and the record's own closing instruction says a stale survey claiming there is no configuration table "would be worse than no survey". Re-running it is the first task, not a formality: a macro definition is a configuration object, so this step is built directly on what that section describes.
+**The RES-008 prerequisite is done, and it changed this step's shape twice.** [RES-008](../research/RES-008-configuration-model.md) section 3 was re-surveyed against schema v6 on 2026-08-13. Two findings matter here.
+
+**The good one: macro storage is already solved.** `config_objects` and `config_revisions` are keyed by `(kind, id)` with the payload held as JSON, so a new configuration type is a new `kind` string and a payload schema, **not a schema migration**. A macro definition is already storable. Revisions are monotonic integers per object, which satisfies ADR-008's requirement that the `cmd` envelope's `revision` be short, stable, and JSON-safe. So this step's configuration work is a payload schema, a validator, and a surface. Note that exactly one `kind` exists today, `fpp.endpoints`, so the generic mechanism has been exercised against one shape and proven against no second one; this step is that second shape.
+
+**The blocking one: there is no way to deliver a fallback to the node that would run it.** ADR-004 requires every critical macro to define what runs locally when the coordinator is unreachable. The survey establishes that the agent has **no cached fallback subset** (ADR-025 decided its trust model and Step 7 built none of it) and that **ADR-008's v1 topic set contains no configuration-distribution topic**. So a fallback definition has no path to a node. Under [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md) a macro carrying a fallback field that provably cannot be delivered is a field no code computes, which is forbidden.
+
+**The question to answer before specifying this step**, and it is a scope decision rather than a technical one:
+
+- **Either** this step builds the distribution path, meaning the agent cache under ADR-025 with its pinned verifying key and an ADR-008 topic to carry it, which is a large step in its own right and would be landing alongside the plugin.
+- **Or** the first macro is deliberately scoped to one with **no critical fallback**, and that limitation is stated in the step and in the macro definition rather than left for someone to discover when the coordinator goes down mid-show.
+
+The second is almost certainly right for a first macro, and it is the shape this project has used before: Step 7 shipped the safe direction first and said so. But it must be decided and written down, because "the first macro has no fallback" is the kind of sentence that is fine as a decision and dangerous as an accident.
 
 ### Deliverables
 

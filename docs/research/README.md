@@ -15,7 +15,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | unresearched | critical | RES-004, RES-006 |
 | [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (L1) | high | — |
 | [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench, L0) | critical | RES-002 |
-| [RES-008](RES-008-configuration-model.md) | Configuration model | planned (constraint survey L1, now stale at schema v6; D1–D6 decided, D1/D2 shipped in Step 7; §4 macro decisions L0) | high | — |
+| [RES-008](RES-008-configuration-model.md) | Configuration model | planned (constraint survey L1, re-run 2026-08-13 at schema v6; D1–D6 decided, D1/D2 shipped in Step 7; §4 macro decisions L0) | high | — |
 | [RES-009](RES-009-failure-mode-testing.md) | Failure-mode testing | planned | critical | all records |
 | [RES-010](RES-010-projection-preview-monitoring.md) | Projection preview monitoring | planned (L1) | critical | RES-005, RES-006 |
 | [RES-011](RES-011-pixel-current-diagnostics.md) | Pixel-current diagnostics | planned (L1) | critical | — |
