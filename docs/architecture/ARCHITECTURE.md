@@ -116,9 +116,9 @@ It should not require containers on machines that need direct GPU, HDMI, audio, 
 
 ### 4.4 Renderer
 
-The renderer converts synchronized show or matrix data into frames, executed as agent-supervised GStreamer pipelines per [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md). Rendering and transport are separate interfaces: the same frame producer may target a local display, NDI sender, capture-output path, or future transport.
+The renderer supports one or more independent logical surfaces. FPP Connect uploads the sequence and FSEQ to the renderer node ahead of playback; each surface extracts its assigned FSEQ virtual-matrix channels locally, renders them to its own canvas, and owns an independent output transport or stream. This is not a live matrix stream. Rendering is executed as agent-supervised GStreamer pipelines per [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md), and rendering and transport remain separate interfaces.
 
-One logical surface per projector is the preferred authoring model unless performance tests show that a combined canvas provides a material advantage. See [renderer performance research](../research/RES-004-virtual-matrix-renderer-performance.md).
+The renderer does not model physical projectors. A logical surface may feed one projector or a combined surface may feed a projector pair downstream; that mapping belongs to deployment configuration, Resolume, and the physical video path. The architecture supports `N` surfaces per node, while v1 implements one (`N=1`). The day-0/Halloween reference profile is one logical surface at 40 fps over NDI on each Dell OptiPlex Micro 7040-class x86 renderer. Multiple surfaces per node and Raspberry Pi 4 / ARM HDMI profiles are deferred, not excluded. See [renderer performance research](../research/RES-004-virtual-matrix-renderer-performance.md).
 
 ### 4.5 Audio engine
 
@@ -134,7 +134,7 @@ The adapter controls and observes composition state without entering the frame p
 
 ### 4.7 Transport adapters
 
-Media transport is pluggable. NDI is a preferred candidate for high-bandwidth show networks; HDMI with capture remains a supported fallback and a valid choice for smaller deployments. See [ADR-005](../decisions/ADR-005-pluggable-media-transport.md) and [transport research](../research/RES-005-ndi-vs-hdmi-transport.md).
+Media transport is pluggable. NDI is the v1/reference renderer transport; HDMI with capture remains a supported alternate/fallback. Transport is selected per node and surface from advertised capabilities rather than as one global system choice. A node may advertise NDI send, HDMI output, or both, and support for either transport requires profile-specific evidence. See [ADR-005](../decisions/ADR-005-pluggable-media-transport.md) and [transport research](../research/RES-005-ndi-vs-hdmi-transport.md).
 
 ### 4.8 Observability subsystem
 

@@ -23,6 +23,7 @@ Each scenario must state the injected condition, detection signal and deadline, 
 | Missing or corrupt media | Playback does not substitute the wrong asset |
 | Decoder hang or frozen frames | Fault is detected without treating intentional stills as failures |
 | NDI sender, receiver, or link loss | Output enters defined state and reconnect is measurable |
+| User-installed NDI runtime absent at agent start | Node stays operational, NDI send is unavailable and not advertised as usable, other capabilities remain available, and the operator receives an actionable installation pointer ([RES-006](RES-006-linux-ndi-support.md)) |
 | HDMI/capture or EDID loss | Signal loss is distinguished from black content |
 | SMPTE loss, noise, or jump | Resolume and audio follow defined hold/recover policy |
 | Audio device or Dante route loss | Program and LTC failure are independently visible |

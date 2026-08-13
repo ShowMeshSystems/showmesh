@@ -2,32 +2,28 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#47-transport-adapters) · [Tracker](README.md) · [Transport comparison](RES-005-ndi-vs-hdmi-transport.md)
 
-Status: planned (bench) · Risk: high · Verification: L1 — source verified 2026-08-10
+Status: planned (distribution resolved; sender bench pending) · Risk: high · Verification: L1 — source verified 2026-08-10
 
-## Decision to make
+## Decision and validation scope
 
-Determine whether an open-source Linux node can ship an operationally reliable, legally distributable NDI sender across required architectures.
+Validate an operationally reliable Linux NDI sender on the required architectures. The licensing and redistribution architecture is resolved: ShowMesh does not redistribute the NDI runtime.
 
-## Questions
+## Resolved architecture
 
-- Which official Linux SDK/runtime versions and CPU architectures are supported?
-- May required runtime components be redistributed, downloaded at install time, or only supplied by users?
-- Does headless discovery work across the intended VLAN topology?
-- Which pixel formats, frame rates, metadata, audio, and timestamp features are available?
-- What hardware acceleration exists, and which operations remain CPU-bound?
-- How are runtime loading, version conflicts, packaging, and upgrades handled?
-- What diagnostic data can an agent expose?
+- ShowMesh may vendor the MIT-licensed headers but does not redistribute the proprietary NDI runtime.
+- The NDI adapter dynamically loads a runtime installed separately by the user and honors the runtime's documented location override.
+- If the runtime is absent, the node stays operational, does not advertise a usable NDI sender, preserves its other capabilities, and reports an actionable installation pointer.
+- Runtime, discovery, and diagnostic details remain adapter concerns; they do not reopen the distribution decision or expand closure into an exhaustive environment matrix.
 
 ## Acceptance criteria
 
-- A clean supported Linux installation can send to the target Resolume version after a documented setup.
-- Licensing and redistribution requirements are reviewed and recorded.
-- `amd64` behavior is bench verified; `arm64` is either verified or explicitly unsupported.
-- Headless start, discovery, reconnect, runtime upgrade, and runtime absence have defined behavior.
+- A documented `amd64` installation with a user-installed NDI runtime sends the reference surface to the target Resolume version.
+- A documented `arm64` installation with a user-installed NDI runtime sends a representative surface to the target Resolume version.
+- The test record captures sender and receiver versions, architecture, canvas dimensions, pixel count, achieved frame rate, frame pacing, and observed stability.
 
 ## Test method
 
-Use authoritative SDK and license materials, then build the smallest dynamically isolated sender. Test supported distributions and architectures, multiple NICs, routed and local discovery, receiver restart, sender restart, missing runtime, and version mismatch. Record CPU/GPU use and timestamps.
+Build the smallest dynamically loaded sender and exercise it against Resolume on `amd64` and `arm64`. Use the practical documented installation path and record CPU/GPU use, timestamps, pacing, and stability. This closure work is a sender-to-Resolume validation on the two architectures, not an exhaustive survey of distributions, NIC arrangements, discovery topologies, runtime versions, or theoretical failure combinations.
 
 ## Evidence and findings
 
@@ -37,14 +33,14 @@ Desk research 2026-08-10 (official docs + open-source project experience; no SDK
 
 - The official NDI SDK fully supports Linux; the library depends on `libavahi-common.so.3`/`libavahi-client.so.3` and a running `avahi-daemon` ([platform considerations](https://docs.ndi.video/all/developing-with-ndi/sdk/platform-considerations)). x86_64 and aarch64 are first-class; NDI 6.2 shipped ARM-specific fixes. Current line as of Aug 2026: **NDI 6.3.2** (2026-04-13) ([release notes](https://docs.ndi.video/all/developing-with-ndi/sdk/release-notes)). [doc]
 - Board-specific/embedded ARM builds and hardware-encoded NDI HX come via the separate **Advanced SDK**. [doc][proj]
-- Download is registration-gated; exact contents of the current Linux tarball (ARM triples, glibc floor) must be confirmed at download time.
+- Download is registration-gated; exact contents of the current Linux tarball (ARM triples, glibc floor) are test parameters to record during the two architecture validations, not unresolved distribution architecture.
 
 ### Licensing and redistribution — the decisive constraint
 
 - **Headers are MIT-licensed for open-source projects**, explicitly to allow in-repo headers plus **dynamic loading** of the NDI libraries at runtime ([software distribution](https://docs.ndi.video/all/developing-with-ndi/sdk/software-distribution)). [doc]
 - Redistributing runtime binaries requires your EULA to cover the NDI SDK EULA; the sanctioned alternative is pointing users at NDI's runtime installer (`ndi.link/NDIRedistV5`; env vars `NDI_RUNTIME_DIR_V5`/`V6`). [doc]
 - Branding obligations: link to ndi.video wherever NDI appears; trademark attribution; do not redistribute NDI Tools; keep NDI libs out of system paths; permission required to use "NDI" in a product name ([licensing](https://docs.ndi.video/all/developing-with-ndi/sdk/licensing)). [doc]
-- SDK terms **tightened in 6.2.1 (Aug 2025)** with an updated exclusions list; the current EULA text must be read from the actual 6.3 download before committing to a distribution mechanism. [doc]
+- SDK terms **tightened in 6.2.1 (Aug 2025)** with an updated exclusions list. That reinforces the decision not to redistribute the runtime: ShowMesh uses the documented user-installed-runtime path and does not make its distribution mechanism contingent on runtime redistribution rights. A future material license change is a revalidation trigger. [doc]
 - Ecosystem precedent: **DistroAV** (ex obs-ndi) ships GPL plugin code with no bundled runtime and requires users to install the NDI runtime separately ([DistroAV](https://github.com/DistroAV/DistroAV)); **GStreamer's Rust NDI plugin** dlopens the runtime honoring `NDI_RUNTIME_DIR_V6` ([teltek/gst-plugin-ndi](https://github.com/teltek/gst-plugin-ndi), upstream in [gst-plugins-rs](https://github.com/GStreamer/gst-plugins-rs)); **FFmpeg removed NDI in 2019** after a GPL dispute ([ffmpeg-devel](https://ffmpeg.org/pipermail/ffmpeg-devel/2018-December/237097.html)). [proj]
 - No production-grade clean-room open implementation of full-bandwidth NDI exists; everything practical wraps the official runtime. [proj]
 
@@ -66,12 +62,11 @@ Desk research 2026-08-10 (official docs + open-source project experience; no SDK
 
 ### Open items for bench (L2) verification
 
-1. Download SDK 6.3; record tarball contents, glibc floor, ARM triples; read the full current EULA (post-6.2.1 exclusions).
-2. SpeedHQ encode headroom at target resolutions on reference x86 and arm64 hardware, with/without async send and GSO.
-3. Discovery Server behavior across the reference VLANs with Resolume as receiver; Avahi behavior if the agent ships in a container.
-4. Achieved inter-node alignment at Resolume with NTP vs PTP discipline.
-5. Missing-runtime, version-mismatch, and runtime-upgrade behavior of the dlopen path.
+1. Validate the dynamically loaded sender into the target Resolume version on `amd64`, recording the reference-profile parameters and frame-pacing results.
+2. Validate the same sender-to-Resolume path on `arm64` with a representative surface and recorded parameters.
+
+The `arm64` item validates the NDI adapter and runtime path. It does not establish a Raspberry Pi / ARM renderer performance profile, which remains deferred in RES-004.
 
 ## Decision, fallback, and revalidation
 
-Direction (pending EULA read and bench work): vendor MIT headers, `dlopen("libndi.so.6")` honoring `NDI_RUNTIME_DIR_V6`, never bundle the runtime, degrade gracefully with an install pointer when absent, and carry the required branding attributions. Repo license choice must account for this pattern (see FFmpeg precedent). NDI remains optional behind the transport adapter; HDMI/capture is the fallback. Revalidate on SDK, license, distribution, architecture, or Resolume changes.
+Resolved: ShowMesh may vendor the MIT headers but never redistributes the NDI runtime. The NDI adapter dynamically loads a user-installed runtime with `dlopen("libndi.so.6")`, honors `NDI_RUNTIME_DIR_V6`, and degrades gracefully with an installation pointer when the runtime is absent. Required branding attributions remain part of product surfaces. NDI is the v1/reference transport behind the adapter; HDMI/capture remains supported as an alternate/fallback. Revalidate the integration after a material SDK, license, architecture, or Resolume change.

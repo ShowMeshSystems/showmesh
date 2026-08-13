@@ -66,6 +66,8 @@ Pointing FPP at a ShowMesh-owned broker instead would be a settings write to a l
 
 - Projector model(s), resolution, refresh: Mixed models all 720 — all support PJLink (purchased for it); per-model PJLink class (`CLSS?`) still to be probed
 - Transport plan per surface (NDI / HDMI+capture): Node to resolume should be NDI primary, but also support HDMI/DP out on the video nodes as well, if its NDI i’ll pull directly into resolume then its HDMI > convert to SDI or HDMI over cat6 > long cable > converter > projector
+- Renderer reference profile: one logical surface per Dell Micro 7040-class x86 renderer, 40 fps, NDI output. FPP Connect uploads the sequence/FSEQ before playback; the renderer extracts its virtual-matrix channels locally.
+- Surface-to-projector mapping: a single combined logical surface may feed a projector pair downstream in this installation. Other deployments may choose one surface per projector; this is configuration outside the projector-agnostic renderer model.
 - Capture hardware, if any: 2 generic HDMI dongles
 - EDID management approach: not sure
 
