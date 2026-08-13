@@ -125,13 +125,42 @@ describe('Configuration', () => {
     expect(screen.getByRole('button', { name: /save configuration/i })).toBeEnabled()
   })
 
-  it('renders "not configured yet" with an empty editor on 404, not as an error', async () => {
-    getFPPEndpointsConfig.mockRejectedValue(new ApiError('not found', 404, 'https://showmesh.dev/problems/resource-not-found'))
+  it('renders the coordinator\'s own 404 reason with an empty editor, not as an error', async () => {
+    getFPPEndpointsConfig.mockRejectedValue(
+      new ApiError(
+        'no fpp.endpoints configuration has been created yet; PUT one to create it',
+        404,
+        'https://showmesh.dev/problems/resource-not-found',
+      ),
+    )
     getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
     renderConfiguration(makeModel({ session: adminSession }))
 
-    expect(await screen.findByText(/configuration exists yet/i)).toBeInTheDocument()
+    expect(await screen.findByText(/configuration has been created yet/i)).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  // The 404 this page treats as "nothing configured" carries two different
+  // facts, and the second one is a warning. When the coordinator's startup
+  // migration of SHOWMESH_FPP_ENDPOINTS could not be persisted, a
+  // configuration IS in effect and the store holds no copy of it, so the
+  // operator must not remove that variable. This page used to answer every
+  // 404 with its own fixed sentence ("No fpp.endpoints configuration
+  // exists yet"), which read as fine while the dashboard listed every host
+  // being polled, and which discarded the warning entirely.
+  it('renders the deferred-migration reason verbatim, including the warning not to remove the variable', async () => {
+    const deferredDetail =
+      'no fpp.endpoints configuration is stored, but this coordinator IS collecting from the endpoints named by ' +
+      'SHOWMESH_FPP_ENDPOINTS: the startup migration of that variable into this store (RES-008 D1) could not be ' +
+      'persisted on this boot. Do NOT remove SHOWMESH_FPP_ENDPOINTS until it has succeeded.'
+    getFPPEndpointsConfig.mockRejectedValue(
+      new ApiError(deferredDetail, 404, 'https://showmesh.dev/problems/resource-not-found'),
+    )
+    getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    expect(await screen.findByText(/Do NOT remove SHOWMESH_FPP_ENDPOINTS/)).toBeInTheDocument()
+    expect(screen.queryByText(/configuration exists yet/i)).not.toBeInTheDocument()
   })
 
   it('renders a real fetch failure as an error, distinct from 404', async () => {

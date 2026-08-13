@@ -1004,7 +1004,13 @@ paths:
         (ADR-024 decision 4 fixes exactly four read scopes, and this
         surface is a new, always-sensitive one exactly like `GET /audit`,
         not one of the four the open-reads posture covers). `404` when no
-        revision has ever been activated. `restartRequired` is always
+        revision has ever been activated, which carries two distinct
+        facts and states which one in `detail`: nothing has ever been
+        configured here, or this coordinator's startup migration of
+        `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be
+        persisted, in which case a configuration IS in effect and
+        `GET /fpp` lists it. A client must not read this `404` as "this
+        coordinator is collecting from nothing". `restartRequired` is always
         `true`: this coordinator does not hot-reload configuration, so a
         change here takes effect on the coordinator's next restart, never
         immediately — see `restartRequiredReason`.
@@ -1060,7 +1066,14 @@ paths:
         this coordinator's own env/store disagreement rule on its very
         next restart, so the refusal happens now, while this coordinator
         is up and the reason is readable, rather than after a restart that
-        never completes.
+        never completes. That `409` carries one of two REMEDIES and they
+        are not interchangeable, so `detail` is the part to read rather
+        than the status: normally, remove the variable and restart once.
+        But if this coordinator's startup migration of that variable was
+        deferred because it could not be persisted, the store holds no
+        endpoint list at all and removing the variable would resolve this
+        coordinator to zero endpoints; `detail` then says so explicitly
+        and the fix is to repair the data volume and restart.
 
         On success, appends a new immutable revision and activates it in
         the SAME transaction as its audit log entry (ADR-024 decision 11's

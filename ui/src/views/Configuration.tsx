@@ -40,7 +40,17 @@ const CONFIG_WRITE_SCOPE = 'config:write'
 // straight from `scopeGate` on every render, never captured into state.
 type LoadState =
   | { kind: 'loading' }
-  | { kind: 'not_configured' }
+  // `reason` is the coordinator's own 404 detail, rendered verbatim rather
+  // than replaced by a fixed sentence. Two different facts arrive as this
+  // same 404: a coordinator nothing has ever configured, and a coordinator
+  // whose startup migration of SHOWMESH_FPP_ENDPOINTS could not be
+  // persisted, which IS collecting from that variable's endpoints while
+  // the store holds no copy of them. This view used to assert the first
+  // one unconditionally ("No fpp.endpoints configuration exists yet"),
+  // which read as fine and was false in the second case while the
+  // dashboard listed every host being polled. The server states the
+  // reason; this page's job is to show it, not to author its own.
+  | { kind: 'not_configured'; reason: string }
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: FPPEndpointsConfigResponse; revisions: ConfigRevisionMeta[] }
 
@@ -95,13 +105,15 @@ export function Configuration() {
         setRows(config.payload.endpoints)
       } catch (err) {
         if (cancelled) return
-        // 404 ("no fpp.endpoints configuration has been created yet") is
-        // not a failure this page shows as an error — it is the normal
-        // starting state for a coordinator nothing has configured yet,
-        // and this view's job is to let an admin create the first
-        // revision, not to report its absence as broken.
+        // A 404 is not a failure this page shows as an error: no
+        // configuration is stored, which this view exists to let an admin
+        // fix. Why none is stored is the coordinator's to say, and it says
+        // it in the problem detail (`ApiError.message`) — see LoadState's
+        // `reason`. The detail is carried through rather than summarized
+        // because one of the two cases it distinguishes is an active
+        // warning not to remove SHOWMESH_FPP_ENDPOINTS.
         if (err instanceof ApiError && err.status === 404) {
-          setState({ kind: 'not_configured' })
+          setState({ kind: 'not_configured', reason: err.message })
           setRows([])
           return
         }
@@ -184,9 +196,8 @@ export function Configuration() {
           {(state.kind === 'loaded' || state.kind === 'not_configured') && (
             <>
               {state.kind === 'not_configured' && (
-                <p className="text-muted">
-                  No <code>fpp.endpoints</code> configuration exists yet. Add at least one instance below and save
-                  to create the first revision.
+                <p className="text-muted" role="status">
+                  {state.reason}
                 </p>
               )}
               {state.kind === 'loaded' && (

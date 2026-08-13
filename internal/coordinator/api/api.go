@@ -93,6 +93,29 @@ type Dependencies struct {
 	// for any embedder that has not wired it in.
 	FPPEndpointsEnvVarSet bool
 
+	// FPPEndpointsMigrationDeferred is whether this coordinator started
+	// with SHOWMESH_FPP_ENDPOINTS set, tried to migrate it into the store
+	// (RES-008 D1), and could NOT persist that write — so it is collecting
+	// from an endpoint list the store does not hold. Threaded through as
+	// data for the same reason [FPPEndpointsEnvVarSet] is: this package
+	// reads neither the environment nor the store's startup history.
+	//
+	// It exists because the two states are otherwise indistinguishable
+	// from the store alone, and answering the wrong one is a falsehood in
+	// both directions. handleGetFPPEndpointsConfig would report "no
+	// fpp.endpoints configuration has been created yet" while three hosts
+	// are being polled from the list that failed to persist, and
+	// handlePutFPPEndpointsConfig's 409 would tell the operator to remove
+	// SHOWMESH_FPP_ENDPOINTS and restart — correct advice once a migration
+	// has landed, and a silent loss of every configured endpoint before
+	// one has. Both are stated correctly when this is true.
+	//
+	// The zero value (false) is the same "nothing told this API otherwise"
+	// posture as every other unwired dependency here, and is correct: a
+	// coordinator that never deferred a migration, and any embedder or
+	// test that does not wire it, both want the unqualified messages.
+	FPPEndpointsMigrationDeferred bool
+
 	// FPPMQTTHostIDs is SHOWMESH_FPP_MQTT_HOSTS's parsed instance-id ->
 	// host-name mapping ([config.Config.FPPMQTTHosts]), threaded through
 	// for the identical "this package does not read the environment or

@@ -103,6 +103,28 @@ The second half is worse than the dead code. The operator was told a **transport
 
 **Rule:** when one side of a contract waits and the other side times out, the two numbers are a single design decision and must be written down as one. Derive the client budget from the server's deadline, and put a test on the relationship, not on either number.
 
+## Fail-closed protects the operator from an unaccountable actor, so where there is no actor it protects nobody
+
+**Step 7, fixed 2026-08-13.** The `SHOWMESH_FPP_ENDPOINTS` to store migration writes its config revision and its audit entry in one transaction, per [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 11. When the audit append failed, the whole transaction rolled back and the coordinator **exited 1**. The shipped bundle sets `restart: unless-stopped`, so an unwritable `audit_log` was a restart loop: no API, no change stream, no dashboard, no sight of the show.
+
+Three things made it the wrong direction, and the second is the one that generalizes.
+
+- The same function already made the opposite call twice, eight lines above, for a zero `current_revision` and a dangling revision pointer, with a comment saying a store-integrity question must not become an availability outage.
+- **Decision 11's fail-closed rule exists so an operator cannot act without a trace. A startup migration has no principal.** There is no actor to hold accountable, so refusing the write protects nobody while costing everything. Fail-closed was applied by shape (this is an audited write) rather than by purpose (someone might act unaccountably).
+- Constraint 23 and decision 7 scope an identity or audit failure to "you cannot act", never "you cannot see". Exiting costs the reads too, at the widest possible scope. And the branch is reachable **only on the first boot after an existing deployment upgrades into Step 7**, so the operator reads it as the upgrade having broken their coordinator.
+
+The fix logs at ERROR, persists nothing, returns the environment's endpoint list so the boot collects exactly as it did before, and retries next boot. It exempts nothing from decision 11: the transaction still rolls back, so the unattributable write still does not proceed. Only the process-level response changes, and that belongs to constraint 13. Writing the revision anyway with degraded attribution, the way the blackout/stop/power-off safety class does, *would* have been a second exemption and would have needed an ADR.
+
+**Rule:** before applying a fail-closed rule, name the actor it holds accountable. If there is not one, the rule is not doing its job, and the cost of applying it anyway is paid by the operator. Then check what the refusal actually removes: this project degrades toward the show continuing and toward the operator keeping sight of it, and a refusal that takes out the read surface is pointed the wrong way whatever it protects.
+
+## Softening a hard failure creates a state other surfaces were written assuming could not exist
+
+**Step 7's deferral fix, 2026-08-13, found by the review of the fix itself.** Making the migration non-fatal made a combination reachable that had been impossible: coordinator serving, `SHOWMESH_FPP_ENDPOINTS` in effect, store holding no configuration. Two surfaces already had answers written under the old invariant, and both became false the moment the exit was removed.
+
+The read handler reported that nothing had ever been configured, while the dashboard listed every host being polled from the list that failed to persist. And the write refusal's remedy inverted: *"remove SHOWMESH_FPP_ENDPOINTS and restart once"* is correct after a migration lands and, before one lands, discards the only copy of the endpoint list. The operator follows the API's own written instruction and loses every configured endpoint, with no mistake at any step. The original bug was a loud restart loop; the incomplete fix would have replaced it with a quiet, self-inflicted outage.
+
+**Rule:** when you turn a fatal path into a survivable one, enumerate what becomes reachable that was not, then go read what every existing surface says about it. A remedy written for the normal case is not automatically safe in the case you just invented, and remedies are the most dangerous text in a system because operators execute them.
+
 ## Confirming that a value equals what you wanted is not evidence that anything happened
 
 **Step 7.** The first FPP command implementation confirmed by asking "does the current observation equal the desired value?" It never asked whether that observation post-dated the dispatch, and observations stay `current` for 45 seconds. Measured against a live coordinator: a command reported `confirmed` **179 microseconds** after its own `dispatchedAt`, which is far too fast to have collected anything.

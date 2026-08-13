@@ -486,6 +486,112 @@ func TestPutFPPEndpointsConfigRefusesWhenEnvVarSet(t *testing.T) {
 	}
 }
 
+// TestPutFPPEndpointsConfigDeferredMigrationGivesANonDestructiveRemedy
+// covers the state the deferral fix (internal/coordinator/configsync.go,
+// 2026-08-13) made reachable and its review caught: SHOWMESH_FPP_ENDPOINTS
+// is set AND the startup migration of it could not be persisted, so the
+// store holds no fpp.endpoints configuration at all.
+//
+// The refusal is the same 409 for the same reason, and the REMEDY must
+// differ. The standard detail tells the operator to remove the variable
+// and restart once, which is correct after a migration has landed and
+// destroys the endpoint list before one has: removing the only copy of
+// the list resolves the coordinator to zero endpoints on its next
+// restart, and the retried write then fails on the same unwritable store.
+// The whole sequence closes with the operator making no mistake at any
+// step, which is why this is asserted on the text rather than left to a
+// reader of the code.
+func TestPutFPPEndpointsConfigDeferredMigrationGivesANonDestructiveRemedy(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.FPPEndpointsEnvVarSet = true
+	deps.FPPEndpointsMigrationDeferred = true
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	detail := fmt.Sprint(decodeMap(t, body)["detail"])
+	if !strings.Contains(detail, "Do NOT remove SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("detail = %q, want an explicit warning against removing the variable while the migration is deferred", detail)
+	}
+	// The exact instruction the standard 409 gives, which is destructive
+	// here. Asserting its ABSENCE is the load-bearing half: a handler that
+	// forgot to branch would still contain the phrase above if it were
+	// added to both messages, but cannot contain this one.
+	if strings.Contains(detail, "Remove SHOWMESH_FPP_ENDPOINTS from this coordinator's environment and restart it once") {
+		t.Errorf("detail = %q, must NOT give the standard remedy: with the migration deferred, removing the variable "+
+			"discards the only copy of the endpoint list", detail)
+	}
+}
+
+// TestGetFPPEndpointsConfigDeferredMigrationStatesItRatherThanReportingNothingConfigured
+// is the read half of the same state. ADR-020: absent evidence is stated
+// with a reason, never reported as absence. A bare "no fpp.endpoints
+// configuration has been created yet" is false while GET /api/v1/fpp is
+// listing every host this coordinator is polling from the very list that
+// failed to persist, and the Operator UI turns that 404 into an empty
+// table reading "No fpp.endpoints configuration exists yet".
+func TestGetFPPEndpointsConfigDeferredMigrationStatesItRatherThanReportingNothingConfigured(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.FPPEndpointsEnvVarSet = true
+	deps.FPPEndpointsMigrationDeferred = true
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodGet, "/api/v1/config/fpp.endpoints", "",
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	// Still a 404: no configuration IS stored, and that part was never the
+	// falsehood. What changes is that the reason is stated.
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	detail := fmt.Sprint(decodeMap(t, body)["detail"])
+	if strings.Contains(detail, "has been created yet") {
+		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: one IS in effect", detail)
+	}
+	for _, want := range []string{"SHOWMESH_FPP_ENDPOINTS", "could not be", "GET /api/v1/fpp"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail = %q, want it to contain %q", detail, want)
+		}
+	}
+}
+
+// TestGetFPPEndpointsConfigUnconfiguredKeepsTheOriginalMessage is the
+// control for the test above: with the deferral flag false (its zero
+// value, and every real coordinator that never deferred a migration), a
+// genuinely unconfigured store must still say so plainly. Without this,
+// a handler that dropped the branch entirely and always returned the
+// deferral text would pass the test above.
+func TestGetFPPEndpointsConfigUnconfiguredKeepsTheOriginalMessage(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodGet, "/api/v1/config/fpp.endpoints", "",
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+	}
+	detail := fmt.Sprint(decodeMap(t, body)["detail"])
+	if !strings.Contains(detail, "has been created yet") {
+		t.Errorf("detail = %q, want the plain not-configured message when no migration was deferred", detail)
+	}
+}
+
 // TestPutFPPEndpointsConfigAllowsWriteWhenEnvVarNotSet is the control for
 // TestPutFPPEndpointsConfigRefusesWhenEnvVarSet: identical setup with
 // FPPEndpointsEnvVarSet left false (its zero value, matching every other

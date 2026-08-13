@@ -2,11 +2,15 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#9-configuration-model) · [Tracker](README.md) · [Failure testing](RES-009-failure-mode-testing.md)
 
-Status: planned · Risk: high · Verification: L1 for the constraint survey below; every decision this record exists to make is still undecided
+Status: planned · Risk: high · Verification: L1 for the constraint survey below; D1 through D6 decided 2026-08-12 (section 6a), D1 and D2 implemented in Step 7; the section 4 decisions the macro step forces are still open
 
 **What "L1" means here and what it does not.** The survey in section 3 is source-verified against this repository's own code and its accepted ADRs, with file paths, line numbers, and decision numbers. That is evidence about *what already constrains the answer*. It is not evidence that any answer is correct, and no part of this record has been benched, run, or exercised against a deployment. The open decisions in sections 4 and 5 remain at L0.
 
-Surveyed 2026-08-12, against the repository at Step 6 complete (schema v5). Worked now, ahead of its place in the queue, because the step after next introduces show macros and a macro definition is a configuration object.
+**The status line above was corrected on 2026-08-13.** It previously read "every decision this record exists to make is still undecided", which stopped being true the moment section 6a was written on 2026-08-12 and was badly wrong once D1 and D2 shipped as code in Step 7. Recorded rather than silently edited, because a status line that understates what has been decided invites the decisions to be made a second time and differently.
+
+Surveyed 2026-08-12, against the repository at Step 6 complete (schema v5). Worked then, ahead of its place in the queue, because the step after next introduces show macros and a macro definition is a configuration object.
+
+**Section 3 is now stale, by this record's own closing instruction, and re-running it is a prerequisite for specifying the macro step.** The survey describes schema v5 and states that no configuration table exists. Step 7 implemented D1 and D2 and landed schema v6, so section 3.1's table of ten observed-state tables and its central finding are both out of date. The record already warned that "a stale survey that still says there is no configuration table would be worse than no survey"; that condition is now met. The re-run belongs to the macro step's specification and has not been done.
 
 ## 1. Decision to make
 
@@ -164,5 +168,11 @@ The survey in section 3 is source-verified desk evidence about this repository a
 A minimal local configuration file may bootstrap nodes, but must not become a competing source of truth. `SHOWMESH_FPP_ENDPOINTS` already is one, and per D1 its migration into the authoritative store is part of this record's work rather than a separate cleanup. Deployment secrets are the deliberate exception and stay in the environment.
 
 **No fallback is defined**, because nothing has been built to fall back from. The one recorded risk is D4's: an opted-in secret export is a plaintext credential file, and the export surface has to make that visible at the point of use rather than relying on this record.
+
+**D1's migration has a third outcome, added 2026-08-13.** As implemented in Step 7, the `SHOWMESH_FPP_ENDPOINTS` migration had two: it persisted, or the coordinator refused to start. The second was the wrong failure direction for a write with no principal (see the [build log](../build/BUILD-LOG.md) entry and [LESSONS](../build/LESSONS.md)), so a failed migration is now **deferred**: nothing is persisted, the coordinator starts and collects from the variable exactly as it did pre-D1, and the migration is retried on every start.
+
+This does not weaken D1's single-source-of-truth requirement, which is the concern this section records. While deferred, the store holds nothing, so the variable remains the only source exactly as it was before D1 existed, and the disagreement rule cannot fire against a configuration that does not exist. Two consequences are worth carrying into the macro step, because both were found by review rather than by design. **The deferred state must be visible on the API**, since "no configuration is stored" and "no configuration is stored while one is in effect" are otherwise indistinguishable to every client; both the read handler and the write refusal now state it. And **the standard remedy inverts**: the operator is normally told to remove `SHOWMESH_FPP_ENDPOINTS` once the store is authoritative, and while a migration is deferred that instruction would discard the only copy of the endpoint list. Any future env-to-store migration this record's D1 pattern is applied to inherits both.
+
+The retry is deliberately boot-only. Nothing re-attempts the migration while the process runs, so an operator who frees the disk must restart; that is a recorded limitation, tolerable only because the state is visible on the API rather than in one startup log line.
 
 Revalidate whenever the schema, persistence layer, migration engine, or trust model changes, and **re-run the section 3 survey against the repository before the macro step is specified**, because it is a snapshot of code that is still moving. In particular D1 and D2 both change section 3.1's findings the moment they are implemented, and a stale survey that still says "there is no configuration table" would be worse than no survey.

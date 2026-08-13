@@ -108,7 +108,11 @@ func Run() int {
 	// environment value); nothing downstream — apiDeps, the FPP collector
 	// construction loop, the FPPMQTTHosts cross-check below — may read the
 	// raw env-parsed value again.
-	cfg, err = resolveAuthoritativeFPPEndpoints(ctx, st, identitySvc, cfg, time.Now, logger)
+	// fppEndpointsMigrationDeferred is the migration-could-not-be-persisted
+	// fact (configsync.go), threaded to api.Dependencies below so the
+	// configuration read and write handlers can state it instead of
+	// reporting a coordinator that nothing has ever configured.
+	cfg, fppEndpointsMigrationDeferred, err := resolveAuthoritativeFPPEndpoints(ctx, st, identitySvc, cfg, time.Now, logger)
 	if err != nil {
 		logger.Error("failed to resolve the authoritative fpp.endpoints configuration", "error", err)
 		_ = st.Close()
@@ -214,6 +218,15 @@ func Run() int {
 		// mistake, while this coordinator is still up and the operator can
 		// still read why, not after a restart that never completes.
 		FPPEndpointsEnvVarSet: cfg.FPPEndpointsEnvSet,
+		// FPPEndpointsMigrationDeferred plumbs the other half of the same
+		// fact: SHOWMESH_FPP_ENDPOINTS is set AND the migration of it into
+		// the store could not be persisted on this boot, so this
+		// coordinator is collecting from a list the store does not hold.
+		// Without it the read handler cannot tell that state apart from a
+		// coordinator nothing has ever configured, and the write handler's
+		// 409 gives a remedy that would silently discard the endpoint list
+		// (see both handlers in api/config.go).
+		FPPEndpointsMigrationDeferred: fppEndpointsMigrationDeferred,
 		// FPPMQTTHostIDs plumbs cfg.FPPMQTTHosts — the SHOWMESH_FPP_MQTT_HOSTS
 		// mapping — into the API package for the identical reason: defect
 		// 4 (Step 7 seam A review), PUT /api/v1/config/fpp.endpoints must

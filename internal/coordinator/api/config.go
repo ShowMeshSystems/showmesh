@@ -72,6 +72,28 @@ func (h *handlers) handleGetFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 
 	obj, err := h.deps.Config.GetConfigObject(r.Context(), config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		// "Nothing has ever been configured" and "the startup migration of
+		// SHOWMESH_FPP_ENDPOINTS could not be persisted, so a configuration
+		// IS in effect and this store simply does not hold it" produce the
+		// identical ErrConfigObjectNotFound, and the second is not a
+		// hypothetical: it is what a full or read-only data volume does on
+		// the first boot after an upgrade into Step 7
+		// (internal/coordinator/configsync.go). Answering the unqualified
+		// message there tells a client that nothing is configured while
+		// GET /api/v1/fpp lists every host being polled, which is ADR-020's
+		// stated rule inverted — absent evidence is stated with a reason,
+		// never reported as absence.
+		if h.deps.FPPEndpointsMigrationDeferred {
+			writeProblem(w, h.logger, now, resourceNotFoundProblem(
+				"no fpp.endpoints configuration is stored, but this coordinator IS collecting from the endpoints named by "+
+					"SHOWMESH_FPP_ENDPOINTS: the startup migration of that variable into this store (RES-008 D1) could not be "+
+					"persisted on this boot, and was deferred rather than refusing to start. GET /api/v1/fpp lists the "+
+					"endpoints actually in effect. Nothing was written, so nothing here is stale or half-applied. Check this "+
+					"coordinator's startup log for the failure, fix the data volume (usually full, read-only, or a damaged "+
+					"database), and restart: the migration is retried on every start. Do NOT remove SHOWMESH_FPP_ENDPOINTS "+
+					"until it has succeeded — while the migration is deferred that variable is the only copy of this list."))
+			return
+		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(
 			"no fpp.endpoints configuration has been created yet; PUT one to create it"))
 		return
@@ -277,6 +299,14 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	// Defect 3a, checked first and before any body is read: see this
 	// function's own doc comment.
 	if h.deps.FPPEndpointsEnvVarSet {
+		// Same refusal either way, and deliberately a DIFFERENT remedy:
+		// see fppEndpointsMigrationDeferredProblem for why the standard
+		// "remove the variable and restart once" instruction destroys the
+		// endpoint list when the startup migration was deferred.
+		if h.deps.FPPEndpointsMigrationDeferred {
+			writeProblem(w, h.logger, now, fppEndpointsMigrationDeferredProblem())
+			return
+		}
 		writeProblem(w, h.logger, now, fppEndpointsEnvVarSetProblem())
 		return
 	}

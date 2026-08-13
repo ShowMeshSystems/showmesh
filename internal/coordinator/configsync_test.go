@@ -2,8 +2,11 @@ package coordinator
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,13 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+
+	// Registers the "sqlite" driver for [makeTableUnwritable]'s direct
+	// second connection to the store's own database file. The coordinator
+	// itself never imports a SQL driver — internal/coordinator/store owns
+	// that (ADR-012: pure-Go modernc.org/sqlite, never mattn/go-sqlite3) —
+	// so this is a test-only import and must stay one.
+	_ "modernc.org/sqlite"
 )
 
 // This file is Step 7 seam A's own startup-sequencing suite: the
@@ -52,7 +62,7 @@ var testEndpoints = []config.FPPEndpoint{
 func TestSyncFPPEndpointsConfigNothingConfiguredIsANoop(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, discardLogger())
+	got, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil", err)
 	}
@@ -69,9 +79,12 @@ func TestSyncFPPEndpointsConfigNothingConfiguredIsANoop(t *testing.T) {
 func TestSyncFPPEndpointsConfigMigratesFromEnv(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger())
+	got, deferred, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil", err)
+	}
+	if deferred {
+		t.Error("migrationDeferred = true on a migration that succeeded")
 	}
 	if !config.FPPEndpointsEqual(got, testEndpoints) {
 		t.Errorf("got = %+v, want %+v (no endpoint lost in migration)", got, testEndpoints)
@@ -131,7 +144,7 @@ func TestSyncFPPEndpointsConfigIdenticalStartsWithWarning(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 
 	// First call migrates.
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
 		t.Fatalf("first syncFPPEndpointsConfig() error = %v", err)
 	}
 
@@ -139,7 +152,7 @@ func TestSyncFPPEndpointsConfigIdenticalStartsWithWarning(t *testing.T) {
 	// variable still set, in a different order (order-insensitive per
 	// this seam's spec).
 	reordered := []config.FPPEndpoint{testEndpoints[1], testEndpoints[0]}
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, reordered, time.Now, discardLogger())
+	got, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, reordered, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("second syncFPPEndpointsConfig() error = %v, want nil (identical configuration must start)", err)
 	}
@@ -164,7 +177,7 @@ func TestSyncFPPEndpointsConfigIdenticalStartsWithWarning(t *testing.T) {
 func TestSyncFPPEndpointsConfigDifferentRefusesToStart(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
 		t.Fatalf("first syncFPPEndpointsConfig() error = %v", err)
 	}
 
@@ -172,7 +185,7 @@ func TestSyncFPPEndpointsConfigDifferentRefusesToStart(t *testing.T) {
 		{ID: "player-01", URL: "http://10.0.1.20"},
 		{ID: "shed", URL: "http://10.0.1.99"}, // url changed
 	}
-	_, err := syncFPPEndpointsConfig(context.Background(), st, svc, changed, time.Now, discardLogger())
+	_, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, changed, time.Now, discardLogger())
 	if err == nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = nil, want a refusal naming the difference")
 	}
@@ -204,11 +217,11 @@ func TestSyncFPPEndpointsConfigDifferentRefusesToStart(t *testing.T) {
 func TestSyncFPPEndpointsConfigEnvUnsetAfterMigrationUsesStore(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
 		t.Fatalf("first syncFPPEndpointsConfig() error = %v", err)
 	}
 
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, discardLogger())
+	got, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() with env unset error = %v, want nil", err)
 	}
@@ -234,12 +247,12 @@ func TestResolveAuthoritativeFPPEndpointsUsesStoreOverEnv(t *testing.T) {
 	// Simulate a deployment that has already migrated (store populated)
 	// and then had SHOWMESH_FPP_ENDPOINTS removed from its environment,
 	// exactly the state RES-008 D1's warning steers an operator toward.
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
 		t.Fatalf("seed migration: %v", err)
 	}
 
 	cfg := config.Config{FPPEndpoints: nil}
-	resolved, err := resolveAuthoritativeFPPEndpoints(context.Background(), st, svc, cfg, time.Now, discardLogger())
+	resolved, _, err := resolveAuthoritativeFPPEndpoints(context.Background(), st, svc, cfg, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("resolveAuthoritativeFPPEndpoints() error = %v, want nil", err)
 	}
@@ -265,13 +278,259 @@ func TestSyncFPPEndpointsConfigMigrationWarnsOnTheMigratingBoot(t *testing.T) {
 	st, svc := newTestConfigSyncDeps(t)
 	logger, buf := capturingLogger()
 
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, logger); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, logger); err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil", err)
 	}
 
 	got := buf.String()
 	if !strings.Contains(got, "may be removed") {
 		t.Errorf("log output = %q, want a WARN naming that SHOWMESH_FPP_ENDPOINTS may now be removed", got)
+	}
+}
+
+// newTestConfigSyncDepsWithDataDir is [newTestConfigSyncDeps] plus the data
+// directory, so a test can reach the SQLite file underneath a live
+// *store.Store and make one table genuinely unwritable — see
+// [makeTableUnwritable].
+func newTestConfigSyncDepsWithDataDir(t *testing.T) (*store.Store, identity.Service, string) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st, identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(discardLogger())), dir
+}
+
+// makeTableUnwritable installs a BEFORE INSERT trigger that aborts every
+// insert into table, over a second connection to the same SQLite file the
+// live *store.Store is using. This is how the two migration-failure tests
+// below fail a write, and the choice is load-bearing rather than
+// stylistic.
+//
+// A fake identity.Service overriding AuditedWrite was tried first and a
+// review rejected it, correctly. The assertion these tests exist to make
+// is that NOTHING is persisted, and the whole reason that assertion holds
+// is ADR-024 decision 11's same-transaction rule inside the REAL
+// identity.svc.AuditedWrite: fn's config revision and its audit row share
+// one transaction, so the audit failure rolls the revision back too. A
+// fake that substitutes its own transaction proves that property about
+// the fake. Rewriting AuditedWrite to commit fn's work and append the
+// audit row separately — a direct violation of decision 11 — would have
+// left those tests green.
+//
+// Aborting inside the transaction is also a truer fault than an error
+// returned from a stub: it is what a full volume, a read-only mount, or a
+// damaged database actually does, and it is the same mechanism the
+// real-binary verification in the build log used against a real
+// coordinator process.
+func makeTableUnwritable(t *testing.T, dataDir, table string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "showmesh.db"))
+	if err != nil {
+		t.Fatalf("open sqlite directly: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	stmt := fmt.Sprintf(
+		`CREATE TRIGGER %s_unwritable BEFORE INSERT ON %s BEGIN SELECT RAISE(ABORT, 'simulated unwritable %s'); END;`,
+		table, table, table)
+	if _, err := db.Exec(stmt); err != nil {
+		t.Fatalf("install unwritable trigger on %s: %v", table, err)
+	}
+}
+
+// dropTrigger reverses [makeTableUnwritable], standing in for an operator
+// fixing the data volume between two boots.
+func dropTrigger(t *testing.T, dataDir, trigger string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "showmesh.db"))
+	if err != nil {
+		t.Fatalf("open sqlite directly: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec("DROP TRIGGER " + trigger); err != nil {
+		t.Fatalf("drop trigger %s: %v", trigger, err)
+	}
+}
+
+// assertNoFPPEndpointsConfig fails the test unless the store holds no
+// fpp.endpoints configuration object at all.
+func assertNoFPPEndpointsConfig(t *testing.T, st *store.Store) {
+	t.Helper()
+	_, err := st.GetConfigObject(context.Background(), config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID)
+	if !errors.Is(err, store.ErrConfigObjectNotFound) {
+		t.Errorf("GetConfigObject error = %v, want ErrConfigObjectNotFound — the failed migration must persist nothing", err)
+	}
+}
+
+// TestSyncFPPEndpointsConfigAuditWriteFailureStartsWithoutMigrating is the
+// regression test for the failure direction this branch shipped backwards
+// in Step 7: an unwritable audit_log made the coordinator exit 1, and
+// because deploy/docker-compose.yml sets restart: unless-stopped, that is
+// a restart loop with no API, no change stream, and no dashboard. It is
+// reachable only on the first boot after an existing deployment upgrades
+// into Step 7, so the operator would read it as the upgrade having broken
+// their coordinator. See migrateFPPEndpointsFromEnv's doc comment for the
+// full argument; the short version is that ADR-024 decision 11's
+// fail-closed rule protects an operator from an unaccountable actor, and
+// this migration has no actor.
+//
+// The three assertions are load-bearing together. Starting proves the
+// direction; returning envEndpoints proves the collector is not silently
+// left with nothing (defect 7's case); and persisting NOTHING is what
+// keeps decision 11 satisfied rather than exempted, which is the whole
+// reason this fix needs no ADR change.
+func TestSyncFPPEndpointsConfigAuditWriteFailureStartsWithoutMigrating(t *testing.T) {
+	st, svc, dir := newTestConfigSyncDepsWithDataDir(t)
+	makeTableUnwritable(t, dir, "audit_log")
+	logger, buf := capturingLogger()
+
+	got, deferred, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, logger)
+	if err != nil {
+		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil — an audit-write failure must not stop the coordinator starting", err)
+	}
+	if !config.FPPEndpointsEqual(got, testEndpoints) {
+		t.Errorf("got = %+v, want %+v — this boot must still collect from every host it collected from before", got, testEndpoints)
+	}
+	if !deferred {
+		t.Error("migrationDeferred = false, want true: the API cannot state a deferral it is never told about, " +
+			"and reports a coordinator nothing has ever configured instead")
+	}
+	assertNoFPPEndpointsConfig(t, st)
+
+	out := buf.String()
+	if !strings.Contains(out, "could not migrate SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("log output = %q, want an ERROR naming the failed migration", out)
+	}
+	// Deliberately NOT "audit entry could not be written": that phrase also
+	// appears in identity.ErrAuditWrite's own text, which the log line
+	// attaches as its error field, so asserting it passed whether or not
+	// the two failure modes were named apart at all. Found by mutating the
+	// cause clause and watching this test stay green — the project's
+	// "a test's name is a claim" rule, applied to a test written in the
+	// same commit as the code it guards.
+	if !strings.Contains(out, "audit entry could not be recorded alongside it") {
+		t.Errorf("log output = %q, want the audit-write failure mode named apart from a plain store failure", out)
+	}
+}
+
+// TestSyncFPPEndpointsConfigRevisionWriteFailureStartsWithoutMigrating is
+// the same direction for the OTHER failure mode identity.AuditedWrite
+// keeps distinguishable: fn's own error, returned unwrapped, meaning the
+// config revision itself could not be written. The argument is identical
+// (a store write failing at boot must not cost the operator the read API
+// either) and only the remedy differs, so only the message does.
+//
+// An earlier version of this test produced its failure by calling
+// migrateFPPEndpointsFromEnv twice, hitting store.ErrConfigRevisionExists.
+// A review pointed out that syncFPPEndpointsConfig only ever calls that
+// function on ErrConfigObjectNotFound, so the state under test was
+// unreachable in production and the test's name named a function it never
+// called. It now goes through syncFPPEndpointsConfig from a genuinely
+// empty store, with config_revisions itself unwritable.
+func TestSyncFPPEndpointsConfigRevisionWriteFailureStartsWithoutMigrating(t *testing.T) {
+	st, svc, dir := newTestConfigSyncDepsWithDataDir(t)
+	makeTableUnwritable(t, dir, "config_revisions")
+	logger, buf := capturingLogger()
+
+	got, deferred, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, logger)
+	if err != nil {
+		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil — a revision-write failure must not stop the coordinator starting", err)
+	}
+	if !config.FPPEndpointsEqual(got, testEndpoints) {
+		t.Errorf("got = %+v, want %+v", got, testEndpoints)
+	}
+	if !deferred {
+		t.Error("migrationDeferred = false, want true")
+	}
+	assertNoFPPEndpointsConfig(t, st)
+
+	// The audit row must not survive its own transaction either. This is
+	// the mirror of the audit-failure case and it is the assertion that
+	// catches decision 11's rule being broken in the other direction: an
+	// audit entry describing a config revision that does not exist.
+	entries, err := svc.ListAudit(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	for _, e := range entries {
+		if e.Action == "config.migrate" {
+			t.Errorf("found a config.migrate audit entry for a migration that did not happen: %+v", e)
+		}
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "config revision itself could not be written") {
+		t.Errorf("log output = %q, want the revision-write failure mode named apart from an audit-write failure", out)
+	}
+	if strings.Contains(out, "may be removed") {
+		t.Errorf("log output = %q, must NOT tell the operator the store is authoritative and the variable may be removed: "+
+			"nothing was migrated", out)
+	}
+	// The deferred state's one destructive trap, asserted on the log line
+	// the operator actually sees: removing SHOWMESH_FPP_ENDPOINTS here
+	// resolves this coordinator to zero endpoints, because the store holds
+	// no copy of the list.
+	if !strings.Contains(out, "DO NOT remove SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("log output = %q, want an explicit warning against removing the variable while the migration is deferred", out)
+	}
+}
+
+// TestSyncFPPEndpointsConfigDeferredMigrationRetriesOnNextBoot proves the
+// self-healing claim migrateFPPEndpointsFromEnv's doc comment rests on. A
+// deferred migration that never completed would be worse than the exit it
+// replaced: the store would stay permanently unconfigured while every log
+// line after the first boot looked fine.
+func TestSyncFPPEndpointsConfigDeferredMigrationRetriesOnNextBoot(t *testing.T) {
+	st, svc, dir := newTestConfigSyncDepsWithDataDir(t)
+	makeTableUnwritable(t, dir, "audit_log")
+
+	_, deferred, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger())
+	if err != nil {
+		t.Fatalf("failed-write boot: syncFPPEndpointsConfig() error = %v, want nil", err)
+	}
+	if !deferred {
+		t.Fatal("failed-write boot: migrationDeferred = false, want true")
+	}
+	assertNoFPPEndpointsConfig(t, st)
+
+	// Next boot, store writable again. Dropping the trigger is exactly
+	// what fixing the data volume does: nothing in the coordinator
+	// changes, and the next start retries the migration.
+	dropTrigger(t, dir, "audit_log_unwritable")
+	got, deferred, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger())
+	if err != nil {
+		t.Fatalf("retry boot: syncFPPEndpointsConfig() error = %v, want nil", err)
+	}
+	if deferred {
+		t.Error("retry boot: migrationDeferred = true, want false — the migration completed, so the API must stop " +
+			"telling the operator not to remove SHOWMESH_FPP_ENDPOINTS")
+	}
+	if !config.FPPEndpointsEqual(got, testEndpoints) {
+		t.Errorf("got = %+v, want %+v", got, testEndpoints)
+	}
+
+	obj, err := st.GetConfigObject(context.Background(), config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID)
+	if err != nil {
+		t.Fatalf("GetConfigObject after retry: %v", err)
+	}
+	if obj.CurrentRevision != 1 {
+		t.Errorf("CurrentRevision = %d, want 1 — the deferred migration must complete on a later boot", obj.CurrentRevision)
+	}
+
+	entries, err := svc.ListAudit(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var migrations int
+	for _, e := range entries {
+		if e.Action == "config.migrate" {
+			migrations++
+		}
+	}
+	if migrations != 1 {
+		t.Errorf("config.migrate audit entries = %d, want exactly 1 — the deferred attempt must leave no entry behind", migrations)
 	}
 }
 
@@ -298,7 +557,7 @@ func TestSyncFPPEndpointsConfigZeroCurrentRevisionStartsWithWarning(t *testing.T
 		t.Fatalf("CreateConfigObject: %v", err)
 	}
 
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, logger)
+	got, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, logger)
 	if err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil (must start, not refuse)", err)
 	}
@@ -321,7 +580,7 @@ func TestSyncFPPEndpointsConfigDanglingRevisionPointerStartsWithWarning(t *testi
 	st, svc := newTestConfigSyncDeps(t)
 	logger, buf := capturingLogger()
 
-	if _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
+	if _, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, testEndpoints, time.Now, discardLogger()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	// Corrupt the pointer directly at the store layer: activate a
@@ -333,7 +592,7 @@ func TestSyncFPPEndpointsConfigDanglingRevisionPointerStartsWithWarning(t *testi
 		t.Fatalf("ActivateConfigRevision(99): %v", err)
 	}
 
-	got, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, logger)
+	got, _, err := syncFPPEndpointsConfig(context.Background(), st, svc, nil, time.Now, logger)
 	if err != nil {
 		t.Fatalf("syncFPPEndpointsConfig() error = %v, want nil (must start, not refuse)", err)
 	}

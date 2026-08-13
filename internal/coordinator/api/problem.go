@@ -268,6 +268,39 @@ func fppEndpointsEnvVarSetProblem() v1.Problem {
 	}
 }
 
+// fppEndpointsMigrationDeferredProblem is [fppEndpointsEnvVarSetProblem]'s
+// remedy corrected for the one state in which that remedy is destructive.
+// Both are the same 409 for the same reason (the variable is set, so a
+// write cannot survive this coordinator's own disagreement rule), and the
+// only difference is what the operator is told to do next.
+//
+// The standard detail says: remove SHOWMESH_FPP_ENDPOINTS, restart once,
+// retry the write. That is safe once the migration has landed, because
+// removing the variable then leaves the migrated store configuration
+// behind. It is NOT safe while the startup migration is deferred
+// (internal/coordinator/configsync.go), because no store configuration
+// exists: removing the variable and restarting resolves this coordinator
+// to ZERO endpoints, and the retried write then fails on the same
+// unwritable store that deferred the migration in the first place. The
+// operator would have followed the API's own written instruction and lost
+// every configured endpoint. A review of the deferral fix caught this;
+// the sequence closes with no mistake at any step.
+func fppEndpointsMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_ENDPOINTS was deferred",
+		Status: http.StatusConflict,
+		Detail: "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
+			"still set in its process environment (RES-008 D1), and on this boot the migration of that variable into " +
+			"this store could not be persisted, so the store holds no fpp.endpoints configuration at all. Do NOT remove " +
+			"SHOWMESH_FPP_ENDPOINTS yet: while the migration is deferred that variable is the only copy of this " +
+			"coordinator's endpoint list, and removing it would resolve this coordinator to zero endpoints on its next " +
+			"restart. Fix the data volume instead (check this coordinator's startup log; usually full, read-only, or a " +
+			"damaged database) and restart — the migration is retried on every start. Once it succeeds, remove the " +
+			"variable, restart once more, and retry this write.",
+	}
+}
+
 // discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
 // [handlers.handleStartDiscoveryRun] refuses a second discovery run while
 // one is already in flight on this coordinator, rather than queuing it —
