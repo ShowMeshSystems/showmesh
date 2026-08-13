@@ -33,6 +33,8 @@ Record xLights and FPP versions and use representative logical-surface layouts, 
 
 The renderer delivery boundary was settled by the project owner on 2026-08-13. It is workflow intent rather than observed FPP Connect behavior, so this record remains L0 until the delivery path is exercised and recorded.
 
+These decisions are recorded as durable constraints in [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md), which also fixes the rule that the reference profile is described as intended rather than supported until this record's bench runs.
+
 ## Decision, fallback, and revalidation
 
 Use FPP Connect to upload the sequence and FSEQ to renderer nodes ahead of playback. The fallback is documented manual export plus direct node upload. Any proposed xLights modification must demonstrate that an external helper cannot provide the same result. Revalidate after material xLights or FPP Connect changes.

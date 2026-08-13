@@ -37,6 +37,8 @@ Broader congestion, packet-loss, link-flap, EDID, and capture-card fault injecti
 
 The transport roles and capability model above were settled by the project owner on 2026-08-13. The owner also reports successful NDI development testing over Wi-Fi; that observation supports the expectation that the intended wired Ethernet path will be at least as robust, but it is not a recorded repository bench and does not raise this record above L0. The reference-path alignment and stability bench remains open.
 
+These decisions are recorded as durable constraints in [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md), which also fixes the rule that the reference profile is described as intended rather than supported until this record's bench runs.
+
 ## Decision, fallback, and revalidation
 
 Use NDI for the v1/reference renderer path and retain HDMI as a supported alternate/fallback. Preserve adapters and capability advertisement for NDI, HDMI, or both. Revalidate an affected profile after material transport runtime, NIC, switch, GPU, capture-card, driver, cabling, or Resolume changes.

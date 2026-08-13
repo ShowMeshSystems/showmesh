@@ -13,7 +13,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-003](RES-003-xlights-fpp-connect-compatibility.md) | xLights/FPP Connect compatibility | planned (renderer delivery decided; integration L0) | high | RES-002 |
 | [RES-004](RES-004-virtual-matrix-renderer-performance.md) | Virtual-matrix renderer performance | planned (reference profile decided; bench L0) | critical | RES-002 |
 | [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | planned (transport roles decided; bench L0) | critical | RES-004, RES-006 |
-| [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (distribution resolved; sender bench L1) | high | — |
+| [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (distribution resolved at L1; sender bench pending) | high | — |
 | [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench, L0) | critical | RES-002 |
 | [RES-008](RES-008-configuration-model.md) | Configuration model | planned (constraint survey L1, re-run 2026-08-13 at schema v6; D1–D6 decided, D1/D2 shipped in Step 7; §4 macro decisions L0) | high | — |
 | [RES-009](RES-009-failure-mode-testing.md) | Failure-mode testing | planned | critical | all records |

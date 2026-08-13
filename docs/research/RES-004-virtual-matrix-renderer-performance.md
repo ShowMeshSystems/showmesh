@@ -42,6 +42,8 @@ Additional logical surfaces, Raspberry Pi 4 / ARM nodes, and HDMI output are lat
 
 The renderer and reference-profile decisions above were settled by the project owner on 2026-08-13. They are architecture intent, not performance evidence, so this record remains L0 until the physical renderer-to-Resolume bench runs.
 
+These decisions are recorded as durable constraints in [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md), which also fixes the rule that the reference profile is described as intended rather than supported until this record's bench runs.
+
 ## Decision, fallback, and revalidation
 
 Implement v1 as `N=1` without embedding that limit into the architecture or data model. An unsupported layout receives an explicit reduced capability profile rather than a best-effort claim. Revalidate a profile after material renderer, driver, kernel, runtime, transport, or hardware changes.

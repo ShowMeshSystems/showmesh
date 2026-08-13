@@ -10,7 +10,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-002](ADR-002-capability-based-nodes.md) | Nodes are modeled by capabilities | Accepted |
 | [ADR-003](ADR-003-desired-and-observed-state.md) | Desired and observed state remain separate | Accepted |
 | [ADR-004](ADR-004-layered-commands-and-fallback.md) | Use primitives, macros, and reduced local fallback | Accepted (narrowed by ADR-016, ADR-019) |
-| [ADR-005](ADR-005-pluggable-media-transport.md) | Media transport is pluggable | Accepted |
+| [ADR-005](ADR-005-pluggable-media-transport.md) | Media transport is pluggable | Accepted (narrowed by ADR-026: NDI named as reference) |
 | [ADR-006](ADR-006-go-implementation-language.md) | Go is the implementation language | Accepted (frontend clause closed by ADR-014, ADR-015) |
 | [ADR-007](ADR-007-gstreamer-media-engine.md) | Node agent supervises GStreamer as media engine | Accepted |
 | [ADR-008](ADR-008-mqtt-control-plane.md) | MQTT is the coordinator↔agent transport | Accepted |
@@ -31,6 +31,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
 | [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted |
 | [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
+| [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
 
 ## Record template
 
