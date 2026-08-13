@@ -25,6 +25,20 @@ Record every one of these with the results. RES-004 and RES-005 both require the
 - GStreamer version, and the NDI plugin's name, version, and origin.
 - Network path: same switch, routed, or wireless. Wired is the acceptance environment per RES-005.
 
+## Operating system
+
+**Debian 13 on the renderer node**, recommended 2026-08-13 and open to being overturned by the packaging check below.
+
+The argument is media-stack friction, since that is what threatens the schedule. RHEL-family distributions do not carry the GStreamer Rust plugin set in their own repositories or in EPEL, so a Rocky node means building the NDI plugin from cargo and then owning that build; RHEL's media stack is also deliberately conservative. Those are the right tradeoffs for a server and the wrong ones for a show appliance that is rebuilt between seasons and has five weeks to work.
+
+Debian is preferred over Ubuntu for reasons that are structural rather than taste. **FPP is Debian-based**, so the nodes match the platform this project already integrates with, and the Step 9 plugin targets that same family. **Raspberry Pi OS is Debian**, so the deferred ARM profile in RES-004 becomes a continuation rather than a second port. And Debian packages the GStreamer Rust plugins while staying current enough for VAAPI on the reference hardware's integrated graphics.
+
+Ubuntu 24.04 LTS is the fallback if a packaging gap appears, and it carries the densest community documentation for NDI on Linux because the OBS and DistroAV ecosystem lives there.
+
+**Check this before committing to it.** Confirm from `apt-cache search` and `gst-inspect-1.0` that the NDI element is actually present and loadable on the distribution you pick. The recommendation above is reasoned from packaging behaviour recalled rather than verified, which is precisely the kind of claim this project requires to be checked against the system's own output before it is built on. Ten minutes now, and record what you find in [RES-006](../research/RES-006-linux-ndi-support.md).
+
+The coordinator is unaffected either way: it ships as a distroless container under [ADR-012](../decisions/ADR-012-docker-coordinator-deployment.md), so this is a node decision and not a fleet decision.
+
 ## Setup
 
 The NDI runtime is **user-installed and never redistributed**, per the standing constraint and [RES-006](../research/RES-006-linux-ndi-support.md). Install it from NDI's own installer on the renderer node, and note the path and the runtime environment variable it wants.

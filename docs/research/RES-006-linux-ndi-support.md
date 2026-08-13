@@ -67,6 +67,18 @@ Desk research 2026-08-10 (official docs + open-source project experience; no SDK
 
 The `arm64` item validates the NDI adapter and runtime path. It does not establish a Raspberry Pi / ARM renderer performance profile, which remains deferred in RES-004.
 
+### Node distribution: Debian 13 recommended, unverified (2026-08-13)
+
+**Recommended and not yet checked**, which is the whole reason it is written here rather than asserted in the architecture. The reasoning is media-stack friction, since that is what threatens the day-0 schedule rather than stability or lifecycle.
+
+RHEL-family distributions do not carry the GStreamer Rust plugin set in their own repositories, and EPEL does not fill the gap, so a Rocky node means building the NDI plugin from cargo and owning that build; the RHEL media stack is also deliberately conservative about codecs. Those are correct tradeoffs for a server and wrong ones for a show appliance rebuilt between seasons.
+
+Debian is preferred over Ubuntu on structural grounds rather than taste. **FPP is Debian-based**, so nodes match the platform this project already integrates with, and Step 9's plugin targets that same family. **Raspberry Pi OS is Debian**, so RES-004's deferred ARM profile becomes a continuation rather than a second port, which also makes open item 2 above cheaper. Ubuntu 24.04 LTS is the fallback if a packaging gap appears, and carries the densest community documentation for NDI on Linux because the OBS and DistroAV ecosystem lives there.
+
+**What must be verified before this is built on**, and it is ten minutes: that the NDI GStreamer element is actually present and loadable on the chosen distribution, confirmed from `apt-cache search` and `gst-inspect-1.0` rather than from recollection of packaging status. That check belongs to the [Track B spike](../bench/TRACK-B-NDI-SPIKE.md), and its result is recorded here. The recommendation above is reasoned from packaging behaviour **recalled rather than observed**, and this project's standing rule is that an external system's behaviour is named only from that system's own output.
+
+The coordinator is unaffected: it ships distroless under [ADR-012](../decisions/ADR-012-docker-coordinator-deployment.md), so this is a node decision rather than a fleet decision.
+
 ## Decision, fallback, and revalidation
 
 Resolved: ShowMesh may vendor the MIT headers but never redistributes the NDI runtime. The NDI adapter dynamically loads a user-installed runtime with `dlopen("libndi.so.6")`, honors `NDI_RUNTIME_DIR_V6`, and degrades gracefully with an installation pointer when the runtime is absent. Required branding attributions remain part of product surfaces. NDI is the v1/reference transport behind the adapter; HDMI/capture remains supported as an alternate/fallback. Revalidate the integration after a material SDK, license, architecture, or Resolume change.
