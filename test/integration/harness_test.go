@@ -257,44 +257,74 @@ func probeBroker(rawURL string, timeout time.Duration) bool {
 func requireBroker(t *testing.T) {
 	t.Helper()
 	if !brokerReachable {
-		skipOrFatalDependency(t, "no MQTT broker reachable at %s (set %s, or run `make test-integration`)", brokerURL, envBrokerURL)
+		skipOrFatalDependency(t, depBroker, "no MQTT broker reachable at %s (set %s, or run `make test-integration`)", brokerURL, envBrokerURL)
 	}
 }
 
-// envRequireTestDeps, when set to a truthy value, turns every dependency
-// skip behind [skipOrFatalDependency] into a hard test failure instead of a
-// skip. docs/build/LESSONS.md: "make test-integration-fpp had been
+// envRequireTestDeps names which dependencies the harness that invoked
+// `go test` actually guarantees, as a comma-separated list of the depXxx
+// constants below (for example "broker" or "broker,fpp"). A dependency
+// guard for something on that list becomes a hard test failure instead of
+// a skip. docs/build/LESSONS.md: "make test-integration-fpp had been
 // silently skipping its main test on every single run since Step 6 landed
 // allow_anonymous false ... a skip *looks* like a considered decision, and
 // a dependency guard is exactly the kind of considered decision a
 // reviewer nods past." Every scripts/test-integration*.sh sets this before
-// invoking `go test`, so a missing dependency under one of the `make
-// test-integration*` targets — whose entire job is to supply that
-// dependency — fails loudly instead of reporting a quiet, green skip. Run
-// by hand with this unset, the skip stays the convenient, laptop-friendly
-// default the Task E spec asks for.
+// invoking `go test`, so a missing dependency under a `make
+// test-integration*` target whose entire job is to supply that dependency
+// fails loudly instead of reporting a quiet, green skip. Run by hand with
+// this unset, the skip stays the convenient, laptop-friendly default.
+//
+// It is a LIST rather than a boolean, and that is the whole point of this
+// second revision: the first one was a plain truthy flag, and CI failed on
+// it immediately. `make test-integration` starts a broker and no fppd, so
+// under a boolean flag it demanded an FPP it never supplies and turned
+// three legitimately-skipping tests into failures. A harness may only be
+// held to the dependencies it actually provides.
+//
+// Worth recording alongside that: this passed locally and failed on CI
+// for the oldest reason in this project. A bench fppd happened to be
+// running on the developer's own localhost:8090, so the FPP guards found a
+// live FPP and never fired. The environment differed from the deployment
+// environment, and the result reported success on exactly that difference.
 const envRequireTestDeps = "SHOWMESH_REQUIRE_TEST_DEPS"
 
-// requireTestDepsSet reports whether envRequireTestDeps is set to a truthy
-// value in this process's environment.
-func requireTestDepsSet() bool {
-	switch strings.ToLower(os.Getenv(envRequireTestDeps)) {
+// Dependency names carried in envRequireTestDeps. Each names something a
+// harness script starts and can therefore be held responsible for.
+const (
+	depBroker = "broker" // a reachable, credentialed MQTT broker
+	depFPP    = "fpp"    // a reachable bench fppd answering /api/fppd/status
+)
+
+// requireTestDep reports whether the harness that invoked this test run
+// declared that it supplies dep. "1"/"true"/"yes"/"all" mean every
+// dependency, so an older or hand-written harness cannot silently weaken
+// the guard by naming nothing.
+func requireTestDep(dep string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(envRequireTestDeps)))
+	switch raw {
 	case "", "0", "false", "no":
 		return false
-	default:
+	case "1", "true", "yes", "all":
 		return true
 	}
+	for _, part := range strings.Split(raw, ",") {
+		if strings.TrimSpace(part) == dep {
+			return true
+		}
+	}
+	return false
 }
 
 // skipOrFatalDependency is what every dependency guard in this package
 // (and, by the identical env var name, internal/coordinator/collector/fpp's
-// own integration_test.go) calls instead of t.Skipf directly: a skip when
-// envRequireTestDeps is unset (the convenient, unprepared-laptop default),
-// a hard t.Fatalf when it is set (a harness whose whole job was to supply
-// this exact dependency, and did not).
-func skipOrFatalDependency(t *testing.T, format string, args ...any) {
+// and fppmqtt's own integration tests) calls instead of t.Skipf directly:
+// a skip when the invoking harness did not claim to supply dep (the
+// convenient, unprepared-laptop default), and a hard t.Fatalf when it did
+// and then failed to.
+func skipOrFatalDependency(t *testing.T, dep string, format string, args ...any) {
 	t.Helper()
-	if requireTestDepsSet() {
+	if requireTestDep(dep) {
 		t.Fatalf(format, args...)
 		return
 	}

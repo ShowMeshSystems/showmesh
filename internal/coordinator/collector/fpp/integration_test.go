@@ -57,43 +57,60 @@ func requireLiveFPP(t *testing.T) string {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		skipOrFatalDependency(t, "no FPP reachable at %s (%v); start bench/fpp-multisync (`make test-integration-fpp` does this) or set %s — skipping", url, err, envTestFPPURL)
+		skipOrFatalDependency(t, depFPP, "no FPP reachable at %s (%v); start bench/fpp-multisync (`make test-integration-fpp` does this) or set %s — skipping", url, err, envTestFPPURL)
 		return ""
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		skipOrFatalDependency(t, "FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
+		skipOrFatalDependency(t, depFPP, "FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
 		return ""
 	}
 	return url
 }
 
-// envRequireTestDeps, when set to a truthy value, turns [skipOrFatalDependency]
-// into a hard test failure rather than a skip. Same env var name (and
-// intent) as test/integration's own copy in harness_test.go — a separate
-// package needs its own copy of this small helper, but both must agree on
-// the variable scripts/test-integration*.sh sets. See that file's fuller
-// doc comment (docs/build/LESSONS.md: "a test that guards on a dependency
-// must fail, not skip, when a harness whose whole job is to supply that
-// dependency is what invoked it").
+// envRequireTestDeps names which dependencies the harness that invoked
+// `go test` actually guarantees, as a comma-separated list (for example
+// "broker" or "broker,fpp"). A guard for a dependency on that list becomes
+// a hard failure instead of a skip; a guard for anything else still skips.
+//
+// It is a LIST rather than a boolean deliberately. The first revision was a
+// truthy flag and CI failed on it at once: `make test-integration` starts a
+// broker and no fppd, so a boolean made it demand an FPP it never supplies
+// and turned three legitimately-skipping tests into failures. A harness may
+// only be held to the dependencies it actually provides. See
+// test/integration/harness_test.go for the full note.
 const envRequireTestDeps = "SHOWMESH_REQUIRE_TEST_DEPS"
 
-func requireTestDepsSet() bool {
-	switch strings.ToLower(os.Getenv(envRequireTestDeps)) {
+// Dependency names carried in envRequireTestDeps.
+const (
+	depBroker = "broker"
+	depFPP    = "fpp"
+)
+
+// requireTestDep reports whether the invoking harness declared that it
+// supplies dep. "1"/"true"/"yes"/"all" mean every dependency, so an older
+// harness cannot silently weaken the guard by naming nothing.
+func requireTestDep(dep string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(envRequireTestDeps)))
+	switch raw {
 	case "", "0", "false", "no":
 		return false
-	default:
+	case "1", "true", "yes", "all":
 		return true
 	}
+	for _, part := range strings.Split(raw, ",") {
+		if strings.TrimSpace(part) == dep {
+			return true
+		}
+	}
+	return false
 }
 
-// skipOrFatalDependency is requireLiveFPP's own dependency guard: a skip
-// when envRequireTestDeps is unset (the convenient, unprepared-laptop
-// default), a hard t.Fatalf when it is set (a `make test-integration-fpp`
-// invocation, whose whole job was to supply this exact FPP, did not).
-func skipOrFatalDependency(t *testing.T, format string, args ...any) {
+// skipOrFatalDependency skips when the invoking harness did not claim to
+// supply dep, and fails hard when it did and then did not.
+func skipOrFatalDependency(t *testing.T, dep string, format string, args ...any) {
 	t.Helper()
-	if requireTestDepsSet() {
+	if requireTestDep(dep) {
 		t.Fatalf(format, args...)
 		return
 	}

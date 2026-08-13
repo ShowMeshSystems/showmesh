@@ -23,7 +23,12 @@ cd "$ROOT_DIR"
 # failed to supply it, which must never read as a quiet, green skip. Run
 # by hand with this unset, the skip stays the convenient default an
 # unprepared laptop gets.
-export SHOWMESH_REQUIRE_TEST_DEPS=true
+# This script starts a broker and NO fppd, so it declares only "broker".
+# A bare "true" here is what broke CI on the first attempt: it made this
+# script demand an FPP it never supplies, turning three legitimately
+# skipping tests into failures. A harness may only be held to what it
+# actually starts.
+export SHOWMESH_REQUIRE_TEST_DEPS=broker
 
 # Pinned to the exact version deploy/docker-compose.yml pins (see that
 # file's `mosquitto.image`), so this suite never silently drifts onto a

@@ -66,12 +66,12 @@ func requireLiveFPP(t *testing.T) string {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		skipOrFatalDependency(t, "no FPP reachable at %s (%v); run `make test-integration-fpp` (starts bench/fpp-multisync's fpp-master) or set %s — skipping", url, err, envTestFPPURL)
+		skipOrFatalDependency(t, depFPP, "no FPP reachable at %s (%v); run `make test-integration-fpp` (starts bench/fpp-multisync's fpp-master) or set %s — skipping", url, err, envTestFPPURL)
 		return ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		skipOrFatalDependency(t, "FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
+		skipOrFatalDependency(t, depFPP, "FPP at %s returned HTTP %d for /api/fppd/status; skipping", url, resp.StatusCode)
 		return ""
 	}
 	return url

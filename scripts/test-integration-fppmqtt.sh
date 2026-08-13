@@ -38,7 +38,8 @@ cd "$ROOT_DIR"
 # supply it, which must never read as a quiet, green skip. Run by hand
 # with this unset, the skip stays the convenient default an unprepared
 # laptop gets.
-export SHOWMESH_REQUIRE_TEST_DEPS=true
+# This script starts a throwaway broker and no fppd.
+export SHOWMESH_REQUIRE_TEST_DEPS=broker
 
 # Pinned to the exact version deploy/docker-compose.yml pins, same as
 # test-integration.sh and test-integration-fpp.sh, so this suite never

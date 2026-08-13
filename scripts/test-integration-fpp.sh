@@ -44,7 +44,9 @@ cd "$ROOT_DIR"
 # must fail, not skip, when a harness whose whole job is to supply that
 # dependency is what invoked it"). Run by hand with this unset, the skip
 # stays the convenient default an unprepared laptop gets.
-export SHOWMESH_REQUIRE_TEST_DEPS=true
+# This script starts BOTH a bench fppd and a throwaway broker, so it is
+# answerable for both: a skip for either is a hard failure here.
+export SHOWMESH_REQUIRE_TEST_DEPS=broker,fpp
 
 COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
 CONTAINER_NAME="showmesh-bench-fpp-master"

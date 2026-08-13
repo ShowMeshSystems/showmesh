@@ -32,6 +32,12 @@ This is the sharpest form of the project's recurring lesson. [A test's name is a
 
 **Rule:** a test that guards on a dependency must fail, not skip, when a harness whose whole job is to supply that dependency is what invoked it. A script that starts a dependency must fail loudly when the dependency does not start. And a suite's skip count is a number somebody has to actually look at.
 
+**The first attempt at that rule was itself wrong, and CI caught it in one push.** The mechanism was a boolean: every `scripts/test-integration*.sh` exported `SHOWMESH_REQUIRE_TEST_DEPS=true`, and any dependency skip became a hard failure. But `make test-integration` starts a broker and no `fppd`, so it began demanding an FPP it never supplies, and three legitimately-skipping tests turned red. The variable now names which dependencies the invoking harness actually guarantees (`broker`, or `broker,fpp`), and a guard is fatal only for a dependency on that list.
+
+**Why it passed locally and failed on CI is the oldest lesson in this file.** A bench `fppd` happened to be running on the developer's own `localhost:8090`, left over from earlier work, so the FPP guards found a live FPP and never fired at all. [A test environment that differs from the deployment environment reports success on exactly that difference](#a-test-environment-that-differs-from-the-deployment-environment-reports-success-on-exactly-that-difference), and here the difference was a stray container.
+
+**Rule:** a harness may only be held to the dependencies it actually starts. And when you change skip behaviour, verify it by *removing* the dependency, not by running where it happens to be present.
+
 ## An unbounded write on a failure path evicts the evidence it exists to preserve
 
 **Step 7, seam 0.** The credential-resolution failure path wrote an audit row on **every request on every route**, with no bound. A single browser holding a stale session cookie therefore generated a steady stream of rows that quietly pushed genuine attribution history out through retention.
