@@ -39,7 +39,7 @@ Two consequences worth stating before anyone re-derives them:
 
 - **Where the FSEQ comes from, and how the node knows it is current.** RES-003 settles that FPP Connect uploads ahead of playback. What that leaves open is detection: a node holding last week's FSEQ, or no FSEQ, is invisible at playback time and shows up as a wrong or black surface. This is a readiness signal that does not exist yet and is a direct consequence of ADR-026 decision 2.
 - **What a surface does when sync goes away.** `pkg/multisync`'s timeline already free-runs through silence and transitions to `unsynchronized` after a defined interval. What the *output* does at that point is a product decision: hold the last frame, go black, or show a diagnostic. Resolume's own timecode-loss behaviour is undocumented and only forum-reported as holding the last frame (RES-001), so ShowMesh should not assume the downstream does anything sensible.
-- **Whether ShowMesh controls Resolume at all for day-0.** It does not have to. Resolume can hold a composition that displays the NDI input while the operator does mapping by hand. Clip launch, timecode, and the Resolume adapter are RES-001 and are **recommended out of day-0 scope**, because they add an integration with L0 fault behaviour to a track that already carries the project's largest unknown.
+- **Where Track B ends and [Track D](TRACK-D-resolume.md) begins.** Resolume control *is* day-0, decided by the owner on 2026-08-13, and it is one of the three founding reasons for the project. It lives in Track D rather than here. The boundary: **Track B's job finishes when frames arrive in Resolume as a usable NDI source.** What Resolume then does with them, and how it is triggered and follows timecode, is Track D. Getting that boundary wrong means two tracks both half-owning the adapter.
 - **The operating system**, recommended as Debian 13 in the spike document, pending the packaging check there.
 
 ## Acceptance criteria
@@ -53,4 +53,4 @@ Two consequences worth stating before anyone re-derives them:
 
 **Bound by:** ADR-002, ADR-007, ADR-008, ADR-011, ADR-013, ADR-026, and above all the standing constraint that the coordinator is never in the timing or media path. The node renders; the coordinator watches.
 
-**Out of scope:** the Resolume adapter and clip launch (RES-001), audio of any kind (Track C), HDMI output profiles, multiple surfaces per node, ARM hardware, and the preview wall (RES-010, cut from day-0).
+**Out of scope:** the Resolume adapter, clip launch, and timecode, all of which are day-0 but belong to [Track D](TRACK-D-resolume.md); audio of any kind (Track C); HDMI output profiles; multiple surfaces per node; ARM hardware; and the preview wall (RES-010, cut from day-0).

@@ -4,6 +4,10 @@
 
 Status: planned (bench) · Risk: critical · Verification: L1 (capabilities) — source verified 2026-08-10; fault behavior remains L0
 
+**This record is day-0 scope as of 2026-08-13**, promoted from "not sequenced". Controlling Resolume is one of the three founding problems ShowMesh exists to solve, alongside virtual-matrix generation and FPP's scheduler, so it cannot be cut to make a date. Its bench work leads [Track D](../build/TRACK-D-resolume.md), because the adapter's error handling would otherwise be a design against behaviour nobody has observed.
+
+**The timecode chain runs through the audio node**, which is easy to miss: Arena accepts SMPTE only as audio LTC, so the signal originates on the [Track C](../build/TRACK-C-audio-node.md) node's discrete output and reaches Resolume over a physical cable. That makes the audio interface's output addressing a prerequisite for this record's bench, and it means ShowMesh cannot observe the cable in the middle. Confirmation must rest on Resolume's own reported state, never on LTC having been generated.
+
 ## Decision to make
 
 Determine whether Resolume can reliably follow the proposed LTC/SMPTE source through normal playback and timing faults, and define the supported timecode topology.

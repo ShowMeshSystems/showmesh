@@ -8,6 +8,8 @@ Status: not started. Specified 2026-08-13. Interface purchased the same day.
 
 ShowMesh owns audience-facing audio: a node plays show audio and background music on its own clock, generates LTC on a discrete output in the same clock domain, and fails silent when the device goes away.
 
+**This track is also Resolume's timecode source, which makes it more critical than "audio" suggests.** Resolume Arena accepts SMPTE only as audio LTC, so [Track D](TRACK-D-resolume.md) follows the show by way of this node's output 3, over a physical cable into the Resolume machine. If the output-addressing check below fails, both tracks fail together.
+
 ## Start here, before any engine work
 
 **Confirm output 3 on the Behringer U-Phoria UMC204HD is independently addressable and not a mirror of outputs 1 and 2.**

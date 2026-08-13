@@ -26,7 +26,15 @@ Added 2026-08-13, when the owner supplied dates and scope that the numbered step
 | **17 October 2026** | Halloween show opens. |
 | **31 October 2026** | Halloween. |
 
-**Scope at day-0 is the whole show**, not an FPP slice: FPP control, audio, media and projection. Two items are the reason the project exists and cannot be cut. **Show macros** answer one of the biggest complaints about FPP that ShowMesh was started to address. **ShowMesh driving projection** is the second: projection did not work on Raspberry Pis last season, which is why the node work matters as much as the coordinator work.
+**Scope at day-0 is the whole show**, not an FPP slice: FPP control, audio, media, projection, and Resolume.
+
+**Three founding problems, recorded 2026-08-13 because they decide what may be cut.** ShowMesh exists because three separate things went wrong last season and all pointed the same way.
+
+1. **Generating virtual matrix data did not work**, which is why there is a video node. Track B.
+2. **Controlling Resolume did not work**, which is why LTC and the Resolume API and OSC are in scope. Track D.
+3. **FPP's scheduler was the wrong tool**, which is why macros and commands exist. Track A.
+
+Each one alone is a reason this project was started, so **none of the three may be cut to make a date.** What made ShowMesh a system rather than three workarounds was noticing that all three were the same problem, and bringing the whole media path in. Anything else is negotiable; these are not.
 
 ### The tracks
 
@@ -35,7 +43,8 @@ Four tracks run in parallel. They are independent enough to build simultaneously
 - **Track A, FPP control.** Step 8 then Step 9. Sequential within itself. Specified.
 - **[Track B, nodes and projection](TRACK-B-nodes-and-projection.md).** The node agent is a stub today, so this starts close to zero: a real agent, GStreamer pipeline supervision, local FSEQ virtual-matrix extraction, NDI output, into Resolume. Governed by [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md). **The largest and riskiest track**, and the one carrying reason two for the project. Opens with the transport spike in [`docs/bench/TRACK-B-NDI-SPIKE.md`](../bench/TRACK-B-NDI-SPIKE.md).
 - **[Track C, audio node](TRACK-C-audio-node.md).** The interface is purchased (Behringer U-Phoria UMC204HD, 2026-08-13). Design work can start now; the first bench action is the twenty-minute output-addressing check recorded in [RES-007](../research/RES-007-audio-node-architecture.md), because if outputs 3/4 mirror 1/2 then [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) is violated inaudibly and the interface is the wrong one.
-- **[Track D, projector power](TRACK-D-projector-power.md).** `pkg/pjlink` and the first control provider under [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md), needed if a showtime macro turns projectors on. Smallest track.
+- **[Track D, Resolume control and timecode](TRACK-D-resolume.md).** The Resolume adapter over REST, WebSocket and OSC, plus the LTC timecode path. **Day-0**, promoted 2026-08-13. Its timecode arrives as audio LTC over a physical cable from Track C, which puts Track C on this track's critical path.
+- **Projector power is out.** It stays on Home Assistant and Node-RED, driven by MQTT the way it was from FPP. ShowMesh supplies an arbitrary MQTT publish step type in Step 9 instead, which is deliberately unconfirmable and must say so. `pkg/pjlink` and ADR-016's provider model are deferred, not cancelled.
 
 ### The dependency that will bite, and how it is handled
 
@@ -527,6 +536,9 @@ This is the shape the project has used before: Step 7 shipped the safe direction
 - **ADR-004's reduced local fallback, defined per critical macro**, with any step touching a coordinator-hosted provider labelled coordinator-required per [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md).
 - **[ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7's fallback trigger, discharged.** A `401` or `403` from a healthy coordinator fires no ADR-004 fallback, because a fallback detects a transport failure and an authorization refusal is a successful conversation. So the first macro definition must specify behaviour for a refusal, the node policy must treat it as coordinator-unavailable-to-this-caller, and it must be distinguishable in evidence from a network fault. This obligation has been outstanding since Step 7 and attaches here by name.
 - **The FPP plugin**, per RES-015. That record establishes on two independent grounds that FPP's native command mechanism cannot discharge decision 7, so there is no version of this step that does not ship ShowMesh-authored code onto an FPP host.
+- **An arbitrary MQTT publish step type**, added 2026-08-13 when the owner cut projector control from day-0. A macro step publishes an operator-authored payload to an operator-authored topic, so Home Assistant and Node-RED keep driving the projectors exactly as they did from FPP. This replaces `pkg/pjlink` and the ADR-016 provider model for day-0 and buys back the time both would have cost.
+
+  **This step type cannot be confirmed, and that must be stated rather than hidden.** ShowMesh publishes and observes nothing back: there is no evidence the message was acted on, so [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) confirmation is unavailable rather than merely slow. It reports as unconfirmable with a reason from [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md)'s vocabulary, never as success, because **a macro step that always reports success is worse than no step at all**: the operator stops reading it, and then it is silently useless on the night it matters. It is also the one step type that deliberately fails Step 8's rule about only shipping commands whose effect is visible, which is why it is called out here rather than slipped in.
 
 ### Developed against the container, by owner's decision 2026-08-13
 

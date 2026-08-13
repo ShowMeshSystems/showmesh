@@ -79,6 +79,8 @@ Debian is preferred over Ubuntu on structural grounds rather than taste. **FPP i
 
 The coordinator is unaffected: it ships distroless under [ADR-012](../decisions/ADR-012-docker-coordinator-deployment.md), so this is a node decision rather than a fleet decision.
 
+**Debian 13 is primary; Ubuntu is a supported release target.** Owner's decision 2026-08-13. The reference installation runs Debian, and that is what gets built and tested against first. **Ubuntu must also work by release**, because it is where most people adopting this will be comfortable, and a node distribution that only ever ran on the maintainer's choice is a distribution nobody else can use. That makes Ubuntu a second validation target rather than a second first-class platform: it does not gate day-0, and it does gate calling this releasable. Both belong in RES-006's open items once the packaging check confirms what each one actually ships.
+
 ## Decision, fallback, and revalidation
 
 Resolved: ShowMesh may vendor the MIT headers but never redistributes the NDI runtime. The NDI adapter dynamically loads a user-installed runtime with `dlopen("libndi.so.6")`, honors `NDI_RUNTIME_DIR_V6`, and degrades gracefully with an installation pointer when the runtime is absent. Required branding attributions remain part of product surfaces. NDI is the v1/reference transport behind the adapter; HDMI/capture remains supported as an alternate/fallback. Revalidate the integration after a material SDK, license, architecture, or Resolume change.
