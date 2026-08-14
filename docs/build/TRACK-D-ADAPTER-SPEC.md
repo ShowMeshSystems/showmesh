@@ -254,7 +254,34 @@ of the intent, and what the adapter still owes:
   already reads. This is the only surviving form of the page race and it is now
   cheap, because §3.3 means the action itself was never deck-dependent.
 
-### 3.9 With ShowMesh stopped, Resolume keeps doing what it was doing
+### 3.9 Every Resolume action is `coordinator-required`, and the macro definition must say so
+
+**Added after review, and it was missing from the first version of this
+specification.**
+
+[ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md)
+requires the `coordinator-required` label on any macro step touching a
+coordinator-hosted provider, and CLAUDE.md carries it as standing constraint 17.
+The Resolume adapter is coordinator-hosted, Resolume holds no fallback of its own,
+and the composition is reachable **only** through the coordinator's network path.
+So the label applies to every action in §6 without exception.
+
+[Step 9's specification](STEP-9-SPEC.md) already models this: `localFallback`
+carries a `class` of `coordinator-required` with a reason, and a step with no
+`localFallback` is rejected. **Nothing new is built here.** What this section fixes
+is that the Resolume action vocabulary must *declare* the class rather than leaving
+a macro author to supply it per step, because an author who forgets produces a
+macro that is silently wrong about what happens during a coordinator outage.
+
+**This is not the same claim as §3.10 and the two must not be conflated.** §3.10 is
+about a show that is already running. This is about a lifecycle *transition* that
+depends on ShowMesh, which will not happen at all if the coordinator is down. ADR-016
+states the distinction in its own consequences and it is the distinction Track D's
+`Blackout` case turns on: **the wall keeps showing whatever it was showing, and
+ShowMesh cannot black it out.** An operator procedure has to exist for that, and it
+is Resolume's own interface.
+
+### 3.10 With ShowMesh stopped, Resolume keeps doing what it was doing
 
 Free, and stated so it is checked rather than assumed. The adapter is not in the
 frame path, holds no lock, and drives nothing continuously. **Killing the
@@ -321,6 +348,9 @@ Two rules carried from ADR-020 and from Step 3's review:
 Logical actions per [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md).
 Every one takes a ShowMesh reference that resolves to a Resolume object id; **no
 macro ever contains a Resolume path or id.**
+
+**Every action below declares `localFallback.class = "coordinator-required"`**
+per §3.9. The vocabulary supplies it; a macro author never has to know.
 
 | Action | Call | Confirming evidence |
 |---|---|---|
@@ -474,6 +504,12 @@ suite. Track D's own criteria are marked with which are in scope here.
    [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md).
 8. **With the coordinator stopped mid-clip, Resolume keeps playing.** *(Track D,
    and standing constraint 6.)*
+9. **Every action reports `localFallback.class = "coordinator-required"`**, and a
+   macro step built on one carries that label without the author supplying it
+   (§3.9). The paired demonstration is the one that matters: with the coordinator
+   stopped, `blackout` does not run and the wall keeps showing what it was showing.
+   That is correct behaviour and it must be stated in the macro definition rather
+   than discovered during a show.
 
 Deferred to D0 and explicitly not claimed by this step: timecode loss producing a
 defined operator-visible response, and RES-001's test matrix moving off L0.
@@ -494,8 +530,27 @@ Answer before or during the build; none of them blocks starting.
   evidence.
 - **How does this adapter relate to
   [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md)'s
-  provider model?** Resolume has no agent, no advertisement and no LWT, which fits
-  the controlled-device class, but the provider model is deferred and
-  [RES-014](../research/RES-014-control-provider-model.md) is unresearched. This
-  specification treats Resolume as an ADR-029 integration target with a
-  purpose-built adapter, which is the smaller commitment and is reversible.
+  provider model?** Resolume has no agent, no advertisement and no LWT, which is
+  exactly the controlled-device class. What ADR-016 additionally commits to is the
+  **provider**: a driver declaring its configuration, actions and telemetry as
+  metadata, from which operator surfaces are *generated* rather than written.
+
+  That half is unproven. [RES-014](../research/RES-014-control-provider-model.md) is
+  **L0 with no evidence**, its own text warns that self-describing metadata driving
+  generated forms "has a long history of collapsing back into per-device components
+  once real devices arrive", and its acceptance criteria need three dissimilar
+  providers against one unchanged interface. **None of the three exists**: `pkg/pjlink`
+  is deferred and projector power moved to Home Assistant and Node-RED, so ADR-016's
+  intended first implementation is not being built before day-0.
+
+  So this specification treats Resolume as an **ADR-029 integration target with a
+  purpose-built adapter**. The reasoning is that ADR-016's generated-surface payoff
+  is for the case of many similar devices from different vendors, and there is one
+  Resolume; making it the first test of an unproven abstraction puts that risk on
+  the day-0 critical path. If RES-014 later succeeds, Resolume becomes a provider
+  then. The reverse is harder, which is why this is the reversible direction.
+
+  **What is not optional either way is §3.9's `coordinator-required` labelling**,
+  which ADR-016 imposes on any coordinator-hosted provider and which this
+  specification originally omitted. The model choice is open; that obligation is
+  not.
