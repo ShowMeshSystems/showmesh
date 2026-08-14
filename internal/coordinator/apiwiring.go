@@ -496,8 +496,34 @@ type fppRunnerNudger struct {
 	runner *collector.Runner
 }
 
+// Both interfaces are asserted at compile time, and the second one is the
+// reason this pair exists. api.FPPPollNudgeWindower is consumed through an
+// optional type assertion, so a missing method degrades to "no reservation
+// available" rather than to a build failure. Asserting it here converts that
+// silence back into a compile error, which is the only place it can be
+// caught: nothing at run time distinguishes "this adapter does not implement
+// the interface" from "a nudge is not currently available".
+var (
+	_ api.FPPPollNudger        = fppRunnerNudger{}
+	_ api.FPPPollNudgeWindower = fppRunnerNudger{}
+)
+
 func (n fppRunnerNudger) NudgePoll(instanceID string) bool {
 	return n.runner.Nudge(instanceID)
+}
+
+// NextNudgeAt satisfies api.FPPPollNudgeWindower, the optional interface
+// FPPCommandDispatcher.NextNudgeAt type-asserts for. Without this method the
+// assertion fails, the dispatcher reports no reservation, and the macro
+// executor falls back to waiting out the collector's ordinary cadence on
+// every same-instance step. That failure is silent and it is invisible to
+// the test suite, because the dispatcher's own tests wire a stub that does
+// implement the method: the production adapter is the only implementation
+// that would have been missing it. This project has shipped that exact shape
+// before, three times in Step 6, where a capability compiled, passed its
+// tests, and could not be reached by anything.
+func (n fppRunnerNudger) NextNudgeAt(instanceID string) (time.Time, bool) {
+	return n.runner.NextNudgeAt(instanceID)
 }
 
 // --- collector.Sink over *store.Store, poking the SSE hub ---

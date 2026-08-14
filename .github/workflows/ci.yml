@@ -135,6 +135,35 @@ jobs:
       - name: Integration tests (FPP MQTT collector against a real broker)
         run: make test-integration-fppmqtt
 
+  integration-broker:
+    runs-on: ubuntu-latest
+    # internal/coordinator/broker's own retained-message trap and its
+    # reconnect-resubscribe behavior (see
+    # internal/coordinator/broker/response_integration_test.go) are proved
+    # only against a real broker. Review finding 5 on commit 9dcab74 found
+    # this suite existed and ran nowhere: not in `make check`, not in any
+    # script, not in CI — a separate job from `integration`/
+    # `integration-fppmqtt` for the same reason those are split from `test`:
+    # a broker or wiring problem here should be distinguishable from either
+    # at a glance. One of this suite's own tests kills and restarts a real
+    # broker container mid-test, so this job's timeout is wider than the
+    # other two integration jobs.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ubuntu-latest ships Docker already, usable without sudo. Unlike
+      # `integration`/`integration-fppmqtt`, this suite manages its own
+      # throwaway Mosquitto container(s) per test rather than the script
+      # starting one up front — see scripts/test-integration-broker.sh.
+      - name: Integration tests (broker package against real Mosquitto, including a mid-wait restart)
+        run: make test-integration-broker
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10

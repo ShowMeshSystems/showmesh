@@ -17,8 +17,10 @@ import (
 // the process handling it stopped existing before it could finish —
 // coordinator restart, a kill -9, or (before this review pass fixed it)
 // defect 4's own context-cancellation bug — carried outcome_state and
-// outcome_reason as permanent empty strings. handleFPPCommandReplay emits
-// them as "", openapi.yaml declared outcomeState a bare, unconstrained
+// outcome_reason as permanent empty strings. The replay path (Step 9:
+// [handlers.resolveFPPCommandReplay] in fppcommand_dispatch.go, formerly
+// handleFPPCommandReplay in this file's own sibling) emits them as "",
+// openapi.yaml declared outcomeState a bare, unconstrained
 // string so no conformance check could catch a blank one, the UI rendered
 // "Pending: this command has not yet resolved" forever, and the CLI
 // printed "pending: ... (state )" forever, for a command that would never
@@ -54,8 +56,9 @@ import (
 // package calls it anywhere else, and nothing should.
 //
 // This is also what keeps the ONE deliberately accepted blank —
-// handleFPPCommandReplay's narrow concurrent-insert race, where Outcome is
-// legitimately "" for the instant before the winning request finishes —
+// [handlers.resolveFPPCommandReplay]'s narrow concurrent-insert race, where
+// Outcome is legitimately "" for the instant before the winning request
+// finishes —
 // distinguishable from PERMANENT blankness: after this sweep has run, any
 // row still unresolved is, by construction, being handled by a live
 // request in THIS process (which will resolve it within

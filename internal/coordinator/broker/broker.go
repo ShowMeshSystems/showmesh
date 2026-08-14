@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -222,15 +223,42 @@ type BrokerState struct {
 	RejectReason     string
 }
 
+// mqttClient is the subset of *autopaho.ConnectionManager's method set the
+// broker package depends on: outbound publish, dynamic subscribe and
+// unsubscribe for response waiters (see response.go), the liveness probe,
+// and clean shutdown. Extracting it — the same technique [subscriber]
+// already uses for subscribeAll — is what lets response_test.go exercise
+// Publish and AwaitResponse against a fake in-process implementation
+// instead of a real broker connection; *autopaho.ConnectionManager
+// satisfies it without any adaptation, so production wiring is unchanged.
+type mqttClient interface {
+	Publish(ctx context.Context, p *paho.Publish) (*paho.PublishResponse, error)
+	Subscribe(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error)
+	Unsubscribe(ctx context.Context, u *paho.Unsubscribe) (*paho.Unsuback, error)
+	AwaitConnection(ctx context.Context) error
+	Disconnect(ctx context.Context) error
+}
+
 // BrokerManager owns the coordinator's connection to the MQTT broker.
 //
 // Per ADR-008, broker loss is a management-plane outage only: a running
 // show must survive it, and so must the coordinator process. BrokerManager
 // never blocks startup on a successful connection and never causes the
 // coordinator to exit because the broker is unreachable — the underlying
-// autopaho connection manager retries forever with backoff.
+// autopaho connection manager retries forever with backoff. The same rule
+// governs [BrokerManager.Publish] and [BrokerManager.AwaitResponse]: with no
+// broker, each fails the one operation attempted rather than blocking or
+// panicking (see response.go).
 type BrokerManager struct {
-	cm *autopaho.ConnectionManager
+	cm mqttClient
+
+	// logger is used by response.go's best-effort housekeeping (an
+	// unsubscribe issued after the last response waiter on a topic
+	// releases — see releaseResponseWaiter) that has no caller to return an
+	// error to. Falls back to slog.Default() via [BrokerManager.log] when
+	// unset, which happens for BrokerManager values built directly in
+	// tests rather than through [NewBrokerManager].
+	logger *slog.Logger
 
 	// now is the clock BrokerManager uses to stamp BrokerState. It is a
 	// field (rather than a direct time.Now call) so tests can drive state
@@ -240,7 +268,134 @@ type BrokerManager struct {
 	mu    sync.Mutex
 	state BrokerState
 
+	// respMu guards respTopics, respTopicLocks and nextWaiterID: the
+	// response-waiter registry response.go's AwaitResponse machinery uses.
+	// Deliberately a separate lock from mu (BrokerState's), so a burst of
+	// MQTT response step traffic can never contend with, or be blocked by,
+	// BrokerState reads/writes on the readiness path.
+	respMu       sync.Mutex
+	respTopics   map[string]*responseTopicState
+	nextWaiterID atomic.Uint64
+
+	// respTopicLocks holds one *sync.Mutex per response topic ever
+	// registered, returned by topicLock (below) and held by
+	// registerResponseWaiter/releaseResponseWaiter (response.go) across
+	// their network SUBSCRIBE/UNSUBSCRIBE calls — see topicLock's doc
+	// comment for why this has to live here, outside responseTopicState
+	// itself, and review finding 3 on commit 9dcab74 for the race this
+	// closes.
+	//
+	// Entries are deliberately never removed: response topics come from
+	// operator-authored show macro definitions (STEP-9-SPEC.md §7), not
+	// arbitrary or attacker-controlled input, so the set of distinct topics
+	// this map ever holds is bounded by the deployment's own configuration
+	// — the same reasoning [Registry]'s own map (registry.go), which also
+	// never shrinks, already relies on. This is not the unbounded,
+	// caller-triggerable growth LESSONS.md's "unbounded write on a failure
+	// path" rule warns about.
+	respTopicLocks map[string]*sync.Mutex
+
+	// fixedSubs is the subscription set passed to NewBrokerManager: the
+	// coordinator's own long-lived subscriptions (inventory's hello/lwt
+	// filters), which do not change for the life of the process. Read by
+	// subscriptionsToResubscribe on every (re)connection; never mutated
+	// after NewBrokerManager returns, so it needs no lock of its own.
+	fixedSubs []Subscription
+
 	wg sync.WaitGroup
+}
+
+// subscriptionsToResubscribe computes the complete MQTT SUBSCRIBE set to
+// send on every (re)connection: fixedSubs plus every response topic that
+// currently has at least one live waiter (see registerResponseWaiter in
+// response.go), read fresh at call time rather than captured once.
+//
+// This distinction matters because a response waiter's subscription is
+// scoped to one in-flight AwaitResponse call, not to the broker connection's
+// own lifetime: a waiter can be registered, and a reconnect can happen,
+// entirely independently of each other. Before this method existed,
+// OnConnectionUp resent only the construction-time fixed slice, so a broker
+// outage during an active AwaitResponse call silently dropped that
+// subscription — the external responder's eventual answer would then arrive
+// at the broker with nowhere registered to route it to, and the waiter
+// would run out its full deadline having genuinely never had a chance to
+// see it, indistinguishable on the wire from a responder that never
+// answered at all.
+//
+// A topic present in both sets is only sent once, at the fixed set's QoS:
+// resubscribing a topic filter you already hold is a harmless, idempotent
+// refresh, but sending it twice in the same SUBSCRIBE packet is needless.
+func (b *BrokerManager) subscriptionsToResubscribe() []paho.SubscribeOptions {
+	opts := subscriptionsToOptions(b.fixedSubs)
+	seen := make(map[string]bool, len(opts))
+	for _, o := range opts {
+		seen[o.Topic] = true
+	}
+
+	b.respMu.Lock()
+	defer b.respMu.Unlock()
+	for topic, state := range b.respTopics {
+		if seen[topic] {
+			continue
+		}
+		opts = append(opts, paho.SubscribeOptions{
+			Topic: topic,
+			QoS:   state.qos,
+			// Left false for the same reason subscriptionsToOptions and
+			// registerResponseWaiter both already document: RETAIN=1 must
+			// only ever mean "replayed from the retained store", for the
+			// lifetime of this subscription including across a reconnect
+			// that resubscribes it here.
+			RetainAsPublished: false,
+			// RetainHandling deliberately left at its zero value — see
+			// registerResponseWaiter's own SubscribeOptions in response.go
+			// for why review finding 2's optional RetainHandling=2
+			// hardening is not applied here either.
+		})
+		seen[topic] = true
+	}
+	return opts
+}
+
+// topicLock returns the *sync.Mutex serializing every network
+// SUBSCRIBE/UNSUBSCRIBE call response.go's registerResponseWaiter and
+// releaseResponseWaiter issue for topic, creating it on first use.
+//
+// This has to be a mutex keyed by the topic STRING, held independently of
+// any particular [responseTopicState] value, because responseTopicState
+// itself is deleted from respTopics and recreated across a topic's
+// subscribe/unsubscribe lifecycle (see releaseResponseWaiter and
+// registerResponseWaiter): a mutex embedded in that struct would be a new,
+// unrelated lock on every recreation and would serialize nothing across the
+// boundary where the race actually lives. Returning the SAME *sync.Mutex
+// instance across however many times a topic's responseTopicState has been
+// created and deleted is what lets a releaseResponseWaiter's in-flight
+// UNSUBSCRIBE and a concurrent registerResponseWaiter's SUBSCRIBE for the
+// identical topic string actually exclude each other — see review finding
+// 3 on commit 9dcab74 and response.go's own doc comments on both functions
+// for the full race this closes.
+func (b *BrokerManager) topicLock(topic string) *sync.Mutex {
+	b.respMu.Lock()
+	defer b.respMu.Unlock()
+	if b.respTopicLocks == nil {
+		b.respTopicLocks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := b.respTopicLocks[topic]
+	if !ok {
+		mu = &sync.Mutex{}
+		b.respTopicLocks[topic] = mu
+	}
+	return mu
+}
+
+// log returns the logger response.go's housekeeping paths use, falling back
+// to slog.Default() for a BrokerManager built directly (e.g. in a test)
+// rather than through [NewBrokerManager].
+func (b *BrokerManager) log() *slog.Logger {
+	if b.logger != nil {
+		return b.logger
+	}
+	return slog.Default()
 }
 
 // NewBrokerManager begins connecting to cfg.MQTTBroker in the background and
@@ -270,11 +425,31 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, fmt.Errorf("parsing mqtt broker url %q: %w", cfg.MQTTBroker, err)
 	}
 
-	bm := &BrokerManager{now: time.Now}
+	bm := &BrokerManager{now: time.Now, logger: logger}
 	initAt := bm.now()
 	bm.state = BrokerState{Connected: false, Since: initAt, ObservedAt: initAt}
 
-	subscribeOpts := subscriptionsToOptions(subs)
+	// fixedSubs is copied rather than aliasing the caller's slice: nothing
+	// today mutates it after this call, but subscriptionsToResubscribe reads
+	// it on every reconnect for the life of the process, and a caller
+	// reusing or mutating its own backing array later must not be able to
+	// change what gets resubscribed.
+	bm.fixedSubs = append([]Subscription(nil), subs...)
+
+	// combinedHandler is the ONE process-wide OnPublishReceived callback
+	// slot (see MessageHandler's doc comment): it fans every inbound
+	// publish out to the caller-supplied handler unchanged, exactly as
+	// before this field existed, and also to response.go's waiter registry
+	// (dispatchToWaiters), so a second consumer of inbound messages never
+	// needs — and must never claim — a second slot of its own. handler
+	// runs first and unconditionally, so an AwaitResponse caller can never
+	// alter what the original subscriber sees.
+	combinedHandler := func(m Message) {
+		if handler != nil {
+			handler(m)
+		}
+		bm.dispatchToWaiters(m)
+	}
 
 	clientCfg := autopaho.ClientConfig{
 		ServerUrls: []*url.URL{serverURL},
@@ -295,8 +470,12 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 			logger.Info("mqtt broker connection up", "broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID)
 			// Re-subscribing here, unconditionally, on every call (including
 			// every reconnect) is what makes a subscription survive a broker
-			// restart; see subscribeAll's doc comment.
-			subscribeAll(ctx, cm, subscribeOpts, logger)
+			// restart; see subscribeAll's doc comment. The set is computed
+			// fresh on every call via subscriptionsToResubscribe, not
+			// captured once at construction, so a response waiter that is
+			// live right now (rather than at NewBrokerManager time) also
+			// survives the reconnect — see that method's doc comment.
+			subscribeAll(ctx, cm, bm.subscriptionsToResubscribe(), logger)
 		},
 		OnConnectionDown: func() bool {
 			bm.setConnected(false)
@@ -327,7 +506,7 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID:          cfg.MQTTClientID,
-			OnPublishReceived: []func(paho.PublishReceived) (bool, error){newPublishReceivedHandler(handler)},
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){newPublishReceivedHandler(combinedHandler)},
 		},
 	}
 

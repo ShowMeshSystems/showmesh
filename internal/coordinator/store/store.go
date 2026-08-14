@@ -141,6 +141,19 @@ type Store struct {
 	maxDiscoveryRunRows          int64
 	discoveryRunInsertCount      atomic.Int64
 	lastDiscoveryRunPruneAtNanos atomic.Int64
+
+	// maxMacroRunAge, maxMacroRunRows, macroRunInsertCount, and
+	// lastMacroRunPruneAtNanos are macro_runs.go's counterpart to the
+	// commands fields above, applied to the macro_runs table (schemaV7,
+	// Step 9 Wave 1a) — see retention.go's DefaultMaxMacroRunAge/
+	// DefaultMaxMacroRunRows doc comment. Pruning a macro_runs row cascades
+	// (ON DELETE CASCADE, schemaV7) to its macro_run_steps rows; there is
+	// no separate counter for macro_run_steps because nothing prunes that
+	// table directly.
+	maxMacroRunAge           time.Duration
+	maxMacroRunRows          int64
+	macroRunInsertCount      atomic.Int64
+	lastMacroRunPruneAtNanos atomic.Int64
 }
 
 // Open opens (creating if necessary) the SQLite database under dataDir,
@@ -249,6 +262,8 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() t
 		maxCommandRows:      cfg.maxCommandRows,
 		maxDiscoveryRunAge:  cfg.maxDiscoveryRunAge,
 		maxDiscoveryRunRows: cfg.maxDiscoveryRunRows,
+		maxMacroRunAge:      cfg.maxMacroRunAge,
+		maxMacroRunRows:     cfg.maxMacroRunRows,
 	}, nil
 }
 

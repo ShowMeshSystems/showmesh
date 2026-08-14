@@ -459,6 +459,128 @@ func TestSubscribeAllLogsAndDoesNotPanicOnSubscribeError(t *testing.T) {
 	}
 }
 
+// --- subscriptionsToResubscribe: fixed set + live response waiters ---
+
+func TestSubscriptionsToResubscribeIncludesOnlyFixedSetWithNoWaiters(t *testing.T) {
+	bm := &BrokerManager{now: time.Now, fixedSubs: []Subscription{
+		{Filter: "showmesh/nodes/+/hello", QoS: 1},
+	}}
+
+	opts := bm.subscriptionsToResubscribe()
+	if len(opts) != 1 || opts[0].Topic != "showmesh/nodes/+/hello" {
+		t.Fatalf("subscriptionsToResubscribe() = %+v, want only the fixed subscription", opts)
+	}
+}
+
+// TestSubscriptionsToResubscribeIncludesLiveResponseWaiters is item 3 of
+// this package's task specification: a response waiter's subscription must
+// be part of what a reconnect resends, because the fixed set alone is what
+// the coordinator was left with before this method existed — see
+// subscriptionsToResubscribe's doc comment for why a broker outage during
+// an in-flight AwaitResponse call would otherwise silently drop the
+// response topic's subscription and never route the external responder's
+// eventual answer anywhere.
+func TestSubscriptionsToResubscribeIncludesLiveResponseWaiters(t *testing.T) {
+	bm := &BrokerManager{now: time.Now, fixedSubs: []Subscription{
+		{Filter: "showmesh/nodes/+/hello", QoS: 1},
+	}}
+	bm.respTopics = map[string]*responseTopicState{
+		"home/projectors/state": {
+			qos:     1,
+			waiters: map[uint64]*pendingWaiter{1: {id: 1, topic: "home/projectors/state"}},
+		},
+	}
+
+	opts := bm.subscriptionsToResubscribe()
+	if len(opts) != 2 {
+		t.Fatalf("subscriptionsToResubscribe() = %+v, want 2 entries (1 fixed + 1 live response topic)", opts)
+	}
+
+	byTopic := map[string]paho.SubscribeOptions{}
+	for _, o := range opts {
+		byTopic[o.Topic] = o
+	}
+	if _, ok := byTopic["showmesh/nodes/+/hello"]; !ok {
+		t.Errorf("resubscribe set missing the fixed subscription: %+v", opts)
+	}
+	respOpt, ok := byTopic["home/projectors/state"]
+	if !ok {
+		t.Fatalf("resubscribe set missing the live response-waiter topic: %+v", opts)
+	}
+	if respOpt.QoS != 1 {
+		t.Errorf("response-topic QoS = %d, want 1 (from responseTopicState.qos)", respOpt.QoS)
+	}
+	if respOpt.RetainAsPublished {
+		t.Errorf("response-topic RetainAsPublished = true, want false: a reconnect must not lose the retained-replay-vs-live distinction")
+	}
+}
+
+// TestSubscriptionsToResubscribeDedupesTopicPresentInBothSets proves a topic
+// that happens to appear in both the fixed set and the live response-waiter
+// set is only sent once, at the fixed set's QoS — see
+// subscriptionsToResubscribe's doc comment on why sending it twice would be
+// needless rather than incorrect, and why the fixed entry wins.
+func TestSubscriptionsToResubscribeDedupesTopicPresentInBothSets(t *testing.T) {
+	bm := &BrokerManager{now: time.Now, fixedSubs: []Subscription{
+		{Filter: "home/projectors/state", QoS: 2},
+	}}
+	bm.respTopics = map[string]*responseTopicState{
+		"home/projectors/state": {
+			qos:     0,
+			waiters: map[uint64]*pendingWaiter{1: {id: 1, topic: "home/projectors/state"}},
+		},
+	}
+
+	opts := bm.subscriptionsToResubscribe()
+	if len(opts) != 1 {
+		t.Fatalf("subscriptionsToResubscribe() = %+v, want exactly 1 deduplicated entry", opts)
+	}
+	if opts[0].QoS != 2 {
+		t.Errorf("deduplicated entry QoS = %d, want 2 (the fixed set's QoS)", opts[0].QoS)
+	}
+}
+
+// TestSubscriptionsToResubscribeReadsWaitersFreshEachCall proves the set is
+// recomputed from live state on every call rather than captured once: a
+// waiter registered after the BrokerManager was constructed must appear,
+// and one released before the next call must not.
+func TestSubscriptionsToResubscribeReadsWaitersFreshEachCall(t *testing.T) {
+	bm := &BrokerManager{now: time.Now}
+
+	if opts := bm.subscriptionsToResubscribe(); len(opts) != 0 {
+		t.Fatalf("subscriptionsToResubscribe() before any waiter = %+v, want empty", opts)
+	}
+
+	bm.respTopics = map[string]*responseTopicState{
+		"home/garage/state": {qos: 1, waiters: map[uint64]*pendingWaiter{1: {id: 1, topic: "home/garage/state"}}},
+	}
+	opts := bm.subscriptionsToResubscribe()
+	if len(opts) != 1 || opts[0].Topic != "home/garage/state" {
+		t.Fatalf("subscriptionsToResubscribe() with a live waiter = %+v, want the response topic present", opts)
+	}
+
+	delete(bm.respTopics, "home/garage/state")
+	if opts := bm.subscriptionsToResubscribe(); len(opts) != 0 {
+		t.Fatalf("subscriptionsToResubscribe() after the waiter released = %+v, want empty again", opts)
+	}
+}
+
+// TestNewBrokerManagerFixedSubsIsIndependentCopy proves NewBrokerManager
+// does not alias the caller's subs slice: mutating the caller's backing
+// array after construction must not change what a later reconnect resends.
+func TestNewBrokerManagerFixedSubsIsIndependentCopy(t *testing.T) {
+	subs := []Subscription{{Filter: "showmesh/nodes/+/hello", QoS: 1}}
+	bm := &BrokerManager{now: time.Now}
+	bm.fixedSubs = append([]Subscription(nil), subs...)
+
+	subs[0].Filter = "mutated-after-construction"
+
+	opts := bm.subscriptionsToResubscribe()
+	if len(opts) != 1 || opts[0].Topic != "showmesh/nodes/+/hello" {
+		t.Fatalf("subscriptionsToResubscribe() = %+v, want it unaffected by the caller mutating its own slice afterward", opts)
+	}
+}
+
 // TestPublishReceivedHandlerPassesRetainFlag is the unit test for the
 // single most important piece of wiring in this file: that the coordinator
 // actually reads paho's RETAIN flag off every inbound publish and carries
