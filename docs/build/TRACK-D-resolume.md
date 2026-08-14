@@ -2,7 +2,13 @@
 
 [Build plan](BUILD-PLAN.md) · [RES-001](../research/RES-001-resolume-smpte-behavior.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-003](../decisions/ADR-003-desired-and-observed-state.md)
 
-Status: not started. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
+Status: capture complete, adapter specified, build not started. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
+
+> **Corrected 2026-08-14 by [the bench capture](../bench/resolume-control-surface.md).** Resolume's REST, WebSocket and OSC surfaces were captured from a running Arena 7.23.2, and **four things this document asserts turned out to be false**. They are corrected in place below and each correction is dated, rather than being left for a builder to trip over. The implementation specification is [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md).
+>
+> The four: **OSC cannot address a pinned clip**, so the "OSC to act, REST to confirm" split is reversed; **the page race is a clip race, not a layer race**, and dropping OSC removes it rather than guarding it; **the single-page assumption is not the one to guard**, because the operator's composition already has three decks; and **a fixed confirmation deadline is wrong by 35×**, because a disconnect confirms one layer transition after a connect does.
+>
+> What the capture *confirmed*: OSC is fire-and-forget with no reply of any kind, and an inactive layer really is a silent failure, in a sharper form than this document describes. Both are unchanged below.
 
 ## Goal
 
@@ -34,8 +40,8 @@ Three consequences that are software problems, and one that is not:
 From RES-001's desk research, all L1 from documentation and none of it benched:
 
 - **Arena, not Avenue**, accepts SMPTE as audio LTC configured per clip.
-- The REST API (7.8 and later, port 8080, `/api/v1`) plus a WebSocket give confirmable state. **OSC gives low-latency triggers.**
-- **Timecode-loss behaviour is undocumented.** Forums report that it holds the last frame, and the forum pages are bot-gated so even that is a search excerpt rather than a read source.
+- ~~The REST API (7.8 and later, port 8080, `/api/v1`) plus a WebSocket give confirmable state. **OSC gives low-latency triggers.**~~ **Superseded 2026-08-14 by the capture.** REST and the WebSocket do give confirmable state, on the same port, and the port is configuration rather than a constant (this installation runs 9080). **OSC does not give usable triggers**: its address space is positional only, a positional clip address means a different clip on every deck, and it has no reply of any kind. A REST connect is observable in 4–64 ms, so the latency argument for OSC does not survive either. See the capture's §1 and §6.
+- **Timecode-loss behaviour is undocumented.** Forums report that it holds the last frame, and the forum pages are bot-gated so even that is a search excerpt rather than a read source. **Unchanged by the capture**, which deliberately did not touch the timecode path.
 
 That last point is the hole, and it is exactly the shape this project keeps getting caught by: the failure path is the undocumented one. A composition that holds its last frame on timecode loss looks identical to one that is running correctly on a paused show, from across a yard, at night.
 
@@ -45,7 +51,7 @@ That last point is the hole, and it is exactly the shape this project keeps gett
 
 **D0 is not the only thing that can start, and it is not the first.** Capturing what Resolume's REST, WebSocket and OSC surfaces actually expose needs no timecode and no cable, only a running Arena. It is the same ordering Step 8 used when it captured FPP's real command vocabulary before naming a single command, which immediately overturned four assumptions that read as entirely plausible. Everything in D1 through D4 is currently reasoned from documentation and forum posts.
 
-**D1. The Resolume adapter.** REST and WebSocket for state and confirmable operations, OSC for low-latency triggers. The split follows ARCHITECTURE §4.6: management operations use confirmable interfaces, operational triggers may use lower-latency ones. **The adapter never enters the frame path.**
+**D1. The Resolume adapter.** ~~REST and WebSocket for state and confirmable operations, OSC for low-latency triggers.~~ **Corrected 2026-08-14: REST for every action and every read, one WebSocket held purely as a change signal, and no OSC at all in v1.** ARCHITECTURE §4.6 permits a lower-latency interface for operational triggers; the capture established that Resolume's is not one, because it cannot name the right clip and cannot say whether it arrived. **The adapter never enters the frame path**, which is unchanged and free. Specified in [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md) §3.1.
 
 **D2. Explicit composition control**, and this is larger than "launch a clip". See the section below; it is the half of this track that has no timecode in it at all.
 
@@ -69,7 +75,9 @@ The system shape, in the owner's words:
 
 So the control vocabulary is **clip, layer, column, and composition state**, and all four are addressable. That is the scope of D2, and it is closer to "ShowMesh is the Resolume controller for everything that is not timecode" than to "ShowMesh can trigger a clip".
 
-Note the tension the adapter has to resolve: the owner's shape names **OSC** as the transport, and OSC is fire-and-forget UDP with no reply. [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) still wants evidence. Since 7.23.2 has the REST API, the resolution is **OSC to act and REST or WebSocket to confirm**, which is also exactly the split ARCHITECTURE §4.6 already describes. Nothing confirms off the OSC send.
+Note the tension the adapter has to resolve: the owner's shape names **OSC** as the transport, and OSC is fire-and-forget UDP with no reply. [ADR-003](../decisions/ADR-003-desired-and-observed-state.md) still wants evidence. ~~Since 7.23.2 has the REST API, the resolution is **OSC to act and REST or WebSocket to confirm**~~
+
+**Corrected 2026-08-14. The resolution is REST to act and REST to confirm, and the tension dissolves rather than being managed.** The capture proved OSC cannot address a pinned clip at all, so acting over OSC would mean acting positionally, which is the index drift the addressing section below exists to forbid. It also measured a REST connect at 4–64 ms, which removes the reason to reach for a lower-latency path. Nothing confirms off the OSC send, and now nothing is sent over OSC either. The owner verified the pinning limitation on his own installation on 2026-08-14 and notes the contrast that makes it a Resolume design choice: **MIDI and Art-Net/DMX can pin, OSC cannot.**
 
 ## Decisions this track must make
 
@@ -85,25 +93,41 @@ Settled by the owner 2026-08-13, who already works this way in practice.
 
 **Layers are pinned too, confirmed by the owner 2026-08-13.** Resolume can bind to "this layer", so activating a layer is **one command**, not the two this document assumed an hour earlier. The clip and layer halves therefore use the same identity-based addressing and the adapter needs one model rather than two.
 
+> **Corrected 2026-08-14, and this is the correction that reshapes the track.** The rule above is right and the transport assumption under it is wrong. **Pinning is a shortcut-system feature, not a protocol feature.** Resolume's own binding files record a pinned target as `/composition/objects/<id>/…` with `translationType="2"`, and DMX and MIDI honour it. **OSC's default address space does not**: a message to that address does nothing, verified from a disconnected baseline against five spellings, and Arena's own outbound stream emits 1,545 distinct addresses of which none is a pinned form. A pinned OSC trigger exists only as an operator-authored binding, at an address the operator chooses, in a preset file **no API exposes**, so ShowMesh can neither derive nor verify it.
+>
+> **REST has native pinned addressing** at `/composition/{kind}/by-id/{id}`, needing nothing from the operator, and the identifier is the same integer the shortcut files use. Object ids also survive a restart and survive edits and re-saves: 246 clip ids carried from `Christmas 24` to `Christmas 25`.
+>
+> **So the rule stands and the transport changes.** ShowMesh requires pinned addressing and offers no positional addressing at all, which is only possible over REST.
+
 **What pinning does not solve is the page dimension.** A pinned layer command still lands against whatever page is current, and there is no way to pin "this layer on this page". So the race is real: if anything changes the page between ShowMesh deciding and Resolume acting, the command succeeds against the wrong page, reports no error, and the wall does the wrong thing.
 
-### The page race is deliberately deferred, and here is what stops it being forgotten
+### The page race, measured 2026-08-14, is a clip race and it is removed rather than deferred
 
-**Owner's decision, 2026-08-13: the Halloween show is built on a single page**, which makes the race unreachable, and the general fix waits until the project is out of hard build mode. That is the right call with day-0 five weeks out, and it costs nothing while the assumption holds.
+**"Page" and "deck" are the same thing**, confirmed by the owner 2026-08-14, who uses both words. Everything below means `composition.decks`.
 
-**The assumption is "the composition has exactly one page", and it is invisible.** Nothing about a single-page composition looks different from a multi-page one until a second page exists, at which point every layer command silently acquires a race that was not there yesterday. A note in a document does not survive that, because the person adding a second page in December is not reading this file.
+**The race is real, and it is not the one described above.** Measured by selecting each deck and re-reading:
 
-**So the adapter carries a tripwire instead of a reminder.** When it reads composition state it already needs to read for confirmation, it checks how many pages exist. **More than one page surfaces as visible evidence** that the single-page assumption no longer holds, in the same vocabulary every other absence and caveat in this system uses. It is not a failure and it must not refuse anything: multi-page compositions are legitimate and the operator may have good reason. It is the software remembering the thing the owner asked not to forget.
+- **Layer identity is deck-independent.** `layers[1].id` is the same object on all three decks; the same 18 layers exist under every deck. **A layer command does not race the deck**, so the paragraph above is wrong about which object is exposed.
+- **A positional clip path resolves to a different object on every deck.** `/composition/layers/1/clips/5` is `Green screen snowstorm` on `Main` and two different empty clips on the other two decks. The column count itself changes with the selected deck: 14, 9, 9.
+- **REST `by-id` is immune**, verified directly: a `Main` clip read by id while `Rest Staging` was selected returned the right clip.
 
-**What the real fix looks like when it comes back:** assert the page before the layer, treat the pair as one non-interleavable action, and confirm the end state rather than the sends. That design is worked out and recorded here; it is only the implementation that is deferred.
+**So dropping OSC removes the race rather than guarding it.** Positional addressing was the only thing that could race a deck, REST `by-id` is the only addressing the adapter offers, and the deferred fix is not needed.
+
+~~**Owner's decision, 2026-08-13: the Halloween show is built on a single page**, which makes the race unreachable.~~ **That assumption was never true and could not have held**: `Christmas 25` already has three decks, so a tripwire firing on "more than one page exists" would have fired immediately and taught nobody anything.
+
+**What survives of the tripwire's intent**, specified in [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md) §3.8, is narrower and can still fire: **record on an action's outcome whether the selected deck changed between the decision and the confirmation.** `decks[i].selected` is readable in state the adapter already holds. It is evidence, never a refusal.
+
+**And the assumption that actually needed a tripwire turned out to be a different one.** The composition object has **no id field in REST**, the composition-level `uniqueId` in the file is the same constant across all six of the operator's compositions, and after a restart the correct composition *name* appears ~0.7 s before the layers do. So "the right composition is loaded" cannot be asserted by name and is asserted structurally instead, by the expected clip ids resolving.
 
 ## Acceptance criteria
 
-- RES-001's test matrix is run and recorded, moving its fault behaviour off L0.
-- **Layer activation is confirmed by reading back layer state**, never by the OSC message being sent, since OSC is fire-and-forget UDP with no reply.
-- **A composition with more than one page surfaces as visible evidence**, because that is the condition under which the deferred page race becomes reachable.
-- A macro step launches a clip, activates a layer, and triggers a column, each confirmed by Resolume reporting the result rather than by the OSC message being sent.
-- **An inactive layer is reported as a readiness fault before a show**, not discovered when timecode arrives and nothing launches.
+- RES-001's test matrix is run and recorded, moving its fault behaviour off L0. **Still outstanding; this is D0 and the capture deliberately did not touch it.**
+- **Layer activation is confirmed by reading back layer state**, never by the message being sent. Unchanged, and now trivially satisfied because nothing is sent over OSC.
+- ~~**A composition with more than one page surfaces as visible evidence.**~~ **Replaced 2026-08-14**: the deck race is removed by dropping positional addressing, and the surviving criterion is that **an action records whether the selected deck changed between its decision and its confirmation.**
+- A macro step launches a clip, activates a layer, and triggers a column, each confirmed by Resolume reporting the result rather than by the message being sent. **"Activates a layer" resolves to bypass and master**, because the capture established there is no `active` field on a layer.
+- **An inactive layer is reported as a readiness fault before a show**, not discovered when timecode arrives and nothing launches. **Sharper than this document assumed**: a clip on a bypassed layer, and a clip on a layer at zero master, both report `Connected` with `active_clip` present, so `connected` is not evidence anything reached the wall and readiness is a conjunction of seven readable fields.
+- **A confirmation deadline is derived from state, never fixed.** Added 2026-08-14: a connect confirms in 4–64 ms and a disconnect confirms one layer transition later, measured at 0.0 s → 75 ms through 5.0 s → 4,068 ms.
+- **Reachable is never treated as ready.** Added 2026-08-14: after a restart the REST API answers `200 OK` for ~1.2 s describing a composition that is not the show, carrying the correct name for the last 0.7 s of it, with no field saying "loading".
 - Resolume state appears in the Operator UI with provenance and freshness.
 - Timecode loss produces the defined, operator-visible response decided above.
 - A Resolume restart mid-show recovers to a defined composition state rather than an undefined one.

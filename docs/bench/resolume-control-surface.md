@@ -970,11 +970,93 @@ exist yet.
 
 ---
 
-## 12. Open items this capture did not close
+## 12. Do object ids survive a content update? Yes, and the composition has no identity at all
+
+This section answers §10.3's follow-on, which the owner named as the disruption
+that actually recurs: new content arriving as a new composition version from
+another computer.
+
+**Different evidence class from everything above.** `.avc` is plain XML, and object
+ids are stored in it. So this was read from **six of the operator's own real
+composition files** with no application behaviour exercised at all: no save, no
+load, no GUI. It is stronger than reasoning from the id format and weaker than a
+controlled save-and-reload, and it is honest about being an observational study of
+artifacts that already existed.
+
+### 12.1 Ids survive edits, re-saves, and a year-over-year rebuild
+
+Shared `uniqueId` values between related composition files, broken down by the
+element each id belongs to:
+
+| Pair | Clips | Layers | Columns | Decks |
+|---|---|---|---|---|
+| `Haloween 2024.avc` → `Haloween 2024 pj mapping.avc` | **81** | 39 | 9 | 3 |
+| `Christmas 24.avc` → `Christmas 25.avc` | **246** | 10 | 27 | 3 |
+
+`Christmas 24` and `Christmas 25` are a year apart and a substantial rebuild, and
+**246 clip ids still carry over.** In neither pair did a single shared id point at
+a different *kind* of element in the two files, so an id is never recycled onto
+another class of object.
+
+**The failure mode is therefore loud, not silent.** A clip that gets replaced
+loses its id, and a stored reference to it produces `404` on
+`GET /composition/clips/by-id/{id}` (§2.5). That is a stale reference announcing
+itself, which is the outcome this project wants and did not get from FPP.
+
+**So storing a Resolume clip id in ShowMesh configuration is viable.** It was an
+open question; it is now answered well enough to build on, with the caveat that a
+controlled save-and-reload has still not been run.
+
+### 12.2 Layer ids leak across shows, because shows are built from each other
+
+`Halloween 2025.avc` and `Christmas 25.avc` are different shows and share 24 ids:
+one `Composition`, two render/modifier objects, and **21 `Layer`s**. Zero clips.
+
+The shared layers date from October 2025, which is one show having been built from
+the other. **A layer id does not tell you which composition you are looking at.**
+
+### 12.3 The composition `uniqueId` is not unique, and REST does not expose it anyway
+
+All six files carry the identical composition-level id:
+
+```
+<Composition name="Composition" uniqueId="1669865320189" numDecks="3" numLayers="18" …>
+```
+
+`1669865320189` is 2022-12-01, which is when this Arena installation was first set
+up. **It identifies the installation, not the composition.** Two different shows
+report the same value.
+
+And it is moot for the adapter regardless, because the REST composition object has
+**no `id` field at all**:
+
+```
+top-level keys: audio bypassed clipbeatsnap cliptarget cliptriggerstyle columns
+                crossfader dashboard decks layergroups layers master name selected
+                speed tempocontroller video
+```
+
+**The only thing identifying a loaded composition over the API is
+`name`, a mutable `ParamString`.**
+
+Stacked with §10.1, that is a genuinely awkward readiness problem and it should be
+solved deliberately rather than by reaching for the obvious field:
+
+- the name is the only identifier, and it is **not** an identifier;
+- during the ~1.2 s load window the name is correct while the composition is not;
+- layer ids are shared between the operator's own shows (§12.2), so they do not
+  disambiguate either.
+
+What does discriminate, from the data here, is **structure**: layer count, column
+count, deck count and names, and the presence of specific clip ids. A readiness
+check that asserts the expected clip ids resolve is the only formulation found
+that is wrong in none of the three cases above.
+
+## 13. Open items this capture did not close
 
 - **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
 - **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
-- **Loading a different composition without restarting Arena**, which the owner states on 2026-08-14 is the realistic disruption rather than a restart: the show machine runs 24/7 and only restarts deliberately or when new content arrives as a new composition version from another computer. Not tested, and there is no REST path to trigger it (§2.3). The open question is which identifiers survive. Object ids are creation timestamps stored in the file (§3.2), so **unchanged objects should keep their ids and replaced objects will not** — that is a reasoned expectation from the id format, not a measurement, and it decides whether a ShowMesh clip reference survives a content update. It needs its own bench pass before any configuration stores a Resolume object id.
+- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise.
 - **Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).
 - **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
 - **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).

@@ -30,6 +30,24 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
+> **TRACK D, 2026-08-14: Resolume's control surface is captured and the adapter is specified. The build has not started, and the next action is D-1 in [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md) §4.**
+>
+> [docs/bench/resolume-control-surface.md](../bench/resolume-control-surface.md) records what a running Arena 7.23.2 actually does across REST, WebSocket and OSC. This is Step 8's ordering applied to a second vendor, and it paid the same way: **four of Track D's own assumptions were false, and four of RES-001's were.** All eight are corrected in place in those documents, dated, rather than silently replaced.
+>
+> **The one that reshapes the track: OSC cannot address a pinned clip.** Its default address space is positional only, proven by A/B from a disconnected baseline against five spellings and confirmed by Arena emitting 1,545 distinct outbound addresses of which none is a pinned form. Pinning is a shortcut-system feature that DMX and MIDI honour, living in a preset file **no API exposes**, so ShowMesh can neither derive nor verify a pinned OSC address. REST has native `by-id` addressing that needs nothing from the operator. **Track D's "OSC to act, REST to confirm" split is therefore reversed: the adapter uses REST for everything and holds one WebSocket purely as a change signal.** A REST connect is observable in 4–64 ms, so the latency argument for OSC does not survive either. The owner verified the pinning limitation on his own installation the same day.
+>
+> **A fixed confirmation deadline is wrong by 35×.** A connect confirms in 4–64 ms; a disconnect confirms one *layer transition* later, proven causal by driving the parameter: 0.0 s → 75 ms, 0.5 s → 531 ms, 2.5 s → 2,527 ms, 5.0 s → 4,068 ms. The bound is readable at `layers[i].transition.duration`, so the deadline is computed per action rather than configured. This is Step 7's 179-microsecond lesson pointing the other way: post-dispatch evidence is *correct* here and still reads `Connected` for seconds.
+>
+> **`connected` is not evidence that anything reached the wall.** A clip on a bypassed layer, and a clip on a layer at zero master, both report `Connected` with `active_clip` present, and nothing on the clip says otherwise. There is **no `active` field on a layer**; readiness is a conjunction of seven readable fields, which is Track D's silent-failure concern in its measurable form.
+>
+> **Reachable is not ready, and this is the sharpest operational hazard.** After a restart the REST API answers `200 OK` for ~1.2 s describing a composition that is not the show, and carries the **correct composition name** for the last 0.7 s of that. There is no `loading` field. The obvious readiness check passes while 15 of 18 layers do not exist. Arena also comes back with **nothing playing**, so Resolume will not resume the show.
+>
+> **Identity, settled well enough to build on.** Object ids survive a restart (14/14 clip ids) and survive edits and re-saves (246 clip ids carried from `Christmas 24` to `Christmas 25`, read from six of the operator's real `.avc` files). **Parameter ids do not** (0/14), so they may never be persisted and every WebSocket subscription dies silently on restart. The composition itself has **no id in REST**, and the `uniqueId` in the file is the same constant across all six compositions, so it identifies the installation rather than the composition.
+>
+> **The page race is retired rather than deferred.** "Page" and "deck" are the same thing, per the owner. The race is a **clip** race, not the layer race Track D describes: layer identity is deck-independent while a positional clip path resolves to a different object on every deck. Dropping positional addressing removes it. The planned "more than one page" tripwire would have fired on day one, because `Christmas 25` already has three decks.
+>
+> **Arena was driven, restarted four times, and restored to baseline**; its composition file was never written. **D0, the timecode bench, was deliberately not touched** and still gates RES-001's fault behaviour at L0.
+
 > **SETTLED 2026-08-14: deployment identity in test fixtures.** Host names, addresses, board serials and third-party device names from the operator's network were substituted with RFC 5737 and placeholder values across fixtures, test code, production doc comments, filenames and documentation. 292 substitutions in 37 files, plus 13 fixture file renames. Response shape was not touched, and the full Go suite and all 401 UI tests pass unchanged. Provenance is now stated in `README.md` files in both `testdata/` directories rather than left to inference. **Git history was deliberately not rewritten**, on the reasoning that the repository is public and already cloneable, so a force-push would break every existing clone and recall nothing.
 >
 > **Four premises in the original framing did not survive investigation, which is why the earlier options looked worse than the problem was.** The fixtures were never verbatim captures: the raw bodies were saved to a scratch path outside the repo and hand-translated, and the UI fixture already contained one openly constructed scenario, so "editing a verbatim capture" was an objection to a status the files never had. `"ma": null` is in no fixture at all and is synthesized at run time from a real capture. "Assertions key off the hostnames" was true of exactly two lines in `decode_test.go`, not of the ~300 occurrences. And the scope was larger than recorded: board serials, a second subnet, third-party gear on the operator's LAN inside FPP warning strings, and host names used as filenames and inside MQTT topics and URLs, none of which the original note listed.
@@ -190,6 +208,46 @@ The generalizable shape, worth carrying past this record: **an argument that deg
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-14 (Track D: Resolume's control surface captured, and the adapter specified against it)
+
+**Goal:** capture what Resolume Arena actually exposes over REST, WebSocket and OSC before any adapter is designed, on the reasoning that Step 8's FPP capture overturned four plausible assumptions and Track D's entire adapter design rested on documentation and forum posts. Then specify the adapter against the capture.
+
+**Completed:**
+
+- [`docs/bench/resolume-control-surface.md`](../bench/resolume-control-surface.md), the capture. Arena 7.23.2 (revision 51094) on macOS 26.5.2, arm64, driven live: REST path inventory against the application's own served OpenAPI spec, WebSocket protocol read out of the bundled example app's bundle, OSC input tested from a bound socket and OSC output captured by temporarily pointing it at loopback, confirmation latency measured over eight runs, four restarts, and a deck-scoping test.
+- [`docs/build/TRACK-D-ADAPTER-SPEC.md`](TRACK-D-ADAPTER-SPEC.md), the implementation specification for D1–D4, in four seams with read-only first.
+- Corrections in place, all dated, to [`TRACK-D-resolume.md`](TRACK-D-resolume.md) (four claims), [`RES-001`](../research/RES-001-resolume-smpte-behavior.md) (four claims plus its open-item list and its decision section), [`BUILD-PLAN.md`](BUILD-PLAN.md) (the Track D line and the retired page-race cut), and the research tracker row.
+- [`docs/README.md`](../README.md) gained a bench-captures section; neither capture had been indexed.
+
+**Decisions made:**
+
+- **OSC is not used for control, at all, in v1** (spec §3.1), and Resolume's OSC output is not used for observation (§3.2). Both are reversals of Track D.
+- **One authority for confirmation**: a targeted REST `by-id` read. The WebSocket is a wake-up and never an authority, and no observed value is ever taken from a WebSocket message (§3.4). This exists as a decision because of Step 7's `precedence.go` defect, where a shared resolver was bypassed by the one path that most needed it. One authority means there is nothing to arbitrate.
+- **Deadlines are derived per action from `layers[i].transition.duration`**, never fixed (§3.5), and a deadline expiring produces `unconfirmed` rather than `failed`.
+- **Parameter ids are never persisted, cached across a reconnect, or written to configuration** (§3.6).
+- **Composition identity is asserted structurally, by the expected clip ids resolving, never by name** (§3.8).
+- The adapter is treated as an [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md) integration target rather than an [ADR-016](../decisions/ADR-016-controlled-devices-and-control-providers.md) controlled device, which is the smaller and reversible commitment while RES-014 is unresearched.
+
+**Questions raised with the owner:**
+
+- Whether "page" means deck. **It does**, and he uses both words interchangeably. That made the race testable, and it turned out to be a clip race rather than the layer race Track D describes.
+- Whether the confirmation model needed rethinking. **No**, but it needed the derived deadline and a single authority; his framing was that all signals combine into one official confirmation, which §3.4 implements as one authority plus wake-ups.
+- How often Arena restarts in practice. **It runs 24/7 once the show is up**; the only restarts are deliberate, or a new composition version arriving from another computer. That promotes the untested composition-swap case above the restart case.
+- Whether ShowMesh should write Resolume configuration. **No.** Configuration belongs to the programmer, in Resolume, before the show. The one exception he wants later is SMPTE drift detection with a fix-it action, which needs show configuration that does not exist yet.
+
+**Deferred:**
+
+- **D0, the timecode bench.** Untouched by design: it needs an LTC generator and a cable, and RES-001's fault behaviour stays L0.
+- A **controlled save-and-reload** to measure a composition swap without a restart. The identifier question was answered observationally from six of the owner's real `.avc` files, which is enough to build on; what the API reports *during* a swap is not measured, and given the restart's loading window, assuming it is atomic would be unwise.
+- Whether the crossfader is an eighth term in the layer-readiness conjunction.
+- Connect-to-photons latency, which needs a camera or capture card. Only connect-to-observable-state was measured.
+
+**Verification gates:** none run. **No ShowMesh code was written or changed this session**, so no test or CI gate applies. The capture's evidence level is L2 for Arena 7.23.2 on the machine described in its provenance table, which is **not the deployed show host**: protocol and schema findings should travel, and every timing number must be re-measured on the show machine before a deadline is set from it.
+
+**One correction made mid-capture, recorded because the error is the instructive part.** An initial 16-operation tally read as `parameter_update` dropping events, which would have been a serious finding about the WebSocket. It was wrong: the harness was sampling inside the 2.5 s layer transition, during which a clip legitimately stays `Connected`, so the parameter had not changed at the sample points. Re-run with transition-aware waits it was 12/12 with no drops. **A test that samples faster than the system settles reports a defect that is not there, as confidently as one that samples slower reports success that is not there.**
 
 ---
 
