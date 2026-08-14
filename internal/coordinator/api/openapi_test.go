@@ -204,6 +204,9 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"PrincipalSummary", "SessionInfo", "BootstrapRequest",
 		"ConfigFPPEndpoint", "ConfigFPPEndpointsPayload",
 		"FPPEndpointsConfigResponse", "ConfigRevisionMeta", "ConfigRevisionsResponse",
+		"FPPCommandRequest", "StartPlaylistCommandRequest",
+		"StopPlaylistGracefullyCommandRequest", "SetVolumeCommandRequest",
+		"NoParamsFPPCommandRequest", "FPPCommandResponse", "FPPCommandResult",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -382,7 +385,18 @@ func TestOpenAPIBootstrapResponseMatchesRealResponse(t *testing.T) {
 // response from EVERY class this API produces against the shared Problem
 // schema — four from Step 3, method-not-allowed (finding 2.8), and all
 // four of ADR-024's additions (unauthorized is reused, not duplicated:
-// decision 4's 401 and ADR-021's are the identical wire class).
+// decision 4's 401 and ADR-021's are the identical wire class). Step 8's
+// two additions (fpp-command-refused-audit-unavailable,
+// fpp-start-playlist-evidence-not-current) are NOT in this table — they
+// are verified against the shared Problem schema in
+// openapi_fppcommand_test.go's own dedicated tests instead
+// (TestOpenAPIFPPCommandAuditUnavailableResponseMatchesRealResponse,
+// TestOpenAPIFPPStartPlaylistEvidenceNotCurrentResponseMatchesRealResponse),
+// because each needs its own real dispatch setup (an installed
+// fail-audit trigger; stale/absent evidence) this table's shared
+// `api.Handler` cannot produce. Named here, rather than silently
+// omitted, so this comment's own "EVERY class" claim stays checkable
+// against where each one actually is.
 //
 // forbidden and csrf-rejected are exercised here directly, against a real
 // identity.Service-backed principal, rather than cited as "covered

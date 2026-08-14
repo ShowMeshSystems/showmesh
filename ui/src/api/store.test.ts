@@ -2971,3 +2971,68 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
     expect(result.outcome).toBe('confirmed')
   })
 })
+
+// Step 8, ADR-015: FPPCommandRequest.params used to be generated as
+// Record<string, never> (api/openapi.yaml declared it as a bare object
+// with no JSON Schema `properties`), a type no non-empty object
+// satisfies — so nothing anywhere could ever have caught a misspelled
+// param name; the entire request shape was checked exactly once, at
+// runtime, server-side. api/openapi.yaml now models it as a discriminated
+// `oneOf` on `action` (StartPlaylistCommandRequest and its seven
+// siblings), and dispatchFPPCommand (store.ts) uses that generated type
+// directly (FPPCommandDispatchArgs) rather than a hand-typed
+// `Record<string, unknown>`. This block proves the generated type
+// actually rejects what it claims to, not merely that it compiles for the
+// one shape a hand-written call site happens to use.
+//
+// This is a COMPILE-TIME-only check: vitest runs this file through
+// esbuild's stripped transform (see the "uses
+// FPP_COMMAND_REQUEST_TIMEOUT_MS..." test above, same file), which does
+// not type-check at all — `npm test` passing proves nothing about this
+// block. Only `npm run typecheck` (tsc --noEmit) does. Verified by hand
+// for this task, per CLAUDE.md's "a test's name is a claim": with the
+// `@ts-expect-error` comment below temporarily REMOVED, `npm run
+// typecheck` fails with three real compiler errors on the `params:`
+// line — `error TS2322: Type 'string' is not assignable to type
+// 'never'.` (and the same for `false`/`"refuse"`), because once
+// `paylist` fails to match ANY oneOf member, TypeScript's discriminated
+// union resolution has nothing left to narrow to and falls back to
+// `never` for every sibling property in that same object literal — not
+// a silent pass. The comment is restored below; a `@ts-expect-error`
+// that stops being necessary (the type regresses back to something
+// permissive) is ITSELF a `typecheck` failure ("Unused '@ts-expect-error'
+// directive"), so this check cannot silently rot into a no-op either.
+describe('FPPCommandRequest params (type-level only, Step 8/ADR-015)', () => {
+  it('accepts a real startPlaylist params object, and the generated type rejects a misspelled one at compile time', () => {
+    type FPPCommandRequest = components['schemas']['FPPCommandRequest']
+
+    // The PASSING form: every real property, correctly typed. This is
+    // exactly the shape ApiStore.startFPPPlaylist builds.
+    const valid: FPPCommandRequest = {
+      action: 'startPlaylist',
+      idempotencyKey: 'key-1',
+      params: { playlist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
+    }
+    expect(valid.action).toBe('startPlaylist')
+
+    // The FAILING form: `paylist` (missing the second `l`) is not a
+    // property `StartPlaylistCommandRequest.params` declares — a typo
+    // this schema shape must refuse to compile, not silently accept as
+    // an "extra" key the way `Record<string, unknown>` would have. The
+    // whole `params` object is kept on ONE line deliberately: TypeScript
+    // reports the excess-property error AND a cascade of "not assignable
+    // to type 'never'" errors for `repeat`/`ifBusy` once the union match
+    // fails, all on whichever single line the object literal occupies —
+    // `@ts-expect-error` only suppresses diagnostics on the line
+    // immediately below it, so splitting this across multiple lines would
+    // leave the cascade errors unsuppressed and this file would fail
+    // `npm run typecheck` for the wrong reason.
+    const misspelled: FPPCommandRequest = {
+      action: 'startPlaylist',
+      idempotencyKey: 'key-1',
+      // @ts-expect-error 'paylist' is a typo for 'playlist' and must not typecheck.
+      params: { paylist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
+    }
+    expect(misspelled.action).toBe('startPlaylist')
+  })
+})

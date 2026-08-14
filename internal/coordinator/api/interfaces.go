@@ -259,6 +259,64 @@ type CommandStore interface {
 	// its own doc comment for why calling it at any time other than
 	// coordinator startup would be unsound.
 	ListUnresolvedCommands(ctx context.Context) ([]store.CommandRecord, error)
+
+	// GetCommandByIdempotencyKey returns the command that owns key, or
+	// wraps [store.ErrCommandNotFound] ([errors.Is]-detectable) when none
+	// exists. Step 8 review finding 4: [handlers.handleFPPCommand] calls
+	// this BEFORE running a primitive's own PreDispatchCheck, specifically
+	// so a replayed idempotency key is recognized and answered before any
+	// guard gets a chance to refuse it — a legitimate replay must never be
+	// answered with a fresh 409 a guard invented for what it wrongly
+	// treated as a brand-new request. This is a best-effort READ used only
+	// to route an ALREADY-PERSISTED key around the guard early; it is
+	// deliberately NOT the mechanism that makes replay detection
+	// race-free for two concurrent NEW requests sharing one key — that
+	// guarantee still belongs to [InsertCommand]'s own UNIQUE-constraint
+	// violation alone (see [store.ErrCommandIdempotencyKeyExists]'s own
+	// doc comment on why a SELECT-then-INSERT is racy by construction).
+	// When this lookup races a concurrent first insert and misses, the
+	// request falls through to the guard and the insert exactly as before
+	// this finding's fix, and the existing DuplicateCommandError handling
+	// on that insert is what still catches it.
+	GetCommandByIdempotencyKey(ctx context.Context, key string) (store.CommandRecord, error)
+}
+
+// FPPPollNudger requests an out-of-band poll of one FPP instance's
+// collector, ASAP rather than waiting out its own cadence — the owner's
+// 2026-08-13 fix for the FPP REST collector's DefaultPollInterval (15s)
+// making every command confirmation wait an average ~7.5s for evidence
+// that could have been fetched in one LAN round trip. Declared here, at
+// the consumer, for the same reason [FPPInstanceView] and [EventRecord]
+// are: this package does not import internal/coordinator/collector, and
+// the real implementation ([internal/coordinator/collector.Runner.Nudge],
+// wrapped by internal/coordinator/apiwiring.go's fppRunnerNudger) is wired
+// in by coordinator.go, not built here.
+//
+// NudgePoll changes ONLY when the collector's next real poll happens. It
+// never stands in for evidence: fppcommand_handler.go's dispatch path
+// still confirms exclusively through [fppPrimitive.Confirm] against the
+// SAME notBefore fence every other confirmation already uses (Step 7 seam
+// C review defect 2), reading whatever the nudged (or, if suppressed or
+// absent, the ordinarily-scheduled) poll actually wrote to the store. A
+// caller that let a nudge itself count as confirmation would be rebuilding
+// the 179-microsecond defect this project already found and fixed once,
+// deliberately this time.
+type FPPPollNudger interface {
+	// NudgePoll requests a poll of the collector for the FPP instance
+	// named by instanceID, and reports whether the request was accepted —
+	// never an error. false covers every reason it might not have been
+	// (no collector registered for instanceID, a rate limit suppressing a
+	// burst against one instance, or no [FPPPollNudger] wired in at all,
+	// per [noFPPPollNudger]) and every one of them is handled identically
+	// by every caller: fall back to the collector's own scheduled cadence,
+	// never fail or delay the command this nudge was requested for.
+	// Implementations MUST return promptly and MUST NOT block on network
+	// I/O or on the collector's own Poll call completing — matching
+	// [Sink.RecordObservations]'s identical "must not block indefinitely"
+	// contract in internal/coordinator/collector, for the identical
+	// reason: a slow or wedged NudgePoll must never stall the command
+	// dispatch path that calls it.
+	NudgePoll(instanceID string) bool
 }
 
 // DeclarationStore is what this package needs from seam 0's

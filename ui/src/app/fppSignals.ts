@@ -253,6 +253,49 @@ function isReachableInstance(instance: { readonly observations: readonly Evidenc
   return reachable !== undefined && reachable.state === 'current' && reachable.value === true
 }
 
+// ---------------------------------------------------------------------
+// Next-item hazard (Step 8, docs/bench/fpp-command-vocabulary.md section
+// 3.5): "Next Playlist Item" past the last item ENDS the playlist rather
+// than wrapping or no-opping -- measured on both a 3-item and a 1-item
+// bench playlist, and FPP answers "Next Item Playing" identically in
+// both cases, so its own response text cannot be used to tell them
+// apart. A control labelled only "Next" is a stop button whenever the
+// playlist is on its last item, and this project's own standing rule
+// (ADR-011, CLAUDE.md) is that a control must never render as safe on
+// evidence it does not actually have -- so this function reports
+// "unknown" rather than "not the last item" whenever it cannot answer
+// with CURRENT evidence for both signals, and the caller
+// (FPPNextPlaylistItemControl) is required to render that as a caution,
+// not as silence.
+// ---------------------------------------------------------------------
+
+export interface NextItemHazard {
+  /** True only when CURRENT numeric evidence for both fpp.playlist.index and fpp.playlist.count show the current item is the last one (index >= count > 0) -- capture section 3.5's own last-item condition. */
+  knownLastItem: boolean
+  /** True when there is not enough CURRENT evidence to decide either way -- absence of evidence is not evidence of "not last" (CLAUDE.md's own recurring rule, applied here). */
+  unknown: boolean
+  index: Evidence | undefined
+  count: Evidence | undefined
+}
+
+function currentNumericValue(evidence: Evidence | undefined): number | undefined {
+  return evidence !== undefined && evidence.state === 'current' && typeof evidence.value === 'number'
+    ? evidence.value
+    : undefined
+}
+
+/** Evaluates whether one more "Next Playlist Item" would end the show, from whatever fpp.playlist.index/fpp.playlist.count evidence `observations` currently carries. Pure and total. */
+export function evaluateNextItemHazard(observations: readonly Evidence[]): NextItemHazard {
+  const index = findObservation(observations, 'fpp.playlist.index')
+  const count = findObservation(observations, 'fpp.playlist.count')
+  const indexValue = currentNumericValue(index)
+  const countValue = currentNumericValue(count)
+  if (indexValue === undefined || countValue === undefined) {
+    return { knownLastItem: false, unknown: true, index, count }
+  }
+  return { knownLastItem: countValue > 0 && indexValue >= countValue, unknown: false, index, count }
+}
+
 export function summarizeFleetVersions(
   instances: readonly { instanceId: string; observations: readonly Evidence[] }[],
 ): FleetVersionSummary {

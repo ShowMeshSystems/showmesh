@@ -7,10 +7,11 @@
  * `fetch` response behavior.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { ApiClient } from './client'
+import { ApiClient, FPP_COMMAND_REQUEST_TIMEOUT_MS, MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS } from './client'
 import { CSRFRejectedError, ForbiddenError, TooManyRequestsError, UnauthorizedError } from './errors'
-import { startTestServer, type TestServer } from './test-support/test-server'
+import { startTestServer, waitFor, type TestServer } from './test-support/test-server'
 import { makeProblem } from './test-support/fixtures'
+import { FakeClock } from './test-support/fake-clock'
 
 const openedServers: TestServer[] = []
 
@@ -254,5 +255,72 @@ describe('ApiClient error dispatch (ADR-024)', () => {
       expect(err).toBeInstanceOf(TooManyRequestsError)
       expect((err as TooManyRequestsError).retryAfterSeconds).toBeNull()
     }
+  })
+})
+
+// Step 8 client-side review, Finding 1: FPP_COMMAND_REQUEST_TIMEOUT_MS's
+// own doc comment claimed "client.test.ts proves this client actually
+// waits this long when given a slow response" while this file contained
+// zero references to that constant or to 35_000 — proved vacuous by
+// setting the constant to 6_000 (below the coordinator's own 20s
+// confirmation deadline) and observing 389/389 tests, typecheck, lint,
+// and build all still pass. At 6s the browser would abort BEFORE the
+// coordinator answers, rendering a transport-timeout error for a
+// successful conversation with a healthy coordinator — ADR-024 decision
+// 7's inversion, on the browser side, which is the side that already
+// shipped this exact defect once (Step 7 seam C review defect 1, at 15s).
+//
+// Both halves below were verified non-vacuous the same way: with
+// FPP_COMMAND_REQUEST_TIMEOUT_MS temporarily set to 6_000, both tests in
+// this describe block failed; restored to 35_000, both pass. See this
+// task's own report for the exact commands run.
+describe('FPP_COMMAND_REQUEST_TIMEOUT_MS', () => {
+  it('is never below the reconciled server confirmation deadline plus margin', () => {
+    // The static half of the reconciliation: MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS
+    // is a SEPARATE literal (client.ts's own doc comment on that constant),
+    // not derived from FPP_COMMAND_REQUEST_TIMEOUT_MS, so this assertion
+    // actually fails the day someone lowers the constant under test —
+    // unlike a self-referential check, which would pass no matter what
+    // FPP_COMMAND_REQUEST_TIMEOUT_MS was set to.
+    expect(FPP_COMMAND_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS)
+  })
+
+  it('actually waits this long: a response arriving just before the deadline still succeeds', async () => {
+    // The behavioral half the doc comment claims: a real node:http server
+    // (this project's "do not mock fetch" posture) holds the response
+    // open until this test releases it, well past every SHORTER budget
+    // this client could plausibly have used by mistake (the 15s
+    // DEFAULT_REQUEST_TIMEOUT_MS, or a broken constant like 6_000) but
+    // still one millisecond short of FPP_COMMAND_REQUEST_TIMEOUT_MS
+    // itself — proving this client does not abort a slow-but-healthy
+    // conversation early.
+    const release: { fn: (() => void) | null } = { fn: null }
+    const s = await server((_req, res) => {
+      release.fn = () => respondJson(res, 200, { ok: true })
+    })
+
+    // A FakeClock (test-support/fake-clock.ts), matching store.test.ts's
+    // own reasoning: virtual time only advances when this test calls
+    // clock.advance(), so a 35-second-scale deadline can be exercised
+    // without a 35-second-slow test and without racing real scheduling
+    // jitter.
+    const clock = new FakeClock()
+    const client = new ApiClient(s.baseUrl, fetch, FPP_COMMAND_REQUEST_TIMEOUT_MS, clock)
+
+    const resultPromise = client.postJson<{ ok: boolean }>(
+      '/fpp/bench-fpp/commands',
+      { action: 'stopPlaylist' },
+      new AbortController().signal,
+    )
+    await waitFor(() => release.fn !== null, {
+      message: 'the POST was never received by the test server',
+    })
+
+    clock.advance(FPP_COMMAND_REQUEST_TIMEOUT_MS - 1)
+    if (release.fn === null) throw new Error('release.fn not set')
+    release.fn()
+
+    const result = await resultPromise
+    expect(result).toEqual({ ok: true })
   })
 })

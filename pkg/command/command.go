@@ -187,6 +187,35 @@ func MinClientTimeoutForConfirmation(serverConfirmDeadline time.Duration) time.D
 	return serverConfirmDeadline + ClientTimeoutMargin
 }
 
+// MaxFPPCommandConfirmDeadline is the maximum confirmation deadline ANY
+// primitive FPP command this coordinator ships (internal/coordinator/api's
+// fppCommandPrimitives registry) may use with [ConfirmationEvidence]. A
+// client dispatching any of those primitives — not only Stop Playlist —
+// must derive its own request budget from THIS value via
+// [MinClientTimeoutForConfirmation], never from
+// [DefaultFPPCommandConfirmDeadline] alone: a future primitive whose own
+// deadline exceeds the default would otherwise silently understate every
+// existing client's budget, the same class of defect Step 7 seam C review
+// defect 1 already shipped once for a single primitive.
+//
+// Today this equals DefaultFPPCommandConfirmDeadline, because Step 8's own
+// registry gives every primitive the identical ConfirmDeadline function
+// (return the shared base unchanged) — SHOWMESH HYPOTHESIS, NOT MEASURED;
+// RES-009 owns real latency evidence, and nothing measured justifies
+// differentiating one primitive's deadline from another's yet, so
+// inventing distinct numbers now would be fabricated precision. This is
+// enforced, not merely documented: internal/coordinator/api's
+// TestNoFPPCommandPrimitiveDeadlineExceedsMaxConfirmDeadline computes
+// every registered primitive's own deadline against the real
+// [DefaultFPPCommandConfirmDeadline] base and fails the build the day one
+// exceeds this constant without this constant being raised to match — the
+// two are independent numbers for the identical reason
+// [DefaultFPPCommandConfirmDeadline]'s own doc comment gives for
+// cmd/showmeshctl's literal: a unit test comparing two hand-copied
+// literals cannot catch them silently disagreeing, only a test that reads
+// both real sources of truth can.
+const MaxFPPCommandConfirmDeadline = DefaultFPPCommandConfirmDeadline
+
 // NewIdempotencyKey mints a fresh idempotency key: a random UUID (RFC
 // 4122 version 4, via github.com/google/uuid — already a dependency of
 // this module, used identically for principal, session, and command IDs

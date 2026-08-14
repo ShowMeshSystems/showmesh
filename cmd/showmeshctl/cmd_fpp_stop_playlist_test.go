@@ -177,49 +177,24 @@ func TestCmdFPPStopPlaylistRequiresInstanceID(t *testing.T) {
 
 // --- Step 7 seam C review defect 1: this subcommand's own request budget
 // must never be smaller than what the coordinator's own confirmation
-// deadline needs, regardless of --timeout's global default. ---
-
-// TestEffectiveStopPlaylistTimeoutNeverBelowMinimum is the fast, pure half
-// of defect 1's guard (the slow, real half is
-// test/integration's TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline,
-// which runs the real coordinator and this real binary together). This
-// test alone cannot catch minStopPlaylistClientTimeout itself being set
-// too small relative to the SERVER's default — no unit test can, since the
-// two are two independent literals by design (see that constant's own doc
-// comment) — it only proves --timeout can never override the constant
-// downward, which is this function's entire job.
-func TestEffectiveStopPlaylistTimeoutNeverBelowMinimum(t *testing.T) {
-	cases := []struct {
-		name string
-		flag time.Duration
-		want time.Duration
-	}{
-		{"global default (10s) is raised to the minimum", 10 * time.Second, minStopPlaylistClientTimeout},
-		{"zero is raised to the minimum", 0, minStopPlaylistClientTimeout},
-		{"exactly the minimum is left alone", minStopPlaylistClientTimeout, minStopPlaylistClientTimeout},
-		{"an explicit larger value is honored, never clamped down", 5 * time.Minute, 5 * time.Minute},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := effectiveStopPlaylistTimeout(tc.flag)
-			if got != tc.want {
-				t.Errorf("effectiveStopPlaylistTimeout(%v) = %v, want %v", tc.flag, got, tc.want)
-			}
-		})
-	}
-}
+// deadline needs, regardless of --timeout's global default. The fast, pure
+// unit test for this guard (TestEffectiveFPPCommandTimeoutNeverBelowMinimum)
+// now lives in cmd_fpp_command_test.go, alongside effectiveFPPCommandTimeout
+// itself, since Step 8 generalized both to every "fpp <verb>" subcommand,
+// not only this one. This subcommand keeps its own end-to-end
+// reproduction below, because it is the one that first found the defect. ---
 
 // TestCmdFPPStopPlaylistSurvivesAResponseSlowerThanTheExplicitTimeoutFlag
 // is this defect's own reproduction, fixed, kept fast by using an
 // explicit small --timeout rather than waiting out the real 35s minimum:
 // with --timeout set to 200ms (well below
-// [minStopPlaylistClientTimeout]), a fake coordinator that takes 400ms to
+// [minFPPCommandClientTimeout]), a fake coordinator that takes 400ms to
 // answer must still be reached successfully. Before this fix, this
 // subcommand used --timeout directly as both the *http.Client's own
 // Timeout and the request context's deadline, so a 400ms response against
 // a 200ms budget would abort as a bare transport timeout — exactly what a
 // real coordinator's confirmation wait does routinely against the old 10s
-// global default. Broken to verify: reverting effectiveStopPlaylistTimeout
+// global default. Broken to verify: reverting effectiveFPPCommandTimeout
 // to `return flagTimeout` (ignoring the minimum entirely) makes this test
 // fail with a context-deadline-exceeded transport error instead of
 // "confirmed" — see this task's report.

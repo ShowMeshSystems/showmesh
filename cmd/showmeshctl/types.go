@@ -523,20 +523,36 @@ type streamFPPObservationsChanged struct {
 }
 
 // fppCommandRequest is the body of POST /api/v1/fpp/{instanceId}/commands
-// (Step 7 seam C). IdempotencyKey is minted by this program, once per
-// invocation, never by the coordinator — RES-015 section 7.3: FPP
+// (Step 7 seam C, Step 8). IdempotencyKey is minted by this program, once
+// per invocation, never by the coordinator — RES-015 section 7.3: FPP
 // supplies nothing to derive one from, so the caller mints it. This
 // program does not import pkg/command.NewIdempotencyKey for the identical
 // reason it decodes every wire type independently rather than sharing
 // pkg/observation's: see importgraph_test.go and doc.go — this CLI's
 // whole point is to keep the coordinator's own JSON tag renames from
 // silently renaming both sides of a shared struct. Minting its own random
-// value here (see cmd_fpp.go's newIdempotencyKey) costs nothing and keeps
-// that independence real for a value this program SENDS, not merely one
-// it decodes.
+// value here (see cmd_fpp_command.go's newIdempotencyKey) costs nothing
+// and keeps that independence real for a value this program SENDS, not
+// merely one it decodes.
+//
+// Params is Step 8's own addition (docs/bench/fpp-command-vocabulary.md
+// section 4): five of the eight primitives take none, and for those this
+// program leaves Params nil, which "params,omitempty" turns into an
+// OMITTED "params" key on the wire — never an explicit "null" and never an
+// explicit "{}" this program did not intend to send. The three
+// parameter-taking primitives (startPlaylist, stopPlaylistGracefully,
+// setVolume) always send every one of their own parameters, defaulted
+// values included, since this program's flags always resolve to a
+// concrete value whether or not the operator passed the flag explicitly —
+// see api/openapi.yaml's FPPCommandRequest.params description for why an
+// explicitly-sent default and an omitted key are treated identically by
+// the coordinator's own decode (fppcommand_primitives.go's
+// decodeFPPCommandParams), so there is no behavioral difference, only a
+// simpler client.
 type fppCommandRequest struct {
-	Action         string `json:"action"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	Action         string         `json:"action"`
+	IdempotencyKey string         `json:"idempotencyKey"`
+	Params         map[string]any `json:"params,omitempty"`
 }
 
 // fppCommandResponse is the body of a successful response from

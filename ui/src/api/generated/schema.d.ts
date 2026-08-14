@@ -174,8 +174,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Dispatch a primitive FPP lifecycle command (Step 7 seam C)
-         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over GET at its own /api/command/... endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt. A replayed `idempotencyKey` — reused against the SAME `action` and the SAME `instanceId` it was first used against — dispatches nothing and returns the original command's result, flagged `replay: true`. An `idempotencyKey` reused against a DIFFERENT `action` or a DIFFERENT `instanceId` is a `409` conflict, not a replay: see FPPCommandRequest.idempotencyKey and the `409` response below.
+         * Dispatch a primitive FPP lifecycle command (Step 7 seam C, Step 8)
+         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over POST at its own /api/command endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal, per-action deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
+         *     `idempotencyKey` is resolved FIRST, before `startPlaylist`'s own `ifBusy` guard (or any other primitive's pre-dispatch guard) ever runs — a review finding proved live that the reverse order answers a legitimate replay with a fresh `409` the guard invented for what it wrongly evaluated as a brand-new request. A replayed `idempotencyKey` — reused against the SAME `action`, the SAME `instanceId`, and the SAME normalized `params` it was first used against — dispatches nothing and returns the original command's result, flagged `replay: true`, with no guard evaluated at all. An `idempotencyKey` reused against a DIFFERENT `action`, a DIFFERENT `instanceId`, or DIFFERENT `params` is a `409` conflict, not a replay, also decided before any guard runs: see the `idempotencyKey` field on any FPPCommandRequest variant below (the text is identical on all eight) and the `409` response below. Only a genuinely NEW `idempotencyKey` — one this coordinator has never recorded — reaches a primitive's own guard at all.
+         *     `startPlaylist`'s own `ifBusy` default (`"refuse"`) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`, `detail` names what is playing), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current` — this coordinator never proceeds on the grounds that it could not tell) — two DIFFERENT `type` values on the same `409` status, neither of them the plain `conflict` the idempotency-key case above uses, so a client can tell all three apart without parsing `detail` prose; see StartPlaylistCommandRequest.params's own description. This is a guard against an accidental interruption, not a lock: it is evaluated against evidence that can be stale, and cannot prevent a race against FPP's own scheduler.
          */
         post: operations["dispatchFPPCommand"];
         delete?: never;
@@ -346,14 +348,14 @@ export interface paths {
         };
         /**
          * The active fpp.endpoints configuration (Step 7 seam A, RES-008 D1)
-         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated. `restartRequired` is always `true`: this coordinator does not hot-reload configuration, so a change here takes effect on the coordinator's next restart, never immediately — see `restartRequiredReason`.
+         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be persisted, in which case a configuration IS in effect and `GET /fpp` lists it. A client must not read this `404` as "this coordinator is collecting from nothing". `restartRequired` is always `true`: this coordinator does not hot-reload configuration, so a change here takes effect on the coordinator's next restart, never immediately — see `restartRequiredReason`.
          */
         get: operations["getFPPEndpointsConfig"];
         /**
          * Write a new fpp.endpoints configuration revision (Step 7 seam A, RES-008 D1)
          * @description Requires `config:write` (admin only). The request body's `endpoints` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero endpoints is an explicit empty array (`"endpoints": []`). No other top-level field is accepted; an unrecognized one (e.g. a typo'd `endpoint`) is rejected rather than silently ignored, unlike a response body, where an unknown field must be ignored (this is a request a client is asking this coordinator to ACT on, not a response whose shape this coordinator already promised — see `ConfigFPPEndpointsPayload`'s own description).
          *     Validates the body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. Also refused before activation: an endpoint list that would drop an instance id `SHOWMESH_FPP_MQTT_HOSTS` still references, which this coordinator's own startup already enforces fatally — refusing it here means the mistake is refused at write time, not discovered as a refusal to boot on the next restart.
-         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_ENDPOINTS` is still set in this coordinator's own process environment: a write accepted in that state cannot survive this coordinator's own env/store disagreement rule on its very next restart, so the refusal happens now, while this coordinator is up and the reason is readable, rather than after a restart that never completes.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_ENDPOINTS` is still set in this coordinator's own process environment: a write accepted in that state cannot survive this coordinator's own env/store disagreement rule on its very next restart, so the refusal happens now, while this coordinator is up and the reason is readable, rather than after a restart that never completes. That `409` carries one of two REMEDIES and they are not interchangeable, so `detail` is the part to read rather than the status: normally, remove the variable and restart once. But if this coordinator's startup migration of that variable was deferred because it could not be persisted, the store holds no endpoint list at all and removing the variable would resolve this coordinator to zero endpoints; `detail` then says so explicitly and the fix is to repair the data volume and restart.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPEndpointsConfig"];
@@ -615,12 +617,75 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
-        /** @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, ADR-001, ADR-003). action is checked against a fixed vocabulary at the handler; "stopPlaylist" is the only member today, and dispatches FPP's own native "Stop Now" command. idempotencyKey is required on every request (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. */
-        FPPCommandRequest: {
-            /** @enum {string} */
-            action: "stopPlaylist";
-            /** @description Scoped to the exact (action, instanceId) pair it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action and instanceId is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action or a DIFFERENT instanceId is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+        /**
+         * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) — a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies — the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape — required fields, enums, numeric bounds — as real JSON Schema, not as prose a generator cannot see.
+         *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant — see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
+         *     `params` is REQUIRED whenever an action has at least one required parameter (`startPlaylist`, `setVolume`) and OPTIONAL otherwise. When optional, absent or `{}` means every parameter takes its documented default. An explicit `"params": null` is ALWAYS a `400`, for every action — every variant's own `params` schema is a plain JSON object type, never nullable, so a generated client cannot even construct this shape, and this coordinator's own handler rejects it explicitly rather than treating null as "omitted" (an explicit null is not the same as an omitted field). A required parameter absent, present as `null`, or (for a string) present as `""` are three DIFFERENT `400` responses, each naming exactly what is wrong. A key an action's own `params` schema does not declare is a `400` naming it (every variant's `params` sets `additionalProperties: false`) — deliberately stricter than this document's own "clients ignore unknown fields" rule, which governs a client reading RESPONSES, not a server accepting a WRITE: a typo'd parameter name must never silently fall back to that parameter's own default.
+         */
+        FPPCommandRequest: components["schemas"]["StartPlaylistCommandRequest"] | components["schemas"]["StopPlaylistGracefullyCommandRequest"] | components["schemas"]["SetVolumeCommandRequest"] | components["schemas"]["NoParamsFPPCommandRequest"];
+        /** @description `action: "startPlaylist"` (docs/bench/fpp-command-vocabulary.md sections 4/5): starts a playlist on the target FPP instance, or refuses per `ifBusy` below. */
+        StartPlaylistCommandRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "startPlaylist";
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
+            /** @description `ifBusy: "refuse"` (the default) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current`) — see the `409` response on POST /fpp/{instanceId}/commands. */
+            params: {
+                /** @description Must not contain `/`, `\`, or `..` (FPP resolves this to a path on its own filesystem; this coordinator rejects a traversal attempt before dispatch rather than passing one through), must not contain an ASCII control character, and must not have leading or trailing whitespace (rejected, never trimmed — the operator's value is not this coordinator's to edit). The `maxLength` above is 250 JSON Schema code points; the coordinator's own limit is 250 UTF-8 BYTES (see this property's own schema-level comment for why the two are not always the same number). 250 rather than 255 because FPP appends `.json` to this value to resolve a filename, so the string that must fit a POSIX `NAME_MAX` of 255 is this name plus five bytes. */
+                playlist: string & (unknown & unknown & unknown);
+                /** @default false */
+                repeat?: boolean;
+                /**
+                 * @description `"refuse"` is the default and what an absent field means. `"replace"` is the operator saying, in this request, that interrupting whatever is currently running is intended.
+                 * @default refuse
+                 * @enum {string}
+                 */
+                ifBusy?: "refuse" | "replace";
+            };
+        };
+        /** @description `action: "stopPlaylistGracefully"` (docs/bench/fpp-command-vocabulary.md section 3.3/4): a graceful stop's terminal state is bounded by the currently playing item's own remaining runtime, not by any number this coordinator can choose — see FPPCommandResult.outcomeReason. */
+        StopPlaylistGracefullyCommandRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "stopPlaylistGracefully";
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            idempotencyKey: string;
+            /** @description Optional; absent or `{}` means `afterLoop` defaults to `false`. */
+            params?: {
+                /** @default false */
+                afterLoop?: boolean;
+            };
+        };
+        /** @description `action: "setVolume"` (docs/bench/fpp-command-vocabulary.md section 3.6/4). */
+        SetVolumeCommandRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "setVolume";
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            idempotencyKey: string;
+            params: {
+                /** @description A JSON number with a fractional part is a `400`, never truncated (capture section 1.5: FPP itself silently coerces and clamps a bad value; this coordinator does not repeat that for its own parameters). */
+                volume: number;
+            };
+        };
+        /** @description `action` one of `"stopPlaylist"`, `"pausePlaylist"`, `"resumePlaylist"`, `"nextPlaylistItem"`, `"prevPlaylistItem"` — docs/bench/fpp-command-vocabulary.md section 4's five zero-parameter primitives, which take no arguments and so share one shape. */
+        NoParamsFPPCommandRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "stopPlaylist" | "pausePlaylist" | "resumePlaylist" | "nextPlaylistItem" | "prevPlaylistItem";
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            idempotencyKey: string;
+            /** @description Optional; this action takes no parameters — a non-empty `params` object is a `400`. */
+            params?: Record<string, never>;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
         FPPCommandResponse: {
@@ -634,6 +699,10 @@ export interface components {
             idempotencyKey: string;
             action: string;
             instanceId: string;
+            /** @description This command's own normalized parameters (Step 8): defaults applied, present even for a zero-parameter action (as `{}`), never omitted or null — matching AuditEntry.params's identical convention (including `additionalProperties: true`: this is the RESPONSE echo of whichever action's own params this command actually carried, heterogeneous by construction, unlike FPPCommandRequest's own per-action `params`, which is a real, closed shape per variant). On a REPLAY response this is the ORIGINAL command's own params, so a replay always tells the caller what the original request's parameters actually were. */
+            params: {
+                [key: string]: unknown;
+            };
             /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result, returned per ADR-024 decision 11 ("a replay is precisely the case an investigator wants to see, because it means the operator did not get their response"). */
             replay: boolean;
             /**
@@ -646,7 +715,7 @@ export interface components {
              * @enum {string}
              */
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
-            /** @description A short, human-readable explanation. Non-empty whenever this response's own `command.outcome` is `"confirmed"` or `"unconfirmed"` (i.e. whenever this command has actually resolved) — the only value for which it may be empty is a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching `outcome`'s own narrow accepted-empty case exactly. A command a coordinator restart left stranded is resolved by a startup reconciliation pass before it can ever reach a client in that state — see outcomeState's own description — so that condition is never a second source of a blank reason. */
+            /** @description A short, human-readable explanation. Non-empty whenever this response's own `command.outcome` is `"confirmed"` or `"unconfirmed"` (i.e. whenever this command has actually resolved) — verified true, as of Step 8 review finding 6, for every one of the eight primitives on both a confirmed and an unconfirmed outcome (internal/coordinator/api/fppcommand_evidence.go's resolveConfirmationEvidence and every predicate built on it always produces a reason; a confirmed result used to leave this blank, fixed by that same finding). Deliberately left `type: string` with no `minLength`, unlike `outcomeState`'s enum (this schema's own JSON Schema `if`/`then` could express "non-empty unless outcome is empty", but this document's own test suite overlays every schema declaring `properties` with `additionalProperties: false` — including inside an `if` branch — which either rejects the WHOLE object against a partial `if` subschema or silently defeats the conditional outright, a defect invisible to review and exactly the "a test that passes whether or not the bug is present" shape CLAUDE.md warns against; a schema constraint that risky is worse than none). This field's non-emptiness is verified at the handler level instead — the only value for which it may be empty is a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching `outcome`'s own narrow accepted-empty case exactly. A command a coordinator restart left stranded is resolved by a startup reconciliation pass before it can ever reach a client in that state — see outcomeState's own description — so that condition is never a second source of a blank reason. */
             outcomeReason: string;
             /** @description True when this command's dispatch or outcome audit entry could not be written. Stop Playlist is a member of ADR-024 decision 11's blackout/stop/power-off safety class, so the command proceeds regardless, with a degraded attribution record written to the coordinator's stderr instead of the audit log. */
             attributionDegraded: boolean;
@@ -809,16 +878,16 @@ export interface components {
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /**
-         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the twelve values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the fourteen values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
-         *     Four of the twelve are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action or target (Step 7 seam C) — `detail` names which.
+         *     Four of the fourteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy";
             title: string;
             status: number;
             detail: string;
@@ -1315,7 +1384,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description `idempotencyKey` was already used for a command whose `action` or `instanceId` differs from this request's own — a conflict, not a replay (see this operation's own description). */
+            /** @description Three DISTINCT causes, three DISTINCT `type` values, decided in this order (see this operation's own description): (1) `idempotencyKey` was already used for a command whose `action`, `instanceId`, or normalized `params` differs from this request's own — a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key"; decided BEFORE either guard below ever runs. Only once the key is confirmed genuinely new does `startPlaylist`'s own `ifBusy` guard get to refuse: (2) a DIFFERENT playlist is confirmed playing, `type` `fpp-start-playlist-busy`, remedy "resend with ifBusy: replace"; or (3) the evidence needed to decide that is not current, `type` `fpp-start-playlist-evidence-not-current`, remedy "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended". No two of these three share a `type`, specifically so a client branches on `type`, never on `detail` prose, since (1)'s remedy is the OPPOSITE of (2)'s and (3)'s. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -1326,6 +1395,16 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
+            /** @description ADR-024 decision 11's fail-closed default: this action is not a member of decision 11's blackout/stop/power-off safety class, and the pre-dispatch write that must durably record a command before it is dispatched could not be appended to this coordinator's audit store. `type` `fpp-command-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched to FPP; retry once the audit store is writable again. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listObservations: {

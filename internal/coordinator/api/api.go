@@ -130,6 +130,14 @@ type Dependencies struct {
 	// unset SHOWMESH_FPP_MQTT_HOSTS behaves everywhere else in this
 	// codebase.
 	FPPMQTTHostIDs map[string]string
+
+	// Nudger is the post-dispatch poll nudge's dependency — see
+	// [FPPPollNudger]. A nil field is replaced by [noFPPPollNudger], under
+	// which NudgePoll always reports false: every command dispatch
+	// degrades to exactly the pre-nudge behavior (wait for the collector's
+	// own scheduled poll), matching every other unwired dependency's
+	// "nothing told this API otherwise" posture in this struct.
+	Nudger FPPPollNudger
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -171,8 +179,20 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Discovery == nil {
 		d.Discovery = noDeclarationStore{}
 	}
+	if d.Nudger == nil {
+		d.Nudger = noFPPPollNudger{}
+	}
 	return d
 }
+
+// noFPPPollNudger is [Dependencies.Nudger]'s nil-safe default: NudgePoll
+// always reports false, which every caller already treats identically to
+// a suppressed or unknown nudge — see [FPPPollNudger]'s own doc comment.
+// An embedder that has not wired a Nudger in gets exactly the pre-nudge
+// behavior (wait for the collector's own scheduled poll), never an error.
+type noFPPPollNudger struct{}
+
+func (noFPPPollNudger) NudgePoll(string) bool { return false }
 
 type noNodeLister struct{}
 
@@ -256,6 +276,19 @@ func (noCommandStore) UpdateCommandOutcome(context.Context, string, store.Comman
 // methods, which correctly refuse loudly.
 func (noCommandStore) ListUnresolvedCommands(context.Context) ([]store.CommandRecord, error) {
 	return nil, nil
+}
+
+// GetCommandByIdempotencyKey answers store.ErrCommandNotFound, not
+// errCommandStoreNotConfigured: a coordinator with no CommandStore wired in
+// has never recorded any command under any key, so "not found" is the
+// honest, successful answer for this READ (matching ListUnresolvedCommands'
+// identical reasoning just above), distinct from this type's WRITE methods,
+// which correctly refuse loudly. [handlers.handleFPPCommand]'s own
+// idempotency-replay lookup (Step 8 review finding 4) treats this exactly
+// like a genuinely new key and proceeds to the write path below, which then
+// fails loudly on errCommandStoreNotConfigured as it always did.
+func (noCommandStore) GetCommandByIdempotencyKey(context.Context, string) (store.CommandRecord, error) {
+	return store.CommandRecord{}, store.ErrCommandNotFound
 }
 
 // noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads
@@ -393,11 +426,19 @@ type Options struct {
 	// imported here — see this package's doc comment on why this package
 	// does not import that one): confirmation is read entirely from
 	// whatever the collector's own background poll loop has most recently
-	// recorded (this handler triggers no poll of its own, per ADR-001 —
-	// see fppcommand_handler.go), so a deadline shorter than roughly one
-	// poll interval would report "unconfirmed" most of the time for a
-	// command that plainly worked, for no reason but bad luck in when the
-	// collector's own timer last fired. Defaults to 20 seconds.
+	// recorded. As of the owner's 2026-08-13 post-dispatch poll nudge
+	// (fppcommand_handler.go, [Dependencies.Nudger]), a successful dispatch
+	// now also asks that same collector to poll THIS instance immediately
+	// rather than waiting out its own cadence — but the nudge is
+	// best-effort and rate-limited per instance (see
+	// [FPPPollNudger]/[internal/coordinator/collector.Runner.Nudge]), so a
+	// suppressed or unknown nudge still falls all the way back to this
+	// deadline covering roughly one ordinary poll interval. This value
+	// must stay sized for THAT fallback case, not for the nudge's own
+	// common-case latency: shrinking it would report "unconfirmed" most of
+	// the time for a command that plainly worked, exactly whenever the
+	// nudge happens to be the one that gets suppressed. Defaults to 20
+	// seconds.
 	FPPCommandConfirmDeadline time.Duration
 
 	// FPPCommandPollInterval is how often

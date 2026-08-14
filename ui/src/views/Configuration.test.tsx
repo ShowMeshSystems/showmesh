@@ -151,7 +151,7 @@ describe('Configuration', () => {
   it('renders the deferred-migration reason verbatim, including the warning not to remove the variable', async () => {
     const deferredDetail =
       'no fpp.endpoints configuration is stored, but this coordinator IS collecting from the endpoints named by ' +
-      'SHOWMESH_FPP_ENDPOINTS: the startup migration of that variable into this store (RES-008 D1) could not be ' +
+      'SHOWMESH_FPP_ENDPOINTS: the startup migration of that variable into this store could not be ' +
       'persisted on this boot. Do NOT remove SHOWMESH_FPP_ENDPOINTS until it has succeeded.'
     getFPPEndpointsConfig.mockRejectedValue(
       new ApiError(deferredDetail, 404, 'https://showmesh.dev/problems/resource-not-found'),
@@ -249,7 +249,7 @@ describe('Configuration', () => {
     putFPPEndpointsConfig.mockRejectedValue(
       new ApiError(
         "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
-          'still set in its process environment (RES-008 D1); remove it and restart this coordinator once, then retry this write.',
+          'still set in its process environment; remove it and restart this coordinator once, then retry this write.',
         409,
         'https://showmesh.dev/problems/conflict',
       ),

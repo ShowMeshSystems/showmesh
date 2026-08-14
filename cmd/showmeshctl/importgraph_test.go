@@ -27,11 +27,13 @@ var forbiddenImports = []string{
 	// rule alone. pkg/command is not itself a coordinator package (it is
 	// the shared envelope model), but this CLI mints its own idempotency
 	// key independently (cmd_fpp_stop_playlist.go's newIdempotencyKey)
-	// rather than calling pkg/command.NewIdempotencyKey, for the identical
-	// reason it decodes every wire type independently rather than
-	// importing pkg/observation for one: a future change to that
-	// package's minting logic must not be able to silently change what
-	// this CLI sends without a reviewer noticing the coupling.
+	// rather than calling pkg/command.NewIdempotencyKey (see
+	// cmd_fpp_command.go's own newIdempotencyKey, shared by every "fpp
+	// <verb>" write subcommand), for the identical reason it decodes every
+	// wire type independently rather than importing pkg/observation for
+	// one: a future change to that package's minting logic must not be
+	// able to silently change what this CLI sends without a reviewer
+	// noticing the coupling.
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppcommand",
 	"github.com/showmeshsystems/showmesh/pkg/command",
 }

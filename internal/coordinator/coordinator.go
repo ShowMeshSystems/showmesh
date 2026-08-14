@@ -164,6 +164,24 @@ func Run() int {
 		return 1
 	}
 
+	// fppRunner is constructed here — BEFORE apiDeps, not after it the way
+	// this file had every other FPP collector wiring line ordered before
+	// the 2026-08-13 post-dispatch poll nudge — so apiDeps.Nudger
+	// (fppRunnerNudger, below) can wrap the real *collector.Runner instead
+	// of a value that does not exist yet. No collector.Runner method used
+	// here (Add, or NudgePoll's own Nudge) requires Run to have started,
+	// so constructing the Runner early and adding every configured FPP
+	// endpoint's collector to it further down (unchanged from before this
+	// reordering) is safe regardless of when api.New or apiInst's own
+	// construction happens relative to it.
+	fppHTTPClient := &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -250,6 +268,19 @@ func Run() int {
 		// other than always answer a "not configured" internal error
 		// against api.noDeclarationStore's no-op default.
 		Discovery: st,
+		// Nudger is the post-dispatch poll nudge's dependency (owner
+		// decision, 2026-08-13; api.FPPPollNudger's own doc comment has
+		// the full contract): fppRunnerNudger wraps the SAME
+		// *collector.Runner constructed above, whose Add calls further
+		// down register every configured FPP instance's own collector
+		// under the identical instance ID this wraps NudgePoll against —
+		// wiring it in is what turns
+		// POST /api/v1/fpp/{instanceId}/commands' confirmation wait from
+		// "always the collector's own ~15s cadence" into "usually one LAN
+		// round trip, falling back to that same cadence whenever the
+		// nudge is suppressed or fails" against api.noFPPPollNudger's
+		// no-op default.
+		Nudger: fppRunnerNudger{runner: fppRunner},
 	}
 	apiInst := api.New(apiDeps, api.Options{
 		CloseReads:          cfg.CloseReads,
@@ -267,31 +298,34 @@ func Run() int {
 	// Step 7 seam C review defect 5: resolve any command a PRIOR process
 	// left dispatched-but-unresolved (a crash, a kill, or an abandoned
 	// client connection between dispatch and outcome) before it can sit
-	// blank forever. Backgrounded and run exactly once, here — see
-	// api.ReconcileStrandedFPPCommands's own doc comment for why this
-	// timing (before this process has served its first request) is what
-	// makes "still unresolved" mean "stranded" rather than "in flight."
-	go func() {
-		n, rerr := api.ReconcileStrandedFPPCommands(ctx, apiDeps, time.Now, logger)
-		if rerr != nil {
-			logger.Warn("failed to reconcile stranded fpp commands at startup", "error", rerr)
-			return
-		}
-		if n > 0 {
-			logger.Warn("resolved commands left stranded by a prior process", "count", n)
-		}
-	}()
-
-	// One shared *http.Client per contract/Task C's own guidance ("callers
-	// SHOULD construct one *http.Client and pass it to every fpp.New call")
-	// rather than one per instance.
-	fppHTTPClient := &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConnsPerHost: 4,
-			IdleConnTimeout:     90 * time.Second,
-		},
+	// blank forever. Finding 3 (Step 8 review): this used to be
+	// `go func() { ... }()`, which is NOT a happens-before edge against
+	// srv.ListenAndServe() below — api.ReconcileStrandedFPPCommands's own
+	// doc comment claimed "before the HTTP server starts accepting
+	// connections" while the code raced it, and a live request confirming
+	// a command concurrently with this sweep was proved to resolve twice
+	// (two outcome audit entries for the same command_id, one from each
+	// racing path). Called SYNCHRONOUSLY here instead, so it genuinely
+	// completes before the goroutine that calls ListenAndServe is even
+	// started, making that doc comment's claim true rather than aspirational.
+	//
+	// Deliberately NOT fatal on error: this is a bounded local SQLite
+	// scan, which is what makes blocking acceptable, but ADR-024
+	// constraint 23 draws the line at "you cannot act", never "you cannot
+	// see" — a store misbehaving here has no principal to hold
+	// accountable for refusing to boot, so a failure is logged and the
+	// coordinator still proceeds to start listening.
+	if n, rerr := api.ReconcileStrandedFPPCommands(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile stranded fpp commands at startup", "error", rerr)
+	} else if n > 0 {
+		logger.Warn("resolved commands left stranded by a prior process", "count", n)
 	}
-	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
+
+	// fppHTTPClient and fppRunner were already constructed above (before
+	// apiDeps), one shared *http.Client per contract/Task C's own guidance
+	// ("callers SHOULD construct one *http.Client and pass it to every
+	// fpp.New call") rather than one per instance — see that construction
+	// site's own comment for why this reordering was necessary.
 	for _, ep := range cfg.FPPEndpoints {
 		// cfg.Validate already checked ep.ID's syntax and ep.URL's shape
 		// (internal/coordinator/config's validateFPPEndpoints) using the

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -113,19 +114,22 @@ func fppStatusObsFromSource(instanceID, value, source string, observedAt, collec
 // prove the frozen instant differs from whenever the test happened to run,
 // which is true regardless of correctness.
 type fakeFPPCommandServer struct {
-	mu           sync.Mutex
-	requests     []string    // recorded EscapedPath() of every request received
-	requestTimes []time.Time // real wall-clock time.Now() when each request was received
-	status       int
-	body         string
+	mu            sync.Mutex
+	requests      []string    // recorded EscapedPath() of every request received
+	requestBodies []string    // recorded raw JSON body of every request received (Step 8: fppcommand.Client posts {"command":...,"args":[...]} to /api/command, so the PATH alone no longer distinguishes one dispatched primitive from another — the body does)
+	requestTimes  []time.Time // real wall-clock time.Now() when each request was received
+	status        int
+	body          string
 }
 
 func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.Server, *fakeFPPCommandServer) {
 	t.Helper()
 	f := &fakeFPPCommandServer{status: status, body: body}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.requests = append(f.requests, r.URL.EscapedPath())
+		f.requestBodies = append(f.requestBodies, string(raw))
 		f.requestTimes = append(f.requestTimes, time.Now())
 		f.mu.Unlock()
 		w.WriteHeader(f.status)
@@ -135,10 +139,40 @@ func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.S
 	return srv, f
 }
 
+// newFailIfHitFPPCommandServer returns an httptest.Server that fails t
+// immediately if it EVER receives a request. Used by
+// TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing to
+// prove the fail-closed refusal dispatches NOTHING to FPP — a stronger
+// check than reading hitCount() == 0 after the response returns, which
+// only shows nothing had arrived BY THAT MOMENT and would not fail loudly
+// if a future regression fired the dispatch on a goroutine racing the
+// response write.
+func newFailIfHitFPPCommandServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("FPP received a request (%s %s) despite the command being refused before dispatch (ADR-024 "+
+			"decision 11's fail-closed default for a non-safety-class primitive)", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func (f *fakeFPPCommandServer) hitCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.requests)
+}
+
+// lastBody returns the most recently received request's raw JSON body, or
+// "" if none has arrived yet.
+func (f *fakeFPPCommandServer) lastBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requestBodies) == 0 {
+		return ""
+	}
+	return f.requestBodies[len(f.requestBodies)-1]
 }
 
 // firstRequestTime returns the real wall-clock instant the first request
@@ -848,6 +882,157 @@ func TestFPPCommandSucceedsWithAuditStoreFailing(t *testing.T) {
 	}
 }
 
+// --- ADR-024 decision 11's fail-closed default, corrected: Step 8 had
+// inherited Step 7's ONE safety-class exemption (stopPlaylist) onto all
+// eight primitives with no review, so an audit-write failure let
+// startPlaylist — which makes the show DO something — proceed with an
+// unaccountable actor exactly like a genuine stop. startPlaylist is not a
+// member of [fppSafetyClass]'s exempt set (see fppcommand_primitives.go),
+// so it must now fail CLOSED: refused, nothing dispatched, no commands
+// row, no desired_state row. ---
+
+func TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing(t *testing.T) {
+	fppSrv := newFailIfHitFPPCommandServer(t)
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// Idle at request time: startPlaylist's own PreDispatchCheck (ifBusy's
+	// "refuse" default) must clear BEFORE this test ever reaches the audit
+	// write it exists to fail — "nothing is playing" is never busy,
+	// regardless of ifBusy, and needs no fpp.playlist.name evidence at all.
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	// Installed AFTER principal/token creation, exactly like
+	// TestFPPCommandSucceedsWithAuditStoreFailing: neither CreatePrincipal
+	// nor IssueToken writes to audit_log, so this is the exact moment every
+	// SUBSEQUENT audit write starts failing — including this request's own
+	// pre-dispatch write.
+	installFailAuditTrigger(t, setup.storeDir)
+
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	body := fppCommandBody("startPlaylist", "key-1", `{"playlist":"showmesh-test"}`)
+	req := newFPPCommandRequest(t, "bench-fpp", body, token)
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (ADR-024 decision 11's fail-closed default: startPlaylist is not a member of "+
+			"the blackout/stop/power-off safety class); body: %s", resp.StatusCode, respBody)
+	}
+	m := decodeMap(t, respBody)
+	detail, _ := m["detail"].(string)
+	if !strings.Contains(strings.ToLower(detail), "audit") {
+		t.Errorf("problem detail = %q, want it to name the audit store as the refusal's cause", detail)
+	}
+	if !strings.Contains(detail, "startPlaylist") {
+		t.Errorf("problem detail = %q, want it to name the refused action (startPlaylist)", detail)
+	}
+
+	rows, err := setup.st.ListCommands(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list commands: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("commands rows = %d, want 0 — a fail-closed refusal must not create a commands row (the whole "+
+			"transaction already rolled back per identity.ErrAuditWrite's own guarantee)", len(rows))
+	}
+
+	desired, err := setup.st.ListDesiredState(context.Background(), store.DesiredStateFilter{ResourceID: "bench-fpp"})
+	if err != nil {
+		t.Fatalf("list desired state: %v", err)
+	}
+	if len(desired) != 0 {
+		t.Errorf("desired_state rows = %d, want 0 — a fail-closed refusal must not record desired state either", len(desired))
+	}
+}
+
+// auditWriteAlwaysFailsSpy wraps a real identity.Service, forcing every
+// [identity.Service.WriteAudit] call to fail while leaving
+// [identity.Service.AuditedWrite] (the pre-dispatch, transactional write)
+// delegated unchanged to the real implementation. This isolates "the
+// POST-dispatch outcome/replay audit write failed" from "the PRE-dispatch
+// write failed": [installFailAuditTrigger]'s real SQLite trigger cannot
+// make that distinction on its own, since it fails every audit_log insert
+// unconditionally — including the one inside AuditedWrite's own
+// transaction — which would make a non-safety-class primitive fail closed
+// before ever reaching dispatch, the wrong scenario for a test whose whole
+// point is to prove the OUTCOME entry degrades once a command has already
+// been dispatched. [identity.Service.AuditedWrite] never calls
+// [identity.Service.WriteAudit] internally (it appends the audit row
+// directly inside its own store.Store.InTx transaction — see
+// internal/coordinator/identity/audit.go), so overriding only WriteAudit
+// here is sufficient to leave the pre-dispatch path genuinely healthy.
+type auditWriteAlwaysFailsSpy struct {
+	identity.Service
+}
+
+func (s *auditWriteAlwaysFailsSpy) WriteAudit(context.Context, identity.AuditEntry) error {
+	return errors.New("injected post-dispatch audit failure")
+}
+
+// TestFPPCommandPostDispatchOutcomeAuditDegradesForNonSafetyClassPrimitive
+// is this task's own point 4: once a command has been dispatched,
+// refusing to answer cannot undo the dispatch — it can only hide the
+// record of it from the operator, which ADR-024 treats as "you cannot
+// see" and never accepts, unlike a pre-dispatch refusal ("you cannot
+// act"), which is fine. So the post-dispatch OUTCOME audit entry must
+// degrade rather than refuse even for startPlaylist — a
+// fppSafetyClassNotExempt primitive that DOES fail closed on its
+// PRE-dispatch write, per
+// TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing right
+// above. Proving both halves against the SAME primitive is the point:
+// which rule applies depends on WHEN the audit store fails relative to
+// dispatch, never on the primitive's [fppPrimitive.SafetyClass] alone.
+func TestFPPCommandPostDispatchOutcomeAuditDegradesForNonSafetyClassPrimitive(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	deps := setup.deps()
+	deps.Identity = &auditWriteAlwaysFailsSpy{Service: setup.svc}
+
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{
+			fppStatusObs("bench-fpp", "playing", testNow, testNow),
+			fppPlaylistNameObs("bench-fpp", "showmesh-test", testNow, testNow),
+		})
+	}()
+
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	body := fppCommandBody("startPlaylist", "key-1", `{"playlist":"showmesh-test"}`)
+	req := newFPPCommandRequest(t, "bench-fpp", body, token)
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the PRE-dispatch write already succeeded (AuditedWrite is untouched by "+
+			"this spy); an outcome entry that degrades must never turn into a refused response; body: %s", resp.StatusCode, respBody)
+	}
+	m := decodeMap(t, respBody)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "confirmed" {
+		t.Errorf("outcome = %v, want \"confirmed\"", cmd["outcome"])
+	}
+	if cmd["attributionDegraded"] != true {
+		t.Errorf("attributionDegraded = %v, want true — the post-dispatch outcome audit entry failed to write", cmd["attributionDegraded"])
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1 — the command must actually dispatch, exactly as its "+
+			"PRE-dispatch write (which succeeded) already committed to", srv.hitCount())
+	}
+}
+
 // --- Acceptance criterion 4 & 5: a replayed idempotency key dispatches
 // nothing and returns the original result; dispatch and outcome are
 // separate, correlated audit entries. ---
@@ -952,6 +1137,81 @@ func TestFPPCommandReplayDispatchesNothingAndReturnsOriginalResult(t *testing.T)
 	}
 }
 
+// TestFPPCommandFreshAndReplayedTimestampsRenderIdentically is Step 8
+// review finding 14's own reproduction, fixed: a fresh dispatch's
+// dispatchedAt/resolvedAt come from h.now() (fixedClock(testNow) here,
+// whose own testNow — fixtures_test.go — is deliberately anchored at a
+// -05:00 offset, matching contract section 6.3's own pinned example),
+// while a REPLAY's dispatchedAt/resolvedAt are decoded from the STORE's
+// own round trip — store/queries.go's timeToDB/dbToTime deliberately
+// normalize every persisted timestamp to UTC ("this package owns the
+// format itself"). Before this fix, formatTimePtr(dispatchedAt) and
+// formatTime(resolvedAt) on the FRESH path rendered testNow's own -05:00
+// offset verbatim, while the REPLAY path — reading the same underlying
+// instant back out of the store — rendered "...Z". Both are valid RFC
+// 3339 individually, but a client comparing the two strings for the SAME
+// underlying instant saw a difference for no reason connected to the
+// command itself. This asserts the fresh response's own dispatchedAt/
+// resolvedAt already render with a "Z" suffix (matching what a replay of
+// the SAME command will render), rather than testNow's own configured
+// -05:00 offset.
+func TestFPPCommandFreshAndReplayedTimestampsRenderIdentically(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 60 * time.Millisecond, FPPCommandPollInterval: 5 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	first := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("ts-key"), token)
+	resp1, body1 := doRawRequest(t, api.Handler, first)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
+	}
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests, want 1", srv.hitCount())
+	}
+	m1 := decodeMap(t, body1)
+	cmd1, _ := m1["command"].(map[string]any)
+	freshDispatchedAt, _ := cmd1["dispatchedAt"].(string)
+	freshResolvedAt, _ := cmd1["resolvedAt"].(string)
+	if freshDispatchedAt == "" || freshResolvedAt == "" {
+		t.Fatalf("fresh dispatchedAt/resolvedAt unexpectedly empty: %q / %q", freshDispatchedAt, freshResolvedAt)
+	}
+	if !strings.HasSuffix(freshDispatchedAt, "Z") {
+		t.Errorf("fresh dispatchedAt = %q, want a \"Z\" (UTC) suffix, matching what this SAME command's own replay "+
+			"will render from the store's round trip — testNow's own -05:00 offset leaking through here is finding "+
+			"14's own reproduction", freshDispatchedAt)
+	}
+	if !strings.HasSuffix(freshResolvedAt, "Z") {
+		t.Errorf("fresh resolvedAt = %q, want a \"Z\" (UTC) suffix, for the identical reason", freshResolvedAt)
+	}
+
+	second := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("ts-key"), token)
+	resp2, body2 := doRawRequest(t, api.Handler, second)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200; body: %s", resp2.StatusCode, body2)
+	}
+	m2 := decodeMap(t, body2)
+	cmd2, _ := m2["command"].(map[string]any)
+	replayDispatchedAt, _ := cmd2["dispatchedAt"].(string)
+	replayResolvedAt, _ := cmd2["resolvedAt"].(string)
+
+	if replayDispatchedAt != freshDispatchedAt {
+		t.Errorf("replay dispatchedAt = %q, want it to render BYTE-IDENTICAL to the original response's own %q for "+
+			"the same underlying instant", replayDispatchedAt, freshDispatchedAt)
+	}
+	if replayResolvedAt != freshResolvedAt {
+		t.Errorf("replay resolvedAt = %q, want it to render BYTE-IDENTICAL to the original response's own %q for "+
+			"the same underlying instant", replayResolvedAt, freshResolvedAt)
+	}
+}
+
 // TestFPPCommandReplayConflictWhenTargetDiffers is Step 7 seam C review
 // defect 6's own reproduction, fixed: replaying "key" (originally
 // dispatched against fpp-garage) against a DIFFERENT instanceId
@@ -1008,6 +1268,76 @@ func TestFPPCommandReplayConflictWhenTargetDiffers(t *testing.T) {
 	// command result for fpp-roof.
 	if _, ok := m2["command"]; ok {
 		t.Errorf("conflict response unexpectedly carries a \"command\" object: %v", m2["command"])
+	}
+}
+
+// TestFPPCommandReplayRecognizedBeforePreDispatchGuardRuns is Step 8
+// review finding 4's own reproduction, fixed: dispatching
+// `startPlaylist holiday-show` with key `key-replay` while idle
+// dispatches once (an FPP hit, 200) and inserts a commands row under that
+// key; if FPP's own scheduler then moves on to a DIFFERENT show before
+// the SAME key is resent with the SAME body, startPlaylist's own ifBusy
+// guard (the default, "refuse") would refuse a genuinely NEW request in
+// that situation — but this is not a new request, it is a replay, and a
+// replay must dispatch nothing and return the ORIGINAL result regardless
+// of what the guard would decide about the CURRENT state. Before this
+// fix, [handlers.handleFPPCommand] ran the guard (old step 3) before
+// recognizing the replay (old step 4's insert-based detection), so the
+// resend answered 409 (fpp-start-playlist-busy) instead of the documented
+// replay — proved live against a real dispatch (see this task's report).
+func TestFPPCommandReplayRecognizedBeforePreDispatchGuardRuns(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// Idle at dispatch time: startPlaylist's own ifBusy guard is "not
+	// busy" here, so the FIRST request dispatches normally.
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 30 * time.Millisecond, FPPCommandPollInterval: 5 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	body := fppCommandBody("startPlaylist", "key-replay", `{"playlist":"holiday-show"}`)
+
+	first := newFPPCommandRequest(t, "bench-fpp", body, token)
+	resp1, body1 := doRawRequest(t, api.Handler, first)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
+	}
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests after the first dispatch, want 1", srv.hitCount())
+	}
+	m1 := decodeMap(t, body1)
+	cmd1, _ := m1["command"].(map[string]any)
+
+	// FPP's own scheduler moves on to a DIFFERENT show — exactly what the
+	// client never seeing the first response, then FPP itself advancing,
+	// looks like from the coordinator's own evidence.
+	setup.obs.setObs([]observation.Observation{
+		fppStatusObs("bench-fpp", "playing", testNow, testNow),
+		fppPlaylistNameObs("bench-fpp", "some-other-show", testNow, testNow),
+	})
+
+	// Resend the BYTE-IDENTICAL body and key.
+	second := newFPPCommandRequest(t, "bench-fpp", body, token)
+	resp2, body2 := doRawRequest(t, api.Handler, second)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200 (a replay, never a fresh 409 from the ifBusy guard); body: %s", resp2.StatusCode, body2)
+	}
+	if srv.hitCount() != 1 {
+		t.Fatalf("FPP received %d requests after the replay, want still 1 — a replay must dispatch nothing, and the "+
+			"guard must never even run for it", srv.hitCount())
+	}
+	m2 := decodeMap(t, body2)
+	cmd2, _ := m2["command"].(map[string]any)
+	if cmd2["replay"] != true {
+		t.Errorf("replay = %v, want true", cmd2["replay"])
+	}
+	if cmd2["id"] != cmd1["id"] {
+		t.Errorf("replay id = %v, want the original command's id %v", cmd2["id"], cmd1["id"])
 	}
 }
 
@@ -1141,6 +1471,126 @@ func TestFPPCommandOutcomeSurvivesClientDisconnect(t *testing.T) {
 	}
 	if outcomeCount != 1 {
 		t.Errorf("outcome audit entries = %d, want exactly 1 (defect 4: this used to be silently lost on a canceled context)", outcomeCount)
+	}
+}
+
+// TestFPPCommandDispatchSurvivesClientDisconnect is Step 8 review finding
+// 14's own reproduction, fixed: defect 4's original fix severed
+// r.Context()'s cancellation from POST-dispatch bookkeeping only, but left
+// the DISPATCH ATTEMPT ITSELF (primitive.Dispatch, and CaptureBaseline)
+// bound to r.Context() — so a client that disconnected while FPP was slow
+// could abort the outbound command mid-flight, in the worst case a stop.
+//
+// The fake FPP server here blocks on a channel after recording the hit but
+// before writing its response, and the client's own context is canceled
+// only once that channel confirms the request has genuinely reached FPP
+// (never a sleep racing real wall-clock time to REACH that point — the
+// same channel-ordering discipline newFakeFPPCommandServerWithSideEffect
+// uses one file over, for the identical "do not race a kernel" reason).
+// This also guarantees the cancellation lands AFTER authentication and
+// every pre-dispatch step have already run (all of which also read
+// r.Context()), so this test isolates exactly the one thing finding 14 is
+// about: the dispatch attempt itself.
+//
+// The assertion itself is deliberately a BOUNDED "did not finish yet"
+// check, not a hit-count check taken immediately after canceling: closing
+// a local context's Done channel is near-instantaneous, so if dispatch
+// were still bound to r.Context() (the pre-fix shape), Go's own
+// http.Transport tears down the pending round trip as soon as it observes
+// the cancellation — well before this test chooses to unblock the fake
+// server — and ServeHTTP returns almost immediately with a transport
+// error, with NO further wait for FPP. Racing "cancel, then immediately
+// release and see what comes back" against that teardown would be exactly
+// the kernel-scheduling coin flip CLAUDE.md's own Step 4 lesson warns
+// against (a response that already started arriving can beat a
+// cancellation propagating through the transport, or not, depending on
+// how the two goroutines happen to be scheduled). Waiting up to
+// dispatchStillInFlightWindow for `done` to fire BEFORE releasing the
+// server sidesteps that race entirely: under the fix, ServeHTTP is
+// GENUINELY still blocked waiting on FPP's response (bgCtx is immune to
+// ctx's cancellation, so nothing tears the round trip down), and stays
+// blocked for the whole window, deterministically; only the broken,
+// pre-fix shape can make `done` fire during it. This was verified against
+// the pre-fix code (ctx instead of bgCtx in both dispatch-path calls),
+// which fails this test's "still in flight" assertion consistently — see
+// this task's report.
+func TestFPPCommandDispatchSurvivesClientDisconnect(t *testing.T) {
+	const dispatchStillInFlightWindow = 200 * time.Millisecond
+
+	received := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	// releaseFPP unblocks the fake server's handler goroutine below.
+	// Guarded by sync.Once and deferred unconditionally (not just on the
+	// success path) so a t.Fatalf on the "already returned too early"
+	// branch below — which halts THIS goroutine via runtime.Goexit,
+	// running deferred calls first — still releases it, rather than
+	// leaving that goroutine permanently blocked on <-release and
+	// deadlocking t.Cleanup(fppSrv.Close) (Close waits for every
+	// outstanding request to finish).
+	releaseFPP := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseFPP()
+
+	var mu sync.Mutex
+	hitCount := 0
+	fppSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hitCount++
+		mu.Unlock()
+		close(received)
+		<-release
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Stopped"))
+	}))
+	t.Cleanup(fppSrv.Close)
+
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	api := New(setup.deps(), Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 1 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		api.Handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	<-received // the dispatch attempt has genuinely reached the fake FPP server
+	cancel()   // simulate the client disconnecting WHILE FPP is slow to answer
+
+	select {
+	case <-done:
+		t.Fatalf("ServeHTTP returned within %s of the client disconnecting, before FPP was ever allowed to answer — "+
+			"the dispatch attempt itself was aborted by the client's own cancellation (finding 14)", dispatchStillInFlightWindow)
+	case <-time.After(dispatchStillInFlightWindow):
+		// Still in flight, as the fix requires — now let FPP answer.
+	}
+
+	releaseFPP()
+	<-done
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a client disconnect mid-dispatch must not abort the dispatch attempt "+
+			"itself, or the response built from it); body: %s", resp.StatusCode, body)
+	}
+	mu.Lock()
+	got := hitCount
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("FPP received %d requests, want exactly 1 — the in-flight dispatch must be allowed to run to its "+
+			"own conclusion despite the client disconnect (finding 14)", got)
 	}
 }
 
@@ -1395,4 +1845,201 @@ func TestOpenAPIFPPCommandResponseMatchesRealResponse(t *testing.T) {
 		t.Fatalf("replay status = %d, want 200; body: %s", resp2.StatusCode, body2)
 	}
 	assertMatchesSchema(t, c, "FPPCommandResponse", body2)
+}
+
+// --- The owner's 2026-08-13 post-dispatch poll nudge
+// (h.deps.Nudger.NudgePoll, called from handleFPPCommand right before
+// confirmFPPCommand — see that call site's own comment). These tests use a
+// fake [FPPPollNudger] rather than the real
+// internal/coordinator/collector.Runner: the real mechanism (scoping,
+// rate-limiting, never blocking) is already proven directly by that
+// package's own tests
+// (TestRunnerNudgeTriggersPollForItsOwnCollectorOnly,
+// TestRunnerNudgeRateLimitedPerID,
+// TestRunnerNudgeReturnsImmediatelyWhileCollectorPollIsInFlight). What
+// THESE tests prove is this package's own contract with whatever Nudger it
+// is handed: called once, for the right instance, with its return value
+// never consulted — confirmation always resolves purely from
+// [ObservationLister] evidence through the unchanged notBefore fence,
+// regardless of what NudgePoll answers. ---
+
+// recordingNudger is a test-only [FPPPollNudger] that records every call
+// (in order) and always answers accept, whatever that is configured to be.
+// It has no connection to setup.obs at all — deliberately: a test proving
+// the nudge's ACCEPTANCE never substitutes for evidence must not have any
+// code path, even in the test double, that could make accepting a nudge
+// change what [ObservationLister] reports.
+type recordingNudger struct {
+	mu     sync.Mutex
+	calls  []string
+	accept bool
+}
+
+func (n *recordingNudger) NudgePoll(instanceID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.calls = append(n.calls, instanceID)
+	return n.accept
+}
+
+func (n *recordingNudger) callsFor(instanceID string) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	count := 0
+	for _, id := range n.calls {
+		if id == instanceID {
+			count++
+		}
+	}
+	return count
+}
+
+func (n *recordingNudger) totalCalls() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.calls)
+}
+
+// TestFPPCommandDispatchNudgesOnlyItsOwnInstance is this task's own first
+// required test: a dispatched command must trigger exactly one nudged poll
+// for its own instance, and — with a second, entirely unrelated FPP
+// instance configured on the same coordinator — none for that other one.
+func TestFPPCommandDispatchNudgesOnlyItsOwnInstance(t *testing.T) {
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	// Two configured instances; this request only ever names "bench-fpp".
+	setup.fppLister.views = []FPPInstanceView{
+		{InstanceID: "bench-fpp", Endpoint: fppSrv.URL},
+		{InstanceID: "other-fpp", Endpoint: fppSrv.URL},
+	}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+
+	nudger := &recordingNudger{accept: true}
+	deps := setup.deps()
+	deps.Nudger = nudger
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	if got := nudger.callsFor("bench-fpp"); got != 1 {
+		t.Errorf("NudgePoll(\"bench-fpp\") called %d times, want exactly 1", got)
+	}
+	if got := nudger.callsFor("other-fpp"); got != 0 {
+		t.Errorf("NudgePoll(\"other-fpp\") called %d times, want 0 — a nudge for one instance must never reach another", got)
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Errorf("NudgePoll called %d times in total, want exactly 1", got)
+	}
+}
+
+// TestFPPCommandNudgeRejectionDoesNotFailOrFalselyConfirmCommand is this
+// task's own second and third required tests together: a nudge that the
+// Nudger declines (modeling both "suppressed by the rate limit" and
+// "errored" — [FPPPollNudger]'s own doc comment treats every non-accepted
+// outcome identically) must neither fail the request nor prevent it from
+// confirming normally through ordinary evidence. The seeded observation
+// already reads the desired value, collected at/after dispatch — exactly
+// TestFPPCommandAcceptedForOperator's own positive case — proving
+// confirmation here comes entirely from [ObservationLister], never from
+// the nudge's own return value.
+func TestFPPCommandNudgeRejectionDoesNotFailOrFalselyConfirmCommand(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+
+	nudger := &recordingNudger{accept: false} // every call declined
+	deps := setup.deps()
+	deps.Nudger = nudger
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a declined nudge must never fail the request); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "confirmed" {
+		t.Errorf("outcome = %v, want \"confirmed\" — a declined nudge must not stop the command confirming normally off ordinary evidence", cmd["outcome"])
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Errorf("NudgePoll called %d times, want exactly 1 (the handler must still ATTEMPT the nudge even though this fake always declines it)", got)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
+}
+
+// TestFPPCommandNudgeAcceptedButEffectNeverOccurredStaysUnconfirmed is this
+// task's own LOAD-BEARING test: docs/bench/fpp-command-vocabulary.md
+// section 2 measured "Resume Playlist" against an already-idle fppd as a
+// 200 ("Playlist Restarted") that changes nothing at all. This dispatches
+// resumePlaylist with the nudge ACCEPTED (nudger.accept = true) — modeling
+// "the nudge fired" — while [ObservationLister] never reports fpp.status
+// moving to "playing" for the whole confirmation window, exactly as a real
+// idle bench fppd would report it: the nudge changes WHEN the collector
+// polls, never WHAT it finds. If accepting the nudge ever became a
+// shortcut for evidence, this would report "confirmed" for an effect that
+// never happened — precisely Step 7's 179-microsecond defect, rebuilt
+// deliberately, and precisely what this test exists to catch.
+func TestFPPCommandNudgeAcceptedButEffectNeverOccurredStaysUnconfirmed(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Restarted")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	// fpp.status stays "idle" for the entire confirmation window — capture
+	// section 2/3.4's own measured behavior: Resume Playlist against an
+	// idle host is a no-op 200.
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+
+	nudger := &recordingNudger{accept: true}
+	deps := setup.deps()
+	deps.Nudger = nudger
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 150 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	start := time.Now()
+	req := newFPPCommandRequest(t, "bench-fpp", `{"action":"resumePlaylist","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["outcome"] != "unconfirmed" {
+		t.Fatalf("outcome = %v, want \"unconfirmed\" — FPP answered 200 (\"Playlist Restarted\") but fpp.status never "+
+			"left \"idle\"; accepting the nudge must NEVER stand in for evidence the collector never actually produced", cmd["outcome"])
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Errorf("NudgePoll called %d times, want exactly 1 (the nudge must still be requested even though this scenario never confirms)", got)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("handler returned after %v, want it to have waited out the ~150ms confirm deadline rather than confirming instantly off the accepted nudge", elapsed)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1", srv.hitCount())
+	}
 }

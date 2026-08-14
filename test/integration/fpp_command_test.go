@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 )
 
 // This file is Step 7 seam C review's own required addition: BUILD-PLAN's
@@ -299,4 +301,116 @@ func TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline(t *testing.T) {
 			"never a bare process failure; exit=%d stderr=%q", stdout, code, stderr)
 	}
 	t.Logf("showmeshctl fpp stop-playlist against a real coordinator/bench fppd, default --timeout: exit=%d stdout=%q", code, stdout)
+}
+
+// TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict
+// is Step 8's own extension of this file's replay coverage. Everything
+// above in this file exercises stopPlaylist, which takes NO parameters —
+// so nothing before this function ever proved replay behavior against a
+// PARAMETERIZED command, that the replay is recorded in the audit trail
+// AS a replay (identity.AuditReplay, surfaced on GET /api/v1/audit's own
+// "kind" field), or that a replayed key presented with DIFFERENT
+// normalized params is refused as a 409 conflict rather than silently
+// answered as if it were the original request
+// (fppcommand_primitives.go's own canonicalParamsJSON-keyed conflict
+// check, added by this step; see fppCommandReplayParamsConflictProblem).
+//
+// setVolume is used throughout because its effect is externally
+// observable AND independently settable: this test moves the bench
+// fppd's volume DIRECTLY (bypassing ShowMesh entirely, via
+// dispatchRawFPPCommand in fpp_command_primitives_test.go) between the
+// original dispatch and each replay attempt, so "dispatched nothing" is
+// proven STRUCTURALLY rather than inferred from a 200/409 status code
+// alone: if the replay path had actually re-dispatched "Volume Set 77" to
+// FPP, the independently-set value would have been overwritten back to
+// 77; if the params-conflict path had actually dispatched "Volume Set
+// 99", the bench's volume would show 99. Neither may happen.
+func TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict(t *testing.T) {
+	requireBroker(t)
+	fppURL := requireLiveFPP(t)
+	resetBenchToIdle(t, fppURL)
+	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
+
+	coord, adminToken, instanceID := newFPPCoordinatorForTest(t, fppURL, "bench-fpp-replay")
+
+	replayKey := "key-replay-vol-" + uniqueSuffix()
+	first := dispatchFPPCommand(t, coord, adminToken, instanceID, "setVolume", map[string]any{"volume": 77}, replayKey)
+	requireConfirmed(t, "setVolume (original)", first)
+	if v, ok := benchVolume(fetchBenchFPPStatus(t, fppURL)); !ok || v != 77 {
+		t.Fatalf("original setVolume(77) confirmed but bench fppd volume = %v (ok=%v), want 77", v, ok)
+	}
+
+	// Move the bench's volume DIRECTLY, bypassing ShowMesh — independent
+	// ground truth a replay (or a refused conflict) must not disturb.
+	dispatchRawFPPCommand(t, fppURL, "Volume Set", []string{"10"})
+	waitForBenchStatus(t, fppURL, 5*time.Second, func(doc map[string]any) bool {
+		v, ok := benchVolume(doc)
+		return ok && v == 10
+	}, "bench fppd volume to read 10 after a direct, ShowMesh-bypassing Volume Set")
+
+	// --- Replay: SAME params. Must dispatch nothing. ---
+	status, body := postRawWithToken(t, coord, "/api/v1/fpp/"+instanceID+"/commands", adminToken, map[string]any{
+		"action": "setVolume", "idempotencyKey": replayKey, "params": map[string]any{"volume": 77},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("replay with identical params: status = %d, want 200; body: %s", status, body)
+	}
+	var replayResp v1.FPPCommandResponse
+	if err := json.Unmarshal(body, &replayResp); err != nil {
+		t.Fatalf("decode replay response: %v; body: %s", err, body)
+	}
+	if !replayResp.Command.Replay {
+		t.Errorf("replay = false on a reused idempotency key with identical params, want true")
+	}
+	if replayResp.Command.ID != first.ID {
+		t.Errorf("replay id = %q, want the original command's id %q", replayResp.Command.ID, first.ID)
+	}
+	if replayResp.Command.Outcome != first.Outcome {
+		t.Errorf("replay outcome = %q, want the ORIGINAL result %q", replayResp.Command.Outcome, first.Outcome)
+	}
+	if v, ok := benchVolume(fetchBenchFPPStatus(t, fppURL)); !ok || v != 10 {
+		t.Fatalf("after a REPLAY of setVolume(77), bench fppd volume = %v (ok=%v), want it UNCHANGED at 10 — the "+
+			"replay must have dispatched NOTHING to FPP", v, ok)
+	}
+
+	// --- Audit trail: the replay must be recorded AS a replay, correlated
+	// to the original command id (ADR-024 decision 11: "a replay is
+	// precisely the case an investigator wants to see"). ---
+	auditStatus, auditBody := coord.getRaw(t, "/api/v1/audit?limit=200")
+	if auditStatus != http.StatusOK {
+		t.Fatalf("GET /api/v1/audit: status = %d, want 200; body: %s", auditStatus, auditBody)
+	}
+	var auditResp v1.AuditResponse
+	if err := json.Unmarshal(auditBody, &auditResp); err != nil {
+		t.Fatalf("decode audit response: %v; body: %s", err, auditBody)
+	}
+	var sawReplayEntry bool
+	for _, e := range auditResp.Entries {
+		if e.Kind == "replay" && e.CommandID == first.ID && e.IdempotencyKey == replayKey {
+			sawReplayEntry = true
+			if e.Action != "fpp.set_volume" {
+				t.Errorf("replay audit entry action = %q, want \"fpp.set_volume\"", e.Action)
+			}
+		}
+	}
+	if !sawReplayEntry {
+		t.Errorf("no audit_log entry with kind=\"replay\", commandId=%q, idempotencyKey=%q was found among %d entries",
+			first.ID, replayKey, len(auditResp.Entries))
+	}
+
+	// --- Replay with DIFFERENT params: refused as a 409, dispatches
+	// nothing. ---
+	conflictStatus, conflictBody := postRawWithToken(t, coord, "/api/v1/fpp/"+instanceID+"/commands", adminToken, map[string]any{
+		"action": "setVolume", "idempotencyKey": replayKey, "params": map[string]any{"volume": 99},
+	})
+	if conflictStatus != http.StatusConflict {
+		t.Fatalf("replay with DIFFERENT params: status = %d, want 409; body: %s", conflictStatus, conflictBody)
+	}
+	if !strings.Contains(string(conflictBody), "DIFFERENT") {
+		t.Errorf("409 body does not explain the params conflict; body: %s", conflictBody)
+	}
+	if v, ok := benchVolume(fetchBenchFPPStatus(t, fppURL)); !ok || v != 10 {
+		t.Fatalf("after a REFUSED replay with different params, bench fppd volume = %v (ok=%v), want it STILL "+
+			"UNCHANGED at 10 — the 409 must have dispatched nothing", v, ok)
+	}
 }
