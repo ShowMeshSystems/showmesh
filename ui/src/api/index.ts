@@ -31,6 +31,29 @@ export type {
   SessionInfo,
   SessionResponse,
   StreamSeq,
+  // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
+  // configuration objects and the macro run surface.
+  ConfigObjectSummary,
+  ConfigObjectsListResponse,
+  ConfigShowActionMQTTPublish,
+  ConfigShowActionMQTTExpect,
+  ConfigShowActionTarget,
+  ConfigShowAction,
+  ShowActionConfigResponse,
+  ConfigShowMacroLocalFallback,
+  ConfigShowMacroStep,
+  ConfigShowMacro,
+  ShowMacroConfigResponse,
+  MacroRunSummary,
+  MacroRunStepCommand,
+  MacroRunStep,
+  MacroRun,
+  MacroRunResponse,
+  MacroRunSubmitResponse,
+  MacroRunsListResponse,
+  MacroPriorFailureRequest,
+  CreateMacroRunRequest,
+  MacroRunChangedEvent,
 } from './domain'
 export {
   useModel,
@@ -53,6 +76,16 @@ export {
   runDiscovery,
   declareNode,
   deleteNodeDeclaration,
+  listConfigObjects,
+  getShowAction,
+  putShowAction,
+  getShowActionRevisions,
+  getShowMacro,
+  putShowMacro,
+  getShowMacroRevisions,
+  submitMacroRun,
+  listMacroRuns,
+  getMacroRun,
 } from './useModel'
 
 // A pure, side-effect-free read of whether a break-glass token is

@@ -377,6 +377,12 @@ export class ApiClient {
       problem?.detail ?? `${path} failed with status ${response.status}`,
       response.status,
       problem?.type,
+      // Step 9: additive on every Problem (api/openapi.yaml's own
+      // "Additive and omitted when empty"), so this is safe to read
+      // unconditionally for every failed request, not only the three
+      // macro-run conflicts that ever populate it — see
+      // ApiError.conflictingRunId's own doc comment.
+      problem?.conflictingRunId,
     )
   }
 }

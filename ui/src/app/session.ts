@@ -125,6 +125,55 @@ export function evaluateScope(
   return { allowed: true }
 }
 
+/**
+ * Step 9 (STEP-9-SPEC.md section 5.5): "reading show.macro and
+ * show.action requires show:macro:run OR config:write" — this project's
+ * FIRST read surface gated by more than one scope (every prior gate,
+ * including [evaluateScope] above, checks exactly one). A DIFFERENT
+ * function rather than a loop over [evaluateScope] because every
+ * "not currently vouched for" branch (no session yet, a failed refresh,
+ * signed out, a stale scope list) means the identical thing regardless
+ * of WHICH scope is being asked about, so calling evaluateScope twice
+ * would only ever differ in its final branch — and even there, "missing
+ * scope A" and "missing scope B" are each individually true but neither
+ * alone is the honest message once EITHER would have worked; this
+ * states both, matching evaluateScope's "name what's missing" contract
+ * for the OR case specifically.
+ */
+export function evaluateAnyScope(
+  session: SessionResponse | null,
+  sessionFetchFailed: boolean,
+  requiredScopes: readonly string[],
+): ScopeGateResult {
+  if (session === null) {
+    return { allowed: false, reason: 'Waiting to hear from the coordinator what this device may do.' }
+  }
+  if (sessionFetchFailed) {
+    return {
+      allowed: false,
+      reason: 'This device’s permissions could not be confirmed just now; treating this control as not permitted until they can be.',
+    }
+  }
+  if (!session.authenticated) {
+    return { allowed: false, reason: 'Sign in to use this control.' }
+  }
+  if (session.scopesState !== 'current') {
+    return {
+      allowed: false,
+      reason: 'This device’s permissions are unknown right now; treating this control as not permitted until they can be confirmed.',
+    }
+  }
+  if (requiredScopes.some((scope) => session.scopes.includes(scope))) {
+    return { allowed: true }
+  }
+  const role = session.principal?.role ?? 'this principal’s role'
+  const scopeList = requiredScopes.map((s) => `"${s}"`).join(' or ')
+  return {
+    allowed: false,
+    reason: `${role} does not include ${scopeList}. Ask an administrator to grant one, or sign in as a principal that holds one.`,
+  }
+}
+
 // ---------------------------------------------------------------------
 // Turning a thrown request error into what a sign-in/sign-out/bootstrap
 // form shows the operator. Dispatches on error TYPE, never on `.message`

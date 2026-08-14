@@ -8,12 +8,28 @@
 export class ApiError extends Error {
   readonly status: number | undefined
   readonly problemType: string | undefined
+  /**
+   * `Problem.conflictingRunId` (api/openapi.yaml), when the failed
+   * response carried one — Step 9's three macro-run 409s
+   * (PROBLEM_TYPE.macroRunAlreadyInFlight and the two idempotency
+   * conflicts) are the only causes that set this today, and it is
+   * `undefined` for every other failure. Carried on the base class
+   * (rather than a dedicated MacroRunConflictError, the way
+   * UnauthorizedError/ForbiddenError get their own classes) because
+   * three DIFFERENT `type`s all populate the SAME extension field with
+   * the SAME meaning ("the run this problem is about"), so a caller
+   * branches on `problemType` to decide what to say and reads
+   * `conflictingRunId` to decide what to link to — a single new field
+   * on ApiError, not a new class per type.
+   */
+  readonly conflictingRunId: string | undefined
 
-  constructor(message: string, status?: number, problemType?: string) {
+  constructor(message: string, status?: number, problemType?: string, conflictingRunId?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.problemType = problemType
+    this.conflictingRunId = conflictingRunId
   }
 }
 

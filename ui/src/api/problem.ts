@@ -56,4 +56,42 @@ export const PROBLEM_TYPE = {
   fppCommandRefusedAuditUnavailable: 'https://showmesh.dev/problems/fpp-command-refused-audit-unavailable',
   fppStartPlaylistEvidenceNotCurrent: 'https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current',
   fppStartPlaylistBusy: 'https://showmesh.dev/problems/fpp-start-playlist-busy',
+  // Step 9 (STEP-9-SPEC.md section 6.2, ADR-031 decisions 2 and 6): the
+  // macro run surface's own three conflicts, all 409, all DISTINCT from
+  // `conflict` and from each other on purpose — a client that must offer
+  // "go look at the run that's already running" (macroRunAlreadyInFlight)
+  // versus "mint a fresh idempotency key" (the other two) needs to branch
+  // on `type`, not parse `detail` prose, matching every other dispatchable
+  // problem in this file. `detail` (and, where present, the sibling
+  // `Problem.conflictingRunId` extension field — see errors.ts's
+  // ApiError.conflictingRunId) names the run in question; this client
+  // never re-derives it from a substring match, the exact defect
+  // FPPStartPlaylistControl.tsx's own history in this file already
+  // records once.
+  macroRunAlreadyInFlight: 'https://showmesh.dev/problems/macro-run-already-in-flight',
+  macroRunIdempotencyMacroConflict: 'https://showmesh.dev/problems/macro-run-idempotency-macro-conflict',
+  macroRunIdempotencyRevisionConflict: 'https://showmesh.dev/problems/macro-run-idempotency-revision-conflict',
+  // Step 9's eleven show.action/show.macro write-time validation problem
+  // types (internal/coordinator/config's ValidationError.Code, mapped
+  // mechanically per api/openapi.yaml's Problem description). None of
+  // these has a dedicated error class below, for the same reason
+  // `conflict`/`fppCommandRefusedAuditUnavailable` above do not: the
+  // coordinator's own `detail` is already the full actionable message
+  // (which field, what was wrong with it, or — for
+  // showConfigLocalFallbackReduced specifically — that no delivery path
+  // exists for `reduced`, per STEP-9-SPEC.md section 5.4). Listed
+  // individually, rather than left undispatchable, purely so this
+  // constant stays what its own doc comment claims: every class this
+  // coordinator currently produces.
+  showConfigBodyInvalid: 'https://showmesh.dev/problems/show-config-body-invalid',
+  showConfigFieldRequired: 'https://showmesh.dev/problems/show-config-field-required',
+  showConfigFieldNull: 'https://showmesh.dev/problems/show-config-field-null',
+  showConfigFieldEmpty: 'https://showmesh.dev/problems/show-config-field-empty',
+  showConfigFieldInvalid: 'https://showmesh.dev/problems/show-config-field-invalid',
+  showConfigFieldUnknownReference: 'https://showmesh.dev/problems/show-config-field-unknown-reference',
+  showConfigSafetyClassMismatch: 'https://showmesh.dev/problems/show-config-safety-class-mismatch',
+  showConfigLocalFallbackReduced: 'https://showmesh.dev/problems/show-config-local-fallback-reduced',
+  showConfigStepsEmpty: 'https://showmesh.dev/problems/show-config-steps-empty',
+  showConfigStepsTooMany: 'https://showmesh.dev/problems/show-config-steps-too-many',
+  showConfigStepIdDuplicate: 'https://showmesh.dev/problems/show-config-step-id-duplicate',
 } as const

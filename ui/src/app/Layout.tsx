@@ -15,14 +15,17 @@ export interface LayoutProps {
  * architecture: Monitor, Control, Configure.
  *
  * Configure now exists: Step 7 seam A ships this application's first
- * configuration write surface (RES-008 D1). Control remains deliberately
- * NOT rendered as an empty or disabled group — this is the same rule the
- * dashboard follows for subsystems the coordinator does not model: a
- * visible-but-empty group asserts that the section exists and currently
- * has nothing in it, which is a false statement about a system whose
- * FIRST device/show command (seam C) had not landed when this comment was
- * written. It appears when the behaviour behind it does, the same way
- * Configure just did.
+ * configuration write surface (RES-008 D1). Control now exists too, as
+ * of Step 9: "moving between operational states through show macros" is
+ * OPERATOR-UI section 8's own example of what belongs here, and a macro
+ * run is the first thing that fits it. Both groups were deliberately
+ * NOT rendered empty or disabled before the behaviour behind them
+ * existed — this is the same rule the dashboard follows for subsystems
+ * the coordinator does not model: a visible-but-empty group asserts that
+ * the section exists and currently has nothing in it, which was a false
+ * statement right up until this step. A future group (e.g. controlled
+ * devices) stays absent from this list until its own behaviour ships,
+ * the same way these two did.
  */
 const NAV_GROUPS: Array<{
   heading: string
@@ -39,8 +42,15 @@ const NAV_GROUPS: Array<{
     ],
   },
   {
+    heading: 'Control',
+    items: [{ to: '/macros', label: 'Macros', end: false }],
+  },
+  {
     heading: 'Configure',
-    items: [{ to: '/config', label: 'FPP endpoints', end: false }],
+    items: [
+      { to: '/config', label: 'FPP endpoints', end: false },
+      { to: '/actions', label: 'Show actions', end: false },
+    ],
   },
 ]
 

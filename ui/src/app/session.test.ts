@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeApiError, describeSignInState, evaluateScope } from './session'
+import { describeApiError, describeSignInState, evaluateAnyScope, evaluateScope } from './session'
 import {
   ApiError,
   CSRFRejectedError,
@@ -158,5 +158,61 @@ describe('describeApiError', () => {
 
   it('falls back to a generic sentence for a non-Error throw', () => {
     expect(describeApiError('a plain string')).toBe('Something went wrong. Try again.')
+  })
+})
+
+// Step 9 (STEP-9-SPEC.md section 5.5): the first read surface gated by
+// MORE THAN ONE scope — the exact criterion 21 concern: "an operator-role
+// principal can list, read and run a macro... this is the criterion that
+// catches the UI rendering an empty list for the role the actual operator
+// signs in as."
+describe('evaluateAnyScope', () => {
+  const SCOPES = ['show:macro:run', 'config:write']
+
+  it('is not allowed while the session has never been fetched', () => {
+    expect(evaluateAnyScope(null, false, SCOPES).allowed).toBe(false)
+  })
+
+  it('is not allowed when the last session fetch failed, even if a scope list is cached from before', () => {
+    const result = evaluateAnyScope(signedIn({ scopes: SCOPES }), true, SCOPES)
+    expect(result.allowed).toBe(false)
+  })
+
+  it('is not allowed while signed out', () => {
+    const result = evaluateAnyScope(signedOut(), false, SCOPES)
+    expect(result.allowed).toBe(false)
+  })
+
+  it('is not allowed when scopesState is not "current", even if the scopes are listed', () => {
+    const result = evaluateAnyScope(signedIn({ scopesState: 'unknown', scopes: SCOPES }), false, SCOPES)
+    expect(result.allowed).toBe(false)
+  })
+
+  // This is the exact shape of the "operator" role: show:macro:run held,
+  // config:write NOT held. The list must render for this principal — a
+  // regression here is a 403/empty macro list for the role the actual
+  // operator signs in as.
+  it('is allowed when the principal holds ONLY the first of the two scopes (the operator-role shape)', () => {
+    const result = evaluateAnyScope(signedIn({ scopes: ['show:macro:run'] }), false, SCOPES)
+    expect(result.allowed).toBe(true)
+  })
+
+  it('is allowed when the principal holds ONLY the second of the two scopes (an admin who never runs macros)', () => {
+    const result = evaluateAnyScope(signedIn({ scopes: ['config:write'] }), false, SCOPES)
+    expect(result.allowed).toBe(true)
+  })
+
+  it('is allowed when the principal holds both', () => {
+    const result = evaluateAnyScope(signedIn({ scopes: SCOPES }), false, SCOPES)
+    expect(result.allowed).toBe(true)
+  })
+
+  it('is not allowed and names both scopes when neither is held', () => {
+    const result = evaluateAnyScope(signedIn({ scopes: ['node:read'] }), false, SCOPES)
+    expect(result.allowed).toBe(false)
+    if (!result.allowed) {
+      expect(result.reason).toContain('show:macro:run')
+      expect(result.reason).toContain('config:write')
+    }
   })
 })

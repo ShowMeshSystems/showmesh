@@ -12,6 +12,9 @@ dist/
 /showmesh-coordinator
 /showmesh-agent
 /showmesh-multisync-probe
+# Step 9 wave 3's plugin binary, added the day it left a stray at the root,
+# which is how the four lines above were earned as well.
+/showmesh-fpp-plugin
 *.db
 *.db-wal
 *.db-shm

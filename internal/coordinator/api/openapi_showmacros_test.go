@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -20,9 +23,11 @@ func TestOpenAPIShowConfigDocumentIsWellFormed(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	for _, name := range []string{
 		"ConfigObjectSummary", "ConfigObjectsListResponse",
-		"ConfigShowActionMQTTPublish", "ConfigShowActionMQTTExpect", "ConfigShowActionTarget",
-		"ConfigShowAction", "ShowActionConfigResponse",
-		"ConfigShowMacroLocalFallback", "ConfigShowMacroStep", "ConfigShowMacro", "ShowMacroConfigResponse",
+		"ConfigShowActionMQTTPublish", "ConfigShowActionMQTTPublishWrite",
+		"ConfigShowActionMQTTExpect", "ConfigShowActionTarget", "ConfigShowActionTargetWrite",
+		"ConfigShowAction", "ConfigShowActionWrite", "ShowActionConfigResponse",
+		"ConfigShowMacroLocalFallback", "ConfigShowMacroStep", "ConfigShowMacroStepWrite",
+		"ConfigShowMacro", "ConfigShowMacroWrite", "ShowMacroConfigResponse",
 		"MacroRunSummary", "MacroRunStepCommand", "MacroRunStep", "MacroRun",
 		"MacroRunResponse", "MacroRunSubmitResponse", "MacroRunsListResponse",
 		"MacroPriorFailureRequest", "CreateMacroRunRequest", "MacroRunChangedEvent",
@@ -89,6 +94,54 @@ func TestOpenAPIShowConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "Problem", badBody)
 }
 
+// TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody is the
+// defect this file's own review found: PUT /config/show.macro/{id} and
+// PUT /config/show.action/{id} pointed their requestBody at the STRICT
+// read/stored schema, which requires onFailure, onUnconfirmed, and
+// target.publish.retain, even though the handler (config/showmacro.go,
+// config/showaction.go's decodeDefaultedEnum/decodeDefaultedBool) treats
+// an absent key on any of the three as "apply the documented default" —
+// making the default path unreachable through any client that validates
+// its own request against the published schema first.
+//
+// validShowActionFPPBody and validShowMacroBody (showconfig_test.go) are
+// this package's own long-standing fixtures for a real, successful write:
+// both omit onFailure/onUnconfirmed already, and this test additionally
+// exercises an mqtt target that omits target.publish.retain. All three
+// must validate against the WRITE schema. The strict READ schema must
+// still reject the identical bodies — proving the split is load-bearing,
+// not merely a rename: a reader who deletes the split and points PUT back
+// at the strict schema gets a failing test here, not a passing one that
+// happens not to notice.
+func TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	assertMatchesSchema(t, c, "ConfigShowActionWrite", []byte(validShowActionFPPBody))
+	assertMatchesSchema(t, c, "ConfigShowMacroWrite", []byte(validShowMacroBody("start-main-show")))
+
+	mqttActionOmittingRetain := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"mqtt","broker":"home-automation",
+		"publish":{"topic":"home/projectors/set","payload":"ON","qos":1},
+		"expect":{"kind":"none"}}}`
+	assertMatchesSchema(t, c, "ConfigShowActionWrite", []byte(mqttActionOmittingRetain))
+
+	for _, tc := range []struct {
+		schema, body string
+	}{
+		{"ConfigShowAction", validShowActionFPPBody},
+		{"ConfigShowMacro", validShowMacroBody("start-main-show")},
+		{"ConfigShowAction", mqttActionOmittingRetain},
+	} {
+		sch := compileSchema(t, c, tc.schema)
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(tc.body)))
+		if err != nil {
+			t.Fatalf("decoding fixture: %v", err)
+		}
+		if err := sch.Validate(instance); err == nil {
+			t.Errorf("a real, successful write request validated cleanly against the STRICT %s schema; it must be rejected there (that schema requires the resolved value) for %s to be doing anything", tc.schema, tc.schema+"Write")
+		}
+	}
+}
+
 // TestOpenAPIMacroRunResponsesMatchRealResponses proves the run surface
 // (STEP-9-SPEC.md section 6.6) against a real coordinator wiring, driven
 // through [fakeMacroRunner] (this package cannot import
@@ -114,6 +167,14 @@ func TestOpenAPIMacroRunResponsesMatchRealResponses(t *testing.T) {
 			Steps: []store.MacroRunStepRecord{
 				{RunID: "run-1", StepIndex: 0, StepID: "s0", ActionObjectID: "a0", Integration: "fpp", SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "resolved", Outcome: "confirmed", OutcomeState: "current", OutcomeReason: "ok", CommandID: &cmdID},
 				{RunID: "run-1", StepIndex: 1, StepID: "s1", ActionObjectID: "a1", Integration: "mqtt", SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "resolved", Outcome: "unconfirmable", OutcomeState: "unconfirmable_declared", OutcomeReason: "no expected response"},
+				// A third, still-unresolved step: buildStepRecords (macro/resolve.go)
+				// writes State "pending" and Outcome "" for every step at run
+				// creation, and STEP-9-SPEC.md section 6.6 requires an in-flight
+				// run's steps to be readable, so a real response can and does
+				// carry this shape. MacroRunStep.outcome's enum must include ""
+				// alongside section 6.4's five resolved values or this response
+				// fails validation — this step exists to prove that stays true.
+				{RunID: "run-1", StepIndex: 2, StepID: "s2", ActionObjectID: "a2", Integration: "fpp", SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending", Outcome: "", OutcomeState: store.MacroRunStepOutcomeStatePending, OutcomeReason: store.MacroRunStepOutcomeReasonPending},
 			},
 		},
 		listResult: []store.MacroRunRecord{{ID: "run-1", MacroObjectID: "begin-set", Show: "halloween-2026", Trigger: "ui", CreatedAt: testNow, State: "finished"}},

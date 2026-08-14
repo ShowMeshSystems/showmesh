@@ -303,3 +303,58 @@ jobs:
             VERSION=${{ github.sha }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
+
+  fpp-plugin-release:
+    # Step 9's FPP plugin (cmd/showmesh-fpp-plugin) is fetched onto an FPP
+    # host by scripts/fpp_install.sh as a prebuilt, sha256-verified static
+    # binary — FPP hosts carry no Go toolchain, so there is no
+    # build-on-device path the way there is for the 55 other listed FPP
+    # plugins. This job is that pipeline: it cross-compiles the three
+    # platforms the deployed fleet actually needs (a Raspberry Pi 3 B+ —
+    # amd64/arm64 already cover neither of the fleet's real ARM targets —
+    # a BeagleBone Black needing GOARCH=arm GOARM=7, and a PocketBeagle2),
+    # writes the pinned SHA256SUMS manifest, and verifies it — on every
+    # run, not as a one-time trusted claim.
+    #
+    # This job deliberately does NOT create a GitHub Release, upload a
+    # release-visible artifact, or push anything anywhere. The owner's
+    # decision (2026-08-14): publication is enabled later, when an
+    # installer actually needs to fetch these from a real FPP host, and
+    # is a separate decision from proving the pipeline works. Enabling it
+    # then is meant to be a small, obvious addition here — e.g. a
+    # tag-triggered step calling `gh release create` (or
+    # softprops/action-gh-release) with `dist/fpp-plugin/*` as its
+    # assets — not a rewrite of this job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A synthetic, clearly-non-release version for a CI run — the
+      # pinned tag format is fpp-plugin-v<VERSION>, and this is not that;
+      # it exists only so this job's own artifact filenames and manifest
+      # are exercised end to end, matching what `make release-fpp-plugin`
+      # (no VERSION override, defaulting to the top-level VERSION var)
+      # does for a bench-local build.
+      - name: Build and self-verify the FPP plugin release artifacts
+        run: make release-fpp-plugin FPP_PLUGIN_VERSION=0.0.0-ci.${{ github.sha }}
+
+      # A second, independent build of the same commit, compared
+      # byte-for-byte against the first — the stronger reproducibility
+      # claim release-fpp-plugin's own sha256sum -c cannot make on its
+      # own (that only proves the manifest matches what THIS run
+      # produced, not that a second run would produce the same thing).
+      - name: Verify the release build is reproducible
+        run: make verify-fpp-plugin-reproducible FPP_PLUGIN_VERSION=0.0.0-ci.${{ github.sha }}
+
+      # No actions/upload-artifact step here on purpose: this repository
+      # is public, and a workflow artifact on a public repository is
+      # downloadable the same way a Release asset is — uploading one here
+      # would be publication in substance even though it is not the
+      # GitHub Releases feature. dist/fpp-plugin/ is left in the runner's
+      # own workspace and discarded when the job ends.

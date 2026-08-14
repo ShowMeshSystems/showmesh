@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -11,8 +11,7 @@ import { describe, expect, it } from 'vitest'
 // reasoning belongs in a code comment — which this codebase's own
 // convention already uses heavily — never in text a browser renders. See
 // fppcommand_copy_guard_test.go in internal/coordinator/api for this
-// guard's Go-side sibling, which covers the server strings the same
-// defect leaked from.
+// guard's Go-side sibling, whose shape this file now follows exactly.
 //
 // This walks the real TypeScript AST (via the `typescript` package this
 // repo already depends on for `tsc`) rather than grepping raw source
@@ -25,24 +24,76 @@ import { describe, expect, it } from 'vitest'
 // segment, or JsxText node (the raw text between JSX tags, which is NOT a
 // StringLiteral and would be invisible to a check that only looked for
 // string literals) always does.
-const forbiddenCopyPattern = /docs\/|\.md\b|ADR-\d+|RES-\d{3}|section\s+\d/i
+//
+// Inverted 2026-08-14 (Step 9 wave 3, this wave's own brief "Deliverable
+// 0"): this test used to walk a HARDCODED file list
+// (fppCommandCopyGuardFiles below, now deleted), which meant every file
+// this wave — and every wave after it — adds to components/ or views/
+// was unchecked by default, exactly backwards from what a guard against a
+// defect this project has already shipped once should do. It now walks
+// ui/src/components/ AND ui/src/views/ (this wave adds the first files
+// under views/ that carry dense operator-facing macro-run copy) and
+// checks every non-test .ts/.tsx file, carrying [copyGuardExemptions] as
+// an explicit, narrow, STRING-LEVEL (never file-level) exemption list —
+// mirroring the Go sibling's copyGuardExemptions exactly, and for the
+// identical reason: a file-level exemption would remove coverage of
+// every genuinely operator-facing string in the same file, which is a
+// net loss precisely where a file mixes internal-only strings (an
+// aria-label test id, a console.error, a code comment reused as a
+// runtime string) with real operator copy — exactly the shape STEP-9-SPEC.md
+// section 13 warns about.
+//
+// forbiddenCopyPattern is unchanged from the pre-inversion version: a
+// repo path, a doc/spec file reference, an ADR or research-record
+// number, the word "section" followed by a digit, or a literal reference
+// to the OpenAPI spec file are all internal citations that must never
+// reach an operator.
+const forbiddenCopyPattern = /docs\/|\.md\b|ADR-\d+|RES-\d{3}|section\s+\d|api\/openapi\.yaml/i
 
-// fppCommandCopyGuardFiles is every component this step's operator-facing
-// command copy lives in, plus Configuration.tsx (Step 7's own configuration
-// write surface, fixed by the same task alongside this step's own
-// controls once the same defect class was found there too).
-const fppCommandCopyGuardFiles = [
-  'FPPPlaylistTransportControls.tsx',
-  'FPPSetVolumeControl.tsx',
-  'FPPStartPlaylistControl.tsx',
-  'FPPStopPlaylistControl.tsx',
-  'FPPStopPlaylistGracefullyControl.tsx',
-  'FPPCommandOutcome.tsx',
-]
+const TARGET_DIRS = [path.join(__dirname), path.join(__dirname, '..', 'views')]
+
+/**
+ * One (file basename, exact string/JsxText VALUE) pair this guard does
+ * not fail on. Matched against the trimmed text this walk already
+ * extracts (see [collectViolations]'s own `textOf`), not a substring, so
+ * an exemption cannot accidentally also cover some other, unrelated
+ * string that happens to contain the same words — identical matching
+ * discipline to the Go sibling's copyGuardExemption.
+ *
+ * Empty at inversion time: every file this walk currently covers passed
+ * with no exemption needed (see this task's own report for what the
+ * inversion actually surfaced). Kept as a real, typed list rather than
+ * deleted, so the FIRST genuinely-internal-only string this project adds
+ * under components/ or views/ has a place to go that is scoped to that
+ * one string, not to the file it lives in.
+ */
+interface CopyGuardExemption {
+  file: string
+  text: string
+}
+const copyGuardExemptions: CopyGuardExemption[] = []
+
+function isExempt(file: string, text: string): boolean {
+  return copyGuardExemptions.some((e) => e.file === file && e.text === text)
+}
+
+function collectTargetFiles(): string[] {
+  const files: string[] = []
+  for (const dir of TARGET_DIRS) {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue
+      if (name.endsWith('.test.ts') || name.endsWith('.test.tsx')) continue
+      files.push(path.join(dir, name))
+    }
+  }
+  return files.sort()
+}
 
 function collectViolations(filePath: string, sourceText: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, scriptKind)
   const violations: string[] = []
+  const baseName = path.basename(filePath)
 
   function textOf(node: ts.Node): string | undefined {
     if (ts.isStringLiteralLike(node)) return node.text
@@ -54,9 +105,11 @@ function collectViolations(filePath: string, sourceText: string): string[] {
     const text = textOf(node)
     if (text !== undefined) {
       const match = forbiddenCopyPattern.exec(text)
-      if (match) {
+      if (match && !isExempt(baseName, text.trim())) {
         const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
-        violations.push(`${filePath}:${line + 1}: carries an internal citation (${JSON.stringify(match[0])}): ${JSON.stringify(text.trim())}`)
+        violations.push(
+          `${filePath}:${line + 1}: carries an internal citation (${JSON.stringify(match[0])}): ${JSON.stringify(text.trim())}`,
+        )
       }
     }
     ts.forEachChild(node, visit)
@@ -65,12 +118,12 @@ function collectViolations(filePath: string, sourceText: string): string[] {
   return violations
 }
 
-describe('operator-facing FPP command copy carries no internal citation', () => {
-  for (const file of fppCommandCopyGuardFiles) {
-    it(file, () => {
-      const filePath = path.join(__dirname, file)
+describe('operator-facing strings under components/ and views/ carry no internal citation', () => {
+  for (const filePath of collectTargetFiles()) {
+    const relative = path.relative(path.join(__dirname, '..'), filePath)
+    it(relative, () => {
       const source = readFileSync(filePath, 'utf-8')
-      const violations = collectViolations(file, source)
+      const violations = collectViolations(filePath, source)
       expect(violations, violations.join('\n')).toEqual([])
     })
   }

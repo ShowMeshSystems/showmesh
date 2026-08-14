@@ -1281,9 +1281,14 @@ paths:
         class; an `mqtt` target's `broker` must name a broker this
         deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no
         default. Absent, `null`, and explicitly empty are three different
-        things on every field (`target.publish.retain` is the one field
-        besides show.macro's `onFailure`/`onUnconfirmed` where an absent
-        key defaults, to `false`). Stores the VALIDATED, NORMALIZED
+        things on every field. Two keys in this payload default when
+        absent, and reject a present `null` as invalid: `description`
+        (defaults to empty, i.e. no description) and
+        `target.publish.retain` (defaults to `false`) — the same rule
+        show.macro's `onFailure`/`onUnconfirmed` uses. The request body
+        for these two is therefore ConfigShowActionWrite, not
+        ConfigShowAction: the latter is the strict, always-resolved shape
+        this endpoint reads back. Stores the VALIDATED, NORMALIZED
         payload, never the raw request body. Audited in the same
         transaction as the revision write (ADR-024 decision 11).
       parameters:
@@ -1297,7 +1302,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ConfigShowAction"
+              $ref: "#/components/schemas/ConfigShowActionWrite"
       responses:
         "200":
           description: OK. The newly activated revision.
@@ -1407,14 +1412,18 @@ paths:
       description: >-
         Requires `config:write` (admin only). `steps` is required, must
         contain 1-32 entries, each `id` unique, each `action` resolving to
-        an existing `show.action` object. `onFailure` (default `abort`)
-        and `onUnconfirmed` (default `continue`) are the only two keys in
-        this payload where an absent key carries meaning; a present `null`
-        on either is an error. `localFallback.class` is required per step
+        an existing `show.action` object. Two keys in this payload default
+        when absent, and reject a present `null` as invalid: the
+        top-level `description` (defaults to empty, i.e. no description)
+        and each step's `onFailure` (default `abort`) / `onUnconfirmed`
+        (default `continue`). `localFallback.class` is required per step
         (`none` | `coordinator-required` | `silence`); `reduced` is
-        rejected with its own distinct problem type. Stores the VALIDATED,
-        NORMALIZED payload — including onFailure/onUnconfirmed resolved to
-        their defaults — never the raw request body.
+        rejected with its own distinct problem type. The request body is
+        therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is
+        the strict, always-resolved shape this endpoint reads back. Stores
+        the VALIDATED, NORMALIZED payload — including description and
+        onFailure/onUnconfirmed resolved to their defaults — never the raw
+        request body.
       parameters:
         - name: id
           in: path
@@ -1426,7 +1435,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ConfigShowMacro"
+              $ref: "#/components/schemas/ConfigShowMacroWrite"
       responses:
         "200":
           description: OK. The newly activated revision.
@@ -3498,11 +3507,34 @@ components:
     ConfigShowActionMQTTPublish:
       type: object
       description: >-
-        show.action.target.publish (STEP-9-SPEC.md section 5.3), present
-        only when target.integration is "mqtt". retain defaults to false
-        when absent on the write side; on the read side (this schema) it
-        is always the resolved value.
+        The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md
+        section 5.3), present only when target.integration is "mqtt".
+        retain is always the resolved value here, never absent. To submit
+        a publish target, use ConfigShowActionMQTTPublishWrite instead,
+        which allows retain to be absent.
       required: [topic, payload, qos, retain]
+      properties:
+        topic:
+          type: string
+        payload:
+          type: string
+        qos:
+          type: integer
+          enum: [0, 1, 2]
+        retain:
+          type: boolean
+    ConfigShowActionMQTTPublishWrite:
+      type: object
+      description: >-
+        The WRITE shape of show.action.target.publish. Identical to
+        ConfigShowActionMQTTPublish except that retain is not required: an
+        absent key defaults to false, while a present `null` is rejected
+        as invalid — the same absent-defaults rule ConfigShowActionWrite's
+        own description field and ConfigShowMacroStepWrite's
+        onFailure/onUnconfirmed use. The response to a successful write is
+        always the resolved ConfigShowActionMQTTPublish shape, never this
+        one.
+      required: [topic, payload, qos]
       properties:
         topic:
           type: string
@@ -3535,12 +3567,15 @@ components:
     ConfigShowActionTarget:
       type: object
       description: >-
-        show.action.target (STEP-9-SPEC.md section 5.3): integration plus
-        either the fpp fields or the mqtt fields directly, never nested a
-        second level under an "fpp"/"mqtt" key. Only integration is
-        required here; which of the remaining fields is present depends on
-        integration's own value, enforced by this coordinator's write-time
-        validation rather than by this schema.
+        The STORED/READ shape of show.action.target (STEP-9-SPEC.md
+        section 5.3): integration plus either the fpp fields or the mqtt
+        fields directly, never nested a second level under an "fpp"/"mqtt"
+        key. Only integration is required here; which of the remaining
+        fields is present depends on integration's own value, enforced by
+        this coordinator's write-time validation rather than by this
+        schema. publish, when present, is always the resolved
+        ConfigShowActionMQTTPublish shape. To submit a target, use
+        ConfigShowActionTargetWrite instead.
       required: [integration]
       properties:
         integration:
@@ -3559,11 +3594,42 @@ components:
           $ref: "#/components/schemas/ConfigShowActionMQTTPublish"
         expect:
           $ref: "#/components/schemas/ConfigShowActionMQTTExpect"
+    ConfigShowActionTargetWrite:
+      type: object
+      description: >-
+        The WRITE shape of show.action.target. Identical to
+        ConfigShowActionTarget except that publish, when present, is
+        ConfigShowActionMQTTPublishWrite, which allows retain to be
+        absent. The response to a successful write is always the resolved
+        ConfigShowActionTarget shape, never this one.
+      required: [integration]
+      properties:
+        integration:
+          type: string
+          enum: [fpp, mqtt]
+        instanceId:
+          type: string
+        primitive:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        broker:
+          type: string
+        publish:
+          $ref: "#/components/schemas/ConfigShowActionMQTTPublishWrite"
+        expect:
+          $ref: "#/components/schemas/ConfigShowActionMQTTExpect"
     ConfigShowAction:
       type: object
       description: >-
-        The "show.action" configuration kind's decoded payload
-        (STEP-9-SPEC.md section 5.3).
+        The STORED/READ shape of the "show.action" configuration kind's
+        decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and
+        by a successful PUT. description is always the resolved value here
+        (empty string if none was ever set), never absent — a stored
+        revision states its own content outright. To submit an action, use
+        ConfigShowActionWrite instead, which allows description to be
+        absent.
       required: [show, label, description, safetyClass, target]
       properties:
         show:
@@ -3577,6 +3643,31 @@ components:
           enum: [none, blackout, stop, powerOff]
         target:
           $ref: "#/components/schemas/ConfigShowActionTarget"
+    ConfigShowActionWrite:
+      type: object
+      description: >-
+        The WRITE shape of the "show.action" configuration kind's payload:
+        the body PUT /config/show.action/{id} accepts. Identical to
+        ConfigShowAction except that description is not required (an
+        absent key takes its documented default of empty, i.e. no
+        description; a present `null` is rejected as invalid) and target
+        is ConfigShowActionTargetWrite, which allows target.publish.retain
+        to be absent under the same rule. The response to a successful
+        write stores and returns the resolved ConfigShowAction shape,
+        never this one.
+      required: [show, label, safetyClass, target]
+      properties:
+        show:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        safetyClass:
+          type: string
+          enum: [none, blackout, stop, powerOff]
+        target:
+          $ref: "#/components/schemas/ConfigShowActionTargetWrite"
     ShowActionConfigResponse:
       type: object
       description: The body of GET and PUT /config/show.action/{id}.
@@ -3621,10 +3712,38 @@ components:
     ConfigShowMacroStep:
       type: object
       description: >-
-        One element of show.macro.steps. onFailure and onUnconfirmed are
+        The STORED/READ shape of one element of show.macro.steps, returned
+        by GET and by a successful PUT. onFailure and onUnconfirmed are
         always the RESOLVED value (default or explicit), never absent — a
-        stored revision states its own policy outright.
+        stored revision states its own policy outright. To submit a step,
+        use ConfigShowMacroStepWrite instead, which allows the two keys to
+        be absent so the server-side default applies.
       required: [id, action, onFailure, onUnconfirmed, localFallback]
+      properties:
+        id:
+          type: string
+        action:
+          type: string
+        onFailure:
+          type: string
+          enum: [abort, continue]
+        onUnconfirmed:
+          type: string
+          enum: [continue, abort]
+        localFallback:
+          $ref: "#/components/schemas/ConfigShowMacroLocalFallback"
+    ConfigShowMacroStepWrite:
+      type: object
+      description: >-
+        The WRITE shape of one element of PUT /config/show.macro/{id}'s
+        `steps`. Identical to ConfigShowMacroStep except that onFailure and
+        onUnconfirmed are not required: an absent key takes its documented
+        default (onFailure `abort`, onUnconfirmed `continue`), while a
+        present `null` on either is rejected as invalid. These are the
+        only two keys in this payload where an absent key carries meaning.
+        The response to a successful write is always the resolved
+        ConfigShowMacroStep shape, never this one.
+      required: [id, action, localFallback]
       properties:
         id:
           type: string
@@ -3641,8 +3760,13 @@ components:
     ConfigShowMacro:
       type: object
       description: >-
-        The "show.macro" configuration kind's decoded payload
-        (STEP-9-SPEC.md section 5.4).
+        The STORED/READ shape of the "show.macro" configuration kind's
+        decoded payload (STEP-9-SPEC.md section 5.4), returned by GET and
+        by a successful PUT. description is always the resolved value here
+        (empty string if none was ever set), never absent — a stored
+        revision states its own content outright. To submit a macro, use
+        ConfigShowMacroWrite instead, which allows description to be
+        absent.
       required: [show, label, description, steps]
       properties:
         show:
@@ -3657,6 +3781,32 @@ components:
           maxItems: 32
           items:
             $ref: "#/components/schemas/ConfigShowMacroStep"
+    ConfigShowMacroWrite:
+      type: object
+      description: >-
+        The WRITE shape of the "show.macro" configuration kind's payload:
+        the body PUT /config/show.macro/{id} accepts. Identical to
+        ConfigShowMacro except that description is not required (an absent
+        key takes its documented default of empty, i.e. no description; a
+        present `null` is rejected as invalid) and its steps are
+        ConfigShowMacroStepWrite, which allows onFailure and onUnconfirmed
+        to be absent under the same rule. The response to a successful
+        write stores and returns the resolved ConfigShowMacro shape, never
+        this one.
+      required: [show, label, steps]
+      properties:
+        show:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/ConfigShowMacroStepWrite"
     ShowMacroConfigResponse:
       type: object
       description: The body of GET and PUT /config/show.macro/{id}.
@@ -3753,7 +3903,23 @@ components:
           $ref: "#/components/schemas/FPPCommandResult"
     MacroRunStep:
       type: object
-      description: One element of MacroRun.steps.
+      description: >-
+        One element of MacroRun.steps. state is the step's own dispatch
+        lifecycle: "pending" (not yet touched), "dispatched" (nudged, not
+        yet resolved), "resolved" (an outcome was recorded), or "skipped"
+        (an abort left this step never attempted) — a closed vocabulary.
+        outcome is "" while state is not yet "resolved" or "skipped" (no
+        outcome has been recorded for this step yet — a run's own steps
+        can be observed mid-flight, including through GET /snapshot's
+        in-flight runs), and otherwise one of "confirmed", "unconfirmed",
+        "unconfirmable", "failed", "skipped" — also a closed vocabulary.
+        outcomeState is a free-form evidence code from whichever collector
+        or waiter resolved this step and is intentionally not enumerated
+        here: an fpp step carries the same evidence-state vocabulary used
+        elsewhere in this document, an mqtt step carries a distinct set of
+        response-contract codes, and both sets may grow. Clients must
+        treat outcomeState as opaque and render outcomeReason for a human,
+        per the rule that a client ignores what it does not recognise.
       required:
         [stepIndex, stepId, actionObjectId, actionRevision, integration,
          safetyClass, localFallbackClass, state, dispatchedAt, resolvedAt,
@@ -3778,6 +3944,7 @@ components:
           enum: [none, coordinator-required, silence]
         state:
           type: string
+          enum: [pending, dispatched, resolved, skipped]
         dispatchedAt:
           type: [string, "null"]
           format: date-time
@@ -3786,6 +3953,8 @@ components:
           format: date-time
         outcome:
           type: string
+          enum:
+            ["", confirmed, unconfirmed, unconfirmable, failed, skipped]
         outcomeState:
           type: string
         outcomeReason:

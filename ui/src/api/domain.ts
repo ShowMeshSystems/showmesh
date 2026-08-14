@@ -78,6 +78,33 @@ export type NodeDeclaration = components['schemas']['NodeDeclaration']
 export type DiscoveryRun = components['schemas']['DiscoveryRun']
 export type DiscoveryProposal = components['schemas']['DiscoveryProposal']
 
+// Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
+// configuration objects and the macro run surface. Aliased for the
+// identical reason as every type above (ADR-015).
+export type ConfigObjectSummary = components['schemas']['ConfigObjectSummary']
+export type ConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
+export type ConfigShowActionMQTTPublish = components['schemas']['ConfigShowActionMQTTPublish']
+export type ConfigShowActionMQTTExpect = components['schemas']['ConfigShowActionMQTTExpect']
+export type ConfigShowActionTarget = components['schemas']['ConfigShowActionTarget']
+export type ConfigShowAction = components['schemas']['ConfigShowAction']
+export type ShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
+export type ConfigShowMacroLocalFallback = components['schemas']['ConfigShowMacroLocalFallback']
+export type ConfigShowMacroStep = components['schemas']['ConfigShowMacroStep']
+export type ConfigShowMacro = components['schemas']['ConfigShowMacro']
+export type ShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+export type ConfigRevisionsResponseKind = ConfigRevisionsResponse['kind']
+
+export type MacroRunSummary = components['schemas']['MacroRunSummary']
+export type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
+export type MacroRunStep = components['schemas']['MacroRunStep']
+export type MacroRun = components['schemas']['MacroRun']
+export type MacroRunResponse = components['schemas']['MacroRunResponse']
+export type MacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
+export type MacroRunsListResponse = components['schemas']['MacroRunsListResponse']
+export type MacroPriorFailureRequest = components['schemas']['MacroPriorFailureRequest']
+export type CreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
+export type MacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare
@@ -143,6 +170,18 @@ export interface Model {
   nodes: Node[]
   fpp: FPPInstance[]
   collectors: CollectorStatus[]
+  /**
+   * Step 9 (STEP-9-SPEC.md section 6.6): every in-flight macro run, plus a
+   * bounded window of recently finished ones, exactly as `Snapshot.macroRuns`
+   * carries them — this is why a client reconnecting mid-run still sees it
+   * (ADR-020 decision 3's "in-flight runs must appear in the snapshot").
+   * Replaced wholesale on every snapshot (like `nodes`/`fpp`), and
+   * upserted in place by `macroRun.changed` frames for a run ALREADY
+   * present here — see store.ts's applyMacroRunChanged for why an
+   * unrecognized runId is dropped rather than synthesized from a partial
+   * event, mirroring applyFppObservationsChanged's identical posture.
+   */
+  macroRuns: MacroRunSummary[]
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */
   events: Event[]
   /**
@@ -195,6 +234,7 @@ export function initialModel(): Model {
     nodes: [],
     fpp: [],
     collectors: [],
+    macroRuns: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

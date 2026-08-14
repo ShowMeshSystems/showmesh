@@ -24,6 +24,8 @@ import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
   ConfigRevisionsResponse,
+  ConfigShowAction,
+  ConfigShowMacro,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   Model,
@@ -32,6 +34,12 @@ import type { components } from './generated/schema'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
+type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
+type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
+type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
+type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
+type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -137,4 +145,52 @@ export function declareNode(nodeId: string, label: string, notes: string): Promi
 
 export function deleteNodeDeclaration(nodeId: string): Promise<void> {
   return store.deleteNodeDeclaration(nodeId)
+}
+
+// Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
+// configuration objects and the macro run surface. Same thin
+// pass-through pattern as every method above.
+
+export function listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
+  return store.listConfigObjects(kind)
+}
+
+export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
+  return store.getShowAction(id)
+}
+
+export function putShowAction(id: string, payload: ConfigShowAction): Promise<SchemaShowActionConfigResponse> {
+  return store.putShowAction(id, payload)
+}
+
+export function getShowActionRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowActionRevisions(id)
+}
+
+export function getShowMacro(id: string): Promise<SchemaShowMacroConfigResponse> {
+  return store.getShowMacro(id)
+}
+
+export function putShowMacro(id: string, payload: ConfigShowMacro): Promise<SchemaShowMacroConfigResponse> {
+  return store.putShowMacro(id, payload)
+}
+
+export function getShowMacroRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowMacroRevisions(id)
+}
+
+export function submitMacroRun(macroId: string): Promise<SchemaMacroRunSubmitResponse> {
+  return store.submitMacroRun(macroId)
+}
+
+export function listMacroRuns(filter?: {
+  macroId?: string
+  state?: 'running' | 'finished'
+  limit?: number
+}): Promise<SchemaMacroRunsListResponse> {
+  return store.listMacroRuns(filter)
+}
+
+export function getMacroRun(runId: string): Promise<SchemaMacroRunResponse> {
+  return store.getMacroRun(runId)
 }

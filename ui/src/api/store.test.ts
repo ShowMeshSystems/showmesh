@@ -16,6 +16,7 @@ import {
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
+  makeMacroRunSummary,
   makeNode,
   makeProblem,
   makeSessionResponse,
@@ -3034,5 +3035,206 @@ describe('FPPCommandRequest params (type-level only, Step 8/ADR-015)', () => {
       params: { paylist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
     }
     expect(misspelled.action).toBe('startPlaylist')
+  })
+})
+
+// Step 9 (STEP-9-SPEC.md section 6.6, ADR-020 decision 3): macro runs in
+// the model. Same real-server, real-SSE-bytes harness as every describe
+// block above — no mocked fetch, per this file's own standing rule.
+describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
+  it('carries Snapshot.macroRuns into the model on the initial snapshot', async () => {
+    const run = makeMacroRunSummary({ id: 'run-1', state: 'running', completed: null, confirmed: null })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ macroRuns: [run] }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    expect(store.getSnapshot().macroRuns).toEqual([run])
+  })
+
+  it('applies a macroRun.changed frame in place for a run already known from the snapshot', async () => {
+    const run = makeMacroRunSummary({ id: 'run-1', state: 'running', completed: null, confirmed: null, reason: '' })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'macroRun.changed', {
+            seq: 1,
+            serverTime: new Date().toISOString(),
+            runId: 'run-1',
+            macroObjectId: run.macroObjectId,
+            state: 'finished',
+            completed: true,
+            confirmed: false,
+            reason: 'the MQTT step declared no expected response',
+            attributionDegraded: false,
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ macroRuns: [run] }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().macroRuns[0]?.state === 'finished', {
+      message: 'macroRun.changed was never applied to the known run',
+    })
+
+    const updated = store.getSnapshot().macroRuns[0]
+    expect(updated?.completed).toBe(true)
+    expect(updated?.confirmed).toBe(false)
+    expect(updated?.reason).toBe('the MQTT step declared no expected response')
+    // Fields the event does NOT carry (macroRevision, show, trigger,
+    // issuer, createdAt) must survive untouched from the snapshot's own
+    // copy — this is what "update in place" means as opposed to
+    // "replace with a partial object".
+    expect(updated?.macroRevision).toBe(run.macroRevision)
+    expect(updated?.issuerPrincipalName).toBe(run.issuerPrincipalName)
+  })
+
+  it('drops a macroRun.changed frame for a runId this connection has never seen, rather than inventing a partial entry', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'macroRun.changed', {
+            seq: 1,
+            serverTime: new Date().toISOString(),
+            runId: 'run-never-seen',
+            macroObjectId: 'some-macro',
+            state: 'finished',
+            completed: true,
+            confirmed: true,
+            reason: '',
+            attributionDegraded: false,
+          })
+        }, 20)
+        // A node.changed frame AFTER the dropped macroRun.changed proves
+        // the loop kept processing rather than throwing on the drop.
+        setTimeout(() => {
+          writeSSEFrame(res, 'node.changed', { serverTime: new Date().toISOString(), node: makeNode('n1') })
+        }, 40)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ macroRuns: [] }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().nodes.some((n) => n.nodeId === 'n1'), {
+      message: 'the frame after the dropped one was never applied — the drop broke the loop',
+    })
+
+    expect(store.getSnapshot().macroRuns).toEqual([])
+  })
+
+  it('submitMacroRun upserts the returned run into the model immediately, without waiting for a stream frame', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot({ macroRuns: [] }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      if (req.url === '/macros/begin-set/runs' && req.method === 'POST') {
+        respondJson(res, 202, {
+          serverTime: new Date().toISOString(),
+          replay: false,
+          run: {
+            id: 'run-new',
+            macroObjectId: 'begin-set',
+            macroRevision: 3,
+            show: 'halloween-2026',
+            trigger: 'ui',
+            issuerPrincipalId: 'p1',
+            issuerPrincipalName: 'operator',
+            createdAt: new Date().toISOString(),
+            finishedAt: null,
+            state: 'running',
+            completed: null,
+            confirmed: null,
+            reason: '',
+            attributionDegraded: false,
+            steps: [],
+          },
+        })
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    const resp = await store.submitMacroRun('begin-set')
+    expect(resp.run.id).toBe('run-new')
+    expect(store.getSnapshot().macroRuns.some((r) => r.id === 'run-new')).toBe(true)
   })
 })

@@ -91,6 +91,19 @@ type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
+// Step 9 (STEP-9-SPEC.md sections 5, 6): show.action/show.macro
+// configuration objects and the macro run surface.
+type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
+type SchemaConfigShowAction = components['schemas']['ConfigShowAction']
+type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
+type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
+type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
+type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
+type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
+type SchemaCreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
+type SchemaMacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
+type SchemaMacroRunSummary = components['schemas']['MacroRunSummary']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -502,6 +515,231 @@ export class ApiStore {
     } finally {
       this.endSideCall(controller)
     }
+  }
+
+  // -- Step 9: show.action / show.macro configuration objects ----------
+  //
+  // Same posture as the Step 7 seam A methods above (plain side-calls,
+  // never touching `this.model` or the read loop) with ONE difference:
+  // reads here require `show:macro:run` OR `config:write` (STEP-9-SPEC.md
+  // section 5.5), not `config:write` alone, so — unlike Configuration.tsx
+  // — the calling view must NOT gate its fetch on `config:write` only, or
+  // it silently renders empty/403 for the operator role these config
+  // kinds exist to serve. See views/Macros.tsx and views/ShowActions.tsx.
+
+  /** `GET /api/v1/config/show.action` or `GET /api/v1/config/show.macro` — object ids, labels, and current revision only, never the full payloads (STEP-9-SPEC.md section 5.5). */
+  async listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigObjectsListResponse>(`/config/${kind}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.action/{id}`. Throws (404) when no such action exists. */
+  async getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowActionConfigResponse>(
+        `/config/show.action/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.action/{id}` (STEP-9-SPEC.md section 5.3).
+   * `config:write` only — validated and normalized server-side; a
+   * rejected payload throws and appends no revision, rendered by the
+   * caller via `describeApiError` exactly like `putFPPEndpointsConfig`.
+   */
+  async putShowAction(id: string, payload: SchemaConfigShowAction): Promise<SchemaShowActionConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowActionConfigResponse>(
+        `/config/show.action/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.action/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowActionRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.action/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.macro/{id}`. Throws (404) when no such macro exists. */
+  async getShowMacro(id: string): Promise<SchemaShowMacroConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowMacroConfigResponse>(
+        `/config/show.macro/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.macro/{id}` (STEP-9-SPEC.md section 5.4).
+   * `config:write` only. `onFailure`/`onUnconfirmed` are sent as their
+   * RESOLVED value on every step (this method's caller — the macro editor
+   * — never omits them; see ConfigShowMacroStep's own generated doc
+   * comment for why the wire type makes both required rather than
+   * optional), which is wire-equivalent to omitting them: the resolved
+   * default and an explicit request for that same default produce the
+   * identical stored revision.
+   */
+  async putShowMacro(id: string, payload: SchemaConfigShowMacro): Promise<SchemaShowMacroConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowMacroConfigResponse>(
+        `/config/show.macro/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.macro/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowMacroRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.macro/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Step 9: the macro run surface (STEP-9-SPEC.md section 6.6, ADR-031) --
+
+  /**
+   * `POST /api/v1/macros/{id}/runs`. Requires `show:macro:run`
+   * specifically (never satisfied by `config:write` alone — decision 4).
+   * `202`, never a completed result (ADR-031 decision 1): the returned
+   * run is its INITIAL state, and the caller learns the outcome by
+   * watching `model.macroRuns` (this store's `macroRun.changed` handling
+   * below) or by calling [getMacroRun], never by waiting on this
+   * response any longer than it takes the coordinator to accept it.
+   *
+   * Mints a fresh idempotency key per call, exactly like
+   * [dispatchFPPCommand] — the caller never supplies one, so two fast
+   * clicks on the SAME run control mint two DIFFERENT keys and correctly
+   * produce two submissions, one of which the coordinator's own
+   * overlap guard (ADR-031 decision 6, `409`) refuses; a caller wanting
+   * "this exact click, replayed" is not a case this UI's own run control
+   * needs (unlike a machine client retrying after a lost response), so
+   * this method does not expose the key as a parameter.
+   *
+   * `priorFailures`/`priorFailuresDropped` are the FPP plugin's own
+   * buffered-degraded-outcome mechanism (STEP-9-SPEC.md section 8.3 path
+   * 2) — this UI is never that caller (`trigger: 'ui'` always, never
+   * `'plugin'`), so both are always omitted here, matching
+   * CreateMacroRunRequest's own "absent means nothing buffered" contract.
+   */
+  async submitMacroRun(macroId: string): Promise<SchemaMacroRunSubmitResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaCreateMacroRunRequest = {
+        idempotencyKey: randomUUIDv4(),
+        trigger: 'ui',
+      }
+      const resp = await this.client.postJson<SchemaMacroRunSubmitResponse>(
+        `/macros/${encodeURIComponent(macroId)}/runs`,
+        body,
+        controller.signal,
+      )
+      // Immediate, optimistic feedback for the common interactive case —
+      // a run THIS browser just started — without waiting for the next
+      // `macroRun.changed` frame or reconnect/re-snapshot. Safe as a
+      // plain upsert: `resp.run` is this coordinator's own authoritative
+      // initial state for this run id, the same shape a snapshot's
+      // `macroRuns` entry would carry (steps omitted, matching
+      // MacroRunSummary), so this can never disagree with what a
+      // subsequent frame or re-snapshot would say. See
+      // applyMacroRunChanged's own comment for why an event for a run
+      // NOT already known here is instead dropped rather than
+      // synthesized — this call site is the one place a not-yet-known
+      // run is safe to add, because the full MacroRun (steps aside) came
+      // back on THIS response, not reconstructed from a partial delta.
+      this.upsertMacroRunSummary(toMacroRunSummary(resp.run))
+      return resp
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/macro-runs` (STEP-9-SPEC.md section 6.6): most recent first, optionally filtered by macro id and/or state. Steps are not included. */
+  async listMacroRuns(filter: { macroId?: string; state?: 'running' | 'finished'; limit?: number } = {}): Promise<SchemaMacroRunsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (filter.macroId !== undefined) params.set('macroId', filter.macroId)
+      if (filter.state !== undefined) params.set('state', filter.state)
+      if (filter.limit !== undefined) params.set('limit', String(filter.limit))
+      const qs = params.toString()
+      return await this.client.getJson<SchemaMacroRunsListResponse>(
+        `/macro-runs${qs === '' ? '' : `?${qs}`}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/macro-runs/{runId}` (STEP-9-SPEC.md section 6.6): one
+   * run WITH its steps. Deliberately not part of the push model — "step
+   * detail is fetched, not streamed" (section 6.6) — so a caller
+   * (views/MacroRunView.tsx) calls this directly on mount and on its own
+   * refresh schedule, rather than reading it off `model`.
+   */
+  async getMacroRun(runId: string): Promise<SchemaMacroRunResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaMacroRunResponse>(
+        `/macro-runs/${encodeURIComponent(runId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * Upserts one [SchemaMacroRunSummary] into `model.macroRuns` by `id`,
+   * preserving every other entry's relative position (matching
+   * `applyNodeChanged`'s own append-if-new/replace-in-place shape). The
+   * ONLY two callers are [submitMacroRun] (a run this browser just
+   * created) and [applyMacroRunChanged] (a live transition for a run
+   * already present) — never called for a runId this store has not
+   * already been told exists from an authoritative source, per
+   * applyMacroRunChanged's own comment.
+   */
+  private upsertMacroRunSummary(run: SchemaMacroRunSummary): void {
+    const idx = this.model.macroRuns.findIndex((r) => r.id === run.id)
+    const macroRuns = idx === -1 ? [run, ...this.model.macroRuns] : replaceAt(this.model.macroRuns, idx, run)
+    this.setModel({ ...this.model, macroRuns })
   }
 
   /**
@@ -1040,6 +1278,16 @@ export class ApiStore {
         this.applyEventRecorded(payload.event, payload.serverTime)
         return
       }
+      case 'macroRun.changed': {
+        // Unlike every case above, this frame's own schema (MacroRunChangedEvent)
+        // carries serverTime as one of its OWN top-level fields rather than
+        // being nested under a wrapper — see the /stream table in
+        // api/openapi.yaml. Parsed as the whole event, not destructured.
+        const payload = tryParse<SchemaMacroRunChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyMacroRunChanged(payload)
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).
@@ -1125,6 +1373,62 @@ export class ApiStore {
       nodes: [...snapshot.nodes].sort(compareByNodeId),
       fpp: snapshot.fpp.instances,
       collectors: snapshot.collectors,
+      // Step 9 / ADR-020 decision 3: "in-flight runs must appear in
+      // /api/v1/snapshot" — a plain wholesale replace, exactly like
+      // `nodes`/`fpp` above, because `Snapshot.macroRuns` is this
+      // coordinator's own authoritative current window (in-flight plus a
+      // bounded recently-finished tail), not a delta this store needs to
+      // merge.
+      macroRuns: snapshot.macroRuns,
+    })
+  }
+
+  /**
+   * `macroRun.changed` (STEP-9-SPEC.md section 6.6): a run's own state
+   * transition, carrying [MacroRunSummary]'s fields minus everything a
+   * summary knows but a transition event does not (macroRevision, show,
+   * trigger, issuer, createdAt) — structurally a DELTA, not "this run's
+   * complete current representation" the way `fpp.changed` is for an FPP
+   * instance. If `runId` is already present in `model.macroRuns` (it
+   * arrived via the last snapshot, or via [submitMacroRun]'s own
+   * optimistic upsert), update those five fields in place. If it is NOT
+   * present — a run this connection has never been told about by an
+   * authoritative source — the frame is DROPPED rather than synthesizing
+   * a partial MacroRunSummary with invented values for the fields this
+   * event does not carry: exactly [applyFppObservationsChanged]'s own
+   * posture for the identical reason (that method's own comment), and
+   * for the identical reason [applyFppChanged] does NOT drop for a new
+   * FPP instance — its `fpp.changed` frame carries the instance's WHOLE
+   * representation, so there is something real to add; this event does
+   * not. A run started by another client (the CLI, the FPP plugin,
+   * another browser tab) while this connection is live therefore only
+   * appears here once its FIRST transition after this connection already
+   * knows it — practically: after the next reconnect/re-snapshot, which
+   * ADR-020 decision 3's snapshot inclusion already bounds. Recorded here
+   * rather than silently accepted as a gap, per this task's own report.
+   */
+  private applyMacroRunChanged(event: SchemaMacroRunChangedEvent): void {
+    const idx = this.model.macroRuns.findIndex((r) => r.id === event.runId)
+    if (idx === -1) return
+    const existing = this.model.macroRuns[idx]
+    if (existing === undefined) return // unreachable — see applyFppObservationsChanged's identical guard
+    const updated: SchemaMacroRunSummary = {
+      ...existing,
+      state: event.state,
+      completed: event.completed,
+      confirmed: event.confirmed,
+      reason: event.reason,
+      attributionDegraded: event.attributionDegraded,
+      finishedAt: event.state === 'finished' ? (existing.finishedAt ?? event.serverTime) : existing.finishedAt,
+    }
+    const macroRuns = replaceAt(this.model.macroRuns, idx, updated)
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime: event.serverTime,
+      clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      macroRuns,
     })
   }
 
@@ -1291,6 +1595,79 @@ function replaceAt<T>(list: readonly T[], index: number, value: T): T[] {
 
 function toModelEvent(event: SchemaEvent): ModelEvent {
   return { ...event, seq: asEventSeq(event.seq) }
+}
+
+/**
+ * A full [SchemaMacroRun] minus its `steps` — exactly [MacroRunSummary]'s
+ * own shape (`MacroRunSummary`'s doc comment: "a run's own state without
+ * its steps"). Used only by [ApiStore.submitMacroRun] to fold its `202`
+ * response's full run object into `model.macroRuns`, which holds
+ * summaries, never full runs with steps — steps stay fetch-only per
+ * section 6.6.
+ */
+function toMacroRunSummary(run: {
+  id: string
+  macroObjectId: string
+  macroRevision: number
+  show: string
+  trigger: 'api' | 'plugin' | 'cli' | 'ui'
+  issuerPrincipalId: string
+  issuerPrincipalName: string
+  createdAt: string
+  finishedAt: string | null
+  state: 'running' | 'finished'
+  completed: boolean | null
+  confirmed: boolean | null
+  reason: string
+  attributionDegraded: boolean
+}): {
+  id: string
+  macroObjectId: string
+  macroRevision: number
+  show: string
+  trigger: 'api' | 'plugin' | 'cli' | 'ui'
+  issuerPrincipalId: string
+  issuerPrincipalName: string
+  createdAt: string
+  finishedAt: string | null
+  state: 'running' | 'finished'
+  completed: boolean | null
+  confirmed: boolean | null
+  reason: string
+  attributionDegraded: boolean
+} {
+  const {
+    id,
+    macroObjectId,
+    macroRevision,
+    show,
+    trigger,
+    issuerPrincipalId,
+    issuerPrincipalName,
+    createdAt,
+    finishedAt,
+    state,
+    completed,
+    confirmed,
+    reason,
+    attributionDegraded,
+  } = run
+  return {
+    id,
+    macroObjectId,
+    macroRevision,
+    show,
+    trigger,
+    issuerPrincipalId,
+    issuerPrincipalName,
+    createdAt,
+    finishedAt,
+    state,
+    completed,
+    confirmed,
+    reason,
+    attributionDegraded,
+  }
 }
 
 /**

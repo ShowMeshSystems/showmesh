@@ -4,6 +4,7 @@ COORDINATOR := $(BIN_DIR)/showmesh-coordinator
 AGENT       := $(BIN_DIR)/showmesh-agent
 MULTISYNC_PROBE := $(BIN_DIR)/showmesh-multisync-probe
 SHOWMESHCTL := $(BIN_DIR)/showmeshctl
+FPP_PLUGIN  := $(BIN_DIR)/showmesh-fpp-plugin
 
 VERSION     ?= dev
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -20,6 +21,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(AGENT) ./cmd/showmesh-agent
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(MULTISYNC_PROBE) ./cmd/showmesh-multisync-probe
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(SHOWMESHCTL) ./cmd/showmeshctl
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(FPP_PLUGIN) ./cmd/showmesh-fpp-plugin
 
 .PHONY: test
 test:
@@ -136,7 +138,7 @@ vet:
 
 .PHONY: clean
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) $(FPP_PLUGIN_DIST)
 
 .PHONY: run-coordinator
 run-coordinator: build
@@ -207,3 +209,123 @@ docker-build:
 .PHONY: docker-run
 docker-run:
 	$(DOCKER) run --rm -p 8080:8080 $(IMAGE):$(VERSION)
+
+# --- FPP plugin release artifacts (Step 9) ---
+#
+# The deployed fleet spans both ARM word sizes (a Raspberry Pi 3 B+, a
+# BeagleBone Black needing GOARCH=arm GOARM=7, and a PocketBeagle2), and
+# CI has so far built linux/amd64 and linux/arm64 container images only —
+# neither standalone binaries nor armv7 at all. This section is the
+# plugin's own release-artifact pipeline: three CGO_ENABLED=0 static
+# cross-compiles, each tarred as a single file named showmesh-fpp-plugin
+# at mode 0755, plus one SHA256SUMS covering all three.
+#
+# The artifact contract is pinned (not invented here) so a separate
+# packaging repository's install script can fetch and verify against it
+# without coordinating a second change:
+#   tag:   fpp-plugin-v<VERSION>
+#   asset: showmesh-fpp-plugin_<VERSION>_linux_<ARCH>.tar.gz, ARCH in
+#          {amd64, arm64, armv7}
+#   sums:  showmesh-fpp-plugin_<VERSION>_SHA256SUMS, standard
+#          `sha256sum` format ("<hex>  <filename>")
+#
+# This section only BUILDS and verifies these artifacts locally; nothing
+# here publishes anything. No GitHub Release is created by this Makefile
+# or by CI's fpp-plugin-release job — publication is enabled later, when
+# an installer needs to reach real hardware, and is deliberately a
+# separate decision from building and verifying the pipeline that will
+# feed it.
+FPP_PLUGIN_DIST    := ./dist/fpp-plugin
+FPP_PLUGIN_VERSION ?= $(VERSION)
+
+# Deterministic ldflags for the release build specifically: the pinned
+# commit's own commit timestamp, not BUILD_DATE's wall-clock $(shell date
+# ...) above, which by construction differs on every invocation and would
+# make two builds of the identical commit non-reproducible for no reason
+# connected to the actual source. Verified locally (2026-08-14, macOS
+# host cross-compiling linux/amd64, go1.25/1.26): two independent
+# CGO_ENABLED=0 `go build -trimpath` invocations with these ldflags
+# produce byte-identical output — see verify-fpp-plugin-reproducible
+# below, which checks this on every run rather than resting on that one
+# observation.
+FPP_PLUGIN_COMMIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
+FPP_PLUGIN_LDFLAGS := -X $(MODULE)/internal/version.Version=$(FPP_PLUGIN_VERSION) \
+                       -X $(MODULE)/internal/version.Commit=$(COMMIT) \
+                       -X $(MODULE)/internal/version.BuildDate=$(FPP_PLUGIN_COMMIT_DATE)
+
+# release-fpp-plugin-<arch> each build one platform's binary at mode
+# 0755, tar it alone (no leading directory) under the pinned asset name,
+# and remove the loose binary so it cannot be mistaken for one of the
+# platform-specific ones on a later run. -trimpath keeps this host's own
+# absolute build path out of the binary, which matters for the
+# reproducibility check below as much as for not leaking a builder's
+# local filesystem layout.
+.PHONY: release-fpp-plugin-amd64
+release-fpp-plugin-amd64:
+	mkdir -p $(FPP_PLUGIN_DIST)
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_amd64.tar.gz showmesh-fpp-plugin
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+
+.PHONY: release-fpp-plugin-arm64
+release-fpp-plugin-arm64:
+	mkdir -p $(FPP_PLUGIN_DIST)
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_arm64.tar.gz showmesh-fpp-plugin
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+
+# armv7 is the BeagleBone Black's own word size (GOARCH=arm GOARM=7) —
+# the asset name uses "armv7" per the pinned contract above even though
+# GOARCH itself is "arm"; RES-015 section 5.3's own warning applies here
+# in spirit even though this is a build-time label, not a runtime probe:
+# never let "arm" alone stand in for the word size without GOARM alongside
+# it.
+.PHONY: release-fpp-plugin-armv7
+release-fpp-plugin-armv7:
+	mkdir -p $(FPP_PLUGIN_DIST)
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_armv7.tar.gz showmesh-fpp-plugin
+	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+
+# release-fpp-plugin is the target CI (and the bench) actually run: build
+# all three platforms, write the checksums file the pinned contract
+# names, then immediately verify it against the tarballs just produced —
+# "verify the manifest" happens on every invocation, not as a trusted
+# one-time claim. sha256sum -c reads relative filenames from within
+# FPP_PLUGIN_DIST, which is why both commands cd there first.
+.PHONY: release-fpp-plugin
+release-fpp-plugin: release-fpp-plugin-amd64 release-fpp-plugin-arm64 release-fpp-plugin-armv7
+	cd $(FPP_PLUGIN_DIST) && sha256sum showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_*.tar.gz > showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_SHA256SUMS
+	cd $(FPP_PLUGIN_DIST) && sha256sum -c showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_SHA256SUMS
+	@echo "release-fpp-plugin: built and self-verified $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_SHA256SUMS"
+
+# verify-fpp-plugin-reproducible builds ONE platform (amd64 — sufficient
+# to prove the mechanism; the other two share the identical build
+# invocation shape and gain little from repeating this per platform)
+# twice, independently, into two separate directories, and fails unless
+# the two binaries are byte-identical. This is the stronger,
+# cross-invocation reproducibility claim — release-fpp-plugin's own
+# sha256sum -c above only proves the checksums file matches what THIS run
+# produced, not that a second run would produce the same thing.
+.PHONY: verify-fpp-plugin-reproducible
+verify-fpp-plugin-reproducible:
+	rm -rf $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
+	mkdir -p $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/.reproducible-a/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/.reproducible-b/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	@if ! cmp -s $(FPP_PLUGIN_DIST)/.reproducible-a/showmesh-fpp-plugin $(FPP_PLUGIN_DIST)/.reproducible-b/showmesh-fpp-plugin; then \
+		echo "two independent builds of the same commit produced DIFFERENT binaries; the release pipeline is not reproducible"; \
+		exit 1; \
+	fi
+	rm -rf $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
+	@echo "verify-fpp-plugin-reproducible: OK, two independent builds are byte-identical"
+
+.PHONY: clean-fpp-plugin-dist
+clean-fpp-plugin-dist:
+	rm -rf $(FPP_PLUGIN_DIST)

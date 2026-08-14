@@ -16,6 +16,13 @@ type EventsResponse = components['schemas']['EventsResponse']
 type Event = components['schemas']['Event']
 type Problem = components['schemas']['Problem']
 type SessionResponse = components['schemas']['SessionResponse']
+// Step 9 (STEP-9-SPEC.md sections 5, 6).
+type ConfigShowAction = components['schemas']['ConfigShowAction']
+type ConfigShowMacro = components['schemas']['ConfigShowMacro']
+type MacroRunSummary = components['schemas']['MacroRunSummary']
+type MacroRunStep = components['schemas']['MacroRunStep']
+type MacroRun = components['schemas']['MacroRun']
+type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 
 const NOW = '2026-08-11T12:00:00.000Z'
 
@@ -96,6 +103,10 @@ export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     nodes: [],
     fpp: { instances: [] },
     collectors: [],
+    // Step 9 (ADR-020 decision 3, STEP-9-SPEC.md section 6.6): required
+    // on every snapshot, defaulting empty here the same way `nodes`/`fpp`
+    // above do — a test that cares about in-flight runs overrides this.
+    macroRuns: [],
     ...overrides,
   }
 }
@@ -162,6 +173,99 @@ export function makeProblem(overrides: Partial<Problem> = {}): Problem {
     status: 500,
     detail: 'test problem',
     serverTime: NOW,
+    ...overrides,
+  }
+}
+
+// Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
+// configuration objects and the macro run surface.
+
+export function makeConfigShowAction(overrides: Partial<ConfigShowAction> = {}): ConfigShowAction {
+  return {
+    show: 'halloween-2026',
+    label: 'Start main show',
+    description: '',
+    safetyClass: 'none',
+    target: {
+      integration: 'fpp',
+      instanceId: 'fpp-main',
+      primitive: 'startPlaylist',
+      params: { playlist: 'Halloween Main', repeat: false, ifBusy: 'refuse' },
+    },
+    ...overrides,
+  }
+}
+
+export function makeConfigShowMacro(overrides: Partial<ConfigShowMacro> = {}): ConfigShowMacro {
+  return {
+    show: 'halloween-2026',
+    label: 'Begin set',
+    description: '',
+    steps: [
+      {
+        id: 'start',
+        action: 'start-main-show',
+        onFailure: 'abort',
+        onUnconfirmed: 'continue',
+        localFallback: { class: 'coordinator-required', reason: 'the coordinator dispatches every step; nothing runs locally' },
+      },
+    ],
+    ...overrides,
+  }
+}
+
+export function makeMacroRunSummary(overrides: Partial<MacroRunSummary> = {}): MacroRunSummary {
+  return {
+    id: 'run-1',
+    macroObjectId: 'begin-set',
+    macroRevision: 1,
+    show: 'halloween-2026',
+    trigger: 'ui',
+    issuerPrincipalId: 'p1',
+    issuerPrincipalName: 'operator',
+    createdAt: NOW,
+    finishedAt: null,
+    state: 'running',
+    completed: null,
+    confirmed: null,
+    reason: '',
+    attributionDegraded: false,
+    ...overrides,
+  }
+}
+
+export function makeMacroRunStepCommand(overrides: Partial<MacroRunStepCommand> = {}): MacroRunStepCommand {
+  return {
+    state: 'none',
+    ...overrides,
+  }
+}
+
+export function makeMacroRunStep(overrides: Partial<MacroRunStep> = {}): MacroRunStep {
+  return {
+    stepIndex: 0,
+    stepId: 'start',
+    actionObjectId: 'start-main-show',
+    actionRevision: 1,
+    integration: 'fpp',
+    safetyClass: 'none',
+    localFallbackClass: 'coordinator-required',
+    state: 'pending',
+    dispatchedAt: null,
+    resolvedAt: null,
+    outcome: '',
+    outcomeState: 'not_collected',
+    outcomeReason: '',
+    attributionDegraded: false,
+    command: makeMacroRunStepCommand(),
+    ...overrides,
+  }
+}
+
+export function makeMacroRun(overrides: Partial<MacroRun> = {}): MacroRun {
+  return {
+    ...makeMacroRunSummary(),
+    steps: [makeMacroRunStep()],
     ...overrides,
   }
 }

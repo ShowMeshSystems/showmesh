@@ -56,6 +56,12 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdDeclare(rest, stdout, stderr, clock)
 	case "undeclare":
 		return cmdUndeclare(rest, stdout, stderr, clock)
+	case "macro":
+		return cmdMacro(rest, stdout, stderr, clock)
+	case "run":
+		return cmdRun(rest, stdout, stderr, clock)
+	case "action":
+		return cmdAction(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -84,6 +90,14 @@ commands (ADR-001) and needs fpp:command; none of them ever reports
 success on an HTTP 200 alone, because ADR-003 requires evidence that
 observed state actually moved.
 
+Step 9 gave this program "macro", "run" and "action": reading show.macro
+and show.action definitions, and submitting a macro run. "macro run" needs
+show:macro:run; every other new subcommand is a read (show:macro:run OR
+config:write). A macro run is accepted asynchronously (202): "macro run"
+and "run show" never wait for a run to finish unless given --follow, and
+--follow itself times out on IDLE silence, never on total duration — see
+"showmeshctl macro run --help".
+
 Usage:
   showmeshctl <command> [flags] [args]
 
@@ -109,6 +123,13 @@ Commands:
   discover                 run discovery and print proposals (write)
   declare <id>             promote a node to declared, or update its label/notes (write)
   undeclare <id>           remove a node's declaration, requires --confirm (write)
+  macro list                          enumerate show.macro objects
+  macro show <id>                     show one macro's full definition
+  macro run <id> [--follow]           submit a macro run (write, 202 accepted; asynchronous unless --follow)
+  run show <runId> [--follow]         show one macro run, including every step's outcome
+  run list [--macro <id>] [--state]   list macro runs, most recent first
+  action list                         enumerate show.action objects
+  action show <id>                    show one action's full definition
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
@@ -157,7 +178,18 @@ Global flags (place before any positional arguments):
                      --timeout on one of those subcommands prints a note
                      to stderr naming both values rather than silently
                      waiting longer than requested; see
-                     "showmeshctl fpp <verb> --help".
+                     "showmeshctl fpp <verb> --help". Every "macro"/"run"/
+                     "action" subcommand RAISES --timeout to its OWN,
+                     smaller minimum (currently 5s) on the same terms —
+                     see "showmeshctl macro run --help" for why that floor
+                     is much smaller than the fpp one (a macro run is
+                     accepted asynchronously; nothing on this surface
+                     holds a response open the way a dispatched fpp
+                     command's confirmation wait does). --idle-timeout on
+                     "macro run --follow"/"run show --follow" is a
+                     SEPARATE, unrelated setting: it bounds how long that
+                     follow loop goes without any update, never the
+                     request budget for one HTTP call.
 
 Run "showmeshctl <command> --help" for flags specific to one command.
 
@@ -183,10 +215,25 @@ Exit codes:
   10 conflict (409: the request was valid, but this coordinator's current
      state makes it unsafe or meaningless to act on right now — a
      different playlist is playing and ifBusy=refuse, the evidence needed
-     to decide that is not current, or an idempotency key was reused
-     against a different action/target/params; see stderr for the
-     specific reason and remedy. Distinct from exit 6: the coordinator is
-     healthy and answered correctly, it declined on purpose)
+     to decide that is not current, an idempotency key was reused against
+     a different action/target/params, or (Step 9) a macro run's
+     idempotency key was reused against a different macro/revision, or the
+     same macro already has a run in flight; see stderr for the specific
+     reason and remedy. Distinct from exit 6: the coordinator is healthy
+     and answered correctly, it declined on purpose)
+  11 still watching (Step 9: "macro run --follow"/"run show --follow"
+     stopped watching because its --idle-timeout elapsed with no run
+     update at all — never because a total duration was exceeded. This is
+     NOT a reported failure: the request itself succeeded and the run may
+     still be in progress, or may already have finished: check with
+     "showmeshctl run show <runId>")
+  12 macro run aborted (Step 9: a macro run reached its terminal state
+     with completed=false — a step failed and the remainder was not
+     dispatched, or a step's target was removed mid-run; see stderr/the
+     run's own "reason" for which step and why. Distinct from exit 9,
+     which this program still uses for a run that completed but did not
+     confirm — "completed" and "confirmed" are two separate facts and
+     this CLI's exit codes keep them separate too)
 `)
 }
 

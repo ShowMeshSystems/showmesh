@@ -103,6 +103,32 @@ const (
 	// silently relying on the (also-correct) 409 status fallback, matching
 	// this file's own established pattern for every 409 type above.
 	problemFPPStartPlaylistBusy = "https://showmesh.dev/problems/fpp-start-playlist-busy"
+
+	// The three Step 9 additions below are internal/coordinator/macro/problems.go's
+	// own ProblemTypeMacroRunAlreadyInFlight/
+	// ProblemTypeMacroRunIdempotencyMacroConflict/
+	// ProblemTypeMacroRunIdempotencyRevisionConflict (STEP-9-SPEC.md
+	// section 2.6 and section 6.2), matched by exact string for the same
+	// "do not misread an unrelated 404/409" reason every constant above
+	// is. All three are 409s and all three map to [exitConflict] below,
+	// matching this file's own established "one exit code covers every
+	// deliberate, retryable refusal" pattern (see
+	// problemFPPStartPlaylistEvidenceNotCurrent's doc comment) — each gets
+	// its own named case anyway, rather than relying on the (also correct)
+	// generic 409 status fallback, so a maintainer reading this switch sees
+	// every problem type this program actually classifies rather than
+	// three of them hiding behind "whatever falls through".
+
+	// problemMacroRunAlreadyInFlight is ADR-031 decision 6's overlap
+	// refusal: a second run of a macro already running.
+	problemMacroRunAlreadyInFlight = "https://showmesh.dev/problems/macro-run-already-in-flight"
+	// problemMacroRunIdempotencyMacroConflict is the same idempotency key
+	// reused for a different macro id.
+	problemMacroRunIdempotencyMacroConflict = "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict"
+	// problemMacroRunIdempotencyRevisionConflict is the same idempotency
+	// key reused for the same macro at a different pinned revision (the
+	// macro was edited between the two submissions).
+	problemMacroRunIdempotencyRevisionConflict = "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict"
 )
 
 // Exit codes. Documented in --help (see usage.go) so a script wrapping this
@@ -153,6 +179,34 @@ const (
 	// and the operator's own remedy is in stderr (e.g. "retry with
 	// --if-busy=replace").
 	exitConflict = 10
+
+	// exitFollowStillWatching is Step 9's own addition: "macro run --follow"
+	// and "run show --follow" stopped watching because the idle window
+	// elapsed with no run event and no successful poll — never because a
+	// total duration was exceeded (STEP-9-SPEC.md section 9: "a total
+	// timeout is forbidden: it reintroduces exactly the client/server
+	// timeout inversion Step 7 shipped as a defect"). This is a clean,
+	// non-error exit distinct from every code above: the request itself
+	// never failed, and the run itself may well still be in progress or
+	// may already have finished — this program genuinely does not know,
+	// and says so rather than guessing either way. A script can tell "I
+	// stopped watching" (this code) apart from "the run is done" (exitOK
+	// or exitCommandUnconfirmed or exitMacroRunAborted below, all only
+	// ever returned once a run has actually reached a terminal state).
+	exitFollowStillWatching = 11
+
+	// exitMacroRunAborted is Step 9's own addition: a macro run reached its
+	// terminal state with completed=false (STEP-9-SPEC.md section 2.3) —
+	// a step failed and the remainder was not dispatched, or a step's
+	// target evaporated mid-run (section 5.6). Distinct from
+	// exitCommandUnconfirmed (9), which this program still uses for
+	// completed=true, confirmed=false (STEP-9-SPEC.md section 2.3's OTHER
+	// combination: every step dispatched and none aborted, but at least
+	// one produced no confirming evidence) — conflating the two would lose
+	// exactly the distinction section 2.3 says the UI (and, by the same
+	// argument, this CLI) must keep legible: "a run that completed without
+	// confirmation must not render the same as" a run that aborted.
+	exitMacroRunAborted = 12
 )
 
 // cliError carries an exit code alongside a human-readable message, so
@@ -190,7 +244,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitForbidden
 		case problemTooManyRequests:
 			return exitRateLimited
-		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy:
+		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy,
+			problemMacroRunAlreadyInFlight, problemMacroRunIdempotencyMacroConflict, problemMacroRunIdempotencyRevisionConflict:
 			return exitConflict
 		}
 	}

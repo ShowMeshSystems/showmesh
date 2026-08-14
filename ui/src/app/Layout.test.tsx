@@ -21,6 +21,7 @@ function model(
     nodes: [],
     fpp: [],
     collectors: [],
+    macroRuns: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

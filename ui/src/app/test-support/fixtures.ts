@@ -165,6 +165,9 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     nodes: [],
     fpp: [],
     collectors: [],
+    // Step 9 (STEP-9-SPEC.md section 6.6, ADR-020 decision 3): required
+    // on Model — a test that cares about macro runs overrides this.
+    macroRuns: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

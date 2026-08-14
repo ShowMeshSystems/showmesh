@@ -37,6 +37,22 @@ export type {
   ResourceRef,
   SessionInfo,
   SessionResponse,
+  // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
+  // configuration objects and the macro run surface.
+  ConfigObjectSummary,
+  ConfigShowActionMQTTPublish,
+  ConfigShowActionMQTTExpect,
+  ConfigShowActionTarget,
+  ConfigShowAction,
+  ShowActionConfigResponse,
+  ConfigShowMacroLocalFallback,
+  ConfigShowMacroStep,
+  ConfigShowMacro,
+  ShowMacroConfigResponse,
+  MacroRunSummary,
+  MacroRunStepCommand,
+  MacroRunStep,
+  MacroRun,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);
@@ -51,6 +67,12 @@ import type {
   FPPInstance as FPPInstanceType,
   NodeDeclaration as NodeDeclarationType,
   ResourceRef as ResourceRefType,
+  ConfigShowAction as ConfigShowActionType,
+  ConfigShowActionTarget as ConfigShowActionTargetType,
+  ConfigShowMacroLocalFallback as ConfigShowMacroLocalFallbackType,
+  ConfigShowMacroStep as ConfigShowMacroStepType,
+  MacroRunSummary as MacroRunSummaryType,
+  MacroRunStepCommand as MacroRunStepCommandType,
 } from '../api'
 
 // Derived, not duplicated: these are indexed-access views onto seam B's
@@ -64,3 +86,13 @@ export type ResourceKind = ResourceRefType['kind']
 export type EvidenceQuality = EvidenceType['quality']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 export type DiscoveryState = NodeDeclarationType['discoveryState']
+// Step 9 (STEP-9-SPEC.md sections 5, 6): same derived-not-duplicated
+// pattern as every alias above.
+export type SafetyClass = ConfigShowActionType['safetyClass']
+export type ActionIntegration = ConfigShowActionTargetType['integration']
+export type LocalFallbackClass = ConfigShowMacroLocalFallbackType['class']
+export type MacroStepOnFailure = ConfigShowMacroStepType['onFailure']
+export type MacroStepOnUnconfirmed = ConfigShowMacroStepType['onUnconfirmed']
+export type MacroRunState = MacroRunSummaryType['state']
+export type MacroRunTrigger = MacroRunSummaryType['trigger']
+export type MacroRunStepCommandState = MacroRunStepCommandType['state']

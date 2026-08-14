@@ -20,6 +20,11 @@ import { FPPDetail } from '../views/FPPDetail'
 import { Capabilities } from '../views/Capabilities'
 import { Events } from '../views/Events'
 import { Configuration } from '../views/Configuration'
+import { Macros } from '../views/Macros'
+import { MacroDetail } from '../views/MacroDetail'
+import { MacroRunView } from '../views/MacroRunView'
+import { ShowActions } from '../views/ShowActions'
+import { ShowActionDetail } from '../views/ShowActionDetail'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -39,6 +44,19 @@ export default function App() {
             <Route path="capabilities" element={<Capabilities />} />
             <Route path="events" element={<Events />} />
             <Route path="config" element={<Configuration />} />
+            {/* Step 9 (STEP-9-SPEC.md section 9): the macro list/run/run-view
+                surfaces plus authoring for both show.macro and show.action.
+                "/macros/new" and "/actions/new" are listed BEFORE their
+                ":id" siblings for readability; react-router-dom v6 ranks
+                routes by specificity regardless of declaration order, so
+                this ordering is not load-bearing, only easier to read. */}
+            <Route path="macros" element={<Macros />} />
+            <Route path="macros/new" element={<MacroDetail isNew />} />
+            <Route path="macros/:id" element={<MacroDetail />} />
+            <Route path="macros/:id/runs/:runId" element={<MacroRunView />} />
+            <Route path="actions" element={<ShowActions />} />
+            <Route path="actions/new" element={<ShowActionDetail isNew />} />
+            <Route path="actions/:id" element={<ShowActionDetail />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
