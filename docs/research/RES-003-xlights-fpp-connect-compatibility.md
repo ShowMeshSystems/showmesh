@@ -125,7 +125,48 @@ This matters because it appears to be **the only path by which xLights pushes mo
 
 This pass brushed against the machinery without tracing it: `POST /api/models` with a body from `CreateModelMemoryMap()`, and `GET`/`POST /api/channel/output/universeOutputs` from `FPP::UploadUDPOut()`, both surfacing in the FPP Connect dialog as dropdowns defaulting to "None". Whether the Controllers tab drives the same code is **unverified**, and the `/api/models` body schema is listed below as explicitly undetermined.
 
-A second research pass is running. Until it reports, **assume nothing about this surface**, and note that day-0 does not depend on it: manual channel-range configuration is a first-class permanent path under ADR-027 decision 4, and section 9.5 confirms it is the natural input to sparse rendering.
+**That pass has now reported: see section 9.7b.** Its answer is that the Controllers tab does *not* push models, so the surface described in this section is not the one that matters. Day-0 was never dependent on it.
+
+### 9.7b The Controllers tab, traced (L1, 2026-08-13, second pass)
+
+Read at xLights `97f78a15b` and FPP `01e0d5cc3`, both shallow-cloned and read directly.
+
+**The button exists and does something other than what it was thought to do.** It is labelled **"Upload Output"**, singular, in `ControllerListPanel.cpp`, and it reaches `FPP::SetOutputs()`, which calls `UploadPanelOutputs`, `UploadVirtualMatrixOutputs`, `UploadPixelOutputs`, `UploadSerialOutputs`, `UploadPWMOutputs`, then restarts the target. **None of those calls `CreateModelMemoryMap()` or `UploadModels()`.** A grep of the whole file finds those two functions referenced only at their own definitions and from three call sites: the FPP Connect dialog, an automation action, and the iPad bridge. The Controllers tab is nowhere among them.
+
+So **"Upload Output" pushes per-port pixel, panel, serial and PWM wiring configuration, not model definitions.** Model definitions reach a device only through FPP Connect's own Models dropdown, which section 9.6 already found and which defaults to "None".
+
+**This settles the question 9.7a was opened to answer, and the answer is that this surface is not the one we want.** Every payload it produces describes how a device drives physical pixel, serial or DMX outputs, which a render node does not do.
+
+**xLights already ships the precedent, which is the most useful single finding here.** `resources/controllers/fpp.xcontroller` defines variants named **"FPP Player Only"** and **"FPP Video Playing Remote Only"**, each with `MaxPixelPort=0`, `MaxSerialPort=0`, a `<PlayerOnly/>` tag, and **no `<SupportsUpload/>` tag at all**. `ControllerSupportsOutputUpload()` checks exactly that, so a controller declared as one of these has "Upload Output" permanently disabled regardless of reachability. xLights has already modelled "a device that plays media and drives no pixel outputs" and deliberately excluded it from this surface. That is the shape of a ShowMesh render node, described by xLights itself.
+
+#### A fifth endpoint the first pass did not find, and it is an identity claim
+
+**Fact.** The Controllers-tab gate is `FPP::AuthenticateAndUpdateVersions()`, which is narrower than FPP Connect discovery: `GET /config.php`, then `GET /api/system/info`, with no UDP, no multicast, no mDNS and no `multiSyncSystems`. `parseConfig()` sets `fppType = FPP_TYPE::FPP` **only if the parsed `settings["Title"]` contains the substring `"Falcon Player"`.**
+
+This explains the operator's observation exactly: a controller is definable offline because the property grid never touches the network, and "Upload Output" fails until those two GETs succeed against that IP at click time.
+
+**The unreconciled part, flagged rather than smoothed over.** This second pass reports that the **model push** also passes through `AuthenticateAndUpdateVersions()`, and therefore also requires `/config.php` to advertise `"Falcon Player"`. The first pass, which traced the FSEQ and media path, never encountered `/config.php` at all and derived a different gate (`typeId` plus `httpConnected`). Both may be true of different operations, since they are different functions guarding different features. **They have not been reconciled against a single call graph, and until they are, section 9.7's four-item list should be read as covering FSEQ and media upload only.** Anyone implementing the model-receive path should assume `/config.php` is also required and verify it on the bench.
+
+**That requirement is a decision, not a detail.** Serving a `/config.php` whose title claims to be Falcon Player is different in kind from implementing a compatible API: it is asserting another project's identity to pass a string comparison. It is the cheapest possible implementation and it deserves a deliberate record rather than appearing in a commit as a one-line string constant.
+
+#### The model schema, now traced
+
+**Fact.** `POST /api/models` takes `{"models": [ ... ]}` where each entry carries `Name` (spaces replaced with underscores), `ChannelCount`, `StartChannel` (1-based), `ChannelCountPerNode`, `xLights: true`, `Orientation` (`horizontal`, `vertical` or `custom`), `StringCount`, `StrandsPerString`, `StartCorner` (two characters, one of `TL`/`TR`/`BL`/`BR`), and `Type` (always `"Channel"` from this function). Custom-orientation models additionally carry `compressedData` on FPP 10 and later, or `data` before it.
+
+Three traps in that exchange, all facts:
+
+- **`GET /api/models` returns a bare array while `POST` expects `{"models": [...]}`.** A client that reads back its own POST body will be confused.
+- **xLights merges client-side before posting.** It GETs the existing models and folds forward any whose `xLights` flag is not `true`, so hand-authored FPP models survive a re-upload. If that GET fails, the merge is silently skipped and the POST contains only xLights' models. That is xLights' robustness problem, noted because a device that answers the GET badly can cause silent data loss on the device itself.
+- **`FPP::UploadModels()` discards the HTTP status and unconditionally returns "not cancelled".** **xLights never checks whether the model POST succeeded**, so a target that accepts the connection and returns anything at all, including a non-2xx, looks successful to the operator. Any ShowMesh implementation must therefore be correct without expecting xLights to report a failure, and should surface its own evidence that a push was received and understood.
+
+**Fact, server side.** FPP writes the request body **verbatim with `O_TRUNC`** to `config/model-overlays.json`, with no schema validation at write time, then sets a restart flag over loopback. A malformed body is accepted and only surfaces on the next `fppd` restart.
+
+#### What this pass could not determine
+
+- Whether the version gate at `supportedForFPPConnect()` blocks the Models checkbox specifically, or only some other FPP Connect capability. The function was read; not every caller was.
+- Whether the other `Upload*` functions check their POST status the way `UploadModels()` demonstrably does not.
+- Whether absent keys in a model entry degrade cleanly or throw on FPP's side. The code path was read but not run.
+- Which FPP version introduced the POST-wrapper versus GET-bare-array asymmetry.
 
 ### 9.8 What this research could not determine
 
