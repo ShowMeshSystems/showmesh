@@ -461,12 +461,27 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		collectors = append(collectors, mapCollectorState(c))
 	}
 
+	// Step 9 wave 2: in-flight macro runs, plus a bounded window of
+	// recently finished ones (STEP-9-SPEC.md section 6.6) — fatal to omit
+	// per ADR-020 decision 3, see [MacroRunner.SnapshotRuns]'s own doc
+	// comment (macro_seam.go).
+	runViews, err := h.deps.Macros.SnapshotRuns(ctx)
+	if err != nil {
+		h.writeInternalError(w, now, "snapshot macro runs", err)
+		return
+	}
+	runs := make([]v1.MacroRunSummary, 0, len(runViews))
+	for _, run := range runViews {
+		runs = append(runs, mapMacroRunSummary(run))
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
 		Nodes:          nodes,
 		FPP:            v1.FPPSection{Instances: instances},
 		Collectors:     collectors,
+		MacroRuns:      runs,
 	})
 }
 

@@ -165,6 +165,32 @@ type FPPCommandOutcome struct {
 	AttributionDegraded bool
 	DispatchedAt        *time.Time
 	ResolvedAt          *time.Time
+
+	// DispatchFailed is true when the request to FPP itself did not
+	// succeed: the client could not be built, the connection was
+	// refused, DNS failed, or FPP answered a non-2xx status. It is
+	// false whenever FPP accepted the command, whatever the
+	// confirmation then concluded.
+	//
+	// Outcome cannot answer this. It is only ever "confirmed" or
+	// "unconfirmed", so a host that is powered off arrives as
+	// "unconfirmed", indistinguishable from a command FPP accepted and
+	// whose effect no evidence reached us about. That distinction is
+	// invisible on the single-command HTTP path, which reports the same
+	// two words either way, and load-bearing for a macro run: ADR-031
+	// decision 2 routes "failed" and "unconfirmed" onto two separate
+	// policy axes, and a step that never reached its host is a failure
+	// of the show, not a gap in ShowMesh's own evidence pipeline.
+	// Without this field a four-step macro against a dead host
+	// dispatched nothing and reported completed: true.
+	//
+	// OutcomeState is not a usable substitute: "collection_failed" is
+	// also what a failed read of this coordinator's OWN observation
+	// store returns during confirmation (fppcommand_evidence.go), which
+	// is genuinely a monitoring gap, so keying on it would push that
+	// case onto the failure axis and abort a run for a condition that
+	// must never stop a show.
+	DispatchFailed bool
 }
 
 // timePtr returns a pointer to a copy of t — used by
@@ -789,6 +815,7 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		AttributionDegraded: dispatchDegraded || outcomeDegraded,
 		DispatchedAt:        utcTimePtr(dispatchedAt),
 		ResolvedAt:          timePtr(resolvedAt.UTC()),
+		DispatchFailed:      dispatchErr != nil,
 	}, nil, nil
 }
 

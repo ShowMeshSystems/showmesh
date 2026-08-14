@@ -235,6 +235,14 @@ type pendingFrame struct {
 	instance *v1.FPPInstance
 	ev       *v1.Event
 
+	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
+	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
+	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
+	// events on a stream every client receives" — step detail is fetched,
+	// via GET /macro-runs/{runId}, never streamed). Seq is assigned in
+	// materialize, exactly like every other kind.
+	macroRun *v1.MacroRunChangedEvent
+
 	// instanceID, changedObs, and removedSignals are set only for an
 	// "fpp.observations.changed" pendingFrame (ADR-023); every other kind
 	// leaves them at their zero value and materialize never reads them for
@@ -259,6 +267,11 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		}
 	case "event.recorded":
 		return "event.recorded", v1.EventRecordedEvent{Seq: seq, ServerTime: pf.serverTime, Event: *pf.ev}
+	case "macroRun.changed":
+		ev := *pf.macroRun
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "macroRun.changed", ev
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -458,6 +471,32 @@ func (h *Hub) render(ctx context.Context) {
 			}
 		}
 		h.evictRendered("fpp:", present)
+	}
+
+	// Step 9 wave 2: run state transitions (STEP-9-SPEC.md section 6.6).
+	// Rendered from the SAME bounded, in-flight-plus-recently-finished
+	// window [Hub.deps.Macros.SnapshotRuns] serves GET /api/v1/snapshot
+	// from (handlers.go's handleSnapshot) — deliberately, so a run this
+	// hub ever announces a change for is always one a freshly connecting
+	// client's own snapshot fetch can also see (ADR-020 decision 3): this
+	// hub must never announce a transition for a run that has already
+	// scrolled out of the window a reconnecting client would re-sync
+	// against, or that client's local model would carry a change it can
+	// never reconcile against its own snapshot.
+	if runs, err := h.deps.Macros.SnapshotRuns(ctx); err != nil {
+		h.logger.Warn("stream hub: snapshot macro runs failed", "error", err)
+	} else {
+		present := make(map[string]struct{}, len(runs))
+		for _, run := range runs {
+			key := "macrorun:" + run.ID
+			present[key] = struct{}{}
+			ev := macroRunChangedEventProjection(run)
+			if h.updateRendered(key, ev) {
+				e := ev
+				pending = append(pending, pendingFrame{event: "macroRun.changed", serverTime: formatTime(now), macroRun: &e})
+			}
+		}
+		h.evictRendered("macrorun:", present)
 	}
 
 	pending = append(pending, h.renderNewEvents(ctx, now)...)

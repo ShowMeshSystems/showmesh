@@ -700,6 +700,7 @@ paths:
           | `fpp.changed` | `FPPChangedEvent` | every connection |
           | `fpp.observations.changed` | `FPPObservationsChangedEvent` | `?deltas=1` connections only |
           | `event.recorded` | `EventRecordedEvent` | every connection |
+          | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -1207,6 +1208,440 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.action:
+    get:
+      operationId: listShowActions
+      summary: Enumerate show.action objects (Step 9, STEP-9-SPEC.md section 5.5)
+      description: >-
+        Object ids with label, show, and current revision number, NOT the
+        full payloads. Requires `show:macro:run` OR `config:write` — never
+        toggled by `Options.CloseReads` (a new, always-sensitive surface,
+        exactly like `GET /audit`). Corrected from an earlier draft that
+        would have copied `fpp.endpoints`' `config:write`-only posture,
+        which breaks the operator role's own macro list (the operator role
+        holds `show:macro:run`, never `config:write`).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.action/{id}:
+    get:
+      operationId: getShowAction
+      summary: One show.action object's active revision (Step 9)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowActionConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowAction
+      summary: Write a new show.action revision (Step 9)
+      description: >-
+        Requires `config:write` (admin only). `safetyClass` is required and
+        must agree with an `fpp` target's own registered primitive safety
+        class; an `mqtt` target's `broker` must name a broker this
+        deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no
+        default. Absent, `null`, and explicitly empty are three different
+        things on every field (`target.publish.retain` is the one field
+        besides show.macro's `onFailure`/`onUnconfirmed` where an absent
+        key defaults, to `false`). Stores the VALIDATED, NORMALIZED
+        payload, never the raw request body. Audited in the same
+        transaction as the revision write (ADR-024 decision 11).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowAction"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowActionConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.action/{id}/revisions:
+    get:
+      operationId: listShowActionRevisions
+      summary: show.action revision history, newest first (Step 9)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.macro:
+    get:
+      operationId: listShowMacros
+      summary: Enumerate show.macro objects (Step 9, STEP-9-SPEC.md section 5.5)
+      description: >-
+        Object ids with label, show, and current revision number, NOT the
+        full payloads. Same read posture as GET /config/show.action.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.macro/{id}:
+    get:
+      operationId: getShowMacro
+      summary: One show.macro object's active revision (Step 9)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowMacroConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowMacro
+      summary: Write a new show.macro revision (Step 9)
+      description: >-
+        Requires `config:write` (admin only). `steps` is required, must
+        contain 1-32 entries, each `id` unique, each `action` resolving to
+        an existing `show.action` object. `onFailure` (default `abort`)
+        and `onUnconfirmed` (default `continue`) are the only two keys in
+        this payload where an absent key carries meaning; a present `null`
+        on either is an error. `localFallback.class` is required per step
+        (`none` | `coordinator-required` | `silence`); `reduced` is
+        rejected with its own distinct problem type. Stores the VALIDATED,
+        NORMALIZED payload — including onFailure/onUnconfirmed resolved to
+        their defaults — never the raw request body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowMacro"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowMacroConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.macro/{id}/revisions:
+    get:
+      operationId: listShowMacroRevisions
+      summary: show.macro revision history, newest first (Step 9)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /macros/{id}/runs:
+    post:
+      operationId: submitMacroRun
+      summary: Submit a macro run (Step 9, STEP-9-SPEC.md section 6.6, ADR-031)
+      description: >-
+        Requires `show:macro:run` specifically (never satisfied by
+        `config:write` alone — an admin who has never been granted
+        `show:macro:run` may not fire a show through a different scope).
+        `202`, never `200` or `201`: the run is accepted and not complete
+        (ADR-031 decision 1). The body is the run's initial state, so a
+        client that never watches still holds the run id and the pinned
+        macro/action revisions; the outcome is learned by GET
+        /macro-runs/{runId} or the `macroRun.changed` change-stream event,
+        never by waiting on this response. `idempotencyKey` governs a
+        three-way replay rule (STEP-9-SPEC.md section 6.2): the same key
+        with the same macro at the same pinned revision replays (returns
+        the existing run, `replay: true`, not a new one); the same key
+        against a different macro, or the same macro at a different
+        pinned revision, is each its own distinct `409`. A second run of
+        the same macro already in flight is refused `409` naming the
+        in-flight run (ADR-031 decision 6). A run whose steps are not all
+        ADR-024 decision 11 safety-class-exempt is refused `503` when the
+        audit store is unwritable at submission (decision 5).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The show.macro object id to run.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMacroRunRequest"
+      responses:
+        "202":
+          description: Accepted. The run's initial state.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacroRunSubmitResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Three DISTINCT causes, three DISTINCT `type` values (never the
+            plain `conflict`): `macro-run-already-in-flight` (ADR-031
+            decision 6), `macro-run-idempotency-macro-conflict`, and
+            `macro-run-idempotency-revision-conflict` (STEP-9-SPEC.md
+            section 6.2) — `detail` names the in-flight or conflicting
+            run.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: >-
+            ADR-024 decision 11 / ADR-031 decision 5: this run's steps are
+            not all safety-class exempt, and this coordinator's audit
+            store is currently unavailable. Evaluated at submission, not
+            mid-run — once a 202 is out there is no HTTP response left to
+            carry a later refusal. `type`
+            `fpp-command-refused-audit-unavailable`. Nothing was recorded
+            and no step was dispatched; retry once the audit store is
+            writable again.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /macro-runs:
+    get:
+      operationId: listMacroRuns
+      summary: Macro runs, most recent first (Step 9, STEP-9-SPEC.md section 6.6)
+      description: >-
+        Requires `show:macro:run` OR `config:write`, matching
+        GET /config/show.macro. Steps are not included — a list of runs is
+        a list of runs; a client wanting step detail fetches the run.
+      parameters:
+        - name: macroId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [running, finished]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacroRunsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /macro-runs/{runId}:
+    get:
+      operationId: getMacroRun
+      summary: One macro run with its steps (Step 9, STEP-9-SPEC.md section 6.6)
+      description: >-
+        Requires `show:macro:run` OR `config:write`. A step's `command`
+        member is never blank: `state` is "none" (no dispatched command at
+        all), "retained" (the commands row still exists; `detail` carries
+        it), or "not_retained" (retention has pruned the row; `id` is
+        still named, per STEP-9-SPEC.md section 6.1).
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacroRunResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -2439,7 +2874,7 @@ components:
     Snapshot:
       type: object
       required:
-        [serverTime, latestEventSeq, nodes, fpp, collectors]
+        [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns]
       properties:
         serverTime:
           type: string
@@ -2471,6 +2906,16 @@ components:
             is guaranteed.
           items:
             $ref: "#/components/schemas/CollectorStatus"
+        macroRuns:
+          type: array
+          description: >-
+            Step 9: every in-flight macro run, plus a bounded window of
+            recently finished ones (STEP-9-SPEC.md section 6.6). Fatal to
+            omit per ADR-020 decision 3: the change stream emits no id, so a
+            client connecting for the first time during an in-flight run
+            has no other way to learn the run exists.
+          items:
+            $ref: "#/components/schemas/MacroRunSummary"
     PrincipalSummary:
       type: object
       description: A principal's own non-secret identity (ADR-024).
@@ -2755,7 +3200,14 @@ components:
           type: boolean
     ConfigRevisionsResponse:
       type: object
-      description: The body of GET /config/fpp.endpoints/revisions, newest first.
+      description: >-
+        The body of GET /config/fpp.endpoints/revisions, GET
+        /config/show.action/{id}/revisions, and GET
+        /config/show.macro/{id}/revisions, newest first — one shape shared
+        across every configuration kind's own revision history route
+        (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
+        Step 7-only and never revisited when this schema gained two more
+        callers).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -2763,7 +3215,7 @@ components:
           format: date-time
         kind:
           type: string
-          const: fpp.endpoints
+          enum: [fpp.endpoints, show.action, show.macro]
         revisions:
           type: array
           items:
@@ -2775,11 +3227,29 @@ components:
         member present on every problem this API produces, with no
         exception (section 6.2 and 6.6). supportedVersions is present only
         on an "unsupported-api-version" problem. type is a stable,
-        documented identifier a client dispatches on — the fourteen values
-        in its enum below are every class this coordinator currently
-        produces, and this list is the single source of truth for that
-        set. It is deliberately not a fetchable URI: nothing in this API
-        or its tests dereferences it over the network.
+        documented identifier a client dispatches on — the values in its
+        enum below are every class this coordinator currently produces,
+        and this list is the single source of truth for that set. It is
+        deliberately not a fetchable URI: nothing in this API or its tests
+        dereferences it over the network.
+
+
+        Step 9 (STEP-9-SPEC.md) adds fourteen more, in two groups. Eleven
+        are internal/coordinator/config's ValidationError.Code values,
+        mapped mechanically onto their own "show-config-*" type by
+        internal/coordinator/api's mapValidationError (showconfig.go) — a
+        client that must tell two refusals on a show.action/show.macro
+        write apart branches on type, never on detail's prose. Three are
+        the macro run surface's own conflicts (ADR-031 decisions 2 and 6,
+        STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a
+        second run of a macro already running, 409, naming the in-flight
+        run in detail), "macro-run-idempotency-macro-conflict" (the same
+        idempotency key reused for a different macro, 409), and
+        "macro-run-idempotency-revision-conflict" (the same key reused for
+        the same macro at a different pinned revision — the macro was
+        edited between two submissions under one key, 409) — minted by
+        internal/coordinator/macro (which imports this package; see
+        macro_seam.go), never by this package itself.
 
 
         Four of the fourteen are ADR-024: "forbidden" (401 means no valid
@@ -2837,6 +3307,20 @@ components:
             - https://showmesh.dev/problems/fpp-command-refused-audit-unavailable
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
             - https://showmesh.dev/problems/fpp-start-playlist-busy
+            - https://showmesh.dev/problems/show-config-body-invalid
+            - https://showmesh.dev/problems/show-config-field-required
+            - https://showmesh.dev/problems/show-config-field-null
+            - https://showmesh.dev/problems/show-config-field-empty
+            - https://showmesh.dev/problems/show-config-field-invalid
+            - https://showmesh.dev/problems/show-config-field-unknown-reference
+            - https://showmesh.dev/problems/show-config-safety-class-mismatch
+            - https://showmesh.dev/problems/show-config-local-fallback-reduced
+            - https://showmesh.dev/problems/show-config-steps-empty
+            - https://showmesh.dev/problems/show-config-steps-too-many
+            - https://showmesh.dev/problems/show-config-step-id-duplicate
+            - https://showmesh.dev/problems/macro-run-already-in-flight
+            - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
+            - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
         title:
           type: string
         status:
@@ -2850,6 +3334,18 @@ components:
           type: array
           items:
             type: integer
+        conflictingRunId:
+          type: string
+          description: >-
+            The macro run this problem is about. Present on the three
+            macro-run conflicts and on nothing else: the in-flight run that
+            refused an overlapping submission, or the existing run an
+            idempotency key already belongs to. It is a field rather than
+            something a client digs out of detail, because a 409 whose
+            whole purpose is to point at a run is useless to a client that
+            cannot link to it, and matching a substring of this server's
+            English is how the Operator UI once told two different 409s
+            apart. Additive and omitted when empty.
     StreamStart:
       type: object
       description: The payload of the first event on every SSE connection.
@@ -2964,3 +3460,488 @@ components:
           type: array
           items:
             type: string
+    ConfigObjectSummary:
+      type: object
+      description: >-
+        Step 9 (STEP-9-SPEC.md section 5.5): one element of
+        ConfigObjectsListResponse.objects — enough to enumerate and label
+        every show.action or show.macro object without fetching each one's
+        full payload.
+      required: [id, label, show, currentRevision, updatedAt]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        show:
+          type: string
+        currentRevision:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    ConfigObjectsListResponse:
+      type: object
+      description: The body of GET /config/show.action and GET /config/show.macro.
+      required: [serverTime, kind, objects]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.action, show.macro]
+        objects:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigObjectSummary"
+    ConfigShowActionMQTTPublish:
+      type: object
+      description: >-
+        show.action.target.publish (STEP-9-SPEC.md section 5.3), present
+        only when target.integration is "mqtt". retain defaults to false
+        when absent on the write side; on the read side (this schema) it
+        is always the resolved value.
+      required: [topic, payload, qos, retain]
+      properties:
+        topic:
+          type: string
+        payload:
+          type: string
+        qos:
+          type: integer
+          enum: [0, 1, 2]
+        retain:
+          type: boolean
+    ConfigShowActionMQTTExpect:
+      type: object
+      description: >-
+        show.action.target.expect (STEP-9-SPEC.md section 7.3), present
+        only when target.integration is "mqtt". topic, value, and
+        deadlineSeconds are omitted entirely for kind "none", which
+        declares no expected response at all.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [none, boolean, number, text, match]
+        topic:
+          type: string
+        value:
+          type: string
+        deadlineSeconds:
+          type: integer
+          maximum: 120
+    ConfigShowActionTarget:
+      type: object
+      description: >-
+        show.action.target (STEP-9-SPEC.md section 5.3): integration plus
+        either the fpp fields or the mqtt fields directly, never nested a
+        second level under an "fpp"/"mqtt" key. Only integration is
+        required here; which of the remaining fields is present depends on
+        integration's own value, enforced by this coordinator's write-time
+        validation rather than by this schema.
+      required: [integration]
+      properties:
+        integration:
+          type: string
+          enum: [fpp, mqtt]
+        instanceId:
+          type: string
+        primitive:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        broker:
+          type: string
+        publish:
+          $ref: "#/components/schemas/ConfigShowActionMQTTPublish"
+        expect:
+          $ref: "#/components/schemas/ConfigShowActionMQTTExpect"
+    ConfigShowAction:
+      type: object
+      description: >-
+        The "show.action" configuration kind's decoded payload
+        (STEP-9-SPEC.md section 5.3).
+      required: [show, label, description, safetyClass, target]
+      properties:
+        show:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        safetyClass:
+          type: string
+          enum: [none, blackout, stop, powerOff]
+        target:
+          $ref: "#/components/schemas/ConfigShowActionTarget"
+    ShowActionConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.action/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.action]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowAction"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigShowMacroLocalFallback:
+      type: object
+      description: >-
+        One step's required localFallback object (STEP-9-SPEC.md section
+        5.4, ADR-004, ADR-016).
+      required: [class, reason]
+      properties:
+        class:
+          type: string
+          enum: [none, coordinator-required, silence]
+        reason:
+          type: string
+    ConfigShowMacroStep:
+      type: object
+      description: >-
+        One element of show.macro.steps. onFailure and onUnconfirmed are
+        always the RESOLVED value (default or explicit), never absent — a
+        stored revision states its own policy outright.
+      required: [id, action, onFailure, onUnconfirmed, localFallback]
+      properties:
+        id:
+          type: string
+        action:
+          type: string
+        onFailure:
+          type: string
+          enum: [abort, continue]
+        onUnconfirmed:
+          type: string
+          enum: [continue, abort]
+        localFallback:
+          $ref: "#/components/schemas/ConfigShowMacroLocalFallback"
+    ConfigShowMacro:
+      type: object
+      description: >-
+        The "show.macro" configuration kind's decoded payload
+        (STEP-9-SPEC.md section 5.4).
+      required: [show, label, description, steps]
+      properties:
+        show:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/ConfigShowMacroStep"
+    ShowMacroConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.macro/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.macro]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowMacro"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    MacroRunSummary:
+      type: object
+      description: >-
+        One element of MacroRunsListResponse.runs and of
+        Snapshot.macroRuns: a run's own state without its steps
+        (STEP-9-SPEC.md section 6.6). completed/confirmed are null while
+        the run is still "running" (ADR-031 decision 3) — never defaulted
+        to false.
+      required:
+        [id, macroObjectId, macroRevision, show, trigger, issuerPrincipalId,
+         issuerPrincipalName, createdAt, finishedAt, state, completed,
+         confirmed, reason, attributionDegraded]
+      properties:
+        id:
+          type: string
+        macroObjectId:
+          type: string
+        macroRevision:
+          type: integer
+        show:
+          type: string
+        trigger:
+          type: string
+          enum: [api, plugin, cli, ui]
+        issuerPrincipalId:
+          type: string
+        issuerPrincipalName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        state:
+          type: string
+          enum: [running, finished]
+        completed:
+          type: [boolean, "null"]
+        confirmed:
+          type: [boolean, "null"]
+        reason:
+          type: string
+        attributionDegraded:
+          type: boolean
+    MacroRunStepCommand:
+      type: object
+      description: >-
+        States the FPP command a step dispatched, or explicitly why no
+        command detail is available — never omitted (STEP-9-SPEC.md
+        section 6.1's "not retained" rendering rule). state is "none" (no
+        command at all — an mqtt step, or an fpp step not yet dispatched),
+        "retained" (detail carries the command), or "not_retained"
+        (retention has pruned the command row; id is still named).
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [none, retained, not_retained]
+        id:
+          type: string
+        reason:
+          type: string
+        detail:
+          $ref: "#/components/schemas/FPPCommandResult"
+    MacroRunStep:
+      type: object
+      description: One element of MacroRun.steps.
+      required:
+        [stepIndex, stepId, actionObjectId, actionRevision, integration,
+         safetyClass, localFallbackClass, state, dispatchedAt, resolvedAt,
+         outcome, outcomeState, outcomeReason, attributionDegraded, command]
+      properties:
+        stepIndex:
+          type: integer
+        stepId:
+          type: string
+        actionObjectId:
+          type: string
+        actionRevision:
+          type: integer
+        integration:
+          type: string
+          enum: [fpp, mqtt]
+        safetyClass:
+          type: string
+          enum: [none, blackout, stop, powerOff]
+        localFallbackClass:
+          type: string
+          enum: [none, coordinator-required, silence]
+        state:
+          type: string
+        dispatchedAt:
+          type: [string, "null"]
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        outcome:
+          type: string
+        outcomeState:
+          type: string
+        outcomeReason:
+          type: string
+        attributionDegraded:
+          type: boolean
+        command:
+          $ref: "#/components/schemas/MacroRunStepCommand"
+    MacroRun:
+      type: object
+      description: >-
+        The body of GET /macro-runs/{runId}'s "run" member, and of the
+        POST /macros/{id}/runs 202 response's "run" member:
+        MacroRunSummary's fields plus its steps.
+      required:
+        [id, macroObjectId, macroRevision, show, trigger, issuerPrincipalId,
+         issuerPrincipalName, createdAt, finishedAt, state, completed,
+         confirmed, reason, attributionDegraded, steps]
+      properties:
+        id:
+          type: string
+        macroObjectId:
+          type: string
+        macroRevision:
+          type: integer
+        show:
+          type: string
+        trigger:
+          type: string
+          enum: [api, plugin, cli, ui]
+        issuerPrincipalId:
+          type: string
+        issuerPrincipalName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        state:
+          type: string
+          enum: [running, finished]
+        completed:
+          type: [boolean, "null"]
+        confirmed:
+          type: [boolean, "null"]
+        reason:
+          type: string
+        attributionDegraded:
+          type: boolean
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/MacroRunStep"
+    MacroRunResponse:
+      type: object
+      description: The body of GET /macro-runs/{runId}.
+      required: [serverTime, run]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        run:
+          $ref: "#/components/schemas/MacroRun"
+    MacroRunSubmitResponse:
+      type: object
+      description: >-
+        The success body of POST /macros/{id}/runs (status 202 — ADR-031
+        decision 1: the run is accepted and not complete).
+      required: [serverTime, run, replay]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        run:
+          $ref: "#/components/schemas/MacroRun"
+        replay:
+          type: boolean
+    MacroRunsListResponse:
+      type: object
+      description: The body of GET /macro-runs.
+      required: [serverTime, runs]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/MacroRunSummary"
+    MacroPriorFailureRequest:
+      type: object
+      description: >-
+        One element of CreateMacroRunRequest.priorFailures (STEP-9-SPEC.md
+        section 8.3 path 2): a degraded outcome the caller (the FPP
+        plugin) buffered locally and is reporting now that it has reached
+        this coordinator successfully.
+      required: [macroObjectId, class, httpStatus, at]
+      properties:
+        macroObjectId:
+          type: string
+        class:
+          type: string
+          enum: [refused, rejected, unreachable]
+        httpStatus:
+          type: integer
+          description: 0 when there was no response at all — a real, distinct value.
+        at:
+          type: string
+          format: date-time
+    CreateMacroRunRequest:
+      type: object
+      description: The body of POST /macros/{id}/runs.
+      required: [idempotencyKey, trigger]
+      properties:
+        idempotencyKey:
+          type: string
+        trigger:
+          type: string
+          enum: [api, plugin, cli, ui]
+        priorFailures:
+          type: array
+          items:
+            $ref: "#/components/schemas/MacroPriorFailureRequest"
+        priorFailuresDropped:
+          type: integer
+    MacroRunChangedEvent:
+      type: object
+      description: >-
+        The payload of a "macroRun.changed" SSE event (STEP-9-SPEC.md
+        section 6.6): one run's state transition. Step-level detail is
+        deliberately NOT carried here — a client wanting step detail
+        fetches GET /macro-runs/{runId}.
+      required:
+        [seq, serverTime, runId, macroObjectId, state, completed, confirmed,
+         reason, attributionDegraded]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        runId:
+          type: string
+        macroObjectId:
+          type: string
+        state:
+          type: string
+          enum: [running, finished]
+        completed:
+          type: [boolean, "null"]
+        confirmed:
+          type: [boolean, "null"]
+        reason:
+          type: string
+        attributionDegraded:
+          type: boolean

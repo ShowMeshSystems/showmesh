@@ -177,6 +177,18 @@ type Config struct {
 	// unconfigured host from ever becoming a new resource (contract
 	// section 4.4).
 	FPPMQTTHosts map[string]string
+
+	// --- Step 9 wave 2: SHOWMESH_INTEGRATION_BROKERS (integrationbrokers.go) ---
+
+	// IntegrationBrokers is the deployment's declared set of external MQTT
+	// brokers a show.action "mqtt" target may name, from
+	// SHOWMESH_INTEGRATION_BROKERS. Empty (the default, nil) means no
+	// integration broker is declared, and any mqtt show.action write is
+	// rejected for naming an undeclared broker (showaction.go). This is
+	// deliberately never seeded from MQTTBroker or FPPMQTTBrokerURL — see
+	// integrationbrokers.go's own top doc comment for why the control-plane
+	// broker must never be auto-registered under any identifier here.
+	IntegrationBrokers []IntegrationBroker
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -349,6 +361,11 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	integrationBrokers, err := parseIntegrationBrokers(getEnvDefault(lookup, envIntegrationBrokers, ""), lookup)
+	if err != nil {
+		return Config{}, err
+	}
+
 	closeReads, err := parseBoolEnv(lookup, envAPICloseReads, false)
 	if err != nil {
 		return Config{}, err
@@ -407,6 +424,8 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		FPPMQTTPassword:    getEnvDefault(lookup, envFPPMQTTPassword, ""),
 		FPPMQTTTopicPrefix: getEnvDefault(lookup, envFPPMQTTTopicPrefix, defaultFPPMQTTTopicPrefix),
 		FPPMQTTHosts:       fppMQTTHosts,
+
+		IntegrationBrokers: integrationBrokers,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -928,6 +947,10 @@ func (c Config) LogValue() slog.Value {
 		// either, are simply less useful here than knowing which hosts
 		// this feature is watching).
 		slog.Any("fpp_mqtt_hosts", c.FPPMQTTHosts),
+		// Step 9 wave 2: ids only, matching fpp_endpoints above — the
+		// per-broker Username/Password are never logged, in the clear or
+		// otherwise (see IntegrationBroker.Password's own doc comment).
+		slog.Any("integration_brokers", integrationBrokerIDs(c.IntegrationBrokers)),
 	)
 }
 

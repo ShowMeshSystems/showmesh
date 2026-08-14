@@ -3,12 +3,15 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -138,6 +141,35 @@ type Dependencies struct {
 	// own scheduled poll), matching every other unwired dependency's
 	// "nothing told this API otherwise" posture in this struct.
 	Nudger FPPPollNudger
+
+	// Macros is Step 9's macro executor as this package needs it — see
+	// [MacroRunner] (macro_seam.go). In practice the real value is
+	// *macro.Executor, built and reconciled by coordinator wiring, never
+	// this package (the import direction is forced: macro imports api, so
+	// api must never import macro — see macro_seam.go's own top comment).
+	// A nil field is replaced by [noMacroRunner], under which every read
+	// answers empty-and-successful (or, for GetRun, "not found") and
+	// SubmitRun refuses loudly — matching this package's standing "a
+	// dependency nobody has wired in yet is not this API failing" posture,
+	// with SubmitRun held to the same "refuse loudly, never fabricate
+	// success" rule as every other write dependency's default.
+	Macros MacroRunner
+
+	// IntegrationBrokers is the deployment's declared external MQTT broker
+	// set (SHOWMESH_INTEGRATION_BROKERS — internal/coordinator/config's
+	// IntegrationBroker, wave 2 shared contract section 5), threaded
+	// through as data for the identical reason [FPPEndpointsEnvVarSet] is:
+	// this package does not read the environment or the config package's
+	// own parsing on its own. Consumed by showconfig.go's show.action
+	// write validation to check an mqtt target's declared broker against
+	// what this deployment actually has (STEP-9-SPEC.md section 2.10: "an
+	// action naming no broker is rejected at write time... validated at
+	// write time against the brokers the deployment declares"). This is
+	// the declared SET only, for validation — actually publishing through
+	// one of them at run time is [Dependencies.Macros]' own
+	// *broker.Registry dependency, built and wired separately by
+	// coordinator wiring, never held here: this package never publishes.
+	IntegrationBrokers []config.IntegrationBroker
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -181,6 +213,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Nudger == nil {
 		d.Nudger = noFPPPollNudger{}
+	}
+	if d.Macros == nil {
+		d.Macros = noMacroRunner{}
 	}
 	return d
 }
@@ -246,6 +281,10 @@ func (noConfigStore) ListConfigRevisions(context.Context, string, string) ([]sto
 	return nil, nil
 }
 
+func (noConfigStore) ListConfigObjects(context.Context, string) ([]store.ConfigObjectRecord, error) {
+	return nil, nil
+}
+
 // errCommandStoreNotConfigured is [noCommandStore]'s uniform failure,
 // matching [errIdentityNotConfigured]'s identical posture in auth.go: a
 // write dependency nobody has wired in refuses loudly rather than
@@ -291,6 +330,14 @@ func (noCommandStore) GetCommandByIdempotencyKey(context.Context, string) (store
 	return store.CommandRecord{}, store.ErrCommandNotFound
 }
 
+// GetCommand answers store.ErrCommandNotFound, matching
+// GetCommandByIdempotencyKey's identical reasoning immediately above: a
+// coordinator with no CommandStore wired in has recorded no command under
+// any id.
+func (noCommandStore) GetCommand(context.Context, string) (store.CommandRecord, error) {
+	return store.CommandRecord{}, store.ErrCommandNotFound
+}
+
 // noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads
 // answer empty and successful (matching every other no-op lister in this
 // file); a write refuses with errDeclarationStoreNotConfigured rather than
@@ -319,6 +366,38 @@ func (noDeclarationStore) ListNodeDeclarations(context.Context) ([]store.NodeDec
 
 func (noDeclarationStore) RecordNodeDiscoverySeen(context.Context, string, string, time.Time) error {
 	return errDeclarationStoreNotConfigured
+}
+
+// errMacroRunnerNotConfigured is [noMacroRunner.SubmitRun]'s uniform
+// failure, matching [errCommandStoreNotConfigured]'s identical posture: a
+// write dependency nobody has wired in refuses loudly rather than
+// fabricating a run that was never persisted or executed.
+var errMacroRunnerNotConfigured = errors.New("api: no MacroRunner was wired into this API's Dependencies")
+
+// noMacroRunner is [Dependencies.Macros]'s nil-safe default. Every read
+// answers empty-and-successful (ListRuns, SnapshotRuns) or
+// [ErrMacroRunNotFound] (GetRun) — a coordinator with no macro executor
+// wired in has no runs, which is the honest answer for a read, matching
+// [noCommandStore]'s ListUnresolvedCommands/GetCommandByIdempotencyKey
+// posture. SubmitRun is a write and refuses loudly instead, matching
+// [noCommandStore.InsertCommand]'s identical posture for the identical
+// reason.
+type noMacroRunner struct{}
+
+func (noMacroRunner) SubmitRun(context.Context, MacroSubmitRequest) (MacroRunResult, *v1.Problem, error) {
+	return MacroRunResult{}, nil, errMacroRunnerNotConfigured
+}
+
+func (noMacroRunner) GetRun(_ context.Context, runID string) (MacroRunResult, error) {
+	return MacroRunResult{}, fmt.Errorf("%w: %s", ErrMacroRunNotFound, runID)
+}
+
+func (noMacroRunner) ListRuns(context.Context, MacroRunFilter) ([]store.MacroRunRecord, error) {
+	return nil, nil
+}
+
+func (noMacroRunner) SnapshotRuns(context.Context) ([]store.MacroRunRecord, error) {
+	return nil, nil
 }
 
 // scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
@@ -680,6 +759,39 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/discovery/runs", h.writeGuard(&scopeConfigWrite, h.handleStartDiscoveryRun))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handlePromoteNode))
 	mux.HandleFunc("DELETE /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handleDeleteNodeDeclaration))
+
+	// Step 9 wave 2: show.action and show.macro, four routes each
+	// (STEP-9-SPEC.md section 5.5). Unlike fpp.endpoints, READS here go
+	// through readAnyGuard(showConfigReadScopes, ...): "reading show.macro
+	// and show.action requires show:macro:run OR config:write" (section
+	// 5.5's own correction of the review finding that copying
+	// fpp.endpoints' config:write-only read posture "breaks the UI" for
+	// the operator role, which holds show:macro:run and not config:write).
+	// Like fpp.endpoints, these reads are never toggled by
+	// [Options.CloseReads] — this is a new, always-sensitive surface, not
+	// one of ADR-024 decision 4's four pre-existing read scopes. Writes are
+	// config:write only, via writeGuard, exactly like fpp.endpoints.
+	mux.HandleFunc("GET /api/v1/config/show.action", h.readAnyGuard(showConfigReadScopes, h.handleListShowActions))
+	mux.HandleFunc("GET /api/v1/config/show.action/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowAction))
+	mux.HandleFunc("PUT /api/v1/config/show.action/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowAction))
+	mux.HandleFunc("GET /api/v1/config/show.action/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActionRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.macro", h.readAnyGuard(showConfigReadScopes, h.handleListShowMacros))
+	mux.HandleFunc("GET /api/v1/config/show.macro/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacro))
+	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
+	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
+
+	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
+	// gated on show:macro:run specifically, never "OR config:write" — an
+	// admin who has never been granted show:macro:run must not be able to
+	// fire a show through the back door of holding a different scope; GETs
+	// use the same OR posture as the config kinds above, matching section
+	// 6.6's "reads on runs require show:macro:run or config:write, matching
+	// section 5.5." No state change is reachable by GET (ADR-024 decision
+	// 7's related clause).
+	mux.HandleFunc("POST /api/v1/macros/{id}/runs", h.writeGuard(&scopeShowMacroRun, h.handleSubmitMacroRun))
+	mux.HandleFunc("GET /api/v1/macro-runs", h.readAnyGuard(showConfigReadScopes, h.handleListMacroRuns))
+	mux.HandleFunc("GET /api/v1/macro-runs/{runId}", h.readAnyGuard(showConfigReadScopes, h.handleGetMacroRun))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

@@ -4,7 +4,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -17,52 +21,113 @@ import (
 // this package hands to a caller — see CLAUDE.md and this task's own
 // report for the full accounting.
 //
-// This test parses the SOURCE of every file in this step's own seam —
-// never runs them, never guesses which scenario would exercise which
-// message — and inspects every string literal that appears in CODE (an
-// *ast.BasicLit of kind STRING, walked via the expression tree
-// go/parser builds). A comment is not part of that tree: go/parser
-// discards comments from the nodes ast.Inspect walks unless asked to
-// retain them as *ast.CommentGroup, and this walk never asks for or
-// visits those, so a citation left in a `//` comment (exactly where this
-// codebase's own convention already puts it) never trips this test.
-// Every remaining string literal is exactly the class of string this
-// package can hand to a caller: a v1.Problem Title/Detail/Type, an
-// outcomeReason, a validation message, or a literal fed into fmt.Sprintf
-// to build one of those — there is no OTHER kind of user-visible string
-// literal in these files, so scanning the whole file is precise, not a
-// heuristic that happens to work today.
+// This test parses the SOURCE of every non-test .go file in this
+// package's own directory — never runs them, never guesses which
+// scenario would exercise which message — and inspects every string
+// literal that appears in CODE (an *ast.BasicLit of kind STRING, walked
+// via the expression tree go/parser builds). A comment is not part of
+// that tree: go/parser discards comments from the nodes ast.Inspect walks
+// unless asked to retain them as *ast.CommentGroup, and this walk never
+// asks for or visits those, so a citation left in a `//` comment (exactly
+// where this codebase's own convention already puts it) never trips this
+// test.
+//
+// Inverted 2026-08-14 (Step 9 wave 2, this wave's own brief section 8,
+// STEP-9-SPEC.md section 13): this test used to walk a HARDCODED file
+// list (fppcommand_evidence.go, fppcommand_primitives.go, problem.go,
+// fppcommand_dispatch.go, plus one file in a sibling package), which meant
+// every file this step adds — showconfig.go, macroruns.go, and the rest —
+// was unchecked by default, exactly backwards from what a guard against a
+// defect this project has already shipped once should do. It now walks
+// this package's own directory and checks every non-test .go file,
+// carrying [copyGuardExemptions] as an explicit, narrow, STRING-LEVEL
+// (never file-level) exemption list — see that var's own doc comment for
+// why a file-level exemption would be a net loss exactly where this
+// inversion needs coverage most.
 //
 // forbiddenCopyPattern is deliberately broader than "the two strings the
 // owner happened to hit": a repo path, a doc/spec file reference, an ADR
 // or research-record number, or the word "section" followed by a digit
 // are ALL internal citations that must never reach an operator, per
 // CLAUDE.md's own rule restated in this task's brief. Any one of these
-// appearing in a new string literal added to this seam later fails this
-// test immediately, rather than waiting for another owner bug report.
+// appearing in a new string literal added to this package later fails
+// this test immediately, rather than waiting for another owner bug
+// report.
 var forbiddenCopyPattern = regexp.MustCompile(
 	`docs/|\.md\b|ADR-\d+|RES-\d{3}|(?i)\bsection\s+\d|api/openapi\.yaml`,
 )
 
-// fppCommandCopyGuardFiles is every source file this step's operator-
-// facing strings live in — the same seam named in this task's own brief
-// (fppcommand_evidence.go, fppcommand_primitives.go, problem.go in this
-// package, plus internal/coordinator/fppcommand/validation.go, read by
-// relative path exactly like loadOpenAPIDocument in openapi_test.go
-// already reads api/openapi.yaml from this same test working directory).
-var fppCommandCopyGuardFiles = []string{
-	"fppcommand_evidence.go",
-	"fppcommand_primitives.go",
-	"problem.go",
+// copyGuardAdditionalFiles is every file OUTSIDE this package's own
+// directory that must still be walked — internal/coordinator/fppcommand
+// is a sibling package this package's HTTP surface builds
+// [v1.Problem]-shaped strings out of (fppcommand_handler.go's own
+// resolveFPPCommandReplay path reads its ValidationError text verbatim
+// into a Detail), so a citation added there is exactly as reachable by an
+// operator as one added in this directory, and the pre-inversion guard
+// already covered it for that reason — carried forward unchanged.
+var copyGuardAdditionalFiles = []string{
 	"../fppcommand/validation.go",
+}
 
-	// fppcommand_dispatch.go: Step 9's exported in-process dispatch core.
-	// It builds *v1.Problem values through the same constructors this
-	// seam always has (invalidParameterProblem, resourceNotFoundProblem,
-	// ...), so it is exactly the class of file this guard exists to
-	// cover — added in the wave that adds it, not left for a later one to
-	// discover uncovered.
-	"fppcommand_dispatch.go",
+// copyGuardExemption is one (file, exact string literal VALUE) pair this
+// guard does not fail on. Matched against [ast.BasicLit.Value] — the raw
+// source text of the literal, including its surrounding quotes — not a
+// substring, so an exemption cannot accidentally also cover some other,
+// unrelated string that happens to contain the same words.
+type copyGuardExemption struct {
+	file  string
+	value string
+}
+
+// copyGuardExemptions is this guard's ENTIRE exemption list, and every
+// entry is a STRING this file's own inversion pass (2026-08-14) verified
+// by hand is genuinely server-side-only, never rendered to an operator —
+// never a whole file. STEP-9-SPEC.md section 13 / this wave's brief
+// section 8 are explicit that a file-level exemption "removes coverage of
+// every genuinely operator-facing string in the same file... exactly
+// where the text density is highest", which is precisely backwards for a
+// file like fppcommand_handler.go that carries BOTH kinds of string.
+//
+// Both entries here are [degradedAttributionReasonSafetyClassExemption]/
+// [degradedAttributionReasonPostDispatch] (fppcommand_handler.go): fed
+// exclusively into [handlers.reportDegradedAttribution], whose own doc
+// comment states plainly it produces "the best-effort, human-readable
+// stderr line" — never a v1.Problem field, an outcomeReason, or any other
+// path to the wire. Confirmed by reading every call site of both
+// constants (fppcommand_dispatch.go) before exempting either.
+var copyGuardExemptions = []copyGuardExemption{
+	{"fppcommand_handler.go", `"ADR-024 decision 11's blackout/stop/power-off safety class exemption (pre-dispatch write)"`},
+	{"fppcommand_handler.go", `"the event this entry records already happened and cannot be un-recorded; refusing to answer would only deny the operator the record of it (ADR-024: \"you cannot see\", never acceptable), not protect them from anything"`},
+}
+
+func copyGuardExemptionSet() map[copyGuardExemption]bool {
+	set := make(map[copyGuardExemption]bool, len(copyGuardExemptions))
+	for _, e := range copyGuardExemptions {
+		set[e] = true
+	}
+	return set
+}
+
+// copyGuardTargetFiles walks this package's own directory (".") for every
+// non-test .go file, and appends [copyGuardAdditionalFiles]. Sorted, so
+// t.Run subtest names — and any failure output — are stable across runs.
+func copyGuardTargetFiles(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading this package's own directory: %v", err)
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, name)
+	}
+	files = append(files, copyGuardAdditionalFiles...)
+	sort.Strings(files)
+	return files
 }
 
 // TestOperatorFacingStringsCarryNoInternalCitation is this task's own
@@ -72,9 +137,15 @@ var fppCommandCopyGuardFiles = []string{
 // section 3.5)") into fppcommand_evidence.go's
 // evaluateFPPStopGracefullyEvidence and rerunning this test turns it from
 // passing to failing, naming the exact file, line, and offending
-// substring — confirmed by hand during this task, then reverted.
+// substring. ALSO verified for the inversion itself (2026-08-14): removing
+// [copyGuardExemptions] entirely and rerunning turns the two genuinely
+// internal-log-only strings in fppcommand_handler.go into failures too,
+// confirming the walk actually reaches them now that it is directory-wide
+// rather than a hardcoded list. Both checks confirmed by hand during this
+// task, then reverted/restored.
 func TestOperatorFacingStringsCarryNoInternalCitation(t *testing.T) {
-	for _, path := range fppCommandCopyGuardFiles {
+	exemptions := copyGuardExemptionSet()
+	for _, path := range copyGuardTargetFiles(t) {
 		path := path
 		t.Run(path, func(t *testing.T) {
 			fset := token.NewFileSet()
@@ -87,12 +158,16 @@ func TestOperatorFacingStringsCarryNoInternalCitation(t *testing.T) {
 				if !ok || lit.Kind != token.STRING {
 					return true
 				}
+				if exemptions[copyGuardExemption{file: filepath.Base(path), value: lit.Value}] {
+					return true
+				}
 				if loc := forbiddenCopyPattern.FindString(lit.Value); loc != "" {
 					pos := fset.Position(lit.Pos())
 					t.Errorf(
 						"%s:%d: string literal carries an internal citation (%q matched by forbiddenCopyPattern): %s\n"+
 							"move the citation into a // comment; the string itself must read as if no internal doc, "+
-							"ADR, or research record existed",
+							"ADR, or research record existed. If this string is genuinely server-log-only (never "+
+							"reaches a client), add a copyGuardExemption naming this exact string and the reason.",
 						path, pos.Line, loc, lit.Value)
 				}
 				return true

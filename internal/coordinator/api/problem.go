@@ -15,7 +15,25 @@ import (
 // problem "type" URI under. These are identifiers, not fetchable
 // documentation pages; nothing in this package or its tests dereferences
 // them over the network.
-const problemBaseURI = "https://showmesh.dev/problems/"
+//
+// ProblemBaseURI is the same value, exported. Step 9 wave 2's own finding
+// (the orchestrator, section 5b item 3 of this wave's brief): the macro
+// executor package (internal/coordinator/macro, which imports this
+// package per macro_seam.go's forced import direction) needed this exact
+// prefix for its own new problem type URIs
+// (ProblemTypeMacroRunAlreadyInFlight and its two idempotency-conflict
+// siblings, macro/problems.go) and, finding no exported constant to
+// reference, minted a second copy of the literal instead. Exporting it
+// here is "one base string, one place" as far as this package's own
+// boundary allows; macro/problems.go still holds its own copy of the
+// value rather than importing this constant, because reconciling that is
+// an edit to internal/coordinator/macro, a file this wave's build order
+// assigns to a different builder and marks not-to-be-touched — see this
+// task's own report.
+const (
+	problemBaseURI = "https://showmesh.dev/problems/"
+	ProblemBaseURI = problemBaseURI
+)
 
 // Problem type URIs for the six classes this API produces (contract
 // section 6.6, plus the 500 and 405 classes finding 2.4/2.8 of the Step 3

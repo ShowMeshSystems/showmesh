@@ -1,0 +1,328 @@
+package macro
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+)
+
+func TestSubmitRunUnknownMacroIs404Problem(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "does-not-exist", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil {
+		t.Fatalf("expected a problem for an unknown macro, got none")
+	}
+	if problem.Status != 404 {
+		t.Fatalf("status = %d, want 404", problem.Status)
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunEmptyIdempotencyKeyIsProblem(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil || problem.Status != 400 {
+		t.Fatalf("expected a 400 problem for an empty idempotency key, got %+v (err=%v)", problem, err)
+	}
+}
+
+func TestSubmitRunReplayReturnsSameRunNotNew(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	req := api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer()}
+
+	first, problem, err := e.SubmitRun(context.Background(), req)
+	if err != nil || problem != nil {
+		t.Fatalf("first submit: problem=%+v err=%v", problem, err)
+	}
+	if first.Replay {
+		t.Fatalf("first submit reported Replay=true")
+	}
+
+	second, problem, err := e.SubmitRun(context.Background(), req)
+	if err != nil || problem != nil {
+		t.Fatalf("second submit (replay): problem=%+v err=%v", problem, err)
+	}
+	if !second.Replay {
+		t.Fatalf("second submit with the same idempotency key did not report Replay=true")
+	}
+	if second.Run.ID != first.Run.ID {
+		t.Fatalf("replay returned a different run id: first=%s second=%s", first.Run.ID, second.Run.ID)
+	}
+
+	e.wg.Wait()
+}
+
+func TestSubmitRunSameKeyDifferentMacroIsDistinctConflict(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+	putMacro(t, st, "m2", testMacroPayload(testStep("s1", "a1")))
+
+	if _, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "shared-key", Trigger: "api", Issuer: testIssuer(),
+	}); err != nil || problem != nil {
+		t.Fatalf("first submit: problem=%+v err=%v", problem, err)
+	}
+
+	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m2", IdempotencyKey: "shared-key", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil || problem.Status != 409 {
+		t.Fatalf("expected a 409 problem for a key reused against a different macro, got %+v", problem)
+	}
+	if problem.Type != ProblemTypeMacroRunIdempotencyMacroConflict {
+		t.Fatalf("problem.Type = %q, want %q", problem.Type, ProblemTypeMacroRunIdempotencyMacroConflict)
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunSameMacroDifferentRevisionIsDistinctConflict(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	if _, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "shared-key", Trigger: "api", Issuer: testIssuer(),
+	}); err != nil || problem != nil {
+		t.Fatalf("first submit: problem=%+v err=%v", problem, err)
+	}
+
+	// Edit the macro (a new revision) between the two submissions.
+	payloadJSON, err := config.EncodeShowMacroPayload(testMacroPayload(testStep("s1", "a1"), testStep("s2", "a1")))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowMacroConfigKind, ObjectID: "m1", Revision: 2, PayloadJSON: payloadJSON,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create revision 2: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowMacroConfigKind, "m1", 2); err != nil {
+		t.Fatalf("activate revision 2: %v", err)
+	}
+
+	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "shared-key", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil || problem.Status != 409 {
+		t.Fatalf("expected a 409 problem for a key reused against an edited macro, got %+v", problem)
+	}
+	if problem.Type != ProblemTypeMacroRunIdempotencyRevisionConflict {
+		t.Fatalf("problem.Type = %q, want %q", problem.Type, ProblemTypeMacroRunIdempotencyRevisionConflict)
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunOverlapGuardRefusesSecondRunOfSameMacro(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	// A dispatcher that blocks until released, so the first run's ONE step
+	// stays dispatching (and the run stays state=="running") long enough
+	// for a second submission to observe it before the background
+	// goroutine can finish the run out from under this test.
+	release := make(chan struct{})
+	dispatch := &fakeDispatcher{dispatchFn: func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
+		<-release
+		return api.FPPCommandOutcome{
+			CommandID: "cmd-1", Outcome: "confirmed", OutcomeState: "current", OutcomeReason: "ok",
+			DispatchedAt: ptrTime(time.Now()), ResolvedAt: ptrTime(time.Now()),
+		}, nil, nil
+	}}
+	e, _ := newTestExecutor(t, st, svc, dispatch, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	first, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-a", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil || problem != nil {
+		close(release)
+		t.Fatalf("first submit: problem=%+v err=%v", problem, err)
+	}
+
+	_, problem, err = e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-b", Trigger: "api", Issuer: testIssuer(),
+	})
+	close(release)
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil || problem.Status != 409 {
+		t.Fatalf("expected a 409 overlap problem, got %+v", problem)
+	}
+	if problem.Type != ProblemTypeMacroRunAlreadyInFlight {
+		t.Fatalf("problem.Type = %q, want %q", problem.Type, ProblemTypeMacroRunAlreadyInFlight)
+	}
+	if want := first.Run.ID; want == "" {
+		t.Fatalf("first run has no id")
+	}
+	e.wg.Wait()
+}
+
+// TestSubmitRunIdempotencyRunsBeforeOverlapGuard is the shared contract's
+// item 6 verification: a legitimate replay of an in-flight run must return
+// that run, never the overlap 409, even though a second, different
+// submission of the SAME macro at the SAME moment would correctly get the
+// 409.
+//
+// The required break-test was performed directly against this test:
+// conflictResult's *store.DuplicateMacroRunError branch (submit.go) was
+// temporarily gated `if false && errors.As(err, &dup)`, so a true replay
+// fell through to conflictResult's final `fmt.Errorf("... called on a
+// non-conflict error ...")` instead of being recognized. This test then
+// failed exactly as expected ("unexpected internal error on replay: macro:
+// conflictResult called on a non-conflict error: store: macro run with
+// idempotency key ... already exists"), confirming the test actually
+// detects the regression. The change was reverted and the test re-run to
+// confirm it passes again. See this builder's own report for the exact
+// diff and both observed outputs.
+func TestSubmitRunIdempotencyRunsBeforeOverlapGuard(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	req := api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "same-key", Trigger: "api", Issuer: testIssuer()}
+
+	first, problem, err := e.SubmitRun(context.Background(), req)
+	if err != nil || problem != nil {
+		t.Fatalf("first submit: problem=%+v err=%v", problem, err)
+	}
+
+	// Replay of the SAME key while the run may still legitimately be
+	// "running": must return the existing run, not the overlap 409.
+	replay, problem, err := e.SubmitRun(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected internal error on replay: %v", err)
+	}
+	if problem != nil {
+		t.Fatalf("a legitimate replay of an in-flight run was refused with a problem instead of returning the run: %+v", problem)
+	}
+	if !replay.Replay || replay.Run.ID != first.Run.ID {
+		t.Fatalf("replay = %+v, want Replay=true and Run.ID=%s", replay, first.Run.ID)
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunAuditUnavailableAtSubmissionRefusesNonExemptRun(t *testing.T) {
+	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	// startPlaylist is NOT one of ADR-024 decision 11's exempt safety
+	// classes.
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", config.ShowSafetyClassNone, map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	installFailAuditTrigger(t, storeDir)
+
+	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected internal error: %v", err)
+	}
+	if problem == nil || problem.Status != 503 {
+		t.Fatalf("expected a 503 problem when the audit store is unwritable and the run is not all-exempt, got %+v", problem)
+	}
+
+	// And nothing was persisted: the transaction rolled back in full.
+	if _, err := e.store.FindRunningMacroRun(context.Background(), "m1"); err == nil {
+		t.Fatalf("a run row was persisted despite the 503 refusal")
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunAuditUnavailableAtSubmissionProceedsWhenAllStepsExempt(t *testing.T) {
+	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	// stopPlaylist IS exempt (ADR-024 decision 11).
+	putAction(t, st, "a1", fppAction("fpp-main", "stopPlaylist", config.ShowSafetyClassStop, nil))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	installFailAuditTrigger(t, storeDir)
+
+	result, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil || problem != nil {
+		t.Fatalf("expected the run to proceed degraded, got problem=%+v err=%v", problem, err)
+	}
+	if !result.Run.AttributionDegraded {
+		t.Fatalf("run created with an unwritable audit store and every step exempt did not record AttributionDegraded")
+	}
+	e.wg.Wait()
+}
+
+func TestSubmitRunPersistsRevisionsAtSubmissionTime(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	result, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer(),
+	})
+	if err != nil || problem != nil {
+		t.Fatalf("submit: problem=%+v err=%v", problem, err)
+	}
+	if result.Run.MacroRevision != 1 {
+		t.Fatalf("MacroRevision = %d, want 1", result.Run.MacroRevision)
+	}
+	if len(result.Steps) != 1 || result.Steps[0].ActionRevision != 1 {
+		t.Fatalf("steps = %+v, want one step at ActionRevision 1", result.Steps)
+	}
+	e.wg.Wait()
+}
+
+func TestGetRunUnknownIDWrapsSentinel(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	_, err := e.GetRun(context.Background(), "does-not-exist")
+	if !errors.Is(err, api.ErrMacroRunNotFound) {
+		t.Fatalf("GetRun on an unknown id: err = %v, want wrapped api.ErrMacroRunNotFound", err)
+	}
+}

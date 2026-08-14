@@ -528,6 +528,15 @@ type Snapshot struct {
 	Nodes          []Node            `json:"nodes"`
 	FPP            FPPSection        `json:"fpp"`
 	Collectors     []CollectorStatus `json:"collectors"`
+
+	// MacroRuns is Step 9's own addition (STEP-9-SPEC.md section 6.6): every
+	// in-flight macro run, plus a bounded window of recently finished ones.
+	// ADR-020 decision 3 makes this fatal to omit — the change stream emits
+	// no id, so a client connecting for the first time during an in-flight
+	// run has no other way to learn the run exists; without this field it
+	// would see nothing, submit a duplicate, and receive ADR-031 decision
+	// 6's overlap 409 naming a run it cannot display.
+	MacroRuns []MacroRunSummary `json:"macroRuns"`
 }
 
 // Problem is the RFC 9457 application/problem+json body every error in
@@ -552,6 +561,26 @@ type Problem struct {
 	ServerTime string `json:"serverTime"`
 
 	SupportedVersions []int `json:"supportedVersions,omitempty"`
+
+	// ConflictingRunID names the macro run a 409 is about: the in-flight
+	// run that refused an overlapping submission (ADR-031 decision 6), or
+	// the existing run an idempotency key already belongs to
+	// (STEP-9-SPEC.md section 6.2). Empty on every other problem.
+	//
+	// It exists as a field because a client must never recover it by
+	// parsing Detail. LESSONS.md records the shape: the FPP command
+	// endpoint returned two different 409s that differed only in their
+	// English, so the Operator UI told them apart by matching a substring
+	// of the server's prose, and rewording that sentence would have
+	// silently offered the operator the wrong remedy. Here the stakes are
+	// concrete: the 409's whole purpose is to point at a run, and a UI
+	// that cannot link to it leaves the operator concluding the system is
+	// stuck.
+	//
+	// Type already distinguishes WHICH conflict occurred. This carries
+	// the one piece of data all three share. Additive under ADR-020, and
+	// omitted rather than sent empty, so no existing client sees a change.
+	ConflictingRunID string `json:"conflictingRunId,omitempty"`
 }
 
 // StreamStart is the payload of the first event on every SSE connection,

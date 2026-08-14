@@ -74,8 +74,9 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 
 	if !h.loginLimiter.acquire(r.Context()) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))
+		// ADR-024 decision 8's login concurrency bound.
 		writeProblem(w, h.logger, now, tooManyRequestsProblem(
-			"too many concurrent login/bootstrap attempts; try again shortly (ADR-024 decision 8)"))
+			"too many concurrent login/bootstrap attempts; try again shortly"))
 		return
 	}
 	defer h.loginLimiter.release()

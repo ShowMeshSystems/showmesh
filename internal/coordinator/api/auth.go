@@ -436,6 +436,60 @@ func (h *handlers) requireScope(scope identity.Scope, next http.HandlerFunc) htt
 	}
 }
 
+// showConfigReadScopes is Step 9 wave 2's own read posture for
+// show.action, show.macro, and the macro run surface (STEP-9-SPEC.md
+// section 5.5, corrected 2026-08-14 after the specification review):
+// "reading show.macro and show.action requires show:macro:run OR
+// config:write." Copying fpp.endpoints' config:write-only posture (an
+// admin-only deployment object) would give an operator-role principal —
+// who holds show:macro:run and NOT config:write, per ADR-024 decision 4's
+// role bundles — a macro it can run and cannot list, rendering empty or
+// 403 for the exact role the actual operator signs in as. See
+// [handlers.readAnyGuard], the OR-semantics guard this posture needs and
+// that no existing helper provided.
+var showConfigReadScopes = []identity.Scope{identity.ScopeShowMacroRun, identity.ScopeConfigWrite}
+
+// scopeShowMacroRun exists only so api.go's route registration can take
+// its address, mirroring [scopeConfigWrite]'s identical reason
+// (config.go): [handlers.writeGuard] takes *identity.Scope, and
+// identity.ScopeShowMacroRun is a typed string CONSTANT, whose address Go
+// does not allow taking directly.
+var scopeShowMacroRun = identity.ScopeShowMacroRun
+
+// readAnyGuard is [handlers.requireScope]'s "any of several scopes"
+// sibling, built for showConfigReadScopes above: there is no existing
+// helper for OR-semantics on a read (readGuardAll/[handlers.readGuardAll]
+// requires EVERY named scope, and is also the wrong shape here for a
+// second reason — it no-ops entirely when h.closeReads is false, which is
+// wrong for a surface that, like GET /api/v1/audit and
+// GET /api/v1/config/fpp.endpoints, is never toggled by
+// [Options.CloseReads] in the first place). Always enforces auth+scope,
+// exactly like [handlers.requireScope], succeeding if the authenticated
+// principal holds ANY ONE of scopes.
+func (h *handlers) readAnyGuard(scopes []identity.Scope, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		now := h.now()
+		ac := authFromContext(r.Context())
+		if !ac.ok {
+			writeProblem(w, h.logger, now, unauthorizedProblem("this endpoint requires authentication"))
+			return
+		}
+		for _, s := range scopes {
+			if ac.result.Principal.Role.Has(s) {
+				next(w, r)
+				return
+			}
+		}
+		// Named with the FIRST scope in the list (STEP-9-SPEC.md's own
+		// examples always lead with show:macro:run): forbiddenProblem's
+		// Detail names one scope, and a client distinguishing this refusal
+		// from any other 403 already has [v1.Problem.Type] to do it with,
+		// not the specific scope named in prose (LESSONS.md: "a client that
+		// branches on the server's prose has left the contract").
+		writeProblem(w, h.logger, now, forbiddenProblem(scopes[0]))
+	}
+}
+
 // writeGuard is [handlers.requireScope]'s write-route sibling: identical
 // auth+scope enforcement (scope may be nil to mean "any authenticated
 // principal, no specific scope" — DELETE /api/v1/session, which is not

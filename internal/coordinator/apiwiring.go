@@ -20,13 +20,95 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
+
+// var _ api.MacroRunner = (*macro.Executor)(nil) is Step 9 wave 2's own
+// compile-time assertion (this wave's brief section 5: "so a signature
+// drift is a compile error rather than a runtime nil"), mirroring
+// api.go's identical storeSatisfiesCommandStore assertion one package
+// over. *macro.Executor already carries this assertion in its own package
+// (macro.go); repeating it here, at the wiring seam that actually
+// constructs one and hands it to api.New as an api.MacroRunner, is what
+// makes a drift between the two packages' independently-declared
+// interfaces (api.MacroRunner, declared in api/macro_seam.go; the
+// concrete *macro.Executor, built against it from the other side) visible
+// at THIS package's own build, not only macro's.
+var _ api.MacroRunner = (*macro.Executor)(nil)
+
+// --- broker.Registry over cfg.IntegrationBrokers (Step 9, STEP-9-SPEC.md
+// section 2.10, wave 2 shared contract section 5) ---
+
+// buildIntegrationBrokerRegistry constructs one *broker.BrokerManager per
+// identifier in brokers (SHOWMESH_INTEGRATION_BROKERS, already parsed and
+// validated by internal/coordinator/config) and registers each into a
+// fresh *broker.Registry, returning both the registry and the individual
+// managers (so the caller can Disconnect each one at shutdown — a
+// *broker.Registry has no bulk-disconnect method of its own, by design:
+// it resolves and dispatches, it does not own the managers' lifecycle).
+//
+// broker.NewBrokerManager reads its server URL and credentials from a
+// config.Config (cfg.MQTTBroker/MQTTClientID/MQTTUsername/MQTTPassword —
+// see that function's own doc comment), which is the shape this
+// coordinator's OWN control-plane broker connection already uses one
+// struct field at a time from the real *config.Config below. Rather than
+// changing that constructor's signature (which every existing caller,
+// including the control-plane connection this function does not touch,
+// would then have to accommodate for a shape only this one caller needs),
+// a synthetic config.Config is built PER integration broker, carrying
+// only the four fields NewBrokerManager actually reads — confirmed by
+// reading its body, not assumed — so each integration broker connects
+// under its own client id (cfg.MQTTClientID + "-integration-" + id, so
+// two brokers, or an integration broker and the control-plane broker,
+// never collide on client id if they ever happened to point at the same
+// physical broker) and its own credentials. THE CONTROL-PLANE BROKER
+// (cfg.MQTTBroker itself) IS NEVER REGISTERED HERE UNDER ANY IDENTIFIER —
+// this function's only input is cfg.IntegrationBrokers, a field
+// config.Config's own parser (integrationbrokers.go) populates from a
+// SEPARATE environment variable and never from SHOWMESH_MQTT_BROKER, so
+// that guarantee holds by construction, not by this function remembering
+// to skip it.
+//
+// A per-broker connection failure here is NOT fatal to coordinator
+// startup: NewBrokerManager itself never fails merely because a broker is
+// currently unreachable (it connects in the background and retries — see
+// its own doc comment), so the only way this function's own loop returns
+// an error is a genuinely malformed cfg entry, which config.LoadConfig's
+// own validation should already have caught before Run ever reaches this
+// call. Treated as fatal anyway (returned, not logged-and-skipped): an
+// integration broker registry with a silently-missing entry is exactly
+// the kind of thing STEP-9-SPEC.md section 2.10 warns about ("an operator
+// authors projectors-on... every symptom points at Node-RED when none of
+// them is Node-RED") — better to fail loudly at startup than to leave a
+// declared broker quietly unregistered.
+func buildIntegrationBrokerRegistry(ctx context.Context, cfg config.Config, logger *slog.Logger) (*broker.Registry, []*broker.BrokerManager, error) {
+	registry := broker.NewRegistry()
+	managers := make([]*broker.BrokerManager, 0, len(cfg.IntegrationBrokers))
+	for _, b := range cfg.IntegrationBrokers {
+		synth := config.Config{
+			MQTTBroker:   b.URL,
+			MQTTClientID: cfg.MQTTClientID + "-integration-" + b.ID,
+			MQTTUsername: b.Username,
+			MQTTPassword: b.Password,
+		}
+		bm, err := broker.NewBrokerManager(ctx, synth, logger, nil, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("coordinator: build integration broker %q: %w", b.ID, err)
+		}
+		if err := registry.Register(b.ID, bm); err != nil {
+			return nil, nil, fmt.Errorf("coordinator: register integration broker %q: %w", b.ID, err)
+		}
+		managers = append(managers, bm)
+	}
+	return registry, managers, nil
+}
 
 // --- api.NodeLister over *inventory.Manager, observing liveness on every read ---
 

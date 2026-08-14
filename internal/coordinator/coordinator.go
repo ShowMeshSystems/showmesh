@@ -24,6 +24,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
@@ -182,6 +183,25 @@ func Run() int {
 	}
 	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
 
+	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
+	// 5): one *broker.BrokerManager per declared external MQTT broker
+	// (SHOWMESH_INTEGRATION_BROKERS), registered under its own identifier.
+	// Built here, alongside every other connection this coordinator owns,
+	// and BEFORE apiDeps for the identical reason fppRunner is: the macro
+	// executor built below needs a live registry to hand its own
+	// Dependencies.Brokers field, and apiDeps.Macros needs the executor.
+	// The control-plane broker (bm, above) is never registered here under
+	// any identifier — see buildIntegrationBrokerRegistry's own doc
+	// comment for why that is a property of its INPUT, not a check it
+	// performs.
+	integrationBrokers, integrationBrokerManagers, err := buildIntegrationBrokerRegistry(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("failed to build integration broker registry", "error", err)
+		_ = bm.Disconnect(ctx)
+		_ = st.Close()
+		return 1
+	}
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -281,8 +301,29 @@ func Run() int {
 		// nudge is suppressed or fails" against api.noFPPPollNudger's
 		// no-op default.
 		Nudger: fppRunnerNudger{runner: fppRunner},
+		// IntegrationBrokers is Step 9's own dependency (wave 2 shared
+		// contract section 5): the declared set show.action's own mqtt
+		// target write-time validation checks a broker identifier
+		// against (showconfig.go's decodeMQTTTarget, one layer up in
+		// internal/coordinator/config). This is the SAME cfg.IntegrationBrokers
+		// buildIntegrationBrokerRegistry just built actual connections
+		// from, above — the validation set and the connection set can
+		// never disagree about which identifiers exist, because both
+		// read the identical field.
+		IntegrationBrokers: cfg.IntegrationBrokers,
 	}
-	apiInst := api.New(apiDeps, api.Options{
+
+	// apiOpts is named (not inlined into api.New's own call, as it used to
+	// be) because Step 9's macro executor needs the IDENTICAL Dependencies
+	// and Options api.New itself uses to build its own second, in-process
+	// dispatch core (api.NewFPPCommandDispatcher's own doc comment: "the
+	// supported pattern for a coordinator wiring both this API's HTTP
+	// surface and Step 9's macro executor... both then dispatch through
+	// the identical core"). apiDeps.Macros is set further down, AFTER
+	// macroExecutor exists, so it does not need a value yet at the point
+	// macroDispatcher below is built — NewFPPCommandDispatcher never reads
+	// Dependencies.Macros.
+	apiOpts := api.Options{
 		CloseReads:          cfg.CloseReads,
 		SecureCookie:        cfg.SecureCookie,
 		TrustClientAddr:     cfg.TrustClientAddr,
@@ -292,7 +333,29 @@ func Run() int {
 		LoginMaxDelay:       cfg.LoginMaxDelay,
 		AllowedOrigins:      cfg.APIAllowedOrigins,
 		Logger:              logger,
-	})
+	}
+
+	// Step 9: the macro executor (internal/coordinator/macro), built
+	// against the SAME apiDeps/apiOpts api.New itself uses — see
+	// api.NewFPPCommandDispatcher's own doc comment for why two
+	// independently-constructed *handlers values sharing one Dependencies
+	// behave identically to one shared value for every purpose this
+	// dispatch core exists for. macroExecutor.Reconcile is called below,
+	// synchronously, before this coordinator starts listening (ADR-031
+	// decision 4), alongside api.ReconcileStrandedFPPCommands.
+	macroDispatcher := api.NewFPPCommandDispatcher(apiDeps, apiOpts)
+	macroExecutor := macro.NewExecutor(macro.Dependencies{
+		Store:    st,
+		Identity: identitySvc,
+		Dispatch: macroDispatcher,
+		Brokers:  integrationBrokers,
+		Notify:   notifyHub,
+		Clock:    time.Now,
+		Logger:   logger,
+	}, macro.Options{})
+	apiDeps.Macros = macroExecutor
+
+	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub
 
 	// Step 7 seam C review defect 5: resolve any command a PRIOR process
@@ -319,6 +382,20 @@ func Run() int {
 		logger.Warn("failed to reconcile stranded fpp commands at startup", "error", rerr)
 	} else if n > 0 {
 		logger.Warn("resolved commands left stranded by a prior process", "count", n)
+	}
+
+	// ADR-031 decision 4 / STEP-9-SPEC.md section 6.5: any macro run left
+	// "running" by a prior process is finished completed:false, never
+	// resumed — called synchronously, alongside the identical stranded-
+	// command sweep immediately above and for the identical reason (this
+	// coordinator must not start listening, and so must not accept a new
+	// run submission, until both sweeps have settled what a prior process
+	// left behind). Deliberately NOT fatal on error, for the identical
+	// reasoning ReconcileStrandedFPPCommands' own non-fatal treatment
+	// states above: constraint 23 draws the line at "you cannot act",
+	// never "you cannot see".
+	if rerr := macroExecutor.Reconcile(ctx); rerr != nil {
+		logger.Warn("failed to reconcile stranded macro runs at startup", "error", rerr)
 	}
 
 	// fppHTTPClient and fppRunner were already constructed above (before
@@ -493,6 +570,28 @@ func Run() int {
 	// than only via the deferred process exit, is what makes "no leaked
 	// goroutines" something a test can assert instead of merely hope for.
 	backgroundWG.Wait()
+
+	// macroExecutor.Stop waits, bounded by shutdownCtx, for any macro run
+	// goroutine's own bookkeeping (a step's final store write, an audit
+	// append) to land before the store it writes to is closed below — see
+	// that method's own doc comment for what it deliberately does NOT do
+	// (cancel an in-flight run; a running macro cannot be stopped by this
+	// or by anything else, by construction). Best-effort: a timeout here
+	// is logged, not fatal, matching every other shutdown step in this
+	// sequence.
+	if err := macroExecutor.Stop(shutdownCtx); err != nil {
+		logger.Warn("macro executor stop error", "error", err)
+	}
+
+	// Step 9: every integration broker connection this coordinator opened
+	// (buildIntegrationBrokerRegistry, above) is torn down alongside the
+	// control-plane broker immediately below — same shutdownCtx, same
+	// best-effort posture.
+	for _, ibm := range integrationBrokerManagers {
+		if err := ibm.Disconnect(shutdownCtx); err != nil {
+			logger.Warn("integration broker disconnect error", "error", err)
+		}
+	}
 
 	if err := bm.Disconnect(shutdownCtx); err != nil {
 		logger.Warn("mqtt disconnect error", "error", err)

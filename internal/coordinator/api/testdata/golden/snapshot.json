@@ -200,6 +200,7 @@
       "state": "running",
       "reason": null
     }
-  ]
+  ],
+  "macroRuns": []
 }
 

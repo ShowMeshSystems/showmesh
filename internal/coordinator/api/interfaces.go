@@ -210,6 +210,13 @@ type ConfigStore interface {
 	GetConfigObject(ctx context.Context, kind, id string) (store.ConfigObjectRecord, error)
 	GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error)
 	ListConfigRevisions(ctx context.Context, kind, id string) ([]store.ConfigRevisionRecord, error)
+
+	// ListConfigObjects returns every config_objects row of kind (Step 9
+	// wave 2, STEP-9-SPEC.md section 5.5's list route: "GET /config/{kind}
+	// -> list: object ids with label, show, current revision. NOT full
+	// payloads."). *store.Store already satisfies this directly, no
+	// adapter needed, matching every other method on this interface.
+	ListConfigObjects(ctx context.Context, kind string) ([]store.ConfigObjectRecord, error)
 }
 
 // CommandStore is what Step 7 seam C's FPP command endpoint needs from
@@ -279,6 +286,18 @@ type CommandStore interface {
 	// this finding's fix, and the existing DuplicateCommandError handling
 	// on that insert is what still catches it.
 	GetCommandByIdempotencyKey(ctx context.Context, key string) (store.CommandRecord, error)
+
+	// GetCommand returns one command by its own id, or wraps
+	// [store.ErrCommandNotFound]. Step 9 wave 2's own addition: a macro
+	// run's step carries a command id (store.MacroRunStepRecord.CommandID),
+	// and the run detail route resolves it to the command's full detail
+	// through this method — see STEP-9-SPEC.md section 6.1's "the commands.id
+	// reference is dangling by design and must be read as one": retention
+	// prunes commands independently of macro_run_steps, so this lookup MAY
+	// legitimately return store.ErrCommandNotFound for a step that really
+	// did dispatch one; that is rendered as "not retained", never as a
+	// blank or an internal error.
+	GetCommand(ctx context.Context, id string) (store.CommandRecord, error)
 }
 
 // FPPPollNudger requests an out-of-band poll of one FPP instance's
