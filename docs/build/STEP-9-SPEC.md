@@ -220,6 +220,12 @@ The object id is the action identifier used by macro steps. One object per actio
 
 `broker` is **required, has no default, and is validated at write time** against the brokers the deployment declares, per §2.10. `safetyClass` on an MQTT action is operator-declared, because the coordinator has no way to know that `home/projectors/set` is a power-off.
 
+**Absent, null and explicitly empty are three different things on every field of this payload too, with two stated exceptions, added 2026-08-14 during wave 2.**
+
+The first is `description`, on both kinds. It is optional, and an absent key and an explicit `""` mean the same thing: no description. That is not the Step 7 erased-label defect wearing a new hat, and the difference is worth stating because the two look identical. **`declare` was a patch and this is a full replace.** A `PUT` writes a whole new immutable revision from the body it was given, so a body with no `description` is the operator saying this revision has none, not the operator declining to mention a field they expect to survive. The erased-label defect was a partial update treating an absent field as an instruction to clear an existing value, and there is no existing value to carry forward here.
+
+The second is `publish.retain`, which is optional and absent means `false`; a present `null` is an error. §5.4's exception list names `onFailure` and `onUnconfirmed` and is scoped to the macro payload, so this is a third defaulted key in the step rather than a violation of that rule, and it is written down here rather than left as a builder's judgement. The reason it is safe to default and the wiped-endpoint and erased-label defects were not: **those two defaulted an absent key to a destructive value**, while `retain: false` is the non-sticky choice, so the operator who says nothing gets the publish that leaves nothing behind on someone else's broker. `qos` carries no default and is required, because there is no equivalent argument for which of 0, 1 and 2 the silent operator meant.
+
 This is the one place a topic legitimately appears in configuration, and it is in the **action**, never the macro. ADR-029 decision 3 sanctions it as an explicitly advanced operation and BUILD-PLAN names it as the general integration point rather than a projector feature. Build it as the general one.
 
 ### 5.4 `show.macro` payload
@@ -347,6 +353,22 @@ Getting that wrong cut both ways. Overstating the failure makes acceptance crite
 **So: dispatch immediately, and adapt the waiting.** The limiter grows a reservation that tells the caller when a nudge will be accepted, and the executor uses that to schedule its confirmation read. Dispatch timing is never altered by telemetry considerations.
 
 One caveat the verifying agent surfaced and a builder must answer: `Runner.Nudge` returns `false` for three distinct causes, unknown collector id, rate limit, and a channel-full coalesce, and **only the rate-limit branch is time-bounded**. A reservation API that treats all three alike will hand out a deadline it cannot honour. Distinguish them or return no reservation for the two that are not time-bounded.
+
+**Correction, 2026-08-14, after wave 2 built against this section. The second half of it prescribes a mechanism the seam it targets has no room for, and the reservation wave 1 shipped for it has no consumer.**
+
+`FPPCommandDispatcher.Dispatch` performs the whole cycle inside one blocking call: it nudges the collector once, then polls the observation store on its own interval until either fresh evidence resolves the command or the confirmation deadline elapses, and it returns only once that is over. The HTTP handler needs nothing else and neither does the executor. **There is therefore no second, executor-owned confirmation read for a reservation to schedule**, and re-invoking `Dispatch` under the same idempotency key replays the existing row rather than re-polling anything.
+
+`NextNudgeAt` is consequently reachable from `collector.Runner` through the coordinator's wiring and into `FPPCommandDispatcher`, and **called by no production code at either end**. Its tests pass against fakes on both sides. That is this project's own recorded shape, a capability that compiles, is tested, and cannot be reached by anything, and it is recorded here rather than quietly left in place.
+
+**What is actually true after wave 2**, and it is narrower than this section assumed:
+
+- **Dispatch is never delayed**, which is the part that mattered and the part acceptance criterion 18 measures. The executor calls `Dispatch` first and consults nothing beforehand.
+- **The starvation this section describes is real and unmitigated.** A step dispatched inside the limiter's 2 s window has its nudge refused and waits for the collector's ordinary tick, which this section's own arithmetic puts at roughly 15 s against a 20 s deadline.
+- **The consequence is latency, not failure.** §2.2 as corrected means a blown margin marks the run `confirmed: false` with a reason and never stops the show. This is the second time that correction has turned out to be the thing carrying the design.
+
+**The fix, if the margin proves too thin against real hardware, is one layer lower than this section looked.** `confirmFPPCommand` already ticks on its own poll interval, so re-nudging on each tick would let the second step's nudge land as soon as the limiter reopens, roughly 2 s rather than 15, and it would improve the single-command HTTP path by the same amount.
+
+**Owner's decision, 2026-08-14: measure before changing anything.** The fix is not taken now, and `NextNudgeAt` is not deleted now either. Acceptance criterion 1 already requires per-step confirmation latency to be measured against the bench and reported as a number, so the evidence that decides this arrives in wave 3 at no extra cost. Changing shipped Step 8 behaviour ahead of that measurement would be the thing this project keeps writing down that it will not do: acting on a plausible reading of a system rather than on what the system did. **If criterion 1's numbers show the margin holding, this section closes as a recorded risk that did not materialize, and `NextNudgeAt` is then a deletion rather than a fix.**
 
 ### 6.4 Step execution
 
@@ -571,6 +593,8 @@ Waves, with disjoint files inside each. Step 7 fanned out three "parallel" seams
 **Wave 3**, three parallel builders: `showmeshctl`, `ui/`, and the plugin with its build targets and its release-artifact pipeline.
 
 **Scope, decided 2026-08-14 after the review recommended a cut.** The review's recommended cut was the whole external MQTT step, on the grounds that it is the only thing forcing a new broker subsystem, that it carries three of the sixteen findings, and that day-0 loses nothing because FPP fires those MQTT commands directly today. **The owner declined the cut and kept it in Step 9**, under schedule pressure toward a mid-September day-0: deferring it collides with work already written, and the subsystem is wanted rather than tolerated. The three findings it carried are therefore **fixed in this document rather than deferred with it**, at §2.10, §7.1 and §7.2. Builders should know the cut was considered and declined on the record, so that "we could just drop this" is a decision already made rather than one to remake at 2am.
+
+**The second recommended cut was also declined, 2026-08-14, after wave 2 landed.** The reviewer recommended dropping the `show.action` UI authoring surface from wave 3, leaving the Operator UI with list, run and run view, on the grounds that [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md) already makes `showmeshctl` the required authoring path. **The owner kept it.** So wave 3's UI ships authoring for both kinds, and the schedule pressure the reviewer was answering is real and now lands somewhere else. That makes the paragraph below binding rather than advisory: with wave 3 the larger of the two options, criteria 8 and 9 are the thing that must not absorb the difference.
 
 **What gets protected instead.** The review's other observation stands: acceptance criteria 8 and 9, the plugin's decision-7 behaviour, are last in the build order, are the only cross-compiled artifact, need a release pipeline that does not exist, and are the obligation that has **already slipped from Step 7 and Step 8**. A plugin that installs, fires a macro and gets a `200` will look complete while discharging nothing. **If anything in this step is trimmed under time pressure, it is not criteria 8 and 9.**
 

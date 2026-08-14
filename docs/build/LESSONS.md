@@ -127,6 +127,30 @@ Reword that sentence and the UI silently offers "Start anyway (replace what is c
 
 This is [ADR-011](../decisions/ADR-011-context-aware-observability.md) and [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md) in their operational form: never collected, collection failed, source does not support it, and gone stale are four different answers, and none of them is an empty string.
 
+## A JSON round trip is not the identity function, and the type that survives it is not the type you stored
+
+**Step 9 wave 2.** A macro `setVolume` step dispatched volume **0** and reported `confirmed`.
+
+The configuration write path normalizes an FPP action's params to `string`, `bool` and `int64`, which is exactly the shape the dispatch seam documents needing. Storing a revision marshals that `map[string]any` to JSON. Resolving the pinned revision unmarshals it back into `map[string]any`, and `encoding/json` has one number type, so `int64(50)` returns as `float64(50)`.
+
+Every integer-valued primitive then reads its own parameter through `params["volume"].(int64)` with the `ok` deliberately discarded, because at the command endpoint the value cannot be anything else: it was decoded from the wire by the same registry two lines earlier. Through the macro path it can. So the dispatch sent 0, the desired state recorded 0, and the confirmation predicate compared observed volume against 0, which meant a muted show reported a green `confirmed: true`.
+
+Three things made it invisible. The write path was correct. The store was correct. The doc comment on the resolver said the params were "already normalized, natively-typed Go values", which was true of what went in and false of what came out, and it was written by someone who had read the seam's contract carefully. Bools and strings survive the round trip, so `setVolume` was the only live instance and the next integer parameter would have inherited it silently.
+
+This is [confirming a value equals what you wanted](#confirming-that-a-value-equals-what-you-wanted-is-not-evidence-that-anything-happened) with the polarity reversed: the evidence was genuinely post-dispatch and genuinely showed the state moved, to the value the coordinator had asked for, which was the wrong one.
+
+**Rule:** when a normalized, natively-typed map crosses a serialization boundary, re-derive it through the same normalizer on the way back, never by coercing the type you find. A second coercion rule is a second place the vocabulary can drift. And when an assertion discards its `ok` because the value provably cannot be another type, that proof belongs to one call path, so write down which one.
+
+## Vacuous truth is not evidence of presence
+
+**Step 9 wave 2.** The startup reconciler computed a run's `confirmed` by starting from `true` and skipping every step that had not resolved. A coordinator that restarted one second after accepting a run therefore finished it with every step reading `skipped` and the run itself reading **confirmed**.
+
+The loop was written to answer "did any resolved step fail to confirm", which is a different question from "did every step confirm". With no resolved steps the first is vacuously false and the second is plainly false, and the code returned the first. ADR-031 requires the surfaces to render `completed` and `confirmed` distinctly, which makes a green tick on a run that never ran worse than a merged indicator would have been.
+
+This is the mirror of [absence of evidence is not evidence of absence](#absence-of-evidence-is-not-evidence-of-absence-and-this-project-has-now-decided-it-four-times), and it is easier to miss, because an empty loop that never falsifies looks like a loop that checked.
+
+**Rule:** an all-of predicate over a possibly-empty set needs the empty case decided on purpose. Ask what the function returns when it examines nothing, and make the test supply that case rather than a populated one.
+
 ## The same defect returns in new disguises
 
 **Steps 2, 3, and 4.** Defaulting an unknown observation time to the collection time has been introduced and caught three separate times, each time looking like a different bug.

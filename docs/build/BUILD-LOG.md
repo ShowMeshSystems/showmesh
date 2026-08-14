@@ -193,6 +193,32 @@ The third-party product name discussed under "Conflicts found" in the audio sess
 
 ---
 
+## 2026-08-14 (Step 9 wave 2: the macro layer, the run API, and a command that confirmed while doing the wrong thing)
+
+**Goal:** build STEP-9-SPEC §13's wave 2 on top of the merged wave 1: the two configuration kinds, the macro executor, and the API surface over both.
+
+**Completed**, in three seams, two in parallel and the third alone:
+
+- **`internal/coordinator/config/`**: the `show.action` and `show.macro` payloads, codecs and validators, the `SHOWMESH_INTEGRATION_BROKERS` declaration, and an `FPPPrimitiveRegistry` interface implemented in `internal/coordinator/api/showaction_registry.go` so the two kinds validate against the Step 8 registry rather than a second copy of the primitive list.
+- **`internal/coordinator/macro/`**: the executor. Run submission with revisions pinned, the three-way run idempotency rule ahead of the overlap guard, sequential step execution under the two policy axes, per-step audit exemption, the five-mode MQTT response contract, startup reconciliation, and coalesced prior-failure events.
+- **`internal/coordinator/api/`**: seven new routes, the v1 wire types, `api/openapi.yaml`, in-flight runs in `/api/v1/snapshot`, a `macroRun.changed` stream event, and the wiring that builds one broker manager per declared identifier and runs reconciliation before the server listens.
+
+**The seam decisions, taken by the orchestrating session before any builder started**, because each has a wrong answer that is cheap to reach and expensive to undo. The import direction is forced: wave 1 exported the FPP dispatch seam for the executor, so `macro` imports `api` and `api` may never import `macro`, which puts every crossing type in `api/macro_seam.go` and is now enforced by a test. `config` may not import `api` either, so it declares the primitive-registry interface it needs and `api` supplies the adapter.
+
+**The defect worth carrying forward, and it is the sharpest one this step has produced.** A macro `setVolume` step dispatched volume **0** and reported `confirmed`. The config write path normalizes params to `int64`; storing marshals that to JSON; resolving unmarshals it back into `map[string]any`, which yields `float64`. Every integer-valued primitive reads its own parameter through a `params["x"].(int64)` assertion whose `ok` is deliberately discarded, because at the command endpoint the value genuinely cannot be anything else. Through the macro path it can. So the dispatch, the desired state and the confirmation predicate all read the same zero, and a correct-looking run went green while the show played muted. Fixed by re-deriving params through the same registry the write path uses, never by coercing `float64` to `int64`, which would be a second normalization rule free to drift from the first. Now in LESSONS.md.
+
+**Five more found by review and each fixed with a test that was broken first and watched to fail.** An FPP host that was powered off resolved `unconfirmed` and the run reported `completed: true`, so a four-step macro against a dead host dispatched nothing and claimed every step dispatched; `FPPCommandOutcome` gained an explicit `DispatchFailed`, because the obvious discriminator, `collection_failed`, is also what a failed read of the coordinator's own observation store returns, and keying on it would have pushed a monitoring gap onto the failure axis. `Reconcile` reported `confirmed: true` for a run in which nothing ever ran, by starting from true and skipping unresolved steps. An MQTT step recorded a `dispatchedAt` on paths where no publish was attempted. The prior-failure event writer used a caller-supplied class string as its coalescing key, so 50 invented classes wrote 50 events into a retention-bounded table, and a report carrying only a dropped count wrote nothing at all. And a raw Go error reached the operator, package path and internal URL included, in the run's own reason, while a doc comment two files over asserted that never happened.
+
+**Decisions made:** ADR-031 is unchanged. STEP-9-SPEC §5.3 now records the two payload keys where an absent value carries meaning and why each is safe, §6.3 records that its own reservation mechanism does not fit the seam it targets, and `v1.Problem` gained `conflictingRunId` so the macro-run conflicts name their run in a field rather than in prose.
+
+**Questions raised with the owner:** three, all answered the same day. Wave 2 is committed on the branch and not pushed. **The reviewer's second recommended scope cut, the show.action UI authoring surface, was declined**, so wave 3 ships authoring for both kinds in the browser and the schedule pressure the reviewer was answering lands elsewhere; STEP-9-SPEC section 13 records that criteria 8 and 9 are what must not absorb it. And the nudge margin is **measured before anything changes**: acceptance criterion 1 already produces the number, and changing shipped Step 8 behaviour ahead of it would be acting on a plausible reading rather than on what the system did.
+
+**Deferred:** `NextNudgeAt` still has no production consumer. `Dispatch` owns the whole nudge-then-poll cycle and returns resolved, so there is no executor-owned confirmation read for a reservation to schedule. The starvation §6.3 describes is real and unmitigated, and §2.2's correction is what keeps it to latency rather than a stopped show. The identified fix is a re-nudge inside `confirmFPPCommand`'s existing tick; per the owner's decision it waits on criterion 1's measured latency, and if that margin holds the export becomes a deletion rather than a fix.
+
+**Verification gates:** `go build`, `go vet` and `gofmt` clean across the repo, the full Go suite green with `-count=1`, and `make test-integration-fpp` green at 28 cases against the bench `fppd`, with no Step 8 test edited. The wave's acceptance criteria are not yet claimed: they are verified against the running stack in wave 3, and the criteria this step's clients exist to exercise have no clients until then.
+
+---
+
 ## 2026-08-14 (Track C stops depending on one interface, and Track D stops depending on Track C)
 
 **Goal:** find what could start in parallel, given that Step 9 is building, the owner holds Track B's bench queue, and the fixture-identity work is in the working tree.
