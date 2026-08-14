@@ -42,6 +42,13 @@ deploy/mosquitto/.acl-explicit-agents-v1
 # Local working notes, not for the repo
 docs/private/
 
+# Show media. Sequence and effect files from the operator's real show are
+# large, are someone's authored work, and describe the physical installation
+# channel by channel. They belong on a scratch path outside the repository;
+# this is the backstop for the day one gets copied in to look at something.
+*.fseq
+*.eseq
+
 # Operator UI (ui/). package-lock.json is committed; node_modules and the
 # Vite build output (dist/, already covered above) are not.
 ui/node_modules/

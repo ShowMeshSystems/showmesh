@@ -12,19 +12,20 @@ ShowMesh drives Resolume: launches what should be playing, feeds it timecode so 
 
 ## The dependency nobody will notice until it bites
 
-**Resolume's timecode comes from Track C's audio node, over a physical cable.**
+**Resolume's timecode arrives as audio over a physical cable, and in the finished system that cable starts at [Track C](TRACK-C-audio-node.md)'s audio node.**
 
 Resolume Arena accepts SMPTE only as **audio LTC**, configured per clip. It is not a network protocol and it is not something ShowMesh can send over the control plane. So the real chain is:
 
-1. The audio node generates LTC on output 3, in the same clock domain as program audio ([ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md)).
+1. The audio node generates LTC on a discrete output, in the same clock domain as program audio ([ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md)).
 2. That output goes by cable into an audio input on the machine running Resolume.
 3. Resolume clips are configured to follow that input.
 
-Two consequences that are software problems, and one that is not:
+Three consequences that are software problems, and one that is not:
 
-- **Track C is on this track's critical path.** Audio is not just for the audience; it is the timecode source. Nothing in Track D's timecode half can be benched before the audio node generates LTC.
+- **D0 does not wait for Track C, corrected 2026-08-14.** This section previously said nothing in Track D's timecode half could be benched before the audio node generates LTC. That is false and it made this track look weeks further out than it is. **D0 needs LTC, not ShowMesh's LTC.** Any off-the-shelf generator on any working interface answers the actual open question, which is what Resolume does when timecode is late, absent, jumps, or restarts. The audio node is the show's LTC source; it is not a prerequisite for observing Resolume's behaviour.
+- **Track C is still on the critical path for the show, just not for this bench.** The finished timecode chain does depend on the audio node, so the two tracks converge before day-0 even though D0 does not wait for them to.
 - **ShowMesh cannot confirm timecode delivery from its own side.** It can confirm that LTC is being generated and it can ask Resolume what it thinks the time is, but the cable in between is unobserved. Confirmation logic must rest on Resolume's own reported state, never on the audio node having sent something.
-- **The cable and the interface are the owner's problem and need no design here.** He is an audio engineer; getting LTC out of an interface and into a computer is his day job. The interface's output addressing was checked against documentation and will be confirmed on arrival, with a known-good Focusrite as the fallback if it disappoints. This is recorded so that nobody spends planning effort on it.
+- **The cable and the interface are the owner's problem and need no design here.** He is an audio engineer; getting LTC out of an interface and into a computer is his day job. Interface selection was reopened on 2026-08-14 and is deliberately not a gate on either track, per Track C. This is recorded so that nobody spends planning effort on it.
 
 ## What is known, and the large hole in it
 
@@ -40,7 +41,9 @@ That last point is the hole, and it is exactly the shape this project keeps gett
 
 ## Deliverables
 
-**D0. Bench RES-001 before building the adapter.** Acquisition, late start, loss of one to ten seconds, jumps, source restart, and a Resolume restart mid-show. This is the record's own test matrix and it needs the real Resolume, the real interface, and Track C's LTC. It is the first thing on this track and it gates the rest, because the adapter's error handling is a design against behaviour nobody has observed.
+**D0. Bench RES-001 before building the adapter.** Acquisition, late start, loss of one to ten seconds, jumps, source restart, and a Resolume restart mid-show. This is the record's own test matrix and it needs the real Resolume and an LTC source, **which is any working generator rather than Track C's node** per the correction above. It gates the adapter's error handling, because that is otherwise a design against behaviour nobody has observed.
+
+**D0 is not the only thing that can start, and it is not the first.** Capturing what Resolume's REST, WebSocket and OSC surfaces actually expose needs no timecode and no cable, only a running Arena. It is the same ordering Step 8 used when it captured FPP's real command vocabulary before naming a single command, which immediately overturned four assumptions that read as entirely plausible. Everything in D1 through D4 is currently reasoned from documentation and forum posts.
 
 **D1. The Resolume adapter.** REST and WebSocket for state and confirmable operations, OSC for low-latency triggers. The split follows ARCHITECTURE §4.6: management operations use confirmable interfaces, operational triggers may use lower-latency ones. **The adapter never enters the frame path.**
 
