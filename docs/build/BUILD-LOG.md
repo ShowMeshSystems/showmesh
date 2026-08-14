@@ -30,6 +30,15 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
+> **OPEN, and the first thing to settle on 2026-08-14: deployment identity in test fixtures.** The repository is public. Prose documentation was redacted in `b149663`, but hostnames and IP addresses from the operator's network remain in test fixtures and test code. **The owner's constraint is that there must be a solution in which hostnames and IPs do not appear in those files in any form.** He explicitly did not accept the options offered on 2026-08-13 and did not want the question resolved that evening, so **this is recorded without a recommendation and a future session should not adopt the earlier framing by default.**
+>
+> **Where it is:** `internal/coordinator/collector/fpp/testdata/*.json` (60K), `internal/coordinator/collector/fppmqtt/testdata/*.json` (56K), `internal/coordinator/config/config_test.go`, and `ui/src/app/test-support/fppFleetFixtures.ts`. Roughly 100 references, and assertions key off the hostnames.
+>
+> **Facts a decision needs.** Six test files across four packages read those fixtures, so untracking them without another mechanism breaks the suite on a fresh clone and in CI. The fixtures are captures from the live 2026-08-11 probe, and their value is FPP's real response *shape*: the heterogeneous ports array, `"ma": null`, the `warnings` key absent on one host while its MQTT topic publishes `[]`. Each of those broke a decoder and each is a recorded lesson, so whatever replaces them has to preserve shape. Editing a file labelled as a verbatim capture without saying so is its own problem. Git history still contains every identifier regardless of what happens next, and scrubbing that means a rewrite and force-push on a public default branch, which nobody has agreed to.
+>
+> **Angles not yet examined**, listed so tomorrow starts with more than two options, and **not** as recommendations: generating fixtures at test time from a redacted template; stripping identity fields in the test helper at load; storing only the fields under test rather than whole responses; keeping captures out of git with CI synthesizing equivalents.
+
+
 Steps 0 (Foundation), 1 (`pkg/multisync`), 2 (control plane skeleton), 3 (read-only FPP observability plus the versioned public API), 4 (the read-only Operator UI), 5 (real FPP signals on the dashboard), 6 (identity, authorization and audit), 7 (the first three write operations), and **8 (the primitive command vocabulary)** are complete.
 
 **Step 8 gave ShowMesh a vocabulary instead of a single verb.** Eight primitives — `startPlaylist`, `stopPlaylist`, `stopPlaylistGracefully`, `pausePlaylist`, `resumePlaylist`, `nextPlaylistItem`, `prevPlaylistItem`, `setVolume` — each confirmed through a signal the collector already collects, on evidence that post-dates its own dispatch. **This is the first step whose direction reverses**: `startPlaylist` is the first thing ShowMesh can do whose failure mode is the display running when it should not be.
