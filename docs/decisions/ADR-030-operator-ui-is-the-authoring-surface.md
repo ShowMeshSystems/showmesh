@@ -19,7 +19,15 @@ No authoring capability ships in the UI without the API endpoint it calls, and `
 
 The CLI half is the part that will feel like overhead, and it is the part that works. `showmeshctl` is forbidden by an enforced import-graph test from importing any coordinator package, so it cannot share the server's types and quietly agree with the server about a field. That property has already caught contract defects in Step 3 that a shared-type client would have missed entirely.
 
-**The ADR-014 test, restated for authoring:** if every browser disappeared, could an operator still configure a show from scratch? The answer must be yes. It does not need to be pleasant.
+**The ADR-014 test, restated for authoring:** if every browser disappeared, could an operator still configure a show from scratch? The answer must be yes.
+
+**And the owner's reason is stronger than the contract one, so it replaces it as the primary justification.** The CLI is the *"oh no, we have to fix the show and the UI is down"* tool. That is not contract hygiene, it is the emergency path, and it changes what "the API supports it" has to mean:
+
+- **The CLI is fully tested, not merely present.** A path that exists and has never been exercised is not an emergency path; it is an untested assumption that will be discovered under the worst possible conditions. Every authoring capability's CLI verb is covered, and covered against a running coordinator rather than only in a unit test.
+- **It has to be usable by a stressed person at night.** Legible errors, no interactive-only flows, no dependence on remembering an opaque identifier. Ordinary CLI usability, which stops being ordinary when it is the thing standing between an operator and a dark house.
+- **It must work when the UI container is down**, which follows from [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md): the UI proxies the API, so an operator whose UI is gone needs to reach the coordinator directly. That path is already required to work and this makes it load-bearing rather than theoretical.
+
+The contract argument still holds and is why `showmeshctl` cannot import a coordinator package. It is now the second reason rather than the first.
 
 ### 2. The UI holds no authoring logic
 

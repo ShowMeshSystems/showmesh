@@ -38,6 +38,8 @@ Exactly one show is active at a time, and which one is a **configuration object*
 
 It was tempting to model this as runtime state, because it drives runtime behaviour. It is recorded as configuration because switching from Halloween to Christmas is an infrequent, deliberate operator decision with large consequences, and [ADR-024](ADR-024-identity-authorization-and-audit.md) decision 11 wants exactly that kind of state change attributed and auditable. Runtime state carries no audit trail and no history.
 
+**The concrete reason, in the owner's words, is better than the architectural one:** it stops you accidentally breaking Halloween because you were programming Christmas. Two shows exist at once in November, one of them is running for an audience, and the other is being edited. An explicit, audited, revisioned pointer between them is what keeps an edit from reaching the wrong one. This is the case the decision exists for, and it is six weeks after day-0 rather than hypothetical.
+
 **Switching the active show changes what every node is required to hold.** That must surface as readiness evidence, showing nodes missing assets for the newly active show, rather than appearing to succeed and failing at showtime. Absence is stated, never omitted, which is the same rule the observation model already follows.
 
 ### 4. Surfaces are mapped from named xLights models, with manual channel ranges permanently supported

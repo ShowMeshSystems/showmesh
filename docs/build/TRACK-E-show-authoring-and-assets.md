@@ -59,7 +59,7 @@ Everything in E1 through E8 is built so this arrives as an additional ingestion 
 
 ## Acceptance criteria
 
-- An operator creates a show, defines a surface with a manual channel range, assigns it to a node, and configures NDI output, **entirely through `showmeshctl`** with no browser. This is ADR-030 decision 1's test and it is deliberately the first criterion.
+- An operator creates a show, defines a surface with a manual channel range, assigns it to a node, and configures NDI output, **entirely through `showmeshctl`** with no browser, **with the UI container stopped**. This is ADR-030 decision 1's test and it is deliberately the first criterion, because the CLI is the path an operator takes when the show is broken and the UI is down. Every authoring verb is exercised against a running coordinator, not only in unit tests: an emergency path nobody has run is an assumption, not a path.
 - Three FSEQ files with the **same filename** and different content are uploaded for three different nodes, and each node resolves to and holds the correct one.
 - A node missing an asset reports as not ready, naming what is missing, before any show starts.
 - A corrupted or truncated asset fails its hash check and is reported rather than being served or silently accepted.
