@@ -28,7 +28,7 @@ jobs:
       # either go.mod's `go` directive or the Dockerfile's golang: tag
       # changes.
       matrix:
-        go-version: ["1.25.0", "1.26.5"]
+        go-version: ["1.25.0", "1.26.6"]
     steps:
       - uses: actions/checkout@v7
 
@@ -229,6 +229,54 @@ jobs:
       # someone remembered to regenerate by hand.
       - name: Generated API types are up to date
         run: make ui-gen-check
+
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to the Dockerfile's golang tag, deliberately NOT
+      # go-version-file: go.mod. govulncheck reports standard-library
+      # vulnerabilities against whichever toolchain runs it, and the stdlib
+      # is linked into the shipped binary, so the only version whose stdlib
+      # findings describe the released artifact is the one the Dockerfile
+      # builds with. Scanning under go.mod's 1.25.0 minimum-support floor
+      # would report a different set that nothing this project publishes
+      # actually contains. Keep this in step with the Dockerfile.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.6"
+          cache: true
+
+      # govulncheck, not Dependabot, is the tool that answers whether a
+      # vulnerability affects this build, and on 2026-08-14 the two
+      # disagreed completely in both directions.
+      #
+      # Dependabot alerts Go at *module* granularity: a flaw in any package
+      # of a module flags the whole module regardless of what is imported.
+      # That produced 16 open alerts, 7 critical, of which zero were
+      # reachable -- 15 in golang.org/x/crypto/ssh and one in the x/net HTML
+      # parser, neither of which this module imports.
+      #
+      # Meanwhile govulncheck found 17 genuinely reachable vulnerabilities
+      # that Dependabot never showed at all, every one of them in the Go
+      # standard library, reached from httpapi's server, fppcommand's client
+      # and the fppmqtt collector. Dependabot does not watch the toolchain,
+      # and the stdlib ships inside the binary. The loud alerts were the
+      # harmless ones and the real ones were invisible.
+      #
+      # So this job is the signal and the Dependabot tab is hygiene. It
+      # fails the build only on a vulnerability actually reachable from this
+      # code, which is what makes a failure here worth reading. That value
+      # is destroyed if it starts failing on unreachable findings, so do not
+      # "fix" a red run here by relaxing it to reporting-only; fix the
+      # finding or move the pin above.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan for reachable vulnerabilities
+        run: govulncheck ./...
 
   docker:
     runs-on: ubuntu-latest

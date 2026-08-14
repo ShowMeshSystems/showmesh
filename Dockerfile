@@ -11,10 +11,20 @@
 # the *target* binary. Go's cross-compilation is native and CGO is disabled,
 # so this produces correct linux/amd64 and linux/arm64 output without QEMU.
 
-# golang:1.26.5-bookworm pins the latest confirmed 1.26.x patch on Debian
-# bookworm as of this writing (verified against the Docker Hub registry
-# tag list); avoids the "1.26-bookworm" floating tag drifting under CI.
-FROM --platform=$BUILDPLATFORM golang:1.26.5-bookworm AS builder
+# golang:1.26.6-bookworm pins the latest 1.26.x patch on Debian bookworm
+# (verified against the go.dev release list 2026-08-14); avoids the
+# "1.26-bookworm" floating tag drifting under CI.
+#
+# This is a security floor, not just a pin. The Go standard library ships
+# inside the binary, so the toolchain version *is* a dependency version and
+# it is the one no dependency scanner watches: on 2026-08-14 govulncheck
+# found 17 reachable stdlib vulnerabilities under 1.26.0 (net/url, crypto/tls,
+# crypto/x509, reached from the HTTP server, the FPP command client and the
+# MQTT collector) while Dependabot's 16 alerts were all unreachable
+# x/crypto/ssh and x/net/html findings. 1.26.5 still missed two of them.
+# Under 1.26.6 govulncheck reports zero. CI's `vuln` job pins this same
+# version deliberately, so keep the two in step.
+FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm AS builder
 
 WORKDIR /src
 
