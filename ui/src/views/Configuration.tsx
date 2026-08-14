@@ -173,7 +173,7 @@ export function Configuration() {
     <div>
       <h2 className="panel__title">Configuration</h2>
       <p className="text-muted">
-        The list of FPP instances this coordinator polls (RES-008 D1), moved out of{' '}
+        The list of FPP instances this coordinator polls, moved out of{' '}
         <code>SHOWMESH_FPP_ENDPOINTS</code> into this coordinator&rsquo;s own store. Requires the{' '}
         <code>config:write</code> scope — admin only; there is no read-only scope for this page.
       </p>

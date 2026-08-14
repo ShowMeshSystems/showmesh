@@ -275,3 +275,81 @@
   color: var(--color-text-muted);
   max-width: 32ch;
 }
+
+/* FPP command controls (FPPStopPlaylistControl, Step 7, and every Step 8
+   primitive control generalized from it — FPPCommandOutcome,
+   FPPPlaylistTransportControls, FPPStartPlaylistControl,
+   FPPStopPlaylistGracefullyControl, FPPSetVolumeControl): dispatch
+   outcome, warning, and error text were markup-only classes with no rule
+   anywhere in this directory (Step 8 client-side review finding 3), so
+   "Confirmed:" and "Unconfirmed:" rendered as identical paragraphs
+   differing only by their leading word, and the "pressing Next Item will
+   END the show" warning (FPPPlaylistTransportControls) rendered as plain
+   body text — the only visually differentiated states were the
+   de-emphasized ones (.text-muted), which is backwards. These rules reuse
+   this file's own --status-* pairing (status-badge above) and
+   .text-error's plain color+weight idiom (global.css) rather than
+   inventing a new visual language, and every state here still carries a
+   text label in the markup itself ("Confirmed:"/"Unconfirmed:"/etc.) or a
+   role="alert", so color is never the only signal (OBSERVABILITY section
+   6.3 / spec section 6.6). */
+.fpp-command-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.fpp-command-control__confirmed {
+  color: var(--status-good-fg);
+  font-weight: 600;
+}
+
+/* Boxed, like .fpp-command-control__warning just below, and deliberately
+   NOT the same rule as .fpp-command-control__error further down this file
+   (Step 8 review finding, CLAUDE.md's own recurring shape: two different
+   events that fire different things must not render identically).
+   "Unconfirmed" is the coordinator answering a completed, successful
+   conversation and saying the effect was not observed by its own evidence
+   (ADR-003) — a real outcome the operator needs to weigh, not a transport
+   failure — so this reuses the SAME boxed, unmissable treatment
+   .fpp-command-control__warning already established for "this needs your
+   attention," just in --status-bad-* rather than --status-warn-* colors.
+   .fpp-command-control__error is what a request that never reached the
+   coordinator (or was refused outright before any conversation happened)
+   renders as, and stays plain text — the existing idiom in this very file
+   already draws that boxed/plain distinction (see
+   .fpp-command-control__warning's own comment); this reuses it rather
+   than inventing new tokens. */
+.fpp-command-control__unconfirmed {
+  background: var(--status-bad-bg);
+  color: var(--status-bad-fg);
+  border: 1px solid var(--status-bad-fg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-weight: 600;
+}
+
+/* Boxed, not just colored text: FPPNextPlaylistItemControl's own comment
+   is explicit that this is "a stronger, unmissable" notice ("pressing
+   Next Item will END the show, the same way Stop does") — a bare color
+   change on body text is not unmissable, a bordered panel matching
+   .session-panel's own boxed treatment is. */
+.fpp-command-control__warning {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  border: 1px solid var(--status-warn-fg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-weight: 600;
+}
+
+/* Plain text, deliberately: see .fpp-command-control__unconfirmed's own
+   comment above for why the two are no longer the same rule. This class
+   covers a request that never reached the coordinator, or was refused
+   before any conversation happened — never a completed, successful
+   round trip whose outcome was "unconfirmed". */
+.fpp-command-control__error {
+  color: var(--status-bad-fg);
+  font-weight: 600;
+}

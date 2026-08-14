@@ -75,12 +75,14 @@ control API (ADR-014). Since ADR-024, reads and the audit log are gated
 by an authenticated principal's scopes rather than by one shared secret,
 see --token below and "showmeshctl session --help".
 
-Step 7 gave this program its first writes, and everything else remains a
-read. "config set", "discover", "declare" and "undeclare" change this
-coordinator's own configuration and inventory and need the config:write
-scope. "fpp stop-playlist" dispatches FPP's own stop command (ADR-001)
-and needs fpp:command; it never reports success on an HTTP 200 alone,
-because ADR-003 requires evidence that observed state actually moved.
+Step 7 gave this program its first writes; Step 8 gave it seven more, all
+under "fpp". "config set", "discover", "declare" and "undeclare" change
+this coordinator's own configuration and inventory and need the
+config:write scope. Every "fpp <verb>" subcommand dispatches one of
+docs/bench/fpp-command-vocabulary.md section 4's eight primitive FPP
+commands (ADR-001) and needs fpp:command; none of them ever reports
+success on an HTTP 200 alone, because ADR-003 requires evidence that
+observed state actually moved.
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -89,7 +91,14 @@ Commands:
   nodes                    list the node inventory
   node <id>                show one node in detail
   fpp [id]                 list configured FPP instances (or show one, if id given)
-  fpp stop-playlist <id>   dispatch FPP's Stop Now command and confirm by evidence (write)
+  fpp stop-playlist <id>              dispatch FPP's Stop Now and confirm by evidence (write)
+  fpp start-playlist <id> <name>      dispatch FPP's Start Playlist and confirm by evidence (write)
+  fpp stop-playlist-gracefully <id>   dispatch FPP's Stop Gracefully and confirm by evidence (write)
+  fpp pause-playlist <id>             dispatch FPP's Pause Playlist and confirm by evidence (write)
+  fpp resume-playlist <id>            dispatch FPP's Resume Playlist and confirm by evidence (write)
+  fpp next-playlist-item <id>         dispatch FPP's Next Playlist Item and confirm by evidence (write)
+  fpp prev-playlist-item <id>         dispatch FPP's Prev Playlist Item and confirm by evidence (write)
+  fpp set-volume <id> <volume>        dispatch FPP's Volume Set and confirm by evidence (write)
   events                   show event history
   snapshot                 show the authoritative snapshot
   watch                    fetch the snapshot, then stream live changes
@@ -137,7 +146,18 @@ Global flags (place before any positional arguments):
                      --output json, not merely unrendered as it would be in
                      the text tables.
   --timeout <dur>   request timeout, e.g. 10s (default 10s; ignored by watch,
-                     which is long-lived by design)
+                     which is long-lived by design). Every "fpp <verb>"
+                     write subcommand RAISES this to its own, larger
+                     minimum (currently 35s) when given a smaller value:
+                     the coordinator holds a dispatched command's response
+                     open for its own confirmation deadline before
+                     answering, so a shorter client budget could only ever
+                     abort a healthy, still-working conversation and
+                     report it as a transport failure. A too-small
+                     --timeout on one of those subcommands prints a note
+                     to stderr naming both values rather than silently
+                     waiting longer than requested; see
+                     "showmeshctl fpp <verb> --help".
 
 Run "showmeshctl <command> --help" for flags specific to one command.
 
@@ -156,10 +176,17 @@ Exit codes:
      authenticated at all)
   8  rate limited (429: the login concurrency bound was exceeded — see
      stderr for how long to wait before retrying)
-  9  command unconfirmed ("fpp stop-playlist" only, ADR-003: the request
-     itself succeeded and the coordinator answered honestly that the
-     command's effect was not confirmed by evidence — never conflated
+  9  command unconfirmed (any "fpp <verb>" write subcommand, ADR-003: the
+     request itself succeeded and the coordinator answered honestly that
+     the command's effect was not confirmed by evidence — never conflated
      with exit 6, which means the request itself failed)
+  10 conflict (409: the request was valid, but this coordinator's current
+     state makes it unsafe or meaningless to act on right now — a
+     different playlist is playing and ifBusy=refuse, the evidence needed
+     to decide that is not current, or an idempotency key was reused
+     against a different action/target/params; see stderr for the
+     specific reason and remedy. Distinct from exit 6: the coordinator is
+     healthy and answered correctly, it declined on purpose)
 `)
 }
 

@@ -9,27 +9,58 @@ import (
 	"time"
 )
 
+// fppWriteSubcommands routes "showmeshctl fpp <verb> ..." to its own flag
+// set and handler before this function's own flag set ever parses args —
+// the same way "showmeshctl session" and "showmeshctl audit" are
+// top-level subcommands with their own flags rather than flags of some
+// other command. Every verb here lives under "fpp" — not as its own
+// top-level verb — because each is FPP-specific in the same way "fpp
+// [id]" already is, and because BUILD-PLAN's own framing named the first
+// of them that way: "showmeshctl fpp stop-playlist <instanceId>".
+// stop-playlist (Step 7 seam C) is the only one of the eight
+// docs/bench/fpp-command-vocabulary.md section 4 primitives that predates
+// this map; the other seven are Step 8's own addition, dispatched
+// identically.
+var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Writer, clock func() time.Time) int{
+	"stop-playlist":            cmdFPPStopPlaylist,
+	"start-playlist":           cmdFPPStartPlaylist,
+	"stop-playlist-gracefully": cmdFPPStopPlaylistGracefully,
+	"pause-playlist":           cmdFPPPausePlaylist,
+	"resume-playlist":          cmdFPPResumePlaylist,
+	"next-playlist-item":       cmdFPPNextPlaylistItem,
+	"prev-playlist-item":       cmdFPPPrevPlaylistItem,
+	"set-volume":               cmdFPPSetVolume,
+}
+
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	// "stop-playlist <instance-id>" (Step 7 seam C) is dispatched before
-	// this subcommand's own flag set ever parses args: it has its own
-	// flag set (cmdFPPStopPlaylist), the same way "showmeshctl session"
-	// and "showmeshctl audit" are top-level subcommands with their own
-	// flags rather than flags of some other command. It lives under
-	// "fpp" — not as a fourth top-level verb — because it is FPP-specific
-	// in the same way "fpp [id]" already is, and because BUILD-PLAN's own
-	// framing names it that way: "showmeshctl fpp stop-playlist
-	// <instanceId>".
-	if len(args) > 0 && args[0] == "stop-playlist" {
-		return cmdFPPStopPlaylist(args[1:], stdout, stderr, clock)
+	if len(args) > 0 {
+		if handler, ok := fppWriteSubcommands[args[0]]; ok {
+			return handler(args[1:], stdout, stderr, clock)
+		}
 	}
 
 	fs, g := newFlagSet("showmeshctl fpp", stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp [flags] [instance-id]")
-		_, _ = fmt.Fprintln(stderr, "       showmeshctl fpp stop-playlist [flags] <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "       showmeshctl fpp <verb> [flags] <instance-id> [args...]")
 		_, _ = fmt.Fprintln(stderr, "\nList configured FPP instances (GET /api/v1/fpp), or show one instance")
 		_, _ = fmt.Fprintln(stderr, "in detail if instance-id is given (GET /api/v1/fpp/{instanceId}).")
-		_, _ = fmt.Fprintln(stderr, "\nRun \"showmeshctl fpp stop-playlist --help\" for the write subcommand.")
+		_, _ = fmt.Fprintln(stderr, "\n<verb> dispatches one of docs/bench/fpp-command-vocabulary.md section 4's")
+		_, _ = fmt.Fprintln(stderr, "eight primitive FPP commands and confirms it by evidence (ADR-003):")
+		_, _ = fmt.Fprintln(stderr, "  stop-playlist              <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "  start-playlist             <instance-id> <playlist-name> [--repeat] [--if-busy refuse|replace]")
+		_, _ = fmt.Fprintln(stderr, "  stop-playlist-gracefully   <instance-id> [--after-loop]")
+		_, _ = fmt.Fprintln(stderr, "  pause-playlist             <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "  resume-playlist            <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "  next-playlist-item         <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "  prev-playlist-item         <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "  set-volume                 <instance-id> <volume 0-100>")
+		_, _ = fmt.Fprintln(stderr, "\nEach <verb> above RAISES the global --timeout to its own, larger minimum")
+		_, _ = fmt.Fprintln(stderr, "(currently 35s) when given a smaller value, and says so on stderr: the")
+		_, _ = fmt.Fprintln(stderr, "coordinator holds a dispatched command's response open for its own")
+		_, _ = fmt.Fprintln(stderr, "confirmation deadline before answering, so a shorter budget could only")
+		_, _ = fmt.Fprintln(stderr, "ever abort a healthy conversation early and misreport it as failed.")
+		_, _ = fmt.Fprintln(stderr, "\nRun \"showmeshctl fpp <verb> --help\" for a write subcommand's own flags.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

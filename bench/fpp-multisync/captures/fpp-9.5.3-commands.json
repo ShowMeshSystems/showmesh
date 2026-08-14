@@ -1,0 +1,987 @@
+[
+  {
+    "description": "Turn all lights off.",
+    "name": "All Lights Off"
+  },
+  {
+    "args": [
+      {
+        "default": "true",
+        "description": "Force Clear",
+        "name": "force",
+        "optional": false,
+        "type": "bool"
+      }
+    ],
+    "name": "Clear Locale Cache"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/effects",
+        "description": "Effect Name",
+        "name": "effect",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Start Channel",
+        "name": "startChannel",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "default": "true",
+        "description": "Loop Effect",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "description": "Background",
+        "name": "bg",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "allowBlanks": true,
+        "contentListUrl": "api/models?simple=true",
+        "description": "Model",
+        "name": "Model",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "Effect Start"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/effects/ALL",
+        "description": "Effect Name",
+        "name": "effect",
+        "optional": false,
+        "type": "datalist"
+      }
+    ],
+    "description": "Stop the specified effect.",
+    "name": "Effect Stop"
+  },
+  {
+    "description": "Stop all running effects.",
+    "name": "Effects Stop"
+  },
+  {
+    "args": [
+      {
+        "adjustable": true,
+        "default": "300",
+        "description": "Extend for Seconds",
+        "max": 43200,
+        "min": -43200,
+        "name": "Seconds",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "adjustable": true,
+        "default": "0",
+        "description": "For schedule events occurring in the next x Seconds",
+        "max": 43200,
+        "min": -43200,
+        "name": "Limit",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "name": "Extend Schedule"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/sequence",
+        "description": "FSEQ Name",
+        "name": "effect",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "true",
+        "description": "Loop Effect",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "description": "Background",
+        "name": "bg",
+        "optional": false,
+        "type": "bool"
+      }
+    ],
+    "name": "FSEQ Effect Start"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/sequence",
+        "description": "FSEQ Name",
+        "name": "effect",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "FSEQ Effect Stop"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/options/GPIOLIST",
+        "description": "Pin",
+        "name": "pin",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "contents": [
+          "On",
+          "Off",
+          "Opposite"
+        ],
+        "description": "Action",
+        "name": "on",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "GPIO"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists/playable",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "-1",
+        "description": "Start Item Index",
+        "max": 100,
+        "min": -1,
+        "name": "startItem",
+        "optional": true,
+        "type": "int"
+      },
+      {
+        "default": "-1",
+        "description": "End Item Index",
+        "max": 100,
+        "min": -1,
+        "name": "endItem",
+        "optional": true,
+        "type": "int"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "description": "After the current item of the currently running playlist is complete, run the new playlist.  When complete, resumes the original playlist at the next position.",
+    "name": "Insert Playlist After Current"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists/playable",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "0",
+        "description": "Start Item Index",
+        "max": 100,
+        "min": 0,
+        "name": "startItem",
+        "optional": true,
+        "type": "int"
+      },
+      {
+        "default": "0",
+        "description": "End Item Index",
+        "max": 100,
+        "min": 0,
+        "name": "endItem",
+        "optional": true,
+        "type": "int"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "description": "If possible, pauses the currently running playlist and then runs the new playlist.  When complete, resumes the original playlist where it was paused.",
+    "name": "Insert Playlist Immediate"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists/playable",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "false",
+        "description": "Immediate",
+        "name": "immediate",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "description": "Run a random item from the given playlist.  When complete, resumes the original playlist.",
+    "name": "Insert Random Item From Playlist"
+  },
+  {
+    "name": "Next Playlist Item"
+  },
+  {
+    "name": "Outputs Off"
+  },
+  {
+    "name": "Outputs On"
+  },
+  {
+    "description": "If possible, pauses the currently running playlist.  This command can not be run from inside a playlist",
+    "name": "Pause Playlist"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/media",
+        "description": "Media",
+        "name": "media",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "1",
+        "description": "Loop Count",
+        "max": 100,
+        "min": 1,
+        "name": "loop",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "default": "0",
+        "description": "Volume Adjust",
+        "max": 100,
+        "min": -100,
+        "name": "volume",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "Plays the media in the background",
+    "name": "Play Media"
+  },
+  {
+    "name": "Prev Playlist Item"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Effect Name",
+        "name": "effect",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Start Channel",
+        "name": "startChannel",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "default": "true",
+        "description": "Loop Effect",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "description": "Background",
+        "name": "bg",
+        "optional": false,
+        "type": "bool"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Effect Start' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Effect Start"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Effect Name",
+        "name": "effect",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Effect Stop' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Effect Stop"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "FSEQ Name",
+        "name": "fseq",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "true",
+        "description": "Loop Effect",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "description": "Background",
+        "name": "bg",
+        "optional": false,
+        "type": "bool"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'FSEQ Effect Start' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote FSEQ Effect Start"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Playlist Name",
+        "name": "playlist",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "true",
+        "description": "Loop Effect",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Start Playlist' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Playlist Start"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Script Name",
+        "name": "script",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "adjustable": true,
+        "description": "Script Arguments",
+        "name": "args",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Environment Variables",
+        "name": "env",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Run Script' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Run Script"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Preset Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Trigger Command Preset' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Trigger Command Preset"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/remotes",
+        "description": "Remote IP",
+        "name": "remote",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "description": "Preset Slot",
+        "max": 255,
+        "min": 1,
+        "name": "slot",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "<b>This command is deprecated and will be removed in FPP 10</b><br><br>Please use 'Trigger Command Preset Slot' command with the Multisync checkbox <br> to select which remote to send it to<br><br>",
+    "name": "Remote Trigger Command Preset Slot"
+  },
+  {
+    "name": "Restart Playlist Item"
+  },
+  {
+    "name": "Resume Playlist"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/scripts",
+        "description": "Script Name",
+        "name": "script",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "adjustable": true,
+        "description": "Script Arguments",
+        "name": "args",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Environment Variables",
+        "name": "env",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "Run Script"
+  },
+  {
+    "name": "Start Next Scheduled Item"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists/playable",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "false",
+        "description": "Repeat",
+        "name": "repeat",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "Protected from Schedule Override",
+        "name": "scheduleProtected",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "name": "Start Playlist"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Item Index",
+        "max": 100,
+        "min": 1,
+        "name": "item",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "default": "false",
+        "description": "Repeat",
+        "name": "repeat",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "Protected from Schedule Override",
+        "name": "scheduleProtected",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "name": "Start Playlist At Item"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "false",
+        "description": "Repeat",
+        "name": "repeat",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "default": "false",
+        "description": "If Not Running",
+        "name": "ifNotRunning",
+        "optional": true,
+        "type": "bool"
+      }
+    ],
+    "name": "Start Playlist At Random Item"
+  },
+  {
+    "description": "Stops all running media was was created via a Command",
+    "name": "Stop All Media"
+  },
+  {
+    "args": [
+      {
+        "description": "After Loop",
+        "name": "loop",
+        "optional": false,
+        "type": "bool"
+      }
+    ],
+    "name": "Stop Gracefully"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/media",
+        "description": "Media",
+        "name": "media",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "description": "Stops the media in the background started via a command",
+    "name": "Stop Media"
+  },
+  {
+    "name": "Stop Now"
+  },
+  {
+    "description": "Restart FPP in Player Mode.",
+    "name": "Switch To Player Mode"
+  },
+  {
+    "description": "Restart FPP in Remote Mode.",
+    "name": "Switch To Remote Mode"
+  },
+  {
+    "args": [
+      {
+        "default": "1000",
+        "description": "Update Interval (ms)",
+        "max": 10000,
+        "min": 100,
+        "name": "UpdateInterval",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/fppd/testing/tests/",
+        "description": "Test Pattern",
+        "name": "TestPattern",
+        "optional": false,
+        "type": "subcommand"
+      }
+    ],
+    "name": "Test Start"
+  },
+  {
+    "name": "Test Stop"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/playlists/playable",
+        "description": "Playlist Name",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "default": "false",
+        "description": "Repeat",
+        "name": "repeat",
+        "optional": true,
+        "type": "bool"
+      },
+      {
+        "contents": [
+          "Gracefully",
+          "After Loop",
+          "Now"
+        ],
+        "default": "Gracefully",
+        "description": "Stop Type",
+        "name": "stop",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "Toggle Playlist"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name",
+        "name": "name",
+        "optional": false,
+        "type": "datalist"
+      }
+    ],
+    "name": "Trigger Command Preset"
+  },
+  {
+    "args": [
+      {
+        "description": "Identifier",
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "MS In Future",
+        "max": 86400000,
+        "min": 0,
+        "name": "ms",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name",
+        "name": "name",
+        "optional": false,
+        "type": "datalist"
+      }
+    ],
+    "name": "Trigger Command Preset In Future"
+  },
+  {
+    "args": [
+      {
+        "description": "Preset Slot",
+        "max": 255,
+        "min": 1,
+        "name": "slot",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "name": "Trigger Command Preset Slot"
+  },
+  {
+    "args": [
+      {
+        "description": "Preset Slot A",
+        "max": 255,
+        "min": 1,
+        "name": "SlotA",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "description": "Preset Slot B",
+        "max": 255,
+        "min": 1,
+        "name": "SlotB",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "description": "Preset Slot C",
+        "max": 255,
+        "min": 1,
+        "name": "SlotC",
+        "optional": false,
+        "type": "int"
+      },
+      {
+        "description": "Preset Slot D",
+        "max": 255,
+        "min": 1,
+        "name": "SlotD",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "name": "Trigger Multiple Command Preset Slots"
+  },
+  {
+    "args": [
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 1",
+        "name": "NameA",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 2",
+        "name": "NameB",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 3",
+        "name": "NameC",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 4",
+        "name": "NameD",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 5",
+        "name": "NameE",
+        "optional": false,
+        "type": "datalist"
+      },
+      {
+        "allowBlanks": false,
+        "contentListUrl": "api/commandPresets?names=true",
+        "description": "Preset Name 6",
+        "name": "NameF",
+        "optional": false,
+        "type": "datalist"
+      }
+    ],
+    "name": "Trigger Multiple Command Presets"
+  },
+  {
+    "args": [
+      {
+        "description": "URL",
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "contents": [
+          "GET",
+          "POST"
+        ],
+        "default": "GET",
+        "description": "Method",
+        "name": "method",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "description": "Post Data",
+        "name": "data",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "name": "URL"
+  },
+  {
+    "args": [
+      {
+        "default": "0",
+        "description": "Volume",
+        "max": 100,
+        "min": -100,
+        "name": "volume",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "Adjust volume either up or down by the given amount. (-100 - 100)",
+    "name": "Volume Adjust"
+  },
+  {
+    "args": [
+      {
+        "default": "0",
+        "description": "Volume",
+        "max": 100,
+        "min": 0,
+        "name": "volume",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "Decreases the volume by the given amount (0 - 100)",
+    "name": "Volume Decrease"
+  },
+  {
+    "args": [
+      {
+        "default": "0",
+        "description": "Volume",
+        "max": 100,
+        "min": 0,
+        "name": "volume",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "Increases the volume by the given amount (0 - 100)",
+    "name": "Volume Increase"
+  },
+  {
+    "args": [
+      {
+        "adjustable": true,
+        "adjustableGetValueURL": "api/fppd/volume?simple=true",
+        "default": "70",
+        "description": "Volume",
+        "max": 100,
+        "min": 0,
+        "name": "volume",
+        "optional": false,
+        "type": "int"
+      }
+    ],
+    "description": "Sets the volume to the specific value. (0 - 100)",
+    "name": "Volume Set"
+  }
+]

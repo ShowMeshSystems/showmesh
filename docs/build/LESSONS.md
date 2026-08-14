@@ -54,6 +54,73 @@ A test that passes whether or not the bug is present is worse than no test, beca
 
 **Rule:** before trusting a test, break the behavior it names and confirm it fails.
 
+## A comment is a claim too, and a comment claiming a test is the worst kind
+
+**Step 8.** Two instances, found in the same review pass, both of them the *fix* for an earlier defect rather than the original defect.
+
+`ui/src/api/client.ts` carried a doc comment saying "client.test.ts proves this client actually waits this long when given a slow response." That test did not exist. The constant it guarded, the browser's command timeout, is the one Step 7 shipped too low, making `unconfirmed` unreachable in the browser. Proved vacuous by lowering it from 35 s to 6 s, below the coordinator's own 20 s confirmation deadline: 389 tests, typecheck, lint and build all passed.
+
+`internal/coordinator/api/fppcommand_handler.go`'s doc comment stated that a primitive "in ADR-024 decision 11's safety class (stopPlaylist is the only member today) proceeds regardless" on an audit-write failure. The struct had no safety-class field at all and the branch fired for all eight primitives, so `startPlaylist` dispatched with degraded attribution.
+
+Both comments were written by someone who understood the rule correctly. Neither was enforced by anything. A reviewer reading the comment sees the rule, ticks it off, and moves on, so an accurate-sounding comment is *more* dangerous than no comment where the code disagrees.
+
+**Rule:** a rule stated only in a comment is a suggestion. If a constant matters, a test asserts it; if a policy has members, the type makes "forgot to decide" impossible to express. And never write that a test proves something without opening the test.
+
+## The rule's author is not exempt from the rule
+
+**Step 8.** The step existed partly to enforce "confirmation rests on evidence that post-dates dispatch and shows the state moved." Its own specification then introduced a violation of exactly that rule.
+
+`nextPlaylistItem` was specified to accept `fpp.status == "idle"` as confirmation, correctly, because the capture measured Next at the last item ending the playlist, which is the command's largest possible effect. What the specification omitted was a pre-dispatch baseline proving the host was not *already* idle. So the input the same capture had already measured two sections earlier — Next while idle, `200 "Next Item Playing"`, nothing happens — reported `confirmed`.
+
+It was found by dispatching it against the bench and watching FPP not move. Not by review, and not by the test named for that branch, which was itself a coin flip: it passed on a race between bcrypt principal creation and a fixed 60 ms sleep, so it could not have caught this.
+
+Two things generalize. Writing the rule down does not confer immunity from breaking it, and the person who most recently wrote it is if anything the likeliest to assume the instance in front of them is covered. And a defect introduced by a specification is invisible to a reviewer who trusts the specification, so it survives exactly the process meant to catch it.
+
+**Rule:** when a predicate has more than one accepted branch, ask what each branch alone would confirm if the command had done nothing. Then verify against the system, because that is the only place this class shows up.
+
+## What the operator reads and what a maintainer needs are different documents
+
+**Step 8.** The first shipped strings cited repo paths at the operator. A warning in the UI read `"This is the last item in the current playlist (1/1) — pressing Next Item will END the show, the same way Stop does, not skip within it (docs/bench/fpp-command-vocabulary.md section 3.5)."` A confirmed graceful stop rendered a four-line paragraph ending in another section reference.
+
+The citations were not sloppiness. They were traceability, put there deliberately so a maintainer could find the evidence behind a behaviour, and they ended up on the wire because the seam specifications cited sources and the implementers put the citations in the strings rather than the comments. It read as diligence the whole way.
+
+Found by the owner loading the real page. No test could have objected: every assertion was on `role` and `textContent`, and both were correct.
+
+**Rule:** an operator-facing string states what happened and what to do about it, in one or two short sentences, with provenance compact and last. The reasoning belongs in the comment beside it. Enforce it with a guard test rather than intention — this project now has two, one walking the Go AST and one the TypeScript AST, failing on any repo path, `.md` reference, ADR number, or `section N` in a user-visible string.
+
+## A plan may name an external system's vocabulary only from that system's own output
+
+**Step 8**, which is the step created to pay off Step 7's version of this. Step 7's plan named the FPP command `Stop Playlist`, which FPP does not have, and named the confirmation signal `fpp.status.player_state`, which the collector does not emit. Both read as entirely plausible and both cost implementation time.
+
+So Step 8 made the capture a deliverable, taken before any command was named. It overturned four more assumptions that were equally plausible:
+
+- **An external system's `200` means its dispatcher ran, and nothing more.** `Start Playlist` against a playlist that does not exist answers `200 "Playlist Starting"` and the host stays idle. Pause, Resume, Next and Prev all answer cheerfully while idle and do nothing. Reading the implementation shows why: the success string is constructed unconditionally, after a call whose failure is never consulted.
+- **An argument's name is not its specification.** `ifNotRunning` reads as "only start if nothing is running." It means "if *this* playlist is not the one already running", so it does nothing whatsoever to protect a different running show.
+- **A command's obvious confirmation may be unreachable.** A graceful stop's terminal state is bounded by the currently playing item's runtime, so it cannot confirm on `idle` within any deadline the coordinator can choose.
+- **A command can be a stop button under another name.** `Next Playlist Item` at the last item ends the playlist, and FPP answers `Next Item Playing` either way.
+
+None of these is discoverable by reading, and each would have shipped as a defect.
+
+**Rule:** capture the vocabulary from the system, then write the plan. Where a command's effect is not observable through a signal already collected, it does not ship, and the exclusion is recorded with its reason rather than omitted.
+
+## A distinction the operator must see cannot be tested by asserting text
+
+**Step 8.** Every visual state in the new command controls was a CSS class with no rule in any stylesheet: the warning that pressing Next will end the show, and the difference between confirmed and unconfirmed. So in a browser the warning rendered as ordinary body text and the two outcomes were identical paragraphs differing by one leading word. `text-muted` *was* styled, so the de-emphasized states were the only visually distinguished ones, exactly backwards.
+
+Every test passed, because jsdom has no computed style and the tests asserted `role` and `textContent`, which were correct.
+
+This is [the deployment-environment lesson](#a-test-environment-that-differs-from-the-deployment-environment-reports-success-on-exactly-that-difference) in its quietest form: nothing was broken, something was merely invisible.
+
+**Rule:** if the operator is meant to notice a difference, assert it somewhere a stylesheet exists, or check the built artifact. Correct text in an unstyled element is not a delivered distinction.
+
+## A client that branches on the server's prose has left the contract
+
+**Step 8.** The command endpoint returns two different `409`s from one guard: a different playlist is playing, or the evidence needed to decide is not current. Both carried the same problem `type` and differed only in their human-readable detail, so the Operator UI told them apart by matching a substring of the server's English.
+
+Reword that sentence and the UI silently offers "Start anyway (replace what is currently playing)" for the case where the coordinator just said it does not know what is playing. No test would notice, because the prose the test asserts is the prose the code matches.
+
+**Rule:** if a client must distinguish two responses, they differ in a machine-readable field. Prose is for the operator, never for control flow. Adding a problem type is additive under [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md), so the cost of doing it properly is close to zero.
+
 ## Absent evidence is stated, never omitted
 
 **Step 3.** A field the system cannot report carries a state and a reason. A missing field renders as blank, and blank reads as fine.

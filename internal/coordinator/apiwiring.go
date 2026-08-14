@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -473,6 +474,30 @@ func (l multiCollectorStatusLister) CollectorStatuses(ctx context.Context) ([]ap
 		out = append(out, states...)
 	}
 	return out, nil
+}
+
+// --- api.FPPPollNudger over *collector.Runner ---
+
+// fppRunnerNudger adapts *collector.Runner to api.FPPPollNudger. Nudge is
+// keyed by [collector.Collector.ID()], which for
+// internal/coordinator/collector/fpp.Collector is exactly the FPP instance
+// ID fpp.New was constructed with (see the fppCollector construction loop
+// in Run, below) — so NudgePoll(instanceID) reaches precisely the fpp-rest
+// collector for that one instance, never any other instance's own poll
+// loop. It also never reaches internal/coordinator/collector/fppmqtt's
+// collector: that collector's own ID() is the single fixed source name
+// "fpp-mqtt" (see fppMQTTCollectorSourceID and fppmqtt's render.go), not
+// an instance ID, so it can never match an instanceID lookup here — which
+// is the correct behavior regardless: fppmqtt.Collector.Poll only ever
+// renders whatever its message store already holds (that package's own
+// doc comment, "Poll never touches the network"), so nudging it could not
+// fetch anything sooner in any case.
+type fppRunnerNudger struct {
+	runner *collector.Runner
+}
+
+func (n fppRunnerNudger) NudgePoll(instanceID string) bool {
+	return n.runner.Nudge(instanceID)
 }
 
 // --- collector.Sink over *store.Store, poking the SSE hub ---

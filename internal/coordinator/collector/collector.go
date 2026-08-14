@@ -95,12 +95,34 @@ type Sink interface {
 	RecordObservations(ctx context.Context, observations []observation.Observation, complete bool)
 }
 
-// entry pairs one Collector with its own poll interval, so different
-// sources can be polled at different cadences from a single Runner.
+// entry pairs one Collector with its own poll interval and its own
+// out-of-band poll request channel (see [Runner.Nudge]), so different
+// sources can be polled at different cadences from a single Runner, and a
+// caller elsewhere in the process can ask any one of them to poll sooner
+// than its own cadence without touching the others.
 type entry struct {
 	collector Collector
 	interval  time.Duration
+
+	// nudge is buffered 1: a pending, not-yet-consumed request coalesces
+	// with a second one rather than queuing (see Nudge) — this collector
+	// is about to poll anyway, and a second "poll now" before the first
+	// has even run adds nothing.
+	nudge chan struct{}
 }
+
+// DefaultNudgeMinInterval is [Runner]'s default minimum spacing between two
+// accepted [Runner.Nudge] calls for the same collector id. SHOWMESH
+// HYPOTHESIS, NOT MEASURED — RES-009 (failure-mode testing) owns real
+// evidence; this exists only to keep a burst of dispatched commands (or,
+// once Step 9 ships, a macro's own sequence of primitives) from turning
+// into a poll storm against one live FPP host, per OBSERVABILITY section
+// 5's "monitoring cannot impair show devices." Chosen short enough that
+// back-to-back commands touching DIFFERENT instances are each still
+// nudged (Nudge is keyed per id, not global), and long enough that two
+// commands touching the SAME instance within one confirmation wait cannot
+// each demand their own out-of-band poll.
+const DefaultNudgeMinInterval = 2 * time.Second
 
 // Runner owns the lifecycle of a set of Collectors: it polls each on its
 // own cadence, delivers every poll's observations to a Sink, and stops all
@@ -116,13 +138,55 @@ type Runner struct {
 	sink    Sink
 	logger  *slog.Logger
 	entries []entry
+
+	nudgeMinInterval time.Duration
+	now              func() time.Time
+
+	// mu guards nudgeChans and lastNudgeAt below — the only Runner state
+	// [Nudge] touches, and the only Runner state ever written after Run
+	// has started (entries itself is only ever appended by Add, which must
+	// be called before Run — see Add's own doc comment). Nudge can be
+	// called concurrently with itself, from any number of goroutines
+	// (concurrent command dispatches), which entries' own single-threaded
+	// construction never has to tolerate.
+	mu          sync.Mutex
+	nudgeChans  map[string]chan struct{}
+	lastNudgeAt map[string]time.Time
+}
+
+// RunnerOption configures optional [Runner] behavior not every caller needs
+// to override — see [WithNudgeMinInterval] and [WithNudgeClock].
+type RunnerOption func(*Runner)
+
+// WithNudgeMinInterval overrides [DefaultNudgeMinInterval].
+func WithNudgeMinInterval(d time.Duration) RunnerOption {
+	return func(r *Runner) { r.nudgeMinInterval = d }
+}
+
+// WithNudgeClock overrides the clock [Runner.Nudge]'s rate limiting reads.
+// Defaults to time.Now; production has no reason to override this — it
+// exists so a test can prove the rate limit's boundary deterministically
+// instead of racing real wall-clock time.
+func WithNudgeClock(now func() time.Time) RunnerOption {
+	return func(r *Runner) { r.now = now }
 }
 
 // NewRunner constructs a Runner that delivers to sink and logs through
 // logger. logger must not be nil; pass slog.Default() if the caller has no
 // specific logger.
-func NewRunner(sink Sink, logger *slog.Logger) *Runner {
-	return &Runner{sink: sink, logger: logger}
+func NewRunner(sink Sink, logger *slog.Logger, opts ...RunnerOption) *Runner {
+	r := &Runner{
+		sink:             sink,
+		logger:           logger,
+		nudgeMinInterval: DefaultNudgeMinInterval,
+		now:              time.Now,
+		nudgeChans:       make(map[string]chan struct{}),
+		lastNudgeAt:      make(map[string]time.Time),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Add registers a Collector to be polled every interval once Run starts.
@@ -137,7 +201,59 @@ func (r *Runner) Add(c Collector, interval time.Duration) {
 	if interval <= 0 {
 		panic("collector: Add: interval must be positive")
 	}
-	r.entries = append(r.entries, entry{collector: c, interval: interval})
+	ch := make(chan struct{}, 1)
+	r.entries = append(r.entries, entry{collector: c, interval: interval, nudge: ch})
+	r.nudgeChans[c.ID()] = ch
+}
+
+// Nudge requests an out-of-band poll of the collector registered under id,
+// as soon as its current (or next) ordinary Poll call returns, instead of
+// waiting out its own interval. It changes WHEN that collector's next
+// ordinary poll happens and nothing else: the observations it produces,
+// and how a caller decides what they mean, are entirely unaffected —
+// Nudge itself never manufactures an observation and is not evidence of
+// anything.
+//
+// Nudge is rate-limited per id via [DefaultNudgeMinInterval] (or
+// [WithNudgeMinInterval]'s override): a call for an id nudged more
+// recently than that interval is suppressed. So is a call for an id with
+// an already-pending, not-yet-consumed nudge (the buffered channel is full
+// — see [entry.nudge]'s doc comment), and a call for an id [Add] was never
+// given. None of these are errors: Nudge returns false and the caller's
+// only correct response is to do nothing — the collector's own scheduled
+// cadence is entirely unaffected either way. This degrade-on-suppression
+// behavior is deliberate, not a limitation to work around: see this
+// method's callers for why a suppressed or unknown nudge must never become
+// a failure the operator sees.
+//
+// Safe to call concurrently, from any goroutine, at any time, including
+// before Run starts (the request is simply queued for the collector's
+// first poll, which happens immediately on Run's own start regardless —
+// see loop) and after ctx has been cancelled (a no-op once nothing is
+// listening any more; the buffered send never blocks).
+func (r *Runner) Nudge(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	ch, ok := r.nudgeChans[id]
+	if !ok {
+		return false
+	}
+
+	now := r.now()
+	if last, seen := r.lastNudgeAt[id]; seen && now.Sub(last) < r.nudgeMinInterval {
+		return false
+	}
+
+	select {
+	case ch <- struct{}{}:
+		r.lastNudgeAt[id] = now
+		return true
+	default:
+		// A nudge is already queued for this id and has not been consumed
+		// yet — coalesce rather than block or accumulate a second one.
+		return false
+	}
 }
 
 // Run polls every registered collector on its own cadence until ctx is
@@ -161,22 +277,33 @@ func (r *Runner) Run(ctx context.Context) {
 		wg.Add(1)
 		go func(e entry) {
 			defer wg.Done()
-			r.loop(ctx, e.collector, e.interval)
+			r.loop(ctx, e)
 		}(e)
 	}
 	wg.Wait()
 }
 
 // loop drives one collector: poll immediately, then wait interval (or
-// ctx.Done) before polling again. An immediate first poll means a
-// freshly-started collector's evidence appears without waiting a full
-// interval, which matters for Step 3's not_collected story: an operator
-// checking the API right after startup should see a real first attempt's
-// result, not "not collected" for up to a full poll interval longer than
-// necessary.
-func (r *Runner) loop(ctx context.Context, c Collector, interval time.Duration) {
+// ctx.Done, or a [Nudge] for this same entry) before polling again. An
+// immediate first poll means a freshly-started collector's evidence
+// appears without waiting a full interval, which matters for Step 3's
+// not_collected story: an operator checking the API right after startup
+// should see a real first attempt's result, not "not collected" for up to
+// a full poll interval longer than necessary.
+//
+// A nudge received while this loop is between the timer's start and its
+// fire (the only window it can be observed at all — see e.nudge's own doc
+// comment for why a nudge received DURING Poll itself is still honored,
+// just slightly delayed) cuts interval's remaining wait short and loops
+// back to poll immediately, exactly like an ordinary tick — the collector
+// this delivers to has no notion of "why now", only "poll now", which is
+// what keeps this the smallest addition that fits Poll's existing
+// contract (never called concurrently with itself for the same
+// collector — see the fpp package's own serialization contract, unaffected
+// by this: a nudge changes only how soon the NEXT call happens).
+func (r *Runner) loop(ctx context.Context, e entry) {
 	for {
-		obs, complete := c.Poll(ctx)
+		obs, complete := e.collector.Poll(ctx)
 		if ctx.Err() != nil {
 			// Cancelled during (or exactly at the end of) this Poll call:
 			// do not deliver a possibly-partial result from a shutdown in
@@ -185,12 +312,19 @@ func (r *Runner) loop(ctx context.Context, c Collector, interval time.Duration) 
 		}
 		r.sink.RecordObservations(ctx, obs, complete)
 
-		timer := time.NewTimer(interval)
+		timer := time.NewTimer(e.interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-e.nudge:
+			// Deliberately no timer.Stop() drain: this timer is discarded
+			// either way (a fresh one is created on the next iteration),
+			// and Stop's return value only matters to a caller that reuses
+			// the timer or must free its channel for GC before the timer
+			// fires — neither applies here.
+			timer.Stop()
 		}
 	}
 }

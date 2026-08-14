@@ -49,6 +49,24 @@ async function main() {
         'gen-api-types: unexpected network fetch — api/openapi.yaml must not reference remote schemas',
       )
     },
+    // openapi-typescript defaults this to true, which emits any property
+    // carrying a `default:` as NON-optional. That assumption is written for
+    // RESPONSES, where the server has already filled the value in, and it
+    // inverts the meaning on a REQUEST body: it forces a client to send
+    // fields the server documents as optional.
+    //
+    // Step 8 hit this for real. FPPCommandRequest marks only `playlist`
+    // required, and api/openapi.yaml's own prose says "Absent, or `{}`,
+    // means every optional parameter takes its documented default" — while
+    // the generated type demanded `repeat` and `ifBusy` on every
+    // startPlaylist, and `afterLoop` on every stopPlaylistGracefully. A
+    // generated type that contradicts both the schema's own `required` list
+    // and the server's actual behaviour is exactly the ADR-015 failure the
+    // generator exists to prevent, so `required` alone decides optionality
+    // here. Every `default:` in the document is on a request param or a
+    // query parameter; none is on a response field, so nothing downstream
+    // loses a guarantee it had.
+    defaultNonNullable: false,
   })
   const output = banner + astToString(ast)
 

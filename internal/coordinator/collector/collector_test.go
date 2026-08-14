@@ -305,3 +305,188 @@ func (s *staticCollector) ID() string { return s.id }
 func (s *staticCollector) Poll(ctx context.Context) ([]observation.Observation, bool) {
 	return s.obs, true
 }
+
+// --- Runner.Nudge: the owner's 2026-08-13 post-dispatch poll nudge. These
+// tests exercise the mechanism this package now offers generically
+// (internal/coordinator/api/fppcommand_handler.go is the one production
+// caller, via internal/coordinator/apiwiring.go's fppRunnerNudger); none of
+// them know or care that the real caller is a command dispatch — Nudge's
+// whole contract is that it means the same thing regardless of caller. ---
+
+// waitForCalls blocks until c.calls reaches at least want, or fails t after
+// a generous deadline — the identical wait shape
+// TestRunnerPollsImmediatelyOnStart and TestRunnerPollsOnCadence above
+// already hand-roll once each; factored out here because the nudge tests
+// below add three more call sites for it.
+func waitForCalls(t *testing.T, c *countingCollector, want int64) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if c.calls.Load() >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("Poll called only %d times within 2s, want at least %d", c.calls.Load(), want)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+// TestRunnerNudgeTriggersPollForItsOwnCollectorOnly proves Nudge is scoped
+// per id: nudging collector "one" produces an extra poll for "one" and
+// none at all for "two", even though both share the same Runner and both
+// are registered with an interval long enough that neither would poll
+// again on its own before this test's own deadline.
+func TestRunnerNudgeTriggersPollForItsOwnCollectorOnly(t *testing.T) {
+	c1 := &countingCollector{id: "one"}
+	c2 := &countingCollector{id: "two"}
+	sink := &fakeSink{}
+	r := NewRunner(sink, testLogger())
+	r.Add(c1, time.Hour)
+	r.Add(c2, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	waitForCalls(t, c1, 1) // Run's own immediate first poll, for both.
+	waitForCalls(t, c2, 1)
+
+	if !r.Nudge("one") {
+		t.Fatalf(`Nudge("one") = false, want true`)
+	}
+	waitForCalls(t, c1, 2)
+
+	// Give a wrongly-broad nudge implementation time to (incorrectly) poll
+	// "two" as well before asserting it never did.
+	time.Sleep(100 * time.Millisecond)
+	if got := c2.calls.Load(); got != 1 {
+		t.Errorf(`collector "two" was polled %d times after Nudge("one"), want 1 (a nudge for one instance must never affect another)`, got)
+	}
+}
+
+// TestRunnerNudgeUnknownIDIsSuppressedNotAnError proves Nudge for an id no
+// Add call ever registered returns false rather than panicking or blocking
+// — the exact "unknown nudge falls back to ordinary behavior" contract
+// [FPPPollNudger]'s doc comment (internal/coordinator/api) names, proven
+// here at the one place that fact is actually implemented.
+func TestRunnerNudgeUnknownIDIsSuppressedNotAnError(t *testing.T) {
+	r := NewRunner(&fakeSink{}, testLogger())
+	r.Add(&countingCollector{id: "known"}, time.Hour)
+
+	if r.Nudge("unknown") {
+		t.Errorf(`Nudge("unknown") = true, want false — no collector was ever registered under that id`)
+	}
+}
+
+// TestRunnerNudgeRateLimitedPerID is this task's own required proof: a
+// second nudge for the SAME id inside [DefaultNudgeMinInterval] (here,
+// [WithNudgeMinInterval]'s override) is suppressed, produces no extra
+// poll, and — critically — is not an error: the collector's own scheduled
+// cadence remains exactly what would confirm a command whose own nudge got
+// suppressed. [WithNudgeClock] decouples the RATE LIMIT's clock from the
+// real wall-clock timers driving each collector's own poll loop (already
+// proven correct, with no fake clock at all, by TestRunnerPollsOnCadence
+// and friends above), so the rate-limit boundary itself can be asserted
+// deterministically rather than raced against a real 2-second sleep.
+func TestRunnerNudgeRateLimitedPerID(t *testing.T) {
+	c := &countingCollector{id: "test"}
+	sink := &fakeSink{}
+
+	var clockMu sync.Mutex
+	fakeNow := time.Unix(1_700_000_000, 0)
+	clock := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return fakeNow
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		fakeNow = fakeNow.Add(d)
+	}
+
+	r := NewRunner(sink, testLogger(), WithNudgeMinInterval(2*time.Second), WithNudgeClock(clock))
+	r.Add(c, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	waitForCalls(t, c, 1) // Run's own immediate first poll.
+
+	if !r.Nudge("test") {
+		t.Fatalf("first Nudge = false, want true (no prior nudge to rate-limit against)")
+	}
+	waitForCalls(t, c, 2)
+
+	// Fake clock has not advanced: still inside the 2s window.
+	if r.Nudge("test") {
+		t.Errorf("second Nudge inside the rate-limit window = true, want false (suppressed)")
+	}
+	time.Sleep(50 * time.Millisecond) // let a wrongly-accepted nudge fire, if it would
+	if got := c.calls.Load(); got != 2 {
+		t.Errorf("Poll called %d times after a rate-limited nudge, want exactly 2 (no extra poll; the command that "+
+			"requested it must still confirm off the collector's own scheduled cadence)", got)
+	}
+
+	// Advance past the window: a nudge must be accepted again.
+	advance(3 * time.Second)
+	if !r.Nudge("test") {
+		t.Errorf("Nudge after the rate-limit window elapsed = false, want true")
+	}
+	waitForCalls(t, c, 3)
+}
+
+// TestRunnerNudgeReturnsImmediatelyWhileCollectorPollIsInFlight proves
+// design constraint 2 (the nudge must never let a dispatch path hang
+// unboundedly): Nudge does not wait for the collector's own in-flight Poll
+// call — the exact call a nudge is meant to make happen SOONER, which is
+// also the one call a naive implementation might be tempted to wait on.
+func TestRunnerNudgeReturnsImmediatelyWhileCollectorPollIsInFlight(t *testing.T) {
+	c := &countingCollector{id: "test"}
+	c.mu.Lock()
+	c.blocking = true
+	c.release = make(chan struct{})
+	c.mu.Unlock()
+
+	sink := &fakeSink{}
+	r := NewRunner(sink, testLogger())
+	r.Add(c, time.Millisecond) // interval far shorter than how long Poll blocks
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	// Let the first (blocked) Poll call establish itself.
+	time.Sleep(100 * time.Millisecond)
+
+	start := time.Now()
+	r.Nudge("test")
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("Nudge took %v while a Poll call was in flight, want it to return immediately (never block on network I/O or on Poll completing)", elapsed)
+	}
+
+	close(c.release)
+	cancel()
+	<-done
+}

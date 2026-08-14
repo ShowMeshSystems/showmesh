@@ -87,9 +87,36 @@ type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfi
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
+type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
+
+/**
+ * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
+ * via `Pick<T, Exclude<keyof T, K>>`, and `keyof` on a union type yields
+ * only the KEYS COMMON to every member, so a naive `Omit` over
+ * `SchemaFPPCommandRequest` (api/openapi.yaml's discriminated `oneOf` on
+ * `action`) would collapse every variant's own distinct `action`
+ * literal/`params` shape down to whatever the branches happen to share.
+ * This distributes the `Omit` over each union member individually instead
+ * (a standard TS idiom: `T extends unknown ? ... : never` forces
+ * distribution), which is what makes [dispatchFPPCommand]'s own
+ * `request` parameter still a real discriminated union — the whole point
+ * of Step 8's `oneOf` fix (see api/openapi.yaml's own FPPCommandRequest
+ * description): passing `{action: 'startPlaylist', params: {playist:
+ * 'x'}}` (a typo'd `playlist`) must fail to compile, not decay to
+ * `Record<string, never>`.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
+/**
+ * Every variant of [SchemaFPPCommandRequest] MINUS `idempotencyKey` — the
+ * one field every caller of [ApiStore.dispatchFPPCommand] does NOT supply,
+ * because that method mints it itself (a fresh `randomUUIDv4()` per call,
+ * never caller-supplied — see that method's own doc comment).
+ */
+type FPPCommandDispatchArgs = DistributiveOmit<SchemaFPPCommandRequest, 'idempotencyKey'>
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -478,37 +505,105 @@ export class ApiStore {
   }
 
   /**
-   * `POST /api/v1/fpp/{instanceId}/commands` with `{"action":"stopPlaylist"}`
-   * (Step 7 seam C, ADR-001/ADR-003) — this application's first write.
-   * Mints a fresh idempotency key per call via `randomUUIDv4()` (./uuid.ts)
-   * — NOT a bare `crypto.randomUUID()` call, which is secure-context-only
-   * and is simply absent (not thrown, not caught) on the plain `http://`
-   * origin this UI actually deploys to (ADR-022; see uuid.ts's own doc
-   * comment for the full story) — (RES-015 section 7.3: FPP supplies
-   * nothing a coordinator could derive one from, so the CALLER mints it —
-   * the same rule showmeshctl's own `stop-playlist` subcommand follows
-   * independently). Returns the
-   * decoded `command` object as-is — including its own `outcome` field,
-   * which is "confirmed" or "unconfirmed", NEVER inferred from this
-   * call's own success: a resolved `Promise` here means the HTTP round
-   * trip succeeded, not that the command's effect was confirmed. The
-   * caller (FPPDetail.tsx) is responsible for rendering outcome
+   * `POST /api/v1/fpp/{instanceId}/commands` (Step 7 seam C, Step 8,
+   * ADR-001/ADR-003) — the one dispatch path every FPP primitive control
+   * (docs/bench/fpp-command-vocabulary.md section 4's eight-member
+   * registry) shares. Mints a fresh idempotency key per call via
+   * `randomUUIDv4()` (./uuid.ts) — NOT a bare `crypto.randomUUID()` call,
+   * which is secure-context-only and is simply absent (not thrown, not
+   * caught) on the plain `http://` origin this UI actually deploys to
+   * (ADR-022; see uuid.ts's own doc comment for the full story) —
+   * (RES-015 section 7.3: FPP supplies nothing a coordinator could derive
+   * one from, so the CALLER mints it — the same rule showmeshctl's own
+   * subcommands follow independently). `params` is passed through
+   * UNTYPED (this method's own signature, not `postJson`'s, which already
+   * takes `body: unknown`): api/openapi.yaml declares `FPPCommandRequest
+   * .params` as a bare `object` with no nested JSON Schema `properties`
+   * (the per-action shape lives in prose, in that field's own
+   * description, not in the schema), so openapi-typescript generates
+   * `Record<string, never>` for it — a type that, taken literally, no
+   * non-empty object satisfies. Typing this method's own `params`
+   * parameter against that generated type would make every real call
+   * (`{ playlist: 'x', repeat: false, ifBusy: 'refuse' }` and so on) a
+   * compile error, so this method deliberately does not attempt to; the
+   * per-action shape is instead enforced ONCE, server-side, exactly as
+   * strictly (`decodeFPPCommandParams`, fppcommand_primitives.go: absent
+   * key, explicit null, and empty string are three different rejections)
+   * — this client sends what the caller asked for and reports the
+   * server's own 400 back through `describeApiError` like any other
+   * validation failure, never re-validates a shape it cannot express in
+   * TypeScript.
+   *
+   * `request` is now REAL, typed, per-action data (`FPPCommandDispatchArgs`
+   * — api/openapi.yaml's own discriminated `oneOf` on `action`, generated
+   * from the schema, minus `idempotencyKey`), not an untyped
+   * `Record<string, unknown>`. Before this fix, api/openapi.yaml declared
+   * `FPPCommandRequest.params` as a bare `object` with no nested JSON
+   * Schema `properties` (the per-action shape lived only in prose), so
+   * openapi-typescript generated `Record<string, never>` for it — a type
+   * that, taken literally, no non-empty object satisfies — and this
+   * method's own `params` parameter had to be typed `Record<string,
+   * unknown>` by hand to avoid making every real call a compile error.
+   * That meant the ONE place this endpoint's entire request shape was
+   * checked was server-side (`decodeFPPCommandParams`,
+   * fppcommand_primitives.go) — ADR-015 satisfied in form ("generated from
+   * the Go types") but not in substance (nothing generated could actually
+   * express a non-empty params object). Now each of the eight callers
+   * below passes a `request` literal TypeScript checks against ITS OWN
+   * variant's real shape — a misspelled `playlist` (e.g. `paylist`), a
+   * wrong type, or an extra key is a compile error, not a 400 discovered
+   * at runtime.
+   *
+   * `params` is OMITTED from the request body entirely (not sent as
+   * `{}`) whenever the caller's own object literal does not set it —
+   * capture section 1.4/spec section 2's own rule, "absent, null, and
+   * empty are three different things," applies to THIS client's own
+   * outbound request exactly as much as to the server it is calling: a
+   * zero-argument primitive (stopPlaylist, pausePlaylist, resumePlaylist,
+   * nextPlaylistItem, prevPlaylistItem) has never sent a `params` key at
+   * all (unchanged from Step 7 — `NoParamsFPPCommandRequest.params` is
+   * generated OPTIONAL, so the callers below simply never set it), and
+   * this method keeps that exact wire shape rather than switching to
+   * `params: {}` merely because a generated type could now express it.
+   *
+   * Returns the decoded `command` object as-is — including its own
+   * `outcome` field, which is "confirmed", "unconfirmed", or (the one
+   * accepted replay race) empty, NEVER inferred from this call's own
+   * success: a resolved `Promise` here means the HTTP round trip
+   * succeeded, not that the command's effect was confirmed. Every caller
+   * (the FPP*Control components) is responsible for rendering outcome
    * honestly, matching ADR-003 exactly the way the CLI's own
    * `reportFPPCommandResult` does. Unlike login/logout/claimBootstrap,
    * this does NOT call `wakeReadLoop()` — a command dispatch is not a
    * credential change, and has no reason to interrupt the SSE connection.
+   *
+   * FPP_COMMAND_REQUEST_TIMEOUT_MS, never the default request budget
+   * every other call here uses (Step 7 seam C review defect 1): this is a
+   * long request by design, since the coordinator waits out its own
+   * confirmation deadline before answering — see that constant's own doc
+   * comment. Every primitive shares ONE client-side budget here because
+   * client.ts cannot import the Go per-primitive `ConfirmDeadline`
+   * functions (module boundary, see FPP_COMMAND_REQUEST_TIMEOUT_MS's own
+   * comment) and — per fppcommand_primitives.go's own
+   * `fppConfirmDeadlineUnchanged` — every registered primitive uses the
+   * SAME server-side deadline today; the day a primitive's own deadline
+   * diverges, this client's budget still bounds it correctly because
+   * FPP_COMMAND_REQUEST_TIMEOUT_MS was derived from the coordinator's
+   * configured base plus margin, not from any one primitive's number.
    */
-  async stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+  private async dispatchFPPCommand(
+    instanceId: string,
+    request: FPPCommandDispatchArgs,
+  ): Promise<FPPCommandResult> {
     const controller = this.beginSideCall()
     try {
-      // FPP_COMMAND_REQUEST_TIMEOUT_MS, never the default request budget
-      // every other call here uses (Step 7 seam C review defect 1): this
-      // is a long request by design, since the coordinator waits out its
-      // own confirmation deadline before answering — see that constant's
-      // own doc comment.
+      const body: SchemaFPPCommandRequest = {
+        ...request,
+        idempotencyKey: randomUUIDv4(),
+      } as SchemaFPPCommandRequest
       const resp = await this.client.postJson<SchemaFPPCommandResponse>(
         `/fpp/${encodeURIComponent(instanceId)}/commands`,
-        { action: 'stopPlaylist', idempotencyKey: randomUUIDv4() },
+        body,
         controller.signal,
         FPP_COMMAND_REQUEST_TIMEOUT_MS,
       )
@@ -516,6 +611,87 @@ export class ApiStore {
     } finally {
       this.endSideCall(controller)
     }
+  }
+
+  /** `{"action":"stopPlaylist"}` — unchanged from Step 7. See [dispatchFPPCommand]. */
+  async stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'stopPlaylist' })
+  }
+
+  /**
+   * `{"action":"startPlaylist","params":{playlist,repeat,ifBusy}}`
+   * (Step 8, capture sections 4/5). `ifBusy` defaults to `"refuse"`
+   * SERVER-side when omitted, but this method always sends it explicitly
+   * — the caller (FPPStartPlaylistControl) decides "refuse" vs "replace"
+   * per attempt, and sending it explicitly makes that choice visible in
+   * this method's own signature rather than relying on a default the
+   * caller has to remember exists. A `409` here means a DIFFERENT
+   * playlist is confirmed playing (or the evidence to decide that is not
+   * current) — the caller renders `err.message` (the coordinator's own
+   * `detail`, which already names what is playing, per
+   * fppStartPlaylistBusyProblem) and offers the explicit `ifBusy:
+   * "replace"` retry; this method never retries on its own.
+   */
+  async startFPPPlaylist(
+    instanceId: string,
+    playlist: string,
+    repeat: boolean,
+    ifBusy: 'refuse' | 'replace',
+  ): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'startPlaylist', params: { playlist, repeat, ifBusy } })
+  }
+
+  /**
+   * `{"action":"stopPlaylistGracefully","params":{afterLoop}}` (capture
+   * section 3.3/4). Confirmed does NOT mean stopped — see
+   * FPPStopPlaylistGracefullyControl's own comment; this method itself
+   * does nothing beyond dispatch, exactly like every other action here.
+   */
+  async stopFPPPlaylistGracefully(instanceId: string, afterLoop: boolean): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'stopPlaylistGracefully', params: { afterLoop } })
+  }
+
+  /** `{"action":"pausePlaylist"}`, no params — see [dispatchFPPCommand]. */
+  async pauseFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'pausePlaylist' })
+  }
+
+  /** `{"action":"resumePlaylist"}`, no params — see [dispatchFPPCommand]. */
+  async resumeFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'resumePlaylist' })
+  }
+
+  /**
+   * `{"action":"nextPlaylistItem"}`, no params. Capture section 3.5: at
+   * the last item, one Next Playlist Item ENDS the playlist — this
+   * method sends the same command regardless of playlist position; the
+   * caller (FPPNextPlaylistItemControl) is what looks at
+   * `fpp.playlist.index`/`fpp.playlist.count` to warn before the click,
+   * since this method has no observation evidence to consult from here.
+   */
+  async nextFPPPlaylistItem(instanceId: string): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'nextPlaylistItem' })
+  }
+
+  /** `{"action":"prevPlaylistItem"}`, no params — see [dispatchFPPCommand]. */
+  async prevFPPPlaylistItem(instanceId: string): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'prevPlaylistItem' })
+  }
+
+  /**
+   * `{"action":"setVolume","params":{volume}}` (capture section 3.6/4).
+   * `volume` is sent exactly as the caller supplied it — this method does
+   * NOT clamp or coerce (capture section 1.5: FPP itself silently clamps
+   * an out-of-range value and coerces a garbage one to 0, and this
+   * project's own standing rule is not to repeat that). Range validation
+   * (0-100) lives in FPPSetVolumeControl, client-side, so the operator
+   * sees why a value was rejected before a round trip, and the server
+   * (`fppcommand.ValidateVolume`) enforces the same rule independently —
+   * two checks that must agree are safer than one the client trusts
+   * blindly.
+   */
+  async setFPPVolume(instanceId: string, volume: number): Promise<FPPCommandResult> {
+    return this.dispatchFPPCommand(instanceId, { action: 'setVolume', params: { volume } })
   }
 
   /**

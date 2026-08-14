@@ -1,11 +1,14 @@
 package fppcommand
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -74,9 +77,13 @@ func refuseRedirects(*http.Request, []*http.Request) error {
 }
 
 // Client dispatches FPP's own native lifecycle commands against ONE
-// configured FPP instance's base URL, over GET at /api/command/... — the
-// exact shape internal/coordinator/collector/fpp's own doc comment names
-// as the reason that package forces CheckRedirect. A Client is built
+// configured FPP instance's base URL, over POST at /api/command with a
+// JSON body — see [Client.Invoke] and package doc for why this is POST
+// rather than the GET-positional-path form
+// internal/coordinator/collector/fpp's own doc comment names as the
+// reason that package forces CheckRedirect; this package forces the
+// identical guard on its own POST for the identical reason, a followed
+// redirect dispatching a second, FPP-invoked command. A Client is built
 // fresh per dispatch by internal/coordinator/api (commands are rare;
 // there is no poll loop here to amortize a shared connection pool
 // against), so it carries no mutable state beyond its own configuration.
@@ -130,20 +137,32 @@ func New(baseURL string, opts Options) (*Client, error) {
 
 // Outcome is FPP's own HTTP-level response to one dispatched command —
 // NOT confirmation that the command took effect. ADR-003: a 200 here is
-// never success on its own; internal/coordinator/api confirms by evidence
-// against the collector separately, and this type carries nothing that
-// could be mistaken for that confirmation.
+// never success on its own, and docs/bench/fpp-command-vocabulary.md
+// section 2 measured exactly how little a 200 means: FPP constructs its
+// success body unconditionally, without consulting whether the command
+// actually did anything. Captured live: "Start Playlist/no-such-playlist"
+// returned 200 "Playlist Starting" while the host stayed idle, and
+// "Pause Playlist", "Resume Playlist", "Next Playlist Item", and "Prev
+// Playlist Item" all returned 200 with cheerful, specific-sounding bodies
+// ("Playlist Paused", "Playlist Restarted", "Next Item Playing", "Prev
+// Item Playing") while idle and changing nothing. internal/coordinator/api
+// confirms by evidence against the collector separately, on evidence that
+// post-dates dispatch, and this type carries nothing that could be
+// mistaken for that confirmation.
 type Outcome struct {
-	// StatusCode is FPP's own response status. A 2xx means FPP accepted
-	// and executed the command synchronously (FPP's command endpoint does
-	// not queue or defer); it is Invoke's caller's decision what a non-2xx
-	// means for the command's own lifecycle, not this package's.
+	// StatusCode is FPP's own response status. A 2xx means FPP's command
+	// dispatcher ran the command synchronously (FPP's command endpoint
+	// does not queue or defer) — it does NOT mean the command had any
+	// effect; see the type's own doc comment. It is Invoke's caller's
+	// decision what a non-2xx means for the command's own lifecycle, not
+	// this package's.
 	StatusCode int
 
 	// Body is FPP's raw response body, bounded by maxResponseBytes. FPP's
 	// command endpoint answers with a short human-readable string (e.g.
-	// "Stopped"), never structured JSON, so this is carried as text for
-	// the caller to log or surface verbatim rather than parsed here.
+	// "Playlist Starting", "Stopped", "Volume Set", "Next Item Playing"),
+	// never structured JSON, so this is carried as text for the caller to
+	// log or surface verbatim rather than parsed here.
 	Body string
 }
 
@@ -155,26 +174,75 @@ type Outcome struct {
 // is not a status document.
 const maxResponseBytes = 64 << 10 // 64 KiB
 
-// Invoke issues GET {baseURL}/api/command/{name} with no arguments, and
-// returns FPP's raw [Outcome]. name is path-escaped, matching the exact
-// encoding an FPP command name with a space requires (e.g. "Stop Now" ->
-// "Stop%20Now") — see [Client.StopPlaylist]'s doc comment for FPP's own
-// command name for the primitive this package's one caller dispatches.
+// commandRequest is the exact JSON shape FPP's own POST /api/command
+// endpoint expects. It is also the shape fppd normalizes every command
+// to internally — GET or POST alike — before republishing it to its own
+// MQTT command/run topic (docs/bench/fpp-command-vocabulary.md section
+// 1.2), so this is FPP's own canonical representation, not a translation
+// layer this package invented.
+//
+// Args is a plain []string with no ",omitempty": encoding/json marshals
+// a nil slice as JSON null, and Invoke always substitutes []string{}
+// before marshaling for exactly that reason — see [Client.Invoke]. Never
+// add omitempty here; it would reintroduce the absent-key case section
+// 1.4 measured FPP rejecting identically to null for a command with
+// required arguments.
+type commandRequest struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// Invoke issues POST {baseURL}/api/command with Content-Type
+// application/json and a body of {"command": name, "args": args}, and
+// returns FPP's raw [Outcome]. This is a deliberate change from the
+// GET-positional-path form Step 7 used:
+// docs/bench/fpp-command-vocabulary.md section 1.3 proved FPP's own
+// Apache configuration rejects a percent-encoded "/" in a GET path
+// segment before fppd ever sees the request (AllowEncodedSlashes is
+// off), so a GET-encoded argument value containing "/" — a media
+// filename under a subdirectory, a script argument — is categorically
+// unreachable through GET. POST's JSON body has no argument value it
+// cannot express, and section 1.2 confirms it is FPP's own canonical
+// internal representation, not a translation layer this package
+// invented.
+//
+// args is always encoded as a JSON array, never as an absent key and
+// never as null, even when nil or empty — see [commandRequest]. Section
+// 1.4 measured an absent args key, "args":null, and "args":[] all
+// rejected identically by FPP (500 "Not found") for a command with
+// required arguments; only "args":[] is correct for a zero-argument
+// command, so this package never emits either of the other two.
+//
+// A 2xx here means only that FPP's command dispatcher ran — see
+// [Outcome]'s doc comment; it is never confirmation that anything
+// changed. An unknown command name surfaces as 500 "No Command: X" on
+// this POST form, NOT 404 — 404 is the GET-path form's error shape
+// (section 1.6); do not assume a 404 means "unknown command" against
+// this client. Wrong arity is 500 "Not found" on both forms.
 //
 // Every non-2xx response, including a 3xx this Client's own client was
-// built to never follow (see [refuseRedirects]), is returned as a non-nil
-// error via [httpStatusError] wrapped by classifyError — never a silent
-// retry, never a fabricated success. A transport-level failure (dial
-// error, timeout) is likewise a non-nil error with no Outcome.
-func (c *Client) Invoke(ctx context.Context, name string) (Outcome, error) {
+// built to never follow (see [refuseRedirects]), is returned as a
+// non-nil error wrapping [httpStatusError] — never a silent retry, never
+// a fabricated success. A transport-level failure (dial error, timeout)
+// is likewise a non-nil error with no Outcome.
+func (c *Client) Invoke(ctx context.Context, name string, args []string) (Outcome, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	target := c.baseURL + "/api/command/" + url.PathEscape(name)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
+	if args == nil {
+		args = []string{}
+	}
+	payload, err := json.Marshal(commandRequest{Command: name, Args: args})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("fppcommand: encoding request for %q: %w", name, err)
+	}
+
+	target := c.baseURL + "/api/command"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		return Outcome{}, fmt.Errorf("fppcommand: building request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -207,11 +275,99 @@ func (c *Client) Invoke(ctx context.Context, name string) (Outcome, error) {
 // fppd — FPP's command list carries no command literally named "Stop
 // Playlist" (BUILD-PLAN's own descriptive name for this step's primitive
 // command); "Stop Now" is the zero-argument member of FPP's Stop family
-// ("Stop Gracefully" requires a "loop" argument, so it is not the
+// ("Stop Gracefully" requires an "afterLoop" argument, so it is not the
 // no-target-parameter command BUILD-PLAN's decision names) confirmed live
 // to transition FPP's status_name from "playing" directly to "idle".
 func (c *Client) StopPlaylist(ctx context.Context) (Outcome, error) {
-	return c.Invoke(ctx, "Stop Now")
+	return c.Invoke(ctx, "Stop Now", nil)
+}
+
+// StartPlaylist dispatches FPP's "Start Playlist" command with exactly
+// three positional arguments: [name, repeat, ifNotRunning], encoded as
+// [name, encodeBool(repeat), encodeBool(ifNotRunning)] per
+// docs/bench/fpp-command-vocabulary.md section 4's authoritative table.
+//
+// FPP's fourth argument, scheduleProtected, is deliberately NOT sent, so
+// FPP's own default applies. scheduleProtected asks FPP's own scheduler
+// not to override the playlist ShowMesh started (capture section 4);
+// ADR-001 makes FPP the authoritative scheduler, so sending it would be
+// ShowMesh overriding FPP's own schedule through a command argument —
+// exactly the constraint ADR-001 exists to prevent, arrived at sideways.
+//
+// name is validated with [ValidatePlaylistName] before dispatch; a
+// validation failure returns before any request is sent. Capture section
+// 3.2 recorded two behaviors this method does NOT attempt to prevent,
+// because they are FPP's own semantics, not this package's to police:
+// Start Playlist always replaces whatever playlist is currently running,
+// and ifNotRunning does not mean "only start if nothing is running" — it
+// means "only start if the requested playlist is not already the one
+// running." Refusing to start against a busy host is
+// internal/coordinator/api's ifBusy decision (capture section 5), not
+// this package's.
+func (c *Client) StartPlaylist(ctx context.Context, name string, repeat bool, ifNotRunning bool) (Outcome, error) {
+	if err := ValidatePlaylistName(name); err != nil {
+		return Outcome{}, err
+	}
+	return c.Invoke(ctx, "Start Playlist", []string{name, encodeBool(repeat), encodeBool(ifNotRunning)})
+}
+
+// StopPlaylistGracefully dispatches FPP's "Stop Gracefully" command with
+// one argument, afterLoop, encoded via [encodeBool]. Capture section 3.3
+// measured this command's terminal state as bounded by show content, not
+// by any deadline ShowMesh can choose — a 120-second pause item held
+// "stopping gracefully" indefinitely, cleared only by a subsequent Stop
+// Now — so a confirmation predicate built on this method's Outcome must
+// never wait for status to reach idle; it confirms on FPP having entered
+// a stop state at all. See capture section 4.
+func (c *Client) StopPlaylistGracefully(ctx context.Context, afterLoop bool) (Outcome, error) {
+	return c.Invoke(ctx, "Stop Gracefully", []string{encodeBool(afterLoop)})
+}
+
+// PausePlaylist dispatches FPP's zero-argument "Pause Playlist" command.
+// Capture section 2 measured this returning 200 "Playlist Paused" while
+// FPP was idle and pausing nothing; a 2xx Outcome from this method is not
+// evidence anything paused.
+func (c *Client) PausePlaylist(ctx context.Context) (Outcome, error) {
+	return c.Invoke(ctx, "Pause Playlist", nil)
+}
+
+// ResumePlaylist dispatches FPP's zero-argument "Resume Playlist"
+// command. Capture section 2 measured this returning 200 "Playlist
+// Restarted" while FPP was idle and resuming nothing; the body's wording
+// ("Restarted") is FPP's own and is not evidence of a restart — capture
+// section 3.4 confirmed the observed playlist index did not move.
+func (c *Client) ResumePlaylist(ctx context.Context) (Outcome, error) {
+	return c.Invoke(ctx, "Resume Playlist", nil)
+}
+
+// NextPlaylistItem dispatches FPP's zero-argument "Next Playlist Item"
+// command. Capture section 3.5: past the last item, one more Next ends
+// the playlist entirely (status becomes idle, playlist becomes empty) —
+// "skip forward" and "stop the show" are the same command at the last
+// item, and FPP answers "Next Item Playing" in both cases regardless.
+func (c *Client) NextPlaylistItem(ctx context.Context) (Outcome, error) {
+	return c.Invoke(ctx, "Next Playlist Item", nil)
+}
+
+// PrevPlaylistItem dispatches FPP's zero-argument "Prev Playlist Item"
+// command. Capture section 3.5 confirmed index movement 3 -> 2 on the
+// bench playlist; unlike NextPlaylistItem, moving before the first item
+// was not captured.
+func (c *Client) PrevPlaylistItem(ctx context.Context) (Outcome, error) {
+	return c.Invoke(ctx, "Prev Playlist Item", nil)
+}
+
+// SetVolume dispatches FPP's "Volume Set" command with one argument,
+// strconv.Itoa(volume). volume is validated with [ValidateVolume] before
+// dispatch — capture section 1.5 measured FPP itself silently clamping
+// Volume Set/999 to 100 and silently coercing Volume Set/abc to 0, so
+// there is no version of "let FPP reject an out-of-range value" that
+// works; this method rejects it before anything is sent.
+func (c *Client) SetVolume(ctx context.Context, volume int) (Outcome, error) {
+	if err := ValidateVolume(volume); err != nil {
+		return Outcome{}, err
+	}
+	return c.Invoke(ctx, "Volume Set", []string{strconv.Itoa(volume)})
 }
 
 // httpStatusError records a non-2xx HTTP response, distinguishable via

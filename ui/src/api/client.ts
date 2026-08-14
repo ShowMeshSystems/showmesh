@@ -67,21 +67,54 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
  * TypeScript and cannot import
  * `pkg/command.DefaultFPPCommandConfirmDeadline`/`MinClientTimeoutForConfirmation`
  * (the Go module boundary is absolute here, not a style choice), so — like
- * cmd/showmeshctl's own `minStopPlaylistClientTimeout`, chosen
+ * cmd/showmeshctl's own `minFPPCommandClientTimeout`, chosen
  * independently for the identical reason — this cannot be DERIVED from the
- * server's value, only reconciled against it: `client.test.ts` proves this
- * client actually waits this long when given a slow response, and the
- * acceptance criteria for this fix are verified against the running stack
- * (CLAUDE.md's own standing rule) rather than trusted from three numbers
- * that merely look consistent on paper.
+ * server's value, only reconciled against it: `client.test.ts`'s
+ * `describe('FPP_COMMAND_REQUEST_TIMEOUT_MS', ...)` block does that
+ * reconciliation two ways — a static assertion against
+ * [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS] below that fails the build the day
+ * this constant is ever set too small again, and a behavioral test
+ * (`'actually waits this long: a response arriving just before the
+ * deadline still succeeds'`) that proves this client does not abort a
+ * slow-but-healthy response early. Both were verified non-vacuous by
+ * setting this constant to 6_000 (a value that previously made 389/389
+ * tests pass, typecheck, lint, and build all green — Step 8 client-side
+ * review finding 1) and confirming both fail, then restoring it. The
+ * acceptance criteria for the ORIGINAL fix (Step 7 seam C) were also
+ * verified against the running stack (CLAUDE.md's own standing rule)
+ * rather than trusted from three numbers that merely look consistent on
+ * paper.
  *
  * 35s = the coordinator's 20s default confirmation deadline + a 15s
  * margin for the round trip itself — the same value and reasoning as
- * cmd/showmeshctl's `minStopPlaylistClientTimeout` and
+ * cmd/showmeshctl's `minFPPCommandClientTimeout` and
  * `pkg/command.ClientTimeoutMargin`, chosen independently here rather than
  * shared, for the reason above.
  */
 export const FPP_COMMAND_REQUEST_TIMEOUT_MS = 35_000
+
+/**
+ * The reconciliation TARGET for [FPP_COMMAND_REQUEST_TIMEOUT_MS] — never
+ * itself the value a request uses. A FOURTH independently chosen literal,
+ * for the identical module-boundary reason that constant's own doc
+ * comment gives: this is `pkg/command.MinClientTimeoutForConfirmation(
+ * pkg/command.DefaultFPPCommandConfirmDeadline)` reconciled by hand, not
+ * imported, deliberately kept as two named, commented components (rather
+ * than one opaque `35_000`) so a reviewer can check each half against the
+ * Go source directly instead of trusting that two unrelated-looking
+ * numbers happen to add up.
+ *
+ * Exists ONLY so `client.test.ts` has something fixed, independent of
+ * [FPP_COMMAND_REQUEST_TIMEOUT_MS] itself, to assert that constant is
+ * still at least as large as — see that constant's own doc comment for
+ * why a self-referential check would not have caught Finding 1 (Step 8
+ * client-side review): the constant under test was set to 6_000 and the
+ * whole suite still passed, because nothing compared it to anything.
+ */
+const SERVER_FPP_COMMAND_CONFIRM_DEADLINE_MS = 20_000 // pkg/command.DefaultFPPCommandConfirmDeadline
+const CLIENT_TIMEOUT_MARGIN_MS = 15_000 // pkg/command.ClientTimeoutMargin
+export const MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS =
+  SERVER_FPP_COMMAND_CONFIRM_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
  * Thin transport layer: builds the request (version header, bearer

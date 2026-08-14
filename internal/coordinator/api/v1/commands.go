@@ -2,30 +2,69 @@ package v1
 
 // FPPCommandRequest is the body of
 // POST /api/v1/fpp/{instanceId}/commands, Step 7 seam C's first write
-// endpoint. Action is checked against a fixed, small vocabulary at the
-// handler ("stopPlaylist" is the only member today; see
-// internal/coordinator/api/fppcommand_handler.go) — carried in the body,
-// not implied solely by the URL, so a second primitive command added by a
-// later step is an additive change to this same endpoint rather than a
-// second route. IdempotencyKey is required on every request: ARCHITECTURE
-// section 8.1 requires an idempotency key on every command, not on some
-// of them, and RES-015 section 7.3 established that FPP supplies nothing
-// to derive one from, so the caller (showmeshctl, the Operator UI) mints
-// it — see pkg/command.NewIdempotencyKey.
+// endpoint, extended by Step 8 from one hardcoded action to
+// docs/bench/fpp-command-vocabulary.md section 4's full eight-primitive
+// vocabulary (internal/coordinator/api/fppcommand_primitives.go). Action
+// is checked against that fixed vocabulary at the handler — carried in
+// the body, not implied solely by the URL, so a primitive command added
+// by a later step is an additive change to this same endpoint rather than
+// a second route. IdempotencyKey is required on every request:
+// ARCHITECTURE section 8.1 requires an idempotency key on every command,
+// not on some of them, and RES-015 section 7.3 established that FPP
+// supplies nothing to derive one from, so the caller (showmeshctl, the
+// Operator UI) mints it — see pkg/command.NewIdempotencyKey.
 //
 // IdempotencyKey's uniqueness is scoped to (Action, the instanceId path
-// value), never global (Step 7 seam C review defect 6): reusing a key
-// against the SAME action and instanceId is a replay (nothing is
-// dispatched again; the original result is returned, flagged
-// "replay": true); reusing it against a DIFFERENT action or a DIFFERENT
-// instanceId is a 409 conflict, refused outright — see
-// fppcommand_handler.go's handleFPPCommandReplay. Before this fix this
-// constraint existed only as a bare database-level UNIQUE on the key
-// column alone, undocumented anywhere an integrator could find it; see
-// api/openapi.yaml's identical documentation on this same field.
+// value, and — as of Step 8 — the normalized Params), never global (Step
+// 7 seam C review defect 6, extended by Step 8): reusing a key against
+// the SAME action, instanceId, AND normalized params is a replay (nothing
+// is dispatched again; the original result is returned, flagged
+// "replay": true); reusing it against a DIFFERENT action, a DIFFERENT
+// instanceId, or DIFFERENT params is a 409 conflict, refused outright —
+// see fppcommand_handler.go's handleFPPCommandReplay. Before Step 7's own
+// fix this constraint existed only as a bare database-level UNIQUE on the
+// key column alone, undocumented anywhere an integrator could find it;
+// see api/openapi.yaml's identical documentation on this same field.
+//
+// Params is this action's own parameter object, OPTIONAL for a primitive
+// with no required parameter — most of the eight take none. Step 8
+// review finding 7's own correction: this comment previously called the
+// wire REQUEST side of this change "additive," which is not accurate.
+// Step 7's published schema declared params as a bare, propertyless
+// `object` with no `additionalProperties: false`, so a body like
+// `{"action":"stopPlaylist","idempotencyKey":"k","params":{"reason":"showdown"}}`
+// validated against it and was accepted (the server silently ignored the
+// unrecognized key). api/openapi.yaml's Step 8 restructuring gives every
+// action its own closed params schema (`additionalProperties: false`),
+// so that SAME request is now REJECTED — a retype-in-place of an existing
+// member of the request document, narrowing what validates, not an
+// addition to it. That narrowing is deliberate and correct — a typo'd or
+// stray param silently taking its own default (or being silently dropped
+// entirely) is the actual defect a prior review caught, and no shipped
+// client ever sent params on an action that does not declare it — but it
+// is not "additive," and this comment previously said otherwise. The
+// RESPONSE side genuinely IS additive: see FPPCommandResult.Params below,
+// present on the wire for the first time by this same step, and ignorable
+// by any client that predates it (ADR-020 decision 8). Params itself is
+// decoded with a THREE-way rule this endpoint enforces strictly, stricter
+// than ADR-020's "clients ignore unknown fields" (which governs a client
+// reading RESPONSES, not a server accepting a WRITE): Params absent, or
+// {}, means every optional parameter takes its documented default; Params
+// present as an explicit JSON null is ALWAYS a 400, for every action,
+// because an explicit null is not the same as an omitted field
+// (CLAUDE.md's own standing, repeatedly-shipped-bug rule, enforced here
+// rather than repeated a fifth time); a required parameter absent,
+// present as null, or (for a string) present as an empty string are three
+// DIFFERENT 400s, each naming what is actually wrong; and an unrecognized
+// key inside params is a 400 naming it, never a silently-ignored typo.
+// See internal/coordinator/api/fppcommand_primitives.go's
+// decodeFPPCommandParams for the implementation this description
+// summarizes, and each primitive's own doc comment for its exact
+// parameter vocabulary.
 type FPPCommandRequest struct {
-	Action         string `json:"action"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	Action         string         `json:"action"`
+	IdempotencyKey string         `json:"idempotencyKey"`
+	Params         map[string]any `json:"params,omitempty"`
 }
 
 // FPPCommandResponse is the body of a successful (200) response from
@@ -48,6 +87,21 @@ type FPPCommandResult struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 	Action         string `json:"action"`
 	InstanceID     string `json:"instanceId"`
+
+	// Params is this command's own normalized parameters — defaults
+	// applied, present even for a zero-parameter action (as an empty
+	// object), matching AuditEntry.Params's identical "never null"
+	// convention. Added additively by Step 8 (ADR-020 decision 8): an
+	// existing client that has never heard of this field keeps working
+	// unchanged. On a REPLAY response this is the ORIGINAL command's own
+	// params, not necessarily byte-identical to what this particular
+	// replay request sent on the wire (a client that omits a defaulted
+	// field and one that sends the default explicitly normalize to the
+	// SAME Params, by construction — see
+	// internal/coordinator/api/fppcommand_primitives.go's
+	// canonicalParamsJSON) — so a replay always tells the caller what the
+	// original command's parameters actually were.
+	Params map[string]any `json:"params"`
 
 	// Replay is true when this response answers a REPLAYED idempotency
 	// key: the command described here was NOT dispatched by this request

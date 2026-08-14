@@ -196,13 +196,29 @@ fi
 # which would silently start matching an unrelated future test this
 # script was never meant to gate), and RAN_COUNT below turns "matched
 # nothing" from a silent, exit-0 no-op into a loud failure.
-FPP_RUN_PATTERN='^(TestFPPSuccessPathThroughRealCoordinator|TestFPPCommandAgainstRealCoordinatorAndBenchFPP|TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline)$'
+#
+# Step 8 extended this the identical way: fpp_command_test.go gained one
+# more real-stack test (the parameterized-command replay/conflict
+# criterion), and fpp_command_primitives_test.go — new in this step —
+# gained eight, one per BUILD-PLAN acceptance criterion for the primitive
+# command vocabulary (docs/bench/fpp-command-vocabulary.md section 4).
+# Named explicitly here for the identical reason the seven above already
+# are.
+FPP_RUN_PATTERN='^(TestFPPSuccessPathThroughRealCoordinator|TestFPPCommandAgainstRealCoordinatorAndBenchFPP|TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline|TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict|TestRemainingFPPPrimitivesConfirmAgainstBenchFPP|TestStopPlaylistGracefullyConfirmsWhileShowStillRunning|TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms|TestUnconfirmedFPPCommandReportsStatedReasonNeverSuccessful|TestStartAndStopPlaylistConfirmOnlyOnPostDispatchEvidenceTimed|TestIfBusyRefusesReplacesAndAllowsSamePlaylist|TestFPPCommandParamsAbsentNullEmptyDistinctionEndToEnd|TestCollectorReadOnlyPostureUnchangedByCommandSurface)$'
 
+# Step 8's own additions each make at least one real, unshrunk wait against
+# the bench fppd's actual behavior (a confirmation deadline running to its
+# full 20s default, an FPP collector poll cadence up to 15s, several
+# primitives dispatched in sequence each paying that cost) — this task's
+# own standing rule against racing a kernel or shrinking a timeout to make
+# a test pass faster. -timeout is widened accordingly; 5m covered the
+# three pre-Step-8 tests comfortably but would not cover this file's own
+# worst case.
 echo "test-integration-fpp: running $FPP_RUN_PATTERN against $FPP_URL and tcp://localhost:${FPP_MOSQUITTO_PORT}"
 FPP_TEST_LOG="$(mktemp)"
 set +e
 SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${FPP_MOSQUITTO_PORT}" \
-  go test -tags=integration -race -count=1 -timeout=5m -v ./test/integration/... -run "$FPP_RUN_PATTERN" | tee "$FPP_TEST_LOG"
+  go test -tags=integration -race -count=1 -timeout=20m -v ./test/integration/... -run "$FPP_RUN_PATTERN" | tee "$FPP_TEST_LOG"
 FPP_TEST_STATUS="${PIPESTATUS[0]}"
 set -e
 

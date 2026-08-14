@@ -16,7 +16,7 @@ export const PROBLEM_TYPE = {
   methodNotAllowed: 'https://showmesh.dev/problems/method-not-allowed',
   internalError: 'https://showmesh.dev/problems/internal-error',
   // ADR-024's four additions (api/openapi.yaml Problem.type enum, and this
-  // document's own top-level description: "Four of the eleven are
+  // document's own top-level description: "Four of the thirteen are
   // ADR-024"). forbidden is 403-authenticated-but-missing-scope, distinct
   // from unauthorized's 401-no-credential-at-all; csrfRejected is 403 too,
   // but names a different cause (a cookie-authenticated write missing
@@ -36,4 +36,24 @@ export const PROBLEM_TYPE = {
   // This entry exists so PROBLEM_TYPE stays what its own doc comment
   // claims: every class this coordinator currently produces.
   conflict: 'https://showmesh.dev/problems/conflict',
+  // Step 8's own three additions, all scoped to
+  // POST /fpp/{instanceId}/commands. fppCommandRefusedAuditUnavailable
+  // (503, ADR-024 decision 11's fail-closed default) has no dedicated
+  // error class either, for the same reason `conflict` above does not —
+  // the coordinator's own `detail` is already the full actionable
+  // message. fppStartPlaylistEvidenceNotCurrent and fppStartPlaylistBusy
+  // DO need to be dispatchable: both used to share `conflict`'s own type
+  // (first with each other, then — after a first fix split
+  // evidenceNotCurrent out — fppStartPlaylistBusy alone still shared
+  // `conflict` with the idempotency-key-reuse case, a review finding's own
+  // "half-applied" catch), distinguishable only by matching a substring of
+  // the server's own English `detail` text (FPPStartPlaylistControl.tsx's
+  // own former defect) — these two entries are what let that component
+  // branch on `type` instead. The two remedies are opposites: "resend with
+  // ifBusy: replace" (busy) versus "mint a fresh key" (a plain `conflict`
+  // idempotency reuse) — a client that cannot tell them apart by `type`
+  // has no way to pick the right one programmatically.
+  fppCommandRefusedAuditUnavailable: 'https://showmesh.dev/problems/fpp-command-refused-audit-unavailable',
+  fppStartPlaylistEvidenceNotCurrent: 'https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current',
+  fppStartPlaylistBusy: 'https://showmesh.dev/problems/fpp-start-playlist-busy',
 } as const

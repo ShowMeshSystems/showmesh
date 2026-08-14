@@ -83,10 +83,45 @@ export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsRespons
   return store.getFPPEndpointsConfigRevisions()
 }
 
-// Step 7 seam C: the first write that leaves this machine. Same thin
-// pass-through pattern as the others above.
+// Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin
+// pass-through pattern as the others above — every method here maps to
+// one row of docs/bench/fpp-command-vocabulary.md section 4's registry,
+// via ApiStore's single dispatchFPPCommand (store.ts).
 export function stopFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
   return store.stopFPPPlaylist(instanceId)
+}
+
+export function startFPPPlaylist(
+  instanceId: string,
+  playlist: string,
+  repeat: boolean,
+  ifBusy: 'refuse' | 'replace',
+): Promise<FPPCommandResult> {
+  return store.startFPPPlaylist(instanceId, playlist, repeat, ifBusy)
+}
+
+export function stopFPPPlaylistGracefully(instanceId: string, afterLoop: boolean): Promise<FPPCommandResult> {
+  return store.stopFPPPlaylistGracefully(instanceId, afterLoop)
+}
+
+export function pauseFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+  return store.pauseFPPPlaylist(instanceId)
+}
+
+export function resumeFPPPlaylist(instanceId: string): Promise<FPPCommandResult> {
+  return store.resumeFPPPlaylist(instanceId)
+}
+
+export function nextFPPPlaylistItem(instanceId: string): Promise<FPPCommandResult> {
+  return store.nextFPPPlaylistItem(instanceId)
+}
+
+export function prevFPPPlaylistItem(instanceId: string): Promise<FPPCommandResult> {
+  return store.prevFPPPlaylistItem(instanceId)
+}
+
+export function setFPPVolume(instanceId: string, volume: number): Promise<FPPCommandResult> {
+  return store.setFPPVolume(instanceId, volume)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same

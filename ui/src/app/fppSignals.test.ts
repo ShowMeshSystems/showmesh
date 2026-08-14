@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPortEntries,
   classifyFppSignal,
+  evaluateNextItemHazard,
   findObservation,
   groupFppObservations,
   portKindOf,
@@ -274,5 +275,63 @@ describe('summarizeFleetVersions', () => {
     const summary = summarizeFleetVersions(instances)
     expect(summary.disagreement).toBe(false)
     expect(summary.versions).toEqual([{ version: '9.4', instanceIds: ['a'] }])
+  })
+})
+
+// Step 8, capture section 3.5: "Next Playlist Item" past the last item
+// ENDS the playlist. A test's name is a claim -- these break the
+// last-item condition in both directions to confirm the function
+// actually distinguishes them, not merely returns a constant.
+describe('evaluateNextItemHazard', () => {
+  it('reports unknown when neither index nor count has been observed at all', () => {
+    const hazard = evaluateNextItemHazard([])
+    expect(hazard).toMatchObject({ unknown: true, knownLastItem: false })
+  })
+
+  it('reports unknown when the evidence is present but stale, never silently "not last"', () => {
+    const observations = [
+      evidence('fpp.playlist.index', { value: 3, state: 'stale' }),
+      evidence('fpp.playlist.count', { value: 3, state: 'stale' }),
+    ]
+    const hazard = evaluateNextItemHazard(observations)
+    expect(hazard.unknown).toBe(true)
+    expect(hazard.knownLastItem).toBe(false)
+  })
+
+  it('reports knownLastItem=true at the last item of a multi-item playlist (index === count)', () => {
+    const observations = [
+      evidence('fpp.playlist.index', { value: 3, state: 'current' }),
+      evidence('fpp.playlist.count', { value: 3, state: 'current' }),
+    ]
+    const hazard = evaluateNextItemHazard(observations)
+    expect(hazard).toMatchObject({ unknown: false, knownLastItem: true })
+  })
+
+  it('reports knownLastItem=true on a one-item playlist (capture: a single Next stops the show)', () => {
+    const observations = [
+      evidence('fpp.playlist.index', { value: 1, state: 'current' }),
+      evidence('fpp.playlist.count', { value: 1, state: 'current' }),
+    ]
+    const hazard = evaluateNextItemHazard(observations)
+    expect(hazard.knownLastItem).toBe(true)
+  })
+
+  it('reports knownLastItem=false when not yet at the last item', () => {
+    const observations = [
+      evidence('fpp.playlist.index', { value: 1, state: 'current' }),
+      evidence('fpp.playlist.count', { value: 3, state: 'current' }),
+    ]
+    const hazard = evaluateNextItemHazard(observations)
+    expect(hazard).toMatchObject({ unknown: false, knownLastItem: false })
+  })
+
+  it('reports unknown (never knownLastItem) while idle at index 0/0, matching the captured idle shape', () => {
+    const observations = [
+      evidence('fpp.playlist.index', { value: 0, state: 'current' }),
+      evidence('fpp.playlist.count', { value: 0, state: 'current' }),
+    ]
+    const hazard = evaluateNextItemHazard(observations)
+    // count === 0 is never "last item" -- there is no item to be last.
+    expect(hazard.knownLastItem).toBe(false)
   })
 })

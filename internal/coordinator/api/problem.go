@@ -81,6 +81,53 @@ const (
 	// writeInternalError itself to reference it is a one-line change left
 	// to that file's owner — see this task's report.
 	ProblemTypeInternalError = problemBaseURI + "internal-error"
+
+	// ProblemTypeFPPCommandRefusedAuditUnavailable is Step 8's own
+	// fail-closed refusal (ADR-024 decision 11's default rule, applied to
+	// every primitive that is not a member of decision 11's own safety
+	// class — see [fppSafetyClass] in fppcommand_primitives.go): the
+	// pre-dispatch audit write failed, the whole transaction rolled back
+	// ([identity.ErrAuditWrite]'s own guarantee), and this primitive is
+	// not exempt, so nothing was inserted and nothing is dispatched to
+	// FPP. Originally defined in fppcommand_handler.go, the only file that
+	// seam was allowed to touch — moved here alongside its peers once that
+	// constraint no longer applied, and added to api/openapi.yaml's
+	// Problem.type enum in the same change: the author of that first
+	// version flagged both gaps in its own doc comment rather than leaving
+	// them to be discovered later.
+	ProblemTypeFPPCommandRefusedAuditUnavailable = problemBaseURI + "fpp-command-refused-audit-unavailable"
+
+	// ProblemTypeFPPStartPlaylistEvidenceNotCurrent is startPlaylist's own
+	// ifBusy "refuse" guard (docs/bench/fpp-command-vocabulary.md section
+	// 5) refusing because the evidence it would need to decide "is
+	// something else currently playing?" is not itself current — never
+	// proceeding on the grounds that it could not tell (CLAUDE.md: absence
+	// of evidence is not evidence of absence). Deliberately its own type,
+	// distinct from [ProblemTypeConflict] AND from
+	// [ProblemTypeFPPStartPlaylistBusy] below: a review finding caught that
+	// this case and [fppStartPlaylistBusyProblem]'s ("a DIFFERENT
+	// playlist IS confirmed playing") both carried ProblemTypeConflict,
+	// differing only in Title/Detail prose, which meant the only way a
+	// client could tell them apart was by matching a substring of the
+	// server's own English detail text — a client parsing prose across a
+	// versioned contract boundary. See [fppStartPlaylistEvidenceNotCurrentProblem].
+	ProblemTypeFPPStartPlaylistEvidenceNotCurrent = problemBaseURI + "fpp-start-playlist-evidence-not-current"
+
+	// ProblemTypeFPPStartPlaylistBusy is [fppStartPlaylistBusyProblem]'s
+	// own type (Step 8 review finding 8, this is the "finish the split"
+	// half): startPlaylist's ifBusy="refuse" guard refusing because a
+	// DIFFERENT playlist is CONFIRMED currently playing. Split out of
+	// [ProblemTypeConflict] for the identical reason
+	// [ProblemTypeFPPStartPlaylistEvidenceNotCurrent] was split out of it
+	// one review finding earlier — that fix was only half-applied: this
+	// case kept sharing ProblemTypeConflict with
+	// [fppCommandReplayConflictProblem] and
+	// [fppCommandReplayParamsConflictProblem], two idempotency-key
+	// conflicts whose remedy ("mint a fresh key") is the OPPOSITE of this
+	// one's ("resend with ifBusy: replace") — indistinguishable except by
+	// matching `detail` prose, the exact defect the sibling type exists to
+	// rule out. See [fppStartPlaylistBusyProblem].
+	ProblemTypeFPPStartPlaylistBusy = problemBaseURI + "fpp-start-playlist-busy"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
@@ -173,7 +220,10 @@ func csrfProblem() v1.Problem {
 		Type:   ProblemTypeCSRFRejected,
 		Title:  "CSRF check failed",
 		Status: http.StatusForbidden,
-		Detail: "a cookie-authenticated write requires the Sec-Fetch-Site: same-origin request header (ADR-024 decision 6); a bearer-token-authenticated request is exempt",
+		// ADR-024 decision 6: a cookie-authenticated write must come from
+		// the same origin. A bearer-token request carries no ambient
+		// cookie for a cross-site page to ride, so it is exempt.
+		Detail: "A cookie-authenticated write must come from the same origin (Sec-Fetch-Site: same-origin). A bearer-token request is exempt from this check.",
 	}
 }
 
@@ -197,7 +247,11 @@ func loginCSRFProblem() v1.Problem {
 		Type:   ProblemTypeCSRFRejected,
 		Title:  "CSRF check failed",
 		Status: http.StatusForbidden,
-		Detail: "POST /api/v1/session and POST /api/v1/bootstrap require the Sec-Fetch-Site: same-origin request header (ADR-024 decision 6, owner decision 2026-08-12: strict); there is no bearer exemption for this rejection, because both endpoints are unauthenticated by construction and carry no pre-existing credential that could be bearer-shaped",
+		// ADR-024 decision 6 (owner decision 2026-08-12: strict), applied
+		// to signing in itself: no bearer exemption here, unlike
+		// [csrfProblem], because signing in has no pre-existing credential
+		// yet that could be bearer-shaped in the first place.
+		Detail: "Signing in must come from the same origin (Sec-Fetch-Site: same-origin) — there is no bearer-token exemption for this request.",
 	}
 }
 
@@ -255,16 +309,17 @@ func methodNotAllowedProblem(detail string) v1.Problem {
 // vs. csrfProblem). detail names the exact variable and the two-step
 // remedy (remove it, restart once) rather than a generic "conflict" — an
 // operator hitting this needs to know it is action-shaped, not a
-// permission or validation problem.
+// permission or validation problem. RES-008 D1 is the decision that this
+// coordinator's store must never accept a write that would disagree with
+// SHOWMESH_FPP_ENDPOINTS on the very next restart.
 func fppEndpointsEnvVarSetProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: SHOWMESH_FPP_ENDPOINTS is still set",
 		Status: http.StatusConflict,
-		Detail: "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
-			"still set in its process environment (RES-008 D1): a write accepted now would disagree with that variable " +
-			"on the coordinator's very next restart and refuse to start. Remove SHOWMESH_FPP_ENDPOINTS from this " +
-			"coordinator's environment and restart it once, then retry this write.",
+		Detail: "This write is refused because SHOWMESH_FPP_ENDPOINTS is still set in this coordinator's environment " +
+			"— accepting it now would conflict with that variable on the next restart. Remove SHOWMESH_FPP_ENDPOINTS " +
+			"and restart this coordinator once, then retry.",
 	}
 }
 
@@ -290,14 +345,11 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 		Type:   ProblemTypeConflict,
 		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_ENDPOINTS was deferred",
 		Status: http.StatusConflict,
-		Detail: "this coordinator's store cannot become authoritative for fpp.endpoints while SHOWMESH_FPP_ENDPOINTS is " +
-			"still set in its process environment (RES-008 D1), and on this boot the migration of that variable into " +
-			"this store could not be persisted, so the store holds no fpp.endpoints configuration at all. Do NOT remove " +
-			"SHOWMESH_FPP_ENDPOINTS yet: while the migration is deferred that variable is the only copy of this " +
-			"coordinator's endpoint list, and removing it would resolve this coordinator to zero endpoints on its next " +
-			"restart. Fix the data volume instead (check this coordinator's startup log; usually full, read-only, or a " +
-			"damaged database) and restart — the migration is retried on every start. Once it succeeds, remove the " +
-			"variable, restart once more, and retry this write.",
+		Detail: "This write is refused because the SHOWMESH_FPP_ENDPOINTS migration could not be saved on this boot, " +
+			"so the store holds no endpoint configuration yet. Do NOT remove SHOWMESH_FPP_ENDPOINTS — it is " +
+			"currently the only copy of this coordinator's endpoint list, and removing it now would leave zero " +
+			"endpoints on the next restart. Check the coordinator's data volume (often full, read-only, or damaged) " +
+			"and restart; the migration retries on every boot. Once it succeeds, remove the variable and retry.",
 	}
 }
 
@@ -334,11 +386,130 @@ func fppCommandReplayConflictProblem(existingID, existingAction, existingTargetI
 		Type:   ProblemTypeConflict,
 		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
+		// An idempotency key is scoped to the exact (action, instanceId) it
+		// was first used against — this is that scope stated in the wire
+		// text, not a citation of where the rule is defined.
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for command %s (action %q, instanceId %q); this request names action %q, "+
-				"instanceId %q. An idempotency key is scoped to the exact action and target it was first used against "+
-				"(api/openapi.yaml: FPPCommandRequest.idempotencyKey) — mint a fresh key for a genuinely new request "+
-				"rather than reusing one across a different action or a different FPP instance.",
+			"idempotencyKey was already used for command %s (action %q, instance %q); this request names a "+
+				"different action %q or instance %q. Mint a fresh idempotencyKey for a genuinely new request.",
 			existingID, existingAction, existingTargetID, requestedAction, requestedTargetID),
+	}
+}
+
+// fppCommandReplayParamsConflictProblem is Step 8's own extension of
+// [fppCommandReplayConflictProblem]: an idempotency key reused against the
+// SAME action and the SAME target, but with DIFFERENT normalized params,
+// is also a conflict, never a replay. An idempotency key names ONE
+// intended operation; returning the original result would report the
+// outcome of (say) starting playlist A as the answer to a request to
+// start playlist B, and dispatching the new request would break
+// idempotency outright by running the SAME key twice for two different
+// operations. Refusing outright — dispatching nothing, exactly like every
+// other conflict this endpoint reports — is the only response that is
+// honest about both requests. existingParamsJSON/requestedParamsJSON are
+// both canonical (defaults applied, sorted keys — see
+// [canonicalParamsJSON]), so this can name exactly which keys differ
+// rather than dumping two opaque JSON blobs at the caller.
+func fppCommandReplayParamsConflictProblem(existingID, action, targetID, existingParamsJSON, requestedParamsJSON string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used with different parameters",
+		Status: http.StatusConflict,
+		// An idempotency key names ONE intended operation — this is that
+		// rule stated in the wire text, not a citation of where it is
+		// defined.
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (action %q, instance %q) with params %s; this request "+
+				"has the SAME action and instance but DIFFERENT params: %s. Mint a fresh idempotencyKey for a "+
+				"genuinely new request.",
+			existingID, action, targetID, existingParamsJSON, requestedParamsJSON),
+	}
+}
+
+// fppStartPlaylistEvidenceNotCurrentProblem is startPlaylist's own ifBusy
+// "refuse" guard (capture section 5) refusing because the evidence it
+// would need to decide "is something else currently playing?" is not
+// itself current — never proceeding on the grounds that it could not
+// tell (CLAUDE.md: absence of evidence is not evidence of absence, the
+// project's own recurring lesson, applied here a fifth time). signal
+// names which evidence was not current (fpp.status or
+// fpp.playlist.name); reason is that signal's own
+// [resolveConfirmationEvidence] explanation.
+func fppStartPlaylistEvidenceNotCurrentProblem(instanceID, signal, reason string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPStartPlaylistEvidenceNotCurrent,
+		Title:  "Start Playlist refused: evidence needed to evaluate ifBusy is not current",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"Can't tell whether instance %q is busy — this needs CURRENT evidence of %s, and the most recent "+
+				"reading isn't current (%s). Retry once fresh evidence arrives, or resend with ifBusy=%q to start "+
+				"anyway.",
+			instanceID, signal, reason, fppIfBusyReplace),
+	}
+}
+
+// fppStartPlaylistBusyProblem is startPlaylist's own ifBusy=refuse (the
+// default) refusal when a DIFFERENT playlist is confirmed to be
+// currently playing (capture section 5): refused before anything is sent
+// to FPP, naming what is currently playing. This is a GUARD, not a lock
+// — it is evaluated against evidence that can go stale between this
+// check and dispatch, and it cannot prevent a race against FPP's own
+// scheduler; see [fppPrimitive.PreDispatchCheck]'s own doc comment on
+// primitiveStartPlaylist.
+//
+// Type is [ProblemTypeFPPStartPlaylistBusy] (Step 8 review finding 8),
+// not the plain [ProblemTypeConflict] this constructor originally used:
+// that shared type made this 409 indistinguishable, except by matching
+// `detail` prose, from [fppCommandReplayConflictProblem]/
+// [fppCommandReplayParamsConflictProblem]'s idempotency-key conflicts —
+// two conditions with OPPOSITE remedies ("mint a fresh key" versus
+// "resend with ifBusy: replace") that a client could not tell apart by
+// `type` alone. See [ProblemTypeFPPStartPlaylistBusy]'s own doc comment.
+func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPStartPlaylistBusy,
+		Title:  "Start Playlist refused: a different playlist is currently playing",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"Instance %q is currently playing %q, so this request is refused (ifBusy=%q, the default). Resend "+
+				"with ifBusy=%q to replace the running show, or wait for it to finish.",
+			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
+	}
+}
+
+// fppCommandAuditUnavailableProblem is
+// [ProblemTypeFPPCommandRefusedAuditUnavailable]'s own constructor.
+// Originally defined in fppcommand_handler.go because the seam that added
+// it was scoped to that file alone; moved here once that constraint no
+// longer applied, alongside every other problem constructor in this
+// package (see e.g. fppEndpointsEnvVarSetProblem, discoveryRunConflictProblem).
+// Status is 503, not 500: [identity.ErrAuditWrite] names a specific,
+// transient dependency condition (the audit store could not be appended to
+// right now), not an unspecified internal defect, and 503 is the honest
+// description of "the coordinator is currently unable to accept this
+// write" — a retry once the audit store recovers is the correct response,
+// which 500's "something is broken" does not convey. detail names the
+// audit store as the cause and states plainly that nothing was dispatched
+// and nothing was recorded, so an operator reading this does not have to
+// guess whether the command partially ran.
+func fppCommandAuditUnavailableProblem(wireAction string, cause error) v1.Problem {
+	return v1.Problem{
+		Type:  ProblemTypeFPPCommandRefusedAuditUnavailable,
+		Title: "Command refused: it could not be durably recorded",
+		// http.StatusServiceUnavailable (503): see this function's own doc
+		// comment for why this is not the generic 500 handlers.go's
+		// writeInternalError would otherwise produce.
+		Status: http.StatusServiceUnavailable,
+		// Detail deliberately does not explain WHY this action (as opposed
+		// to blackout/stop/power-off) fails closed rather than proceeding
+		// degraded — ADR-024 decision 11's safety-class boundary is
+		// architecture reasoning for this function's own doc comment, not
+		// a fact the operator needs mid-incident; what they need is
+		// stated: nothing happened, and when to retry.
+		Detail: fmt.Sprintf(
+			"%q was refused before anything was sent to FPP: it must be durably recorded before dispatch, and "+
+				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing "+
+				"was dispatched; retry once the audit store is writable again.",
+			wireAction, cause),
 	}
 }

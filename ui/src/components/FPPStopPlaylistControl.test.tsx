@@ -46,6 +46,10 @@ function result(overrides: Partial<FPPCommandResult> = {}): FPPCommandResult {
     idempotencyKey: 'key-1',
     action: 'fpp.stop_playlist',
     instanceId: 'bench-fpp',
+    // Step 8: FPPCommandResult.params became required (previously absent
+    // from the schema entirely — stopPlaylist itself is unchanged and
+    // still takes none, so `{}` is this fixture's own honest value).
+    params: {},
     replay: false,
     outcome: 'confirmed',
     outcomeState: 'current',

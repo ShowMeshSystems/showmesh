@@ -453,25 +453,51 @@ paths:
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
-      summary: Dispatch a primitive FPP lifecycle command (Step 7 seam C)
+      summary: Dispatch a primitive FPP lifecycle command (Step 7 seam C, Step 8)
       description: >-
         Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own
-        native command over GET at its own /api/command/... endpoint
+        native command over POST at its own /api/command endpoint
         (ADR-001: this is ShowMesh invoking FPP's own command, never a
         second scheduler) and confirms by evidence against the collector's
-        observations before answering, up to an internal deadline
-        (ADR-003). A `200` from FPP is never reported as this endpoint's
-        own success on its own — see FPPCommandResult.outcome. A
+        observations before answering, up to an internal, per-action
+        deadline (ADR-003). A `200` from FPP is never reported as this
+        endpoint's own success on its own — see FPPCommandResult.outcome. A
         cookie-authenticated request additionally requires
         `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on
         absence, same Problem schema as a missing-scope `403`); a
-        bearer-token-authenticated request is exempt. A replayed
-        `idempotencyKey` — reused against the SAME `action` and the SAME
-        `instanceId` it was first used against — dispatches nothing and
-        returns the original command's result, flagged `replay: true`. An
-        `idempotencyKey` reused against a DIFFERENT `action` or a
-        DIFFERENT `instanceId` is a `409` conflict, not a replay: see
-        FPPCommandRequest.idempotencyKey and the `409` response below.
+        bearer-token-authenticated request is exempt.
+
+        `idempotencyKey` is resolved FIRST, before `startPlaylist`'s own
+        `ifBusy` guard (or any other primitive's pre-dispatch guard) ever
+        runs — a review finding proved live that the reverse order answers
+        a legitimate replay with a fresh `409` the guard invented for what
+        it wrongly evaluated as a brand-new request. A replayed
+        `idempotencyKey` — reused against the SAME `action`, the SAME
+        `instanceId`, and the SAME normalized `params` it was first used
+        against — dispatches nothing and returns the original command's
+        result, flagged `replay: true`, with no guard evaluated at all. An
+        `idempotencyKey` reused against a DIFFERENT `action`, a DIFFERENT
+        `instanceId`, or DIFFERENT `params` is a `409` conflict, not a
+        replay, also decided before any guard runs: see the
+        `idempotencyKey` field on any FPPCommandRequest variant below (the
+        text is identical on all eight) and the `409` response below. Only
+        a genuinely NEW `idempotencyKey` — one this coordinator has never
+        recorded — reaches a primitive's own guard at all.
+
+        `startPlaylist`'s own `ifBusy` default (`"refuse"`) additionally
+        produces a `409` BEFORE anything is dispatched to FPP when a
+        DIFFERENT playlist is currently confirmed playing (`type`
+        `fpp-start-playlist-busy`, `detail` names what is playing), or when
+        the evidence needed to decide that is not current (`type`
+        `fpp-start-playlist-evidence-not-current` — this coordinator never
+        proceeds on the grounds that it could not tell) — two DIFFERENT
+        `type` values on the same `409` status, neither of them the plain
+        `conflict` the idempotency-key case above uses, so a client can
+        tell all three apart without parsing `detail` prose; see
+        StartPlaylistCommandRequest.params's own description. This is a
+        guard against an accidental interruption, not a lock: it is
+        evaluated against evidence that can be stale, and cannot prevent a
+        race against FPP's own scheduler.
       parameters:
         - name: instanceId
           in: path
@@ -507,9 +533,23 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "409":
           description: >-
-            `idempotencyKey` was already used for a command whose `action`
-            or `instanceId` differs from this request's own — a conflict,
-            not a replay (see this operation's own description).
+            Three DISTINCT causes, three DISTINCT `type` values, decided in
+            this order (see this operation's own description): (1)
+            `idempotencyKey` was already used for a command whose `action`,
+            `instanceId`, or normalized `params` differs from this
+            request's own — a conflict, not a replay, `type` `conflict`,
+            remedy "mint a fresh key"; decided BEFORE either guard below
+            ever runs. Only once the key is confirmed genuinely new does
+            `startPlaylist`'s own `ifBusy` guard get to refuse: (2) a
+            DIFFERENT playlist is confirmed playing, `type`
+            `fpp-start-playlist-busy`, remedy "resend with
+            ifBusy: replace"; or (3) the evidence needed to decide that is
+            not current, `type` `fpp-start-playlist-evidence-not-current`,
+            remedy "retry once evidence is current, or resend with
+            ifBusy: replace if interrupting is intended". No two of these
+            three share a `type`, specifically so a client branches on
+            `type`, never on `detail` prose, since (1)'s remedy is the
+            OPPOSITE of (2)'s and (3)'s.
           headers:
             ShowMesh-API-Version:
               $ref: "#/components/headers/ShowMesh-API-Version"
@@ -519,6 +559,23 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          description: >-
+            ADR-024 decision 11's fail-closed default: this action is not
+            a member of decision 11's blackout/stop/power-off safety
+            class, and the pre-dispatch write that must durably record a
+            command before it is dispatched could not be appended to this
+            coordinator's audit store. `type`
+            `fpp-command-refused-audit-unavailable`. Nothing was recorded
+            and nothing was dispatched to FPP; retry once the audit store
+            is writable again.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /observations:
     get:
       operationId: listObservations
@@ -1937,35 +1994,282 @@ components:
         instance:
           $ref: "#/components/schemas/FPPInstance"
     FPPCommandRequest:
+      description: >-
+        The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8,
+        ADR-001, ADR-003) — a discriminated union on `action`, one member
+        per docs/bench/fpp-command-vocabulary.md section 4's eight
+        primitives. This is a deliberate correction: earlier this schema
+        declared `params` as a bare, propertyless `object`, which a
+        strict-JSON-Schema code generator renders as a type NO non-empty
+        object satisfies — the exact opposite of what most of these eight
+        actions need, since three of them (`startPlaylist`,
+        `stopPlaylistGracefully`, `setVolume`) take real parameters. Each
+        variant below carries its own concrete `params` shape — required
+        fields, enums, numeric bounds — as real JSON Schema, not as prose
+        a generator cannot see.
+
+        `idempotencyKey` is required on every variant (ARCHITECTURE
+        section 8.1): RES-015 section 7.3 established that FPP supplies
+        nothing a coordinator-minted key could be derived from, so the
+        caller (showmeshctl, the Operator UI) mints a fresh one per
+        invocation. Its scoping rule (replay vs. `409` conflict) is
+        identical on every variant — see any one variant's own
+        `idempotencyKey` description below; the text is not repeated here
+        a ninth time.
+
+        `params` is REQUIRED whenever an action has at least one required
+        parameter (`startPlaylist`, `setVolume`) and OPTIONAL otherwise.
+        When optional, absent or `{}` means every parameter takes its
+        documented default. An explicit `"params": null` is ALWAYS a
+        `400`, for every action — every variant's own `params` schema is a
+        plain JSON object type, never nullable, so a generated client
+        cannot even construct this shape, and this coordinator's own
+        handler rejects it explicitly rather than treating null as
+        "omitted" (an explicit null is not the same as an omitted field).
+        A required parameter absent, present as `null`, or (for a string)
+        present as `""` are three DIFFERENT `400` responses, each naming
+        exactly what is wrong. A key an action's own `params` schema does
+        not declare is a `400` naming it (every variant's `params` sets
+        `additionalProperties: false`) — deliberately stricter than this
+        document's own "clients ignore unknown fields" rule, which governs
+        a client reading RESPONSES, not a server accepting a WRITE: a
+        typo'd parameter name must never silently fall back to that
+        parameter's own default.
+      discriminator:
+        propertyName: action
+        mapping:
+          startPlaylist: "#/components/schemas/StartPlaylistCommandRequest"
+          stopPlaylistGracefully: "#/components/schemas/StopPlaylistGracefullyCommandRequest"
+          setVolume: "#/components/schemas/SetVolumeCommandRequest"
+          stopPlaylist: "#/components/schemas/NoParamsFPPCommandRequest"
+          pausePlaylist: "#/components/schemas/NoParamsFPPCommandRequest"
+          resumePlaylist: "#/components/schemas/NoParamsFPPCommandRequest"
+          nextPlaylistItem: "#/components/schemas/NoParamsFPPCommandRequest"
+          prevPlaylistItem: "#/components/schemas/NoParamsFPPCommandRequest"
+      oneOf:
+        - $ref: "#/components/schemas/StartPlaylistCommandRequest"
+        - $ref: "#/components/schemas/StopPlaylistGracefullyCommandRequest"
+        - $ref: "#/components/schemas/SetVolumeCommandRequest"
+        - $ref: "#/components/schemas/NoParamsFPPCommandRequest"
+    StartPlaylistCommandRequest:
       type: object
       description: >-
-        The body of POST /fpp/{instanceId}/commands (Step 7 seam C, ADR-001,
-        ADR-003). action is checked against a fixed vocabulary at the
-        handler; "stopPlaylist" is the only member today, and dispatches
-        FPP's own native "Stop Now" command. idempotencyKey is required on
-        every request (ARCHITECTURE section 8.1): RES-015 section 7.3
-        established that FPP supplies nothing a coordinator-minted key
-        could be derived from, so the caller (showmeshctl, the Operator UI)
-        mints a fresh one per invocation.
+        `action: "startPlaylist"` (docs/bench/fpp-command-vocabulary.md
+        sections 4/5): starts a playlist on the target FPP instance, or
+        refuses per `ifBusy` below.
+      required: [action, idempotencyKey, params]
+      properties:
+        action:
+          type: string
+          const: startPlaylist
+        idempotencyKey:
+          type: string
+          description: >-
+            Scoped to the exact (action, instanceId, normalized params)
+            triple it is first used against — a database-level UNIQUE
+            constraint on this value alone (schemaV6) cannot express that
+            scope, so the server checks it explicitly: reusing a key
+            against the SAME action, instanceId, AND normalized params is
+            a replay (nothing is dispatched a second time, the original
+            result is returned, flagged `replay: true`); reusing it
+            against a DIFFERENT action, a DIFFERENT instanceId, or
+            DIFFERENT params is a `409` conflict, refused outright, never
+            answered as if it belonged to whichever command first claimed
+            the key. Mint a fresh key per genuinely new request — never
+            reuse one across two different invocations "to be safe."
+        params:
+          type: object
+          description: >-
+            `ifBusy: "refuse"` (the default) additionally produces a `409`
+            BEFORE anything is dispatched to FPP when a DIFFERENT playlist
+            is currently confirmed playing (`type`
+            `fpp-start-playlist-busy`), or when the evidence needed to
+            decide that is not current (`type`
+            `fpp-start-playlist-evidence-not-current`) — see the `409`
+            response on POST /fpp/{instanceId}/commands.
+          required: [playlist]
+          additionalProperties: false
+          properties:
+            playlist:
+              type: string
+              minLength: 1
+              maxLength: 250
+              # Step 8 review finding 12: a generated client could
+              # previously build a schema-valid request this coordinator
+              # always rejects with a 400 — `" showmesh-test "` (leading/
+              # trailing whitespace), 300 `a`s (exceeds 250 bytes), and
+              # `"../../etc/passwd"` (traversal, described only in prose)
+              # all validated against the PUBLISHED schema before this fix.
+              # allOf below expresses every rule
+              # internal/coordinator/fppcommand.ValidatePlaylistName
+              # enforces that JSON Schema `pattern` (ECMA-style, no
+              # lookaround needed — verified against every one of that
+              # function's own rules, including every case this finding
+              # named, with a small Go program; see this task's report) can
+              # express EXACTLY, not approximately: no ASCII control
+              # character (0x00-0x1F, 0x7F) or `/`/`\` anywhere; no leading
+              # or trailing ASCII space (0x20) — no OTHER leading/trailing
+              # ASCII whitespace needs its own rule, because tab/CR/LF are
+              # already banned everywhere by the control-character pattern;
+              # and no `..` substring anywhere (the traversal rule),
+              # expressed without lookaround by requiring every dot be
+              # immediately followed by a non-dot, with at most one
+              # trailing dot allowed. Two rules the server ALSO enforces
+              # remain genuinely inexpressible here and are named rather
+              # than left undocumented, per this finding's own instruction:
+              # (1) `maxLength` counts Unicode CODE POINTS (JSON Schema's
+              # own definition), while the server counts UTF-8 BYTES (the
+              # 250 the server compares against is `len(name)` in Go, which
+              # is bytes) — a name using multi-byte characters can be
+              # schema-valid at 250 code points and still exceed 250 bytes
+              # server-side; and (2) the server trims Unicode whitespace
+              # generally (Go's `strings.TrimSpace`, `unicode.IsSpace`),
+              # which additionally rejects a handful of non-ASCII
+              # whitespace code points (e.g. U+00A0) at the edges that this
+              # pattern — which only names ASCII space explicitly — cannot
+              # practically enumerate. Neither gap is closable by loosening
+              # the server; the server remains authoritative for both.
+              allOf:
+                - pattern: '^[^\x00-\x1F\x7F/\\]*$'
+                - pattern: '^([^\x20]|[^\x20].*[^\x20])$'
+                - pattern: '^(\.?[^.])*\.?$'
+              description: >-
+                Must not contain `/`, `\`, or `..` (FPP resolves this to a
+                path on its own filesystem; this coordinator rejects a
+                traversal attempt before dispatch rather than passing one
+                through), must not contain an ASCII control character, and
+                must not have leading or trailing whitespace (rejected,
+                never trimmed — the operator's value is not this
+                coordinator's to edit). The `maxLength` above is 250 JSON
+                Schema code points; the coordinator's own limit is 250
+                UTF-8 BYTES (see this property's own schema-level comment
+                for why the two are not always the same number). 250
+                rather than 255 because FPP appends `.json` to this value
+                to resolve a filename, so the string that must fit a
+                POSIX `NAME_MAX` of 255 is this name plus five bytes.
+            repeat:
+              type: boolean
+              default: false
+            ifBusy:
+              type: string
+              enum: [refuse, replace]
+              default: refuse
+              description: >-
+                `"refuse"` is the default and what an absent field means.
+                `"replace"` is the operator saying, in this request, that
+                interrupting whatever is currently running is intended.
+    StopPlaylistGracefullyCommandRequest:
+      type: object
+      description: >-
+        `action: "stopPlaylistGracefully"` (docs/bench/fpp-command-vocabulary.md
+        section 3.3/4): a graceful stop's terminal state is bounded by the
+        currently playing item's own remaining runtime, not by any number
+        this coordinator can choose — see FPPCommandResult.outcomeReason.
       required: [action, idempotencyKey]
       properties:
         action:
           type: string
-          enum: [stopPlaylist]
+          const: stopPlaylistGracefully
         idempotencyKey:
           type: string
           description: >-
-            Scoped to the exact (action, instanceId) pair it is first used
-            against — a database-level UNIQUE constraint on this value
-            alone (schemaV6) cannot express that scope, so the server
-            checks it explicitly: reusing a key against the SAME action and
-            instanceId is a replay (nothing is dispatched a second time,
-            the original result is returned, flagged `replay: true`);
-            reusing it against a DIFFERENT action or a DIFFERENT
-            instanceId is a `409` conflict, refused outright, never
+            Scoped to the exact (action, instanceId, normalized params)
+            triple it is first used against — a database-level UNIQUE
+            constraint on this value alone (schemaV6) cannot express that
+            scope, so the server checks it explicitly: reusing a key
+            against the SAME action, instanceId, AND normalized params is
+            a replay (nothing is dispatched a second time, the original
+            result is returned, flagged `replay: true`); reusing it
+            against a DIFFERENT action, a DIFFERENT instanceId, or
+            DIFFERENT params is a `409` conflict, refused outright, never
             answered as if it belonged to whichever command first claimed
             the key. Mint a fresh key per genuinely new request — never
             reuse one across two different invocations "to be safe."
+        params:
+          type: object
+          description: >-
+            Optional; absent or `{}` means `afterLoop` defaults to
+            `false`.
+          additionalProperties: false
+          properties:
+            afterLoop:
+              type: boolean
+              default: false
+    SetVolumeCommandRequest:
+      type: object
+      description: >-
+        `action: "setVolume"` (docs/bench/fpp-command-vocabulary.md
+        section 3.6/4).
+      required: [action, idempotencyKey, params]
+      properties:
+        action:
+          type: string
+          const: setVolume
+        idempotencyKey:
+          type: string
+          description: >-
+            Scoped to the exact (action, instanceId, normalized params)
+            triple it is first used against — a database-level UNIQUE
+            constraint on this value alone (schemaV6) cannot express that
+            scope, so the server checks it explicitly: reusing a key
+            against the SAME action, instanceId, AND normalized params is
+            a replay (nothing is dispatched a second time, the original
+            result is returned, flagged `replay: true`); reusing it
+            against a DIFFERENT action, a DIFFERENT instanceId, or
+            DIFFERENT params is a `409` conflict, refused outright, never
+            answered as if it belonged to whichever command first claimed
+            the key. Mint a fresh key per genuinely new request — never
+            reuse one across two different invocations "to be safe."
+        params:
+          type: object
+          required: [volume]
+          additionalProperties: false
+          properties:
+            volume:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: >-
+                A JSON number with a fractional part is a `400`, never
+                truncated (capture section 1.5: FPP itself silently
+                coerces and clamps a bad value; this coordinator does not
+                repeat that for its own parameters).
+    NoParamsFPPCommandRequest:
+      type: object
+      description: >-
+        `action` one of `"stopPlaylist"`, `"pausePlaylist"`,
+        `"resumePlaylist"`, `"nextPlaylistItem"`, `"prevPlaylistItem"` —
+        docs/bench/fpp-command-vocabulary.md section 4's five
+        zero-parameter primitives, which take no arguments and so share
+        one shape.
+      required: [action, idempotencyKey]
+      properties:
+        action:
+          type: string
+          enum:
+            [stopPlaylist, pausePlaylist, resumePlaylist, nextPlaylistItem,
+             prevPlaylistItem]
+        idempotencyKey:
+          type: string
+          description: >-
+            Scoped to the exact (action, instanceId, normalized params)
+            triple it is first used against — a database-level UNIQUE
+            constraint on this value alone (schemaV6) cannot express that
+            scope, so the server checks it explicitly: reusing a key
+            against the SAME action, instanceId, AND normalized params is
+            a replay (nothing is dispatched a second time, the original
+            result is returned, flagged `replay: true`); reusing it
+            against a DIFFERENT action, a DIFFERENT instanceId, or
+            DIFFERENT params is a `409` conflict, refused outright, never
+            answered as if it belonged to whichever command first claimed
+            the key. Mint a fresh key per genuinely new request — never
+            reuse one across two different invocations "to be safe."
+        params:
+          type: object
+          description: >-
+            Optional; this action takes no parameters — a non-empty
+            `params` object is a `400`.
+          additionalProperties: false
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.
@@ -1990,7 +2294,7 @@ components:
         vocabulary AuditEntry.outcomeState already uses, not a second one
         invented for this endpoint.
       required:
-        [id, idempotencyKey, action, instanceId, replay, outcome,
+        [id, idempotencyKey, action, instanceId, params, replay, outcome,
          outcomeState, outcomeReason, attributionDegraded, dispatchedAt,
          resolvedAt]
       properties:
@@ -2002,6 +2306,21 @@ components:
           type: string
         instanceId:
           type: string
+        params:
+          type: object
+          additionalProperties: true
+          description: >-
+            This command's own normalized parameters (Step 8): defaults
+            applied, present even for a zero-parameter action (as `{}`),
+            never omitted or null — matching AuditEntry.params's identical
+            convention (including `additionalProperties: true`: this is
+            the RESPONSE echo of whichever action's own params this
+            command actually carried, heterogeneous by construction,
+            unlike FPPCommandRequest's own per-action `params`, which is a
+            real, closed shape per variant). On a REPLAY response this is
+            the ORIGINAL command's own params, so a replay always tells
+            the caller what the original request's parameters actually
+            were.
         replay:
           type: boolean
           description: >-
@@ -2042,7 +2361,24 @@ components:
             A short, human-readable explanation. Non-empty whenever this
             response's own `command.outcome` is `"confirmed"` or
             `"unconfirmed"` (i.e. whenever this command has actually
-            resolved) — the only value for which it may be empty is a
+            resolved) — verified true, as of Step 8 review finding 6, for
+            every one of the eight primitives on both a confirmed and an
+            unconfirmed outcome (internal/coordinator/api/fppcommand_evidence.go's
+            resolveConfirmationEvidence and every predicate built on it
+            always produces a reason; a confirmed result used to leave this
+            blank, fixed by that same finding). Deliberately left `type:
+            string` with no `minLength`, unlike `outcomeState`'s enum
+            (this schema's own JSON Schema `if`/`then` could express
+            "non-empty unless outcome is empty", but this document's own
+            test suite overlays every schema declaring `properties` with
+            `additionalProperties: false` — including inside an `if`
+            branch — which either rejects the WHOLE object against a
+            partial `if` subschema or silently defeats the conditional
+            outright, a defect invisible to review and exactly the "a test
+            that passes whether or not the bug is present" shape CLAUDE.md
+            warns against; a schema constraint that risky is worse than
+            none). This field's non-emptiness is verified at the handler
+            level instead — the only value for which it may be empty is a
             REPLAY response returned before the original request's own
             dispatch/confirmation has finished, matching `outcome`'s own
             narrow accepted-empty case exactly. A command a coordinator
@@ -2439,14 +2775,14 @@ components:
         member present on every problem this API produces, with no
         exception (section 6.2 and 6.6). supportedVersions is present only
         on an "unsupported-api-version" problem. type is a stable,
-        documented identifier a client dispatches on — the twelve values
+        documented identifier a client dispatches on — the fourteen values
         in its enum below are every class this coordinator currently
         produces, and this list is the single source of truth for that
         set. It is deliberately not a fetchable URI: nothing in this API
         or its tests dereferences it over the network.
 
 
-        Four of the twelve are ADR-024: "forbidden" (401 means no valid
+        Four of the fourteen are ADR-024: "forbidden" (401 means no valid
         credential, this means authenticated but missing a scope — the
         detail text names the missing scope), "csrf-rejected" (a
         cookie-authenticated write with no `Sec-Fetch-Site: same-origin`
@@ -2460,8 +2796,27 @@ components:
         the coordinator's own environment, RES-008 D1),
         `POST /discovery/runs` (Step 7 seam B, refused while a run is
         already in progress), and a `commands` idempotency key reused
-        against a different action or target (Step 7 seam C) — `detail`
-        names which.
+        against a different action, target, or (as of Step 8) normalized
+        params (Step 7 seam C, extended by Step 8) — `detail` names which.
+        Three are Step 8's own additions, all scoped to
+        `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable"
+        (ADR-024 decision 11's fail-closed default for a non-safety-class
+        primitive, `503`, when the pre-dispatch audit write could not be
+        made), "fpp-start-playlist-evidence-not-current"
+        (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the
+        evidence it would need to decide whether a different playlist is
+        running is not itself current, `409`), and "fpp-start-playlist-busy"
+        (that same guard refusing because a DIFFERENT playlist IS
+        confirmed currently playing, `409`) — kept as three DISTINCT
+        `409`/`503` types (not sharing "conflict", and not sharing each
+        other) specifically so a client branches on `type` rather than
+        parsing `detail` prose: "mint a fresh key" (idempotency conflict),
+        "resend with ifBusy: replace" (busy), and "retry once evidence is
+        current, or resend with ifBusy: replace if interrupting is
+        intended" (evidence not current) are three different remedies, and
+        a review finding caught that the busy/evidence-not-current split
+        had left "busy" still sharing a type with the idempotency case even
+        after the evidence-not-current case was split out.
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -2479,6 +2834,9 @@ components:
             - https://showmesh.dev/problems/too-many-requests
             - https://showmesh.dev/problems/credential-in-url
             - https://showmesh.dev/problems/conflict
+            - https://showmesh.dev/problems/fpp-command-refused-audit-unavailable
+            - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
+            - https://showmesh.dev/problems/fpp-start-playlist-busy
         title:
           type: string
         status:

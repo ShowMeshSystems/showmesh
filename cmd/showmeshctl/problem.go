@@ -56,6 +56,53 @@ const (
 	// did put one there is reported as a usage bug in this CLI rather than
 	// an opaque server error.
 	problemCredentialInURL = "https://showmesh.dev/problems/credential-in-url"
+
+	// problemConflict is Step 8's own addition: internal/coordinator/api's
+	// ProblemTypeConflict, a 409 meaning "the request itself is valid, but
+	// this coordinator's current state makes it unsafe or meaningless to
+	// act on right now" — every "fpp start-playlist" ifBusy=refuse guard
+	// where a DIFFERENT playlist is confirmed playing, and a replayed
+	// idempotency key reused against a different action/target/params,
+	// share this one type (internal/coordinator/api/problem.go's own
+	// comment on fppEndpointsEnvVarSetProblem: "all three [now several]
+	// are the identical RFC 9457 shape... detail is what tells them
+	// apart"). Step 8 review defect: this had no case below and fell to
+	// exitAPIError (6, "the coordinator returned some other error"),
+	// which a script cannot distinguish from an actual coordinator
+	// malfunction — see exitConflict.
+	problemConflict = "https://showmesh.dev/problems/conflict"
+
+	// problemFPPStartPlaylistEvidenceNotCurrent is a task-2b addition to
+	// internal/coordinator/api/problem.go: "fpp start-playlist" ifBusy
+	// =refuse's OTHER 409 — the coordinator could not tell what is
+	// playing, rather than confirming a DIFFERENT playlist is playing —
+	// used to share [problemConflict]'s own type, distinguishable only by
+	// an Operator UI matching a substring of `detail` (this program never
+	// did that; it always just prints `detail` verbatim). Mapped to the
+	// SAME [exitConflict] as [problemConflict]: both name a deliberate
+	// refusal an operator can retry, and main.go's own --help text for
+	// exit 10 already covers "the evidence needed to decide that is not
+	// current" as one of conflict's causes, so this needs no new exit
+	// code, only an explicit case below rather than falling through to
+	// the (also-correct, but implicit) 409 status fallback.
+	problemFPPStartPlaylistEvidenceNotCurrent = "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current"
+
+	// problemFPPStartPlaylistBusy is Step 8 review finding 8's "finish the
+	// split" fix: fppStartPlaylistBusyProblem ("fpp start-playlist"
+	// ifBusy=refuse's guard refusing because a DIFFERENT playlist IS
+	// confirmed playing) used to share [problemConflict]'s own type too —
+	// the split that gave [problemFPPStartPlaylistEvidenceNotCurrent] its
+	// own type left this sibling case behind, still indistinguishable from
+	// an idempotency-key conflict except by `detail` prose (this program
+	// never parses that; an Operator UI reviewing findings did). Mapped to
+	// the SAME [exitConflict] for the identical reason
+	// problemFPPStartPlaylistEvidenceNotCurrent is: this CLI prints
+	// `detail` verbatim rather than branching UI-style on the remedy, so
+	// one exit code covers every "deliberate, retryable refusal" 409 —
+	// this constant and case exist so the mapping is explicit rather than
+	// silently relying on the (also-correct) 409 status fallback, matching
+	// this file's own established pattern for every 409 type above.
+	problemFPPStartPlaylistBusy = "https://showmesh.dev/problems/fpp-start-playlist-busy"
 )
 
 // Exit codes. Documented in --help (see usage.go) so a script wrapping this
@@ -91,6 +138,21 @@ const (
 	// request succeeded and told you, honestly, that the command's effect
 	// was not confirmed."
 	exitCommandUnconfirmed = 9
+
+	// exitConflict is Step 8's own addition: a 409 carrying
+	// [problemConflict] — a deliberate refusal because this coordinator's
+	// current state makes the request unsafe or meaningless right now (a
+	// different playlist is playing and ifBusy=refuse, the evidence
+	// needed to evaluate that guard is not current, or an idempotency key
+	// was reused against a different action/target/params). Before this
+	// exit code existed, exitCodeForProblem had no case for it and no 409
+	// in its status fallback, so it fell to exitAPIError (6) — "the
+	// coordinator returned some other error" — which a script cannot
+	// distinguish from an actual coordinator malfunction. This is a
+	// DIFFERENT fact: the coordinator is healthy and answered correctly,
+	// and the operator's own remedy is in stderr (e.g. "retry with
+	// --if-busy=replace").
+	exitConflict = 10
 )
 
 // cliError carries an exit code alongside a human-readable message, so
@@ -128,6 +190,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitForbidden
 		case problemTooManyRequests:
 			return exitRateLimited
+		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy:
+			return exitConflict
 		}
 	}
 	switch status {
@@ -141,6 +205,8 @@ func exitCodeForProblem(status int, p *problem) int {
 		return exitUsage
 	case 429:
 		return exitRateLimited
+	case 409:
+		return exitConflict
 	default:
 		return exitAPIError
 	}

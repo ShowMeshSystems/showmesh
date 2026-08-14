@@ -4,6 +4,15 @@ import { FPPHealthBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
 import { FPPStopPlaylistControl } from '../components/FPPStopPlaylistControl'
+import { FPPStartPlaylistControl } from '../components/FPPStartPlaylistControl'
+import { FPPStopPlaylistGracefullyControl } from '../components/FPPStopPlaylistGracefullyControl'
+import {
+  FPPNextPlaylistItemControl,
+  FPPPausePlaylistControl,
+  FPPPrevPlaylistItemControl,
+  FPPResumePlaylistControl,
+} from '../components/FPPPlaylistTransportControls'
+import { FPPSetVolumeControl } from '../components/FPPSetVolumeControl'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { PortGrid } from '../components/PortGrid'
 import { formatAbsolute } from '../app/time'
@@ -69,15 +78,39 @@ export function FPPDetail() {
             </section>
           </PanelErrorBoundary>
 
-          {/* Step 7 seam C, ADR-001/ADR-003: this application's first
-              write control. FPPStopPlaylistControl owns its own
-              scope-gating (ScopedButton, ADR-024 decision 12) and its
-              own outcome rendering (confirmed/unconfirmed/pending, never
-              a bare "done" on a 200 alone). */}
+          {/* Step 7 seam C / Step 8, ADR-001/ADR-003: the full primitive
+              command vocabulary (docs/bench/fpp-command-vocabulary.md
+              section 4's eight-member registry). Every control here owns
+              its own scope-gating (ScopedButton, ADR-024 decision 12) and
+              its own outcome rendering (confirmed/unconfirmed/pending,
+              never a bare "done" on a 200 alone) — FPPStopPlaylistControl
+              is Step 7's original, unchanged; the rest are Step 8's own
+              addition, each in its own panel so one primitive's own
+              caveats (nextPlaylistItem's end-of-show hazard,
+              stopPlaylistGracefully's "confirmed is not the same as
+              stopped", startPlaylist's ifBusy guard) stay visually
+              scoped to the control they belong to rather than blurring
+              together in one shared block. */}
           <PanelErrorBoundary panelLabel="Commands">
             <section className="panel">
               <h3 className="panel__title">Commands</h3>
+              <h4 className="panel__title">Stop</h4>
               <FPPStopPlaylistControl instanceId={instance.instanceId} />
+              <h4 className="panel__title">Stop gracefully</h4>
+              <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
+              <h4 className="panel__title">Pause / resume</h4>
+              <FPPPausePlaylistControl instanceId={instance.instanceId} />
+              <FPPResumePlaylistControl instanceId={instance.instanceId} />
+              <h4 className="panel__title">Item navigation</h4>
+              <FPPPrevPlaylistItemControl instanceId={instance.instanceId} />
+              <FPPNextPlaylistItemControl
+                instanceId={instance.instanceId}
+                observations={instance.observations}
+              />
+              <h4 className="panel__title">Start playlist</h4>
+              <FPPStartPlaylistControl instanceId={instance.instanceId} />
+              <h4 className="panel__title">Volume</h4>
+              <FPPSetVolumeControl instanceId={instance.instanceId} />
             </section>
           </PanelErrorBoundary>
 

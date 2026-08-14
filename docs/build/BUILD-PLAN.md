@@ -457,7 +457,23 @@ Review then runs as it did for Step 6: a constraint review and a test-honesty re
 
 ## Step 8: The primitive command vocabulary
 
-Status: not started. Specified 2026-08-13.
+Status: **done 2026-08-13.** Specified, built, reviewed and verified against a running coordinator the same day.
+
+**The capture is done and is [docs/bench/fpp-command-vocabulary.md](../bench/fpp-command-vocabulary.md)**, taken from the bench `fppd` 9.5.3 before any command was named, as the ordering constraint below requires. It carries the shipped vocabulary, the argument encoding proven against a real daemon, the answer to the start-against-a-busy-host question, and the exclusion register for the 43 captured commands this step does not ship.
+
+**Eight primitives ship**: `startPlaylist`, `stopPlaylist`, `stopPlaylistGracefully`, `pausePlaylist`, `resumePlaylist`, `nextPlaylistItem`, `prevPlaylistItem`, `setVolume`. All eight are confirmed through signals the collector already collects, on evidence post-dating dispatch.
+
+**What the capture changed about this specification, and it is the reason the ordering constraint exists.** The plan's own examples were wrong in the same way Step 7's were. FPP's `200` means only that its command dispatcher ran: `Start Playlist` against a playlist that does not exist answers `200 "Playlist Starting"` and the host stays idle. `ifNotRunning` does not mean "only start if nothing is running"; it suppresses restarting the *same* playlist and does nothing to protect a running show. `Next Playlist Item` at the last item ends the playlist. A graceful stop's terminal state is bounded by show content, so it cannot confirm on `idle` within any deadline. And `Test Start` segfaulted the bench `fppd`. None of that was predictable from the outside.
+
+**Verified against the running stack** (`make test-integration-fpp`, 28 cases against the real bench `fppd`): `startPlaylist` against a host already playing that playlist confirmed after **15.010 s** and `stopPlaylist` against an already-idle host after **15.023 s**, against a 400 ms floor, where Step 7's defect resolved in 179 microseconds. A graceful stop confirmed while FPP still read `stopping gracefully`, with a reason saying the show had not stopped. `resumePlaylist` against an idle host reported **unconfirmed after 20.011 s** with a stated reason, which is the case where FPP answers `200` and does nothing. The collector's read-only posture held: 12 GET, 2 POST `/api/command`, 0 other.
+
+**The review found fourteen findings and all are closed.** The two sharpest: `nextPlaylistItem` reported `confirmed` against an already-idle host (this step's own confirmation rule, broken by the specification that wrote it), and ADR-024 decision 11's safety-class exemption was applied to all eight primitives rather than the two stops, so `startPlaylist` would have dispatched unaccountably when the audit store failed. Both were found by running rather than reading, and both are now enforced by types and tests.
+
+**Confirmation latency was fixed inside this step, by the owner's decision.** A post-dispatch poll nudge took confirmation from 13-15 s to 0.55-0.61 s without touching the evidence fence. See BUILD-LOG.md.
+
+**Verified in a real browser** by the owner, against the shipped UI image behind the real same-origin proxy. Every control behaves; the visual design does not, and that is recorded as work for a step against OBSERVABILITY.md rather than absorbed here.
+
+**Two deliberate deferrals, by the owner's decision on 2026-08-13, on the grounds that nothing here is release-ready yet.** Operator-facing error copy was rewritten once in this step and is **still not final**: it no longer cites repo paths at the operator, and two guard tests now fail on any such citation, but the register is still longer and more technical than an operator needs under pressure. And the command controls' visual design is unaddressed. Both are real and both are cheaper to do once, alongside the OBSERVABILITY.md surface work, than piecemeal in the step that happened to surface them.
 
 **Goal:** Step 7 shipped one command and proved the whole path around it. This step fills out the primitive vocabulary, so that the macro step has something real to sequence and so that ARCHITECTURE Phase 1's "native FPP lifecycle commands" means more than one of them.
 
