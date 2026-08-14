@@ -13,12 +13,21 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
-// Schema strings for the three payloads Step 2 defines. See the package
-// doc comment for why cmd and result have no schema/payload type yet.
+// Schema strings for the payloads this package defines. Step 2 shipped the
+// first three (hello, health, lwt); cmd, result, and the one observed
+// signal a command execution produces (agent echo) were added once
+// pkg/command stopped being a stub — see this file's CmdPayload,
+// ResultPayload, and AgentEchoPayload doc comments, and the package doc
+// comment's note on why these are independent, JSON-tagged types rather
+// than pkg/command's own Envelope reused directly.
 const (
 	SchemaNodeHelloV1  = "showmesh.node.hello/v1"
 	SchemaNodeHealthV1 = "showmesh.node.health/v1"
 	SchemaNodeLWTV1    = "showmesh.node.lwt/v1"
+
+	SchemaNodeCmdV1       = "showmesh.node.cmd/v1"
+	SchemaNodeResultV1    = "showmesh.node.result/v1"
+	SchemaNodeAgentEchoV1 = "showmesh.node.agent.echo/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -229,6 +238,247 @@ type LWTPayload struct {
 	Reason string `json:"reason"`
 }
 
+// CmdTarget mirrors pkg/command.Target's field semantics on the wire — see
+// this package's doc comment for why this package defines its own
+// JSON-tagged types rather than importing pkg/command.
+type CmdTarget struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+// CmdIssuer mirrors pkg/command.Issuer's field semantics on the wire.
+type CmdIssuer struct {
+	PrincipalID   string `json:"principalId"`
+	PrincipalName string `json:"principalName"`
+}
+
+// CmdPayload is the payload of the showmesh.node.cmd/v1 schema, published
+// (never retained — see [CmdDeliveryPolicy]) to a node's cmd topic. Field
+// semantics mirror pkg/command.Envelope; see this file's top-of-package
+// note for why this is an independent, JSON-tagged type rather than that
+// package's Envelope reused directly. Unlike HelloPayload/HealthPayload/
+// LWTPayload, CmdPayload DOES carry its own identifier (CommandID) and
+// idempotency key: those are the command's own identity, not the sending
+// node's, so there is no risk of the topic-injection double-carrying
+// problem [HelloPayload]'s doc comment describes for NodeID.
+type CmdPayload struct {
+	// CommandID identifies this command, matching pkg/command.Envelope.ID.
+	CommandID string `json:"commandId"`
+
+	// IdempotencyKey is what a redelivery of the SAME logical command is
+	// detected by (ADR-008: QoS 1 + idempotency keys so a redelivered
+	// command executes exactly once). Distinct from CommandID for the same
+	// reason pkg/command.Envelope.IdempotencyKey's doc comment gives.
+	IdempotencyKey string `json:"idempotencyKey"`
+
+	// Action identifies what this command does, e.g. "agent.echo". This
+	// package defines no action vocabulary of its own, matching
+	// pkg/command.Envelope.Action's doc comment.
+	Action string `json:"action"`
+
+	Target CmdTarget `json:"target"`
+
+	// Params carries this command's arguments. Deliberately NOT
+	// `omitempty`: this project has a standing rule that absent, null, and
+	// explicitly empty are three different things on a wire payload (the
+	// same class of bug this codebase has shipped four times — see
+	// CLAUDE.md), and `omitempty` on a map collapses two of them (a nil
+	// Params and an explicitly-set, empty map[string]any{}) into the same
+	// "no params key at all" wire representation, indistinguishable from
+	// each other. Without `omitempty`, this package's own encoder emits
+	// "params":null for a nil map and "params":{} for an explicit empty
+	// one, so those two stay distinguishable. A fully absent "params" key
+	// (only reachable from a non-Go or hand-crafted producer, never from
+	// this package's own constructors) still decodes to the same nil Go
+	// map as an explicit null — an inherent limitation of representing
+	// this field as map[string]any rather than a pointer, not something
+	// `omitempty` was ever hiding or fixing. [CmdPayload.Validate]
+	// deliberately does not require Params to be non-nil: a future
+	// operation may legitimately take none.
+	Params map[string]any `json:"params"`
+
+	Issuer CmdIssuer `json:"issuer"`
+
+	// RequestedRevision mirrors pkg/command.Envelope.RequestedRevision:
+	// empty for a command with no revision to be sensitive to.
+	//
+	// This seam DECODES RequestedRevision but does not enforce it anywhere
+	// — see internal/agent/command.go's HandleMessage, where cmd is
+	// decoded, for where that gap is called out explicitly. The one
+	// allowlisted operation this seam ships, "agent.echo", is not
+	// revision-sensitive; a future operation that is must add its own
+	// enforcement, not inherit one from here.
+	RequestedRevision string `json:"requestedRevision,omitempty"`
+
+	// ConfirmationMethod mirrors pkg/command.Envelope.ConfirmationMethod.
+	// Today only "evidence" (pkg/command.ConfirmationEvidence's value) is
+	// implemented anywhere in this codebase; this package does not import
+	// pkg/command to enforce that as a shared constant (see this file's
+	// top-of-package note), so a caller comparing against the literal must
+	// keep it in sync with pkg/command.ConfirmationEvidence by convention,
+	// the same way cmd/showmeshctl's own doc comments describe reconciling
+	// independently-chosen values without a shared import.
+	ConfirmationMethod string `json:"confirmationMethod"`
+
+	// Deadline is the absolute time by which confirmation must succeed, or
+	// nil for "no deadline was set" — never a zero time standing in for
+	// that, matching pkg/command.Envelope.Deadline's doc comment exactly.
+	// A nil Deadline is a legitimate, valid state: [CmdPayload.Validate]
+	// deliberately performs no required-ness check on this field.
+	Deadline *time.Time `json:"deadline"`
+}
+
+// Validate reports whether p has every field a well-formed command payload
+// requires: non-empty CommandID, IdempotencyKey, Action, Target.Kind,
+// Target.ID, Issuer.PrincipalID, and ConfirmationMethod. Deadline is
+// deliberately NOT checked for presence — nil legitimately means "no
+// deadline," not a defect (see the field's doc comment); this project has
+// a standing rule that absent, null, and explicitly empty are three
+// different things on any write surface, and treating a nil Deadline as
+// "missing" here would be exactly that mistake.
+func (p CmdPayload) Validate() error {
+	switch {
+	case p.CommandID == "":
+		return fmt.Errorf("%w: commandId", ErrPayloadMissingField)
+	case p.IdempotencyKey == "":
+		return fmt.Errorf("%w: idempotencyKey", ErrPayloadMissingField)
+	case p.Action == "":
+		return fmt.Errorf("%w: action", ErrPayloadMissingField)
+	case p.Target.Kind == "":
+		return fmt.Errorf("%w: target.kind", ErrPayloadMissingField)
+	case p.Target.ID == "":
+		return fmt.Errorf("%w: target.id", ErrPayloadMissingField)
+	case p.Issuer.PrincipalID == "":
+		return fmt.Errorf("%w: issuer.principalId", ErrPayloadMissingField)
+	case p.ConfirmationMethod == "":
+		return fmt.Errorf("%w: confirmationMethod", ErrPayloadMissingField)
+	}
+	return nil
+}
+
+// Outcome vocabulary for [ResultPayload.Outcome]. This is a closed set,
+// matching pkg/observation.State's closed-enum style: [ResultPayload.
+// Validate] rejects any other string rather than treating outcome as
+// freely extensible ad hoc.
+const (
+	OutcomeConfirmed   = "confirmed"
+	OutcomeUnconfirmed = "unconfirmed"
+	OutcomeRefused     = "refused"
+	OutcomeFailed      = "failed"
+)
+
+// ResultEvidence is the evidence backing a [ResultPayload]'s outcome: what
+// was observed, and when. Per ADR-003, an outcome must be backed by a
+// distinct post-execution observation, not by the fact that a command
+// merely arrived — this project has previously shipped a defect where a
+// command was reported confirmed 179 microseconds after its own dispatch
+// by comparing against a stale pre-dispatch reading; ResultEvidence exists
+// so a result payload always carries the observation it was actually
+// judged against, not merely a boolean.
+type ResultEvidence struct {
+	// Signal names what was observed, e.g. "node.agent.echo_value".
+	Signal string `json:"signal"`
+
+	// Value is what was observed. Left as `any` because the vocabulary of
+	// evidence signals is not fixed by this package — see Action's doc
+	// comment on why this package defines no operation vocabulary.
+	Value any `json:"value"`
+
+	// ObservedAt is when the observed value was true, or nil if genuinely
+	// unknown — matching pkg/observation.Observation.ObservedAt's own
+	// nil-means-unknown convention, never defaulted to CollectedAt.
+	ObservedAt *time.Time `json:"observedAt"`
+
+	// CollectedAt is when this evidence was gathered by the agent. Always
+	// set; bookkeeping, not evidence of the subject's state, matching
+	// pkg/observation.Observation.CollectedAt's own doc comment.
+	CollectedAt time.Time `json:"collectedAt"`
+}
+
+// ResultPayload is the payload of the showmesh.node.result/v1 schema,
+// published (never retained — see [ResultDeliveryPolicy]) to a command's
+// result topic ([ResultTopic]).
+type ResultPayload struct {
+	CommandID      string `json:"commandId"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	Action         string `json:"action"`
+
+	// Outcome is one of [OutcomeConfirmed], [OutcomeUnconfirmed],
+	// [OutcomeRefused], or [OutcomeFailed]. See [ResultPayload.Validate].
+	Outcome string `json:"outcome"`
+
+	// Reason is a short human-readable explanation. Required whenever
+	// Outcome is not [OutcomeConfirmed] — mirroring, one layer up,
+	// pkg/observation.Observation.Reason's own "required whenever there is
+	// no current value" rule, applied here to "required whenever the
+	// outcome isn't a plain success."
+	Reason string `json:"reason"`
+
+	// Evidence is the post-execution observation backing Outcome; see
+	// [ResultEvidence]'s doc comment on why this must be a distinct,
+	// separately-collected observation rather than an assumption from
+	// dispatch. Nil when no evidence was collected (e.g. a refused or
+	// failed command that never reached execution).
+	Evidence *ResultEvidence `json:"evidence"`
+
+	// ReceivedAt is when the agent received the command that produced this
+	// result, on the agent's own clock.
+	ReceivedAt time.Time `json:"receivedAt"`
+
+	// ExecutedAt is when the operation actually ran, or nil if it never
+	// did (refused, or failed before execution).
+	ExecutedAt *time.Time `json:"executedAt"`
+
+	// RespondedAt is when this result was published, on the agent's own
+	// clock.
+	RespondedAt time.Time `json:"respondedAt"`
+}
+
+// ErrPayloadInvalidOutcome is wrapped by [ResultPayload.Validate] when
+// Outcome is not one of the four values this package's closed vocabulary
+// permits.
+var ErrPayloadInvalidOutcome = errors.New("mqttproto: outcome is not a recognized value")
+
+// Validate reports whether p has every field a well-formed result payload
+// requires: non-empty CommandID, IdempotencyKey, and Action; Outcome one
+// of the four [OutcomeConfirmed]/[OutcomeUnconfirmed]/[OutcomeRefused]/
+// [OutcomeFailed] values; and a non-empty Reason whenever Outcome is not
+// [OutcomeConfirmed] (see Reason's doc comment).
+func (p ResultPayload) Validate() error {
+	switch {
+	case p.CommandID == "":
+		return fmt.Errorf("%w: commandId", ErrPayloadMissingField)
+	case p.IdempotencyKey == "":
+		return fmt.Errorf("%w: idempotencyKey", ErrPayloadMissingField)
+	case p.Action == "":
+		return fmt.Errorf("%w: action", ErrPayloadMissingField)
+	}
+	switch p.Outcome {
+	case OutcomeConfirmed, OutcomeUnconfirmed, OutcomeRefused, OutcomeFailed:
+	default:
+		return fmt.Errorf("%w: %q", ErrPayloadInvalidOutcome, p.Outcome)
+	}
+	if p.Outcome != OutcomeConfirmed && p.Reason == "" {
+		return fmt.Errorf("%w: reason (required whenever outcome is not %q)", ErrPayloadMissingField, OutcomeConfirmed)
+	}
+	return nil
+}
+
+// AgentEchoPayload is the payload of the showmesh.node.agent.echo/v1
+// schema, published RETAINED to a node's observed/agent/echo topic
+// ([ObservedTopic]): the durable, current value of the agent's one
+// trivial allowlisted operation ("agent.echo"), published like every
+// other observed signal in this system, per [ObservedDeliveryPolicy].
+//
+// No Validate method, matching [LWTPayload]: an empty Value is a
+// legitimate state (the operation has never run since agent start), and a
+// non-zero AppliedAt is enforced by construction (internal/agent stamps it
+// from a real clock read), not by decode-time validation.
+type AgentEchoPayload struct {
+	Value     string    `json:"value"`
+	AppliedAt time.Time `json:"appliedAt"`
+}
+
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent
 // "payload" key, which unmarshals to a zero-length json.RawMessage) or is
@@ -320,6 +570,50 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
+// DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
+// [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeCmdV1], an
+// error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
+// error wrapping [ErrPayloadMissingField] (via [CmdPayload.Validate]) if a
+// required field is missing.
+func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
+	if env.Schema != SchemaNodeCmdV1 {
+		return CmdPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeCmdV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
+	}
+	var p CmdPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
+	}
+	return p, nil
+}
+
+// DecodeResultPayload decodes env.Payload as a [ResultPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeResultV1],
+// an error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and
+// an error wrapping [ErrPayloadMissingField] or [ErrPayloadInvalidOutcome]
+// (via [ResultPayload.Validate]) if the payload is malformed.
+func DecodeResultPayload(env Envelope) (ResultPayload, error) {
+	if env.Schema != SchemaNodeResultV1 {
+		return ResultPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeResultV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return ResultPayload{}, fmt.Errorf("mqttproto: decode result payload: %w", err)
+	}
+	var p ResultPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return ResultPayload{}, fmt.Errorf("mqttproto: decode result payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return ResultPayload{}, fmt.Errorf("mqttproto: decode result payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -373,4 +667,25 @@ func NewHealthEnvelope(now func() time.Time, nodeID string, payload HealthPayloa
 // why the resulting SentAt must not be read as a time of death.
 func NewLWTEnvelope(now func() time.Time, nodeID string, payload LWTPayload) (Envelope, error) {
 	return newEnvelope(now, SchemaNodeLWTV1, nodeID, payload)
+}
+
+// NewCmdEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+func NewCmdEnvelope(now func() time.Time, nodeID string, payload CmdPayload) (Envelope, error) {
+	return newEnvelope(now, SchemaNodeCmdV1, nodeID, payload)
+}
+
+// NewResultEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+func NewResultEnvelope(now func() time.Time, nodeID string, payload ResultPayload) (Envelope, error) {
+	return newEnvelope(now, SchemaNodeResultV1, nodeID, payload)
+}
+
+// NewAgentEchoEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+func NewAgentEchoEnvelope(now func() time.Time, nodeID string, payload AgentEchoPayload) (Envelope, error) {
+	return newEnvelope(now, SchemaNodeAgentEchoV1, nodeID, payload)
 }

@@ -34,6 +34,14 @@ const keepAliveSeconds = uint16(30)
 // mqttConnectTimeout bounds each individual connection attempt.
 const mqttConnectTimeout = 10 * time.Second
 
+// cmdSubscribeTimeout bounds each SUBSCRIBE attempt against the node's own
+// cmd topic, issued fresh on every (re)connect — see newMQTTConn's
+// OnConnectionUp. Matches mqttConnectTimeout's "one bounded attempt, not a
+// hang" reasoning rather than reusing that constant directly: a SUBSCRIBE
+// is a different MQTT control packet than CONNECT and has no reason to
+// share a budget with it just because both are currently the same number.
+const cmdSubscribeTimeout = 10 * time.Second
+
 // isAuthReasonCode reports whether code is an MQTT v5 reason code in the
 // "the broker understood who you are and refused you" family, as opposed to
 // a transport-level failure (connection refused, timeout, DNS failure)
@@ -199,7 +207,13 @@ func buildWillMessage(nodeID string) (*paho.WillMessage, error) {
 // rather than lost; the send here uses select/default specifically so this
 // callback can never block on it either way, honoring the same "must not
 // block" contract publishAdvertisement's goroutine exists to respect.
-func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, logger *slog.Logger) (*mqttConn, error) {
+//
+// OnConnectionUp also registers cmdHandler against every (re)connect's
+// live client (see registerCommandHandling): a fresh underlying
+// *paho.Client exists after every reconnect, so both the SUBSCRIBE and the
+// publish-received callback binding have to happen again each time, not
+// once at startup.
+func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, logger *slog.Logger) (*mqttConn, error) {
 	serverURL, err := url.Parse(cfg.MQTTBroker)
 	if err != nil {
 		// config.Config.Validate should already have caught this; guard
@@ -222,6 +236,8 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			logger.Info("mqtt broker connection up", "broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID)
 			go publishAdvertisement(ctx, &mqttConn{cm: cm}, cfg, bootID, startedAt, logger)
+
+			registerCommandHandling(ctx, cm, cfg.NodeID, cmdHandler, logger)
 
 			select {
 			case heartbeatConnected <- struct{}{}:
@@ -285,4 +301,127 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 	}
 
 	return &mqttConn{cm: cm}, nil
+}
+
+// registerCommandHandling binds cmdHandler to receive every PUBLISH on
+// nodeID's cmd topic, and subscribes to it — both done fresh on every call
+// (i.e. every OnConnectionUp), because a reconnect gives autopaho a brand
+// new underlying *paho.Client with no memory of a prior SUBSCRIBE or a
+// prior publish-received callback registration.
+//
+// Two distinct autopaho mechanisms are involved, deliberately NOT the
+// single paho.ClientConfig.OnPublishReceived field: that field is bound
+// into the client config once, at construction time, and its callback
+// signature carries no live *autopaho.ConnectionManager to publish a
+// result back through. cm.AddOnPublishReceived, in contrast, hands the
+// callback an autopaho.PublishReceived carrying exactly that
+// ConnectionManager (verified against the vendored
+// github.com/eclipse/paho.golang@v0.23.0/autopaho/auto.go source: its
+// PublishReceived struct embeds paho.PublishReceived — giving
+// .Packet.Topic/.Packet.Payload — plus its own ConnectionManager field),
+// which is what lets HandleMessage's eventual result publish go out
+// through the actual live connection rather than a stale one from a
+// previous session.
+//
+// Re-registering the publish-received callback on every reconnect is
+// intentional, not a leak: AddOnPublishReceived binds against whatever
+// *paho.Client is current at the moment it is called (c.cli, read under
+// c.mu inside ConnectionManager.AddOnPublishReceived), and c.cli is
+// reassigned to a fresh client on every reconnect BEFORE OnConnectionUp
+// fires (auto.go's mainLoop: "c.mu.Lock(); c.cli = cli; ...; c.mu.Unlock()"
+// happens, then "if cfg.OnConnectionUp != nil { cfg.OnConnectionUp(&c,
+// connAck) }" — verified in the same source). A callback registered
+// against a previous, now-replaced client is simply never invoked again;
+// there is nothing to explicitly unregister, and the removal func
+// AddOnPublishReceived returns exists for a caller that wants to stop
+// listening entirely, which this agent never does for the lifetime of one
+// process.
+//
+// AddOnPublishReceived's own registration is a fast, local, in-memory call
+// (no network round trip — it just appends to a callback list under a
+// mutex) and is called synchronously here, before SUBSCRIBE is even
+// issued, so the handler is always in place before any message this
+// SUBSCRIBE could possibly cause to arrive. The SUBSCRIBE itself IS a
+// network round trip, so — honoring OnConnectionUp's "must not block"
+// contract, the same one publishAdvertisement's own goroutine already
+// respects — it runs in its own goroutine.
+//
+// The publish-received callback returns (bool, error) per paho's own
+// AddOnPublishReceived contract, where the bool means "I handled this
+// message" — callbacks registered after this one, and paho's own
+// unhandled-message bookkeeping, use that to decide whether the message
+// still needs handling. This agent subscribes to exactly one topic today,
+// so returning true unconditionally would happen to be harmless right
+// now, but it is still wrong: it silently claims every inbound PUBLISH
+// regardless of topic, which would swallow messages meant for anything
+// else the moment a second subscription exists. The callback therefore
+// checks pr.Packet.Topic against nodeID's own cmd topic (computed once,
+// up front, and reused by both this callback and the SUBSCRIBE call
+// below) and returns false — unhandled — for anything else.
+func registerCommandHandling(ctx context.Context, cm *autopaho.ConnectionManager, nodeID string, cmdHandler *CommandHandler, logger *slog.Logger) {
+	topic, err := mqttproto.CmdTopic(nodeID)
+	if err != nil {
+		// nodeID is validated at config load (mqttproto.ValidateNodeID via
+		// internal/agent/config.LoadConfig), matching runHeartbeat's
+		// identical topic-build guard in heartbeat.go; should be
+		// unreachable in production. Neither the publish-received handler
+		// nor the SUBSCRIBE can be meaningfully registered without a valid
+		// topic, so both are skipped.
+		logger.Error("bug: could not build cmd topic for a validated node ID", "node_id", nodeID, "error", err)
+		return
+	}
+
+	cm.AddOnPublishReceived(func(pr autopaho.PublishReceived) (bool, error) {
+		if pr.Packet == nil || pr.Packet.Topic != topic {
+			return false, nil
+		}
+		payload := pr.Packet.Payload
+
+		// HandleMessage runs in its own goroutine, on a context DERIVED
+		// FROM context.Background() — deliberately NOT ctx (this
+		// connection's own lifetime context) and deliberately NOT
+		// whatever connection-teardown context a caller elsewhere might
+		// be using: an inbound command already received off the wire must
+		// be allowed to run to completion and publish its result even if
+		// the MQTT connection that delivered it is torn down a moment
+		// later, the same way this file's OnConnectionUp already spawns
+		// publishAdvertisement on ctx rather than on a shutdown-scoped
+		// context. Bounded per-publish timeouts inside HandleMessage
+		// (commandPublishTimeout in command.go) are what actually bound
+		// this goroutine's lifetime, not this context.
+		go cmdHandler.HandleMessage(context.Background(), &mqttConn{cm: pr.ConnectionManager}, topic, payload)
+
+		return true, nil
+	})
+
+	go func() {
+		subCtx, cancel := context.WithTimeout(ctx, cmdSubscribeTimeout)
+		defer cancel()
+
+		suback, err := cm.Subscribe(subCtx, &paho.Subscribe{
+			Subscriptions: []paho.SubscribeOptions{
+				{Topic: topic, QoS: mqttproto.CmdDeliveryPolicy.QoS},
+			},
+		})
+		// ERROR, not WARN: an agent that fails to subscribe to its own cmd
+		// topic will silently never receive a command again until the next
+		// reconnect — exactly the "no caller" class of failure this
+		// project's CLAUDE.md says a test suite cannot catch on its own,
+		// and the kind of thing that must be loud in the logs of a real
+		// deployment. Not fatal: matching this file's OnConnectError
+		// philosophy, an agent that exists to keep running through exactly
+		// this kind of trouble must not crash over it — the next reconnect
+		// (autopaho retries forever) gets another attempt.
+		if err != nil {
+			logger.Error("failed to subscribe to cmd topic; this agent will not receive commands until the next reconnect",
+				"node_id", nodeID, "topic", topic, "error", err)
+			return
+		}
+		if len(suback.Reasons) == 0 || suback.Reasons[0] >= 0x80 {
+			logger.Error("broker rejected cmd topic subscription; this agent will not receive commands until the next reconnect",
+				"node_id", nodeID, "topic", topic, "reasons", suback.Reasons)
+			return
+		}
+		logger.Info("subscribed to cmd topic", "node_id", nodeID, "topic", topic)
+	}()
 }
