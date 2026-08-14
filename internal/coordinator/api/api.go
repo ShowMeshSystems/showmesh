@@ -138,6 +138,36 @@ type Dependencies struct {
 	// own scheduled poll), matching every other unwired dependency's
 	// "nothing told this API otherwise" posture in this struct.
 	Nudger FPPPollNudger
+
+	// ResolumeID is SHOWMESH_RESOLUME_ID ([config.Config.ResolumeID]),
+	// threaded through for the identical "this package does not read the
+	// environment or config package state on its own" reason
+	// [FPPEndpointsEnvVarSet] documents — set ONLY when the Resolume
+	// collector is actually enabled (the wiring caller's cfg.ResolumeURL
+	// != "" gate), and left as the empty string otherwise.
+	//
+	// That gating matters: [config.Config.ResolumeID] defaults to
+	// "resolume" even with the collector disabled (see that field's own
+	// doc comment), so this field must NOT simply mirror it
+	// unconditionally — a coordinator with no Resolume instance configured
+	// at all could still have an FPP endpoint literally named "resolume",
+	// and that is not a collision anything can actually hit, because no
+	// Resolume collector is ever constructed to collide with it. The empty
+	// string here means exactly what it means at startup
+	// (internal/coordinator's own boot-time re-check, gated identically):
+	// nothing to cross-check.
+	//
+	// Consumed by handlePutFPPEndpointsConfig (config.go) — a proposed
+	// endpoint list whose id equals this one is refused with 400, mirroring
+	// [FPPMQTTHostIDs]'s identical id-collision shape, against
+	// [config.ValidateResolumeIDAgainstFPPEndpoints], the SAME rule the
+	// coordinator's own startup enforces fatally for this id: a write
+	// accepted here that collides would otherwise report 200 now and
+	// refuse to boot on the very next restart. The zero value (empty
+	// string) is the same "nothing told this API otherwise" posture as
+	// every other unwired dependency in this struct, and is correct for
+	// tests and for any embedder that has not wired it in.
+	ResolumeID string
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that

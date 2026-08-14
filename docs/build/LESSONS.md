@@ -6,6 +6,22 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## The thing you resolve on a transport event is resolved before the thing exists
+
+**Track D, seam D-1.** The Resolume adapter re-resolves object and parameter ids from a fresh composition read every time its WebSocket connects, because parameter ids are minted at composition load and 0 of 14 survive a restart. Correct, and it fires at the wrong moment: the socket is accepted about 1.5 seconds after Arena launches, and the composition takes about 4.9 seconds to load. Caught live on a real restart — the resolver held `layer_count 3, column_count 9, deck "empty"`, which is Arena's default empty composition, and ninety seconds later Arena held the real 18-layer show while the resolver still held every id of a composition that no longer existed. Nothing corrected it, because Arena does not drop the socket when loading finishes.
+
+The bench capture had already measured that window and the specification had already named it the sharpest hazard in the step. Both framed it as a rule about **acting**: no command may be dispatched on reachability alone. Nobody wrote the rule for **resolving**, and a resolver keyed to a transport event is the same defect with no command in sight.
+
+**Rule:** when a cache, index, or resolver refreshes on a connect, ask what the peer is doing 1.5 seconds after it accepts a socket. A transport being ready is not the subject being ready, and the gap between them is where a well-formed, fresh, wrong answer gets stored and kept. Converging on the truth later is a different guarantee from knowing you were wrong, and only one of them is worth claiming.
+
+## Your own reads can be the thing that breaks the device
+
+**Track D, seam D-1.** `GET /api/v1/composition` crashes Arena 7.23.2 — four `SIGSEGV`s with byte-identical faulting frames. The fourth was produced by `curl` alone with no ShowMesh process running, which is what turned "our adapter is unstable" into "this call crashes Arena." Controls mattered as much as the result: 7 minutes idle, 30 `/product` polls over 5 minutes, and a WebSocket held open for 5 minutes all survived, so the finding is about one endpoint rather than about reading Resolume.
+
+Two things generalize. **A crash in the target looks exactly like a defect in your own new code**, and the only way to tell is to reproduce it without your code in the picture. **And the read you cannot avoid is the one worth costing**: the same API offers no collection endpoints, so this call is the only way to enumerate anything, which turned a bandwidth question into a design constraint — the adapter enumerates on connect and inside a bounded window after it, and never on a show-time cadence.
+
+**Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation. Then run the controls, because "reading it is dangerous" and "this one endpoint is dangerous" lead to very different systems.
+
 ## A test environment that differs from the deployment environment reports success on exactly that difference
 
 **Step 4.** The Operator UI's client invoked `fetch` as `this.fetchImpl(...)`, so its receiver was the client instance. A browser's `fetch` is a WebIDL operation on `Window` and answers any other receiver with `Illegal invocation`; Node's does not check. The app could not make a single request in Chrome while 99 unit tests passed — including the ones driving a real `node:http` server with real SSE bytes. Three reviews and a build of the shipped image did not find it. Loading the page did, immediately.

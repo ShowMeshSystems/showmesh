@@ -137,6 +137,45 @@ func Run() int {
 		return 1
 	}
 
+	// Track D seam D-1's identical re-check, for the identical reason:
+	// config.Config.Validate's own validateResolumeConfig only ever saw
+	// cfg.FPPEndpoints as parsed from the ENVIRONMENT, which may differ in
+	// existence (env unset, store populated) from the store-authoritative
+	// list resolveAuthoritativeFPPEndpoints just resolved above. A
+	// deployment that migrated SHOWMESH_FPP_ENDPOINTS into the store and
+	// removed the variable, then later set SHOWMESH_RESOLUME_URL to a
+	// value whose id now happens to match a store-only FPP endpoint id,
+	// would sail past config.Validate with nothing to compare against —
+	// this is the only place left that can still catch it before the two
+	// collectors are actually registered on one shared Runner below.
+	//
+	// Gated on cfg.ResolumeURL != "", mirroring validateResolumeConfig's
+	// own gate exactly: cfg.ResolumeID defaults to "resolume" even with
+	// the collector disabled (see [config.Config.ResolumeID]'s doc
+	// comment), so an ungated check here would fatally refuse to start a
+	// coordinator that happens to have an FPP endpoint literally named
+	// "resolume" and no Resolume instance configured at all — a
+	// collision that can never actually happen, because the Resolume
+	// collector this id would apply to is never constructed.
+	// resolumeConfiguredID is threaded into apiDeps.ResolumeID below,
+	// gated on the SAME cfg.ResolumeURL != "" condition as the fatal
+	// re-check immediately above, so PUT /api/v1/config/fpp.endpoints
+	// (api/config.go's handlePutFPPEndpointsConfig, Track D seam D-1
+	// review finding 1) refuses a write under EXACTLY the condition this
+	// boot-time check would refuse to start under — never a superset
+	// (which would refuse writes this coordinator could never actually
+	// fail to boot from) and never a subset (which would accept a write
+	// this coordinator then cannot survive its own next restart).
+	var resolumeConfiguredID string
+	if cfg.ResolumeURL != "" {
+		if err := config.ValidateResolumeIDAgainstFPPEndpoints(cfg.ResolumeID, cfg.FPPEndpoints); err != nil {
+			logger.Error("SHOWMESH_RESOLUME_ID no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
+			_ = st.Close()
+			return 1
+		}
+		resolumeConfiguredID = cfg.ResolumeID
+	}
+
 	// hub is assigned below, once api.New has built it, but inv (which can
 	// start delivering MQTT messages the instant broker.NewBrokerManager
 	// begins connecting) needs a notify callback wired in before that
@@ -182,6 +221,31 @@ func Run() int {
 	}
 	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
 
+	// Track D seam D-1: the Resolume Arena REST/WebSocket collector
+	// (internal/coordinator/collector/resolume), constructed here —
+	// BEFORE apiDeps, for the identical reason fppRunner itself just was —
+	// so apiDeps.Collectors (below) can read resolumeWire.status rather
+	// than a value that does not exist yet. See newResolumeWiring's own
+	// doc comment in resolumewiring.go for why it joins this SAME
+	// fppRunner rather than a second collector.Runner, and for why every
+	// error path here is fatal: cfg.Validate already checked
+	// SHOWMESH_RESOLUME_URL's shape and SHOWMESH_RESOLUME_ID's syntax and
+	// uniqueness (config.validateResolumeConfig), so a construction
+	// failure here would mean that check and this package's own have
+	// drifted apart — the identical judgment the fpp.New loop further down
+	// already applies to its own endpoints, never a per-instance condition
+	// to skip past silently. resolumeWire.watcher is nil, and
+	// resolumeWire.status reports CollectorNotConfigured, when
+	// SHOWMESH_RESOLUME_URL is unset — no goroutine, no warning storm, no
+	// failed-connection signals for a feature the operator did not enable.
+	resolumeWire, err := newResolumeWiring(cfg, fppRunner, logger)
+	if err != nil {
+		logger.Error("failed to construct resolume collector/watcher", "error", err)
+		_ = bm.Disconnect(ctx)
+		_ = st.Close()
+		return 1
+	}
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -213,6 +277,14 @@ func Run() int {
 		Collectors: multiCollectorStatusLister{
 			fppCollectorStatusLister{endpoints: cfg.FPPEndpoints},
 			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
+			// Track D seam D-1: resolumeWire.status was already built above
+			// (newResolumeWiring), from the same cfg.ResolumeURL != ""
+			// condition that decided whether the collector itself was
+			// constructed and registered on fppRunner — this line and that
+			// one can never disagree about whether Resolume collection is
+			// enabled, the identical guarantee the FPP MQTT comment above
+			// states for its own pair.
+			resolumeWire.status,
 		},
 		// Identity is ADR-024's own dependency: wiring it in is what makes
 		// POST/GET/DELETE /api/v1/session, POST /api/v1/bootstrap, and
@@ -254,6 +326,17 @@ func Run() int {
 		// write time rather than accepting 200 and refusing to boot on the
 		// next restart.
 		FPPMQTTHostIDs: cfg.FPPMQTTHosts,
+		// ResolumeID plumbs cfg.ResolumeID through to api.Dependencies ONLY
+		// when the Resolume collector is enabled (cfg.ResolumeURL != ""),
+		// matching the boot-time re-check just above
+		// (config.ValidateResolumeIDAgainstFPPEndpoints) by the identical
+		// gate: cfg.ResolumeID defaults to "resolume" even with the
+		// collector disabled, so passing it unconditionally here would make
+		// handlePutFPPEndpointsConfig (api/config.go) refuse an endpoint id
+		// that can never actually collide with anything, since no Resolume
+		// collector is ever constructed for it to collide with. Track D
+		// seam D-1 review finding 1.
+		ResolumeID: resolumeConfiguredID,
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -451,6 +534,50 @@ func Run() int {
 			if err := mqttFPPCollector.Run(ctx); err != nil {
 				logger.Error("fpp mqtt collector connection ended", "error", err)
 			}
+		}()
+	}
+
+	// resolumeWire.watcher.Run owns the Resolume WebSocket connection's own
+	// lifecycle (connect, reconnect with backoff on any loss, graceful
+	// shutdown on ctx cancellation — see resolume.Watcher.Run's own doc
+	// comment), entirely separate from fppRunner's poll-loop goroutine
+	// above the same way mqttFPPCollector.Run is: joined via the identical
+	// backgroundWG so shutdown waits for every one of them cleanly, and
+	// started (and only started) exactly when resolumeWire.watcher was
+	// constructed above — an unconfigured Resolume collector contributes
+	// no goroutine at all. Run returns no error (unlike
+	// mqttFPPCollector.Run): a lost or refused connection is never fatal
+	// here or anywhere in this seam — see newResolumeWiring's own doc
+	// comment for the fatal/non-fatal split this wiring draws.
+	if resolumeWire.watcher != nil {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			resolumeWire.watcher.Run(ctx)
+		}()
+	}
+
+	// resolumeWire.adapter.Run owns its own resolve loop's lifecycle (see
+	// resolume.Adapter's own doc comment for why it needs one, per review
+	// finding A, 2026-08-14): it is the ONLY thing in this seam that ever
+	// performs a composition read, and it must run continuously —
+	// independent of resolumeWire.watcher.Run above — for its own
+	// coalescing/retry policy to hold. Joined via the identical
+	// backgroundWG so shutdown waits for it cleanly alongside every other
+	// background goroutine, and started (and only started) exactly when
+	// resolumeWire.adapter was constructed above — an unconfigured
+	// Resolume collector contributes no goroutine at all, matching
+	// resolumeWire.watcher's own condition immediately above. Run returns
+	// no error and performs no networking of its own beyond the
+	// composition reads its own client makes; a lost or refused connection
+	// surfaces through resolumeWire.watcher's disconnect signal and is
+	// never fatal here, for the identical reason resolumeWire.watcher.Run
+	// is not fatal.
+	if resolumeWire.adapter != nil {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			resolumeWire.adapter.Run(ctx)
 		}()
 	}
 

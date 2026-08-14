@@ -257,9 +257,9 @@ func decodeFPPEndpointsConfigPutBody(body io.Reader) ([]config.FPPEndpoint, erro
 // this runs the request already carries an authenticated principal holding
 // config:write and has passed decision 6's CSRF check.
 //
-// Two refusals run BEFORE any of that, both Step 7 seam A review findings,
-// both refusing at the moment of the mistake rather than after a restart
-// that never completes:
+// Three refusals run BEFORE any of that, all Step 7 seam A / Track D seam
+// D-1 review findings, all refusing at the moment of the mistake rather
+// than after a restart that never completes:
 //
 //   - Defect 3a: if [Dependencies.FPPEndpointsEnvVarSet] is true, this
 //     write is refused with 409 outright, with no body read at all — a
@@ -275,6 +275,15 @@ func decodeFPPEndpointsConfigPutBody(body io.Reader) ([]config.FPPEndpoint, erro
 //     fatally, naming the offending instance id — dropping or renaming an
 //     id SHOWMESH_FPP_MQTT_HOSTS still references would otherwise be
 //     accepted with 200 and refuse to boot on the next restart.
+//   - Track D seam D-1 review finding 1: the same list is also
+//     cross-checked against [Dependencies.ResolumeID] with the SAME rule
+//     ([config.ValidateResolumeIDAgainstFPPEndpoints]) startup enforces
+//     fatally for it — an endpoint id colliding with the coordinator's own
+//     Resolume instance id would otherwise be accepted with 200 and
+//     refuse to boot on the next restart. [Dependencies.ResolumeID] is
+//     already the empty string when the Resolume collector is disabled,
+//     so this refusal is unreachable in exactly the case the boot-time
+//     check does not fire either — see that field's own doc comment.
 //
 // ADR-009 requires invalid configuration be REJECTED BEFORE ACTIVATION,
 // and this function's ordering is what makes that literally true: decoding
@@ -330,6 +339,30 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	// own doc comment.
 	if err := config.ValidateFPPMQTTHostIDs(h.deps.FPPMQTTHostIDs, endpoints); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
+	}
+
+	// Track D seam D-1 review finding 1, run only once the list is
+	// shape-valid, for the identical reason Defect 4 is: see this
+	// function's own doc comment. h.deps.ResolumeID is already "" when the
+	// Resolume collector is disabled, so config.ValidateResolumeIDAgainstFPPEndpoints
+	// never finds a collision in that case and this refusal never fires —
+	// matching, byte for byte, the condition under which the coordinator's
+	// own boot-time re-check does not fire either.
+	//
+	// The detail below is hand-written rather than err.Error() (unlike
+	// Defect 4 above): the shared validator's message names
+	// collector.Runner, an implementation detail meaningless to an
+	// operator reading a PUT response, so this constructs the operator's
+	// own actionable version instead — name the colliding id and the two
+	// concrete ways to resolve it, mirroring Defect 3a's remedy text
+	// immediately above rather than exposing internal package names.
+	if err := config.ValidateResolumeIDAgainstFPPEndpoints(h.deps.ResolumeID, endpoints); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
+			"endpoint id %q is the same id this coordinator uses for its Resolume connection; "+
+				"rename this endpoint's id, or change the Resolume instance id, then retry.",
+			h.deps.ResolumeID,
+		)))
 		return
 	}
 

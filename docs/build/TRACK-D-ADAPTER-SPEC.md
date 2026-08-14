@@ -305,7 +305,7 @@ safe once the first two are real.
 
 | Seam | Contents |
 |---|---|
-| **D-1** | The Resolume REST client, the WebSocket change signal, the object-id resolver, and the reachability observation. No composition semantics. |
+| **D-1** | The Resolume REST client, the WebSocket change signal, the object-id resolver, and the reachability observation. No composition semantics. **Built 2026-08-14 — see §4.1.** |
 | **D-2** | Observations (§5), including layer readiness (§3.7) and composition identity (§3.8), on the dashboard with provenance and freshness. |
 | **D-3** | The action vocabulary (§6) with confirmation (§3.4, §3.5). |
 | **D-4** | `showmeshctl` coverage and the Operator UI controls. |
@@ -315,6 +315,39 @@ Placement follows the existing shape: the collector goes in
 source-neutral interface; observations use `pkg/observation` unchanged. **Nothing
 new is invented at the observation layer** — if Resolume needs a concept
 `pkg/observation` does not have, that is a finding to report before building it.
+
+### 4.1 What D-1 shipped, and the two things running it changed
+
+Built 2026-08-14 and verified against the operator's running Arena 7.23.2 rather
+than against the test suite. `internal/coordinator/collector/resolume` holds the
+REST client, the WebSocket watcher, the object-id resolver and its lifetime owner,
+and a collector emitting exactly two signals: `resolume.reachable` and
+`resolume.product`. Everything else in §5 is D-2 and was deliberately not built.
+
+One addition to `pkg/observation`, reported before building it as this section
+requires: a `ResourceResolume` kind. That is a value in an existing closed
+vocabulary, not a new concept, and no State, Quality or Health member was added.
+
+**Two things the build changed in this specification, both found by running it.**
+
+**A one-shot resolve on a transport event lands inside §7.2's load window and
+stays there.** Measured live: an Arena restart, the WebSocket accepted at t≈1.5 s,
+and the resolver held `layer_count 3, column_count 9, deck "empty"` — Arena's
+default empty composition, exactly what §7.2 predicts. Ninety seconds later Arena
+held the real show and the resolver still held every object id and parameter id of
+a composition that no longer existed. §7.2 warned that no *action* may be
+dispatched on reachability alone; it did not say what the *resolver* does, and the
+answer is that a resolve triggered by a transport event fires before the
+composition exists. D-1 therefore re-resolves on change within a bounded window
+after each connect, which makes the resolver **converge**. It does not make it
+*know* it was wrong — that is §3.8, and it is still D-2.
+
+**`GET /composition` crashes Arena 7.23.2**, four times, the fourth from `curl`
+with no ShowMesh process running. `/product` polling and holding a WebSocket were
+each exercised as controls and were fine. Recorded in full in the capture's §14,
+including what is not established. Since §2.3 leaves the full composition read as
+the only way to enumerate anything, this bounds how often the adapter may
+enumerate, and it is an owner decision before it is a build one.
 
 ## 5. Observations
 

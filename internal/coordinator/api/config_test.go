@@ -669,6 +669,98 @@ func TestPutFPPEndpointsConfigAllowsWriteThatKeepsMQTTHost(t *testing.T) {
 	}
 }
 
+// TestPutFPPEndpointsConfigRefusesWhenResolumeIDWouldCollide is Track D
+// seam D-1 review finding 1's own regression test: the proposed endpoint
+// list names an id equal to the coordinator's configured Resolume
+// instance id, and this must be refused at write time — startup already
+// refuses to boot on the identical collision
+// (config.ValidateResolumeIDAgainstFPPEndpoints), so accepting it here
+// with 200 would only defer the operator's mistake to a restart that
+// never completes. Persists nothing: GetConfigObject after the refused
+// write must still report no revision.
+func TestPutFPPEndpointsConfigRefusesWhenResolumeIDWouldCollide(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.ResolumeID = "resolume"
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	bodyNamingResolume := `{"endpoints":[{"id":"resolume","url":"http://10.0.1.30"}]}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", bodyNamingResolume,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "resolume") {
+		t.Errorf("body = %s, want it to name the colliding id %q", body, "resolume")
+	}
+	for _, unwanted := range []string{"collector.Runner", "ADR-", ".md", "docs/"} {
+		if strings.Contains(string(body), unwanted) {
+			t.Errorf("body = %s, must not leak internal implementation detail %q into an operator-facing response", body, unwanted)
+		}
+	}
+
+	if _, err := st.GetConfigObject(context.Background(), "fpp.endpoints", "default"); err == nil {
+		t.Fatalf("GetConfigObject succeeded after a refused write — the Resolume id cross-check must precede activation")
+	}
+}
+
+// TestPutFPPEndpointsConfigAllowsResolumeIDCollisionWhenCollectorDisabled
+// is the sharpest control for
+// TestPutFPPEndpointsConfigRefusesWhenResolumeIDWouldCollide: the SAME
+// body naming id "resolume", but with deps.ResolumeID left at its zero
+// value (""), matching a coordinator with no SHOWMESH_RESOLUME_URL
+// configured — where the boot-time re-check
+// (internal/coordinator.Run, gated on cfg.ResolumeURL != "") never fires
+// either, because no Resolume collector is ever constructed for the id to
+// collide with. The write must succeed, proving the refusal above comes
+// from an ENABLED Resolume collector's id actually colliding, not from
+// the literal string "resolume" being special.
+func TestPutFPPEndpointsConfigAllowsResolumeIDCollisionWhenCollectorDisabled(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	// deps.ResolumeID is "" (zero value): the Resolume collector is
+	// disabled, exactly as every other test in this file leaves it.
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	bodyNamingResolume := `{"endpoints":[{"id":"resolume","url":"http://10.0.1.30"}]}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", bodyNamingResolume,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the Resolume collector is disabled, so its id has nothing to collide with); body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutFPPEndpointsConfigAllowsWriteThatDoesNotNameResolumeID is a
+// second control: deps.ResolumeID set (the collector IS enabled), but the
+// proposed endpoint list never names that id at all — proving the 400 in
+// TestPutFPPEndpointsConfigRefusesWhenResolumeIDWouldCollide comes from
+// the actual collision, not from ResolumeID being set on Dependencies.
+func TestPutFPPEndpointsConfigAllowsWriteThatDoesNotNameResolumeID(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	deps.ResolumeID = "resolume"
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// validFPPEndpointsBody names "player-01" and "shed" — neither is "resolume".
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", validFPPEndpointsBody,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (no proposed endpoint id collides with ResolumeID); body: %s", resp.StatusCode, body)
+	}
+}
+
 // --- Defect 1: absent/null/typo'd "endpoints" ---
 
 // TestPutFPPEndpointsConfigRejectsAbsentEndpointsKey is Step 7 seam A

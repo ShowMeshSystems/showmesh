@@ -420,7 +420,7 @@ export interface components {
         };
         ResourceRef: {
             /** @enum {string} */
-            kind: "node" | "fpp" | "coordinator";
+            kind: "node" | "fpp" | "coordinator" | "resolume";
             id: string;
         };
         Capability: {
@@ -1411,7 +1411,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Restrict to observations about resources of this kind. */
-                resourceKind?: "node" | "fpp" | "coordinator";
+                resourceKind?: "node" | "fpp" | "coordinator" | "resolume";
                 /** @description Restrict to observations about this specific resource ID. */
                 resourceId?: string;
                 /** @description Restrict to observations of this exact signal ID. */

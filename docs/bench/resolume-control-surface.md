@@ -1052,11 +1052,91 @@ count, deck count and names, and the presence of specific clip ids. A readiness
 check that asserts the expected clip ids resolve is the only formulation found
 that is wrong in none of the three cases above.
 
+## 14. Added 2026-08-14, during the D-1 build: `GET /composition` crashes Arena
+
+**This was not found by the capture. It was found by building against the capture**,
+which is the same ordering lesson one step further on: a document written from a
+running system still does not say what happens when your own code reads it on a
+schedule.
+
+**Seven crashes, one signature.** All `EXC_BAD_ACCESS` / `SIGSEGV` on a background
+thread, all with byte-identical faulting-frame offsets across all seven reports
+(`Arena-2026-08-14-{144936,145928,154454,160226,160559,160811,161549}.ips`). Same
+host, same build, same composition as §Provenance.
+
+**The fourth was produced by `curl` alone, with no ShowMesh process running.** That
+is what rules ShowMesh out as the cause and makes this a fact about Arena 7.23.2
+rather than a defect in the adapter.
+
+Controls, each run to completion:
+
+| Run | Duration | Result |
+|---|---|---|
+| Idle, no client at all | 7 min | **survived** |
+| `GET /product` every 10 s | 30 polls / 5 min | **survived** |
+| One WebSocket held open, no REST read | 5 min, 3 messages | **survived** |
+| `GET /composition` every 30 s | ~4.5 min | **crashed after 9 reads** |
+| `GET /composition` back-to-back | 149 s | **crashed after 2,046 reads** |
+| **`GET /composition` twice, 30 s apart** | — | **crashed 26 s after the second read** |
+
+**It is neither a fixed read count nor a fixed elapsed time**, which is why every
+composition row carries both numbers: 2 reads, 9 reads and 2,046 reads all ended
+the same way. The mechanism is unknown, and "crashes Arena" is what was observed,
+not a diagnosis. Neither the 30-second run's crash nor the two-read run's occurred
+*during* a read.
+
+**The two-read row is the one that matters, and it was measured against the
+shipped D-1 mitigation.** That run was the bounded adapter doing exactly what it
+is designed to do — one resolve on connect and one inside the convergence window —
+and it crashed Arena anyway. **So the bound reduces exposure and does not
+eliminate the crash.** Nothing in D-1 makes this safe; it makes it rarer.
+
+### 14.1 Why this constrains the adapter rather than merely annoying it
+
+§2.3 established there are **no collection endpoints** — `/composition/layers`,
+`/composition/columns`, `/composition/decks` and `/composition/layergroups` all
+404. So `GET /composition` is the **only** way to enumerate the composition, and
+the object-id resolver cannot avoid calling it.
+
+What the adapter can do is stop calling it on a show-time cadence, and that is what
+D-1 does: one resolve on connect, plus a bounded convergence window after each
+connect to get past §10.1's load window, and nothing after that. The cost is stated
+rather than hidden — a composition swap **without** an Arena restart now leaves a
+stale resolution indefinitely. That was already §13's open item and is now
+deliberately deferred rather than solved with a call that crashes the target.
+
+The reads the collector actually depends on remain safe: `/product` polling and
+holding one WebSocket were both exercised above and were fine, so
+`resolume.reachable` is unaffected. **Do not over-generalise this to "reading
+Resolume is dangerous."**
+
+### 14.2 What is not established
+
+- Whether it reproduces on **another composition**. Only `Christmas 25` (252 clip
+  slots, 2.26 MB) was used, and payload size is the obvious suspect.
+- Whether it reproduces on **another host or build**. Everything here is the same
+  arm64 laptop as the rest of this document; the show host is a different machine
+  and may become Windows.
+- Whether a **smaller targeted read** in a loop does the same thing —
+  `/composition/layers/by-id/{id}` at 62,795 bytes, or `/composition/clips/by-id/{id}`
+  at 6,818. Only the full read was exercised. This matters, because if the targeted
+  reads are safe they are the path D-2's per-layer and per-clip observations would
+  take anyway.
+- The mechanism, the frame symbols (the reports are unsymbolicated), and whether
+  Resolume already has a fix.
+
+**This is an owner decision, not a build decision.** Resolume control is one of the
+three founding problems, it is on the day-0 critical path, and a video wall that
+segfaults mid-show is a worse failure than anything ShowMesh's own code can
+produce. It needs a vendor report and a decision about how much of Track D may
+depend on enumerating the composition at all.
+
 ## 13. Open items this capture did not close
 
 - **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
 - **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
-- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise.
+- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise. **Now doubly open:** §14 means the adapter no longer re-enumerates on a cadence, so this open item is also the reason a swap-without-restart leaves a stale resolution.
+- **Everything in §14.2**, including the one that decides how much of D-2 is buildable: whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does.
 - **Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).
 - **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
 - **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).
