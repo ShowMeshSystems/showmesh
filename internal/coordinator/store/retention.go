@@ -97,6 +97,29 @@ const (
 	DefaultMaxDiscoveryRunRows int64 = 5_000
 )
 
+// DefaultMaxMacroRunAge and DefaultMaxMacroRunRows bound the macro_runs
+// table (schemaV7, Step 9 Wave 1a), following the identical amortized-
+// on-insert pattern every other table in this file uses.
+//
+// SHOWMESH HYPOTHESIS, NOT DERIVED FROM ANY MEASUREMENT — labeled exactly
+// as every other retention bound in this file is, for the identical
+// reason: nothing has measured a real season's macro-run rate. Sized like
+// commands (180 days / 200,000 rows) rather than like discovery_runs (90
+// days / 5,000 rows): a macro run is exactly the kind of record
+// [DefaultMaxCommandAge]'s doc comment already gives the reasoning for —
+// "an operator reaches for when something is disputed months later" — and
+// unlike a discovery run (triggered only by an operator explicitly
+// re-scanning inventory) a macro run can fire on every schedule entry in
+// a show, so its volume is structurally closer to commands' than to
+// discovery_runs'. Pruning a macro_runs row cascades (ON DELETE CASCADE,
+// schemaV7) to that run's macro_run_steps rows, so no separate bound is
+// needed for macro_run_steps — see [Store.pruneMacroRuns] in
+// macro_runs.go.
+const (
+	DefaultMaxMacroRunAge        = 180 * 24 * time.Hour
+	DefaultMaxMacroRunRows int64 = 200_000
+)
+
 // storeConfig holds every [Option]'s target. It exists only inside Open —
 // the resolved values it produces live on *Store (maxEventAge,
 // maxEventRows) — so a caller never sees storeConfig itself.
@@ -122,6 +145,12 @@ type storeConfig struct {
 	maxDiscoveryRunAge  time.Duration
 	maxDiscoveryRunRows int64
 
+	// maxMacroRunAge/maxMacroRunRows are macro_runs.go's equivalent bounds,
+	// following the identical pattern for the identical reason (see
+	// DefaultMaxMacroRunAge/DefaultMaxMacroRunRows above).
+	maxMacroRunAge  time.Duration
+	maxMacroRunRows int64
+
 	// clock overrides [Open]'s hardcoded time.Now, when set by [WithClock].
 	// nil (the default) leaves Open's existing time.Now behavior
 	// unchanged for every pre-Step-6 call site.
@@ -138,6 +167,8 @@ func defaultConfig() storeConfig {
 		maxCommandRows:      DefaultMaxCommandRows,
 		maxDiscoveryRunAge:  DefaultMaxDiscoveryRunAge,
 		maxDiscoveryRunRows: DefaultMaxDiscoveryRunRows,
+		maxMacroRunAge:      DefaultMaxMacroRunAge,
+		maxMacroRunRows:     DefaultMaxMacroRunRows,
 	}
 }
 
@@ -217,6 +248,23 @@ func WithMaxDiscoveryRunRows(n int64) Option {
 	return func(c *storeConfig) {
 		if n > 0 {
 			c.maxDiscoveryRunRows = n
+		}
+	}
+}
+
+// WithMaxMacroRunAge and WithMaxMacroRunRows override
+// [DefaultMaxMacroRunAge]/[DefaultMaxMacroRunRows]; mirror
+// [WithMaxCommandAge]/[WithMaxCommandRows] exactly, including the
+// asymmetry (a non-positive age disables that bound; a non-positive row
+// count is ignored) — see those two doc comments.
+func WithMaxMacroRunAge(d time.Duration) Option {
+	return func(c *storeConfig) { c.maxMacroRunAge = d }
+}
+
+func WithMaxMacroRunRows(n int64) Option {
+	return func(c *storeConfig) {
+		if n > 0 {
+			c.maxMacroRunRows = n
 		}
 	}
 }
@@ -302,6 +350,7 @@ const pruneCheckInterval = 1 * time.Hour
 const (
 	pruneEveryNCommands      = 100
 	pruneEveryNDiscoveryRuns = 100
+	pruneEveryNMacroRuns     = 100
 )
 
 // pruneCommands deletes command rows older than maxCommandAge (if
@@ -364,6 +413,36 @@ func (s *Store) pruneDiscoveryRuns(ctx context.Context, q querier) error {
 			)
 		`, s.maxDiscoveryRunRows); err != nil {
 			return fmt.Errorf("store: prune discovery runs by row count: %w", err)
+		}
+	}
+	return nil
+}
+
+// pruneMacroRuns is [pruneCommands]'s identical shape applied to
+// macro_runs (schemaV7, Step 9 Wave 1a). It never touches macro_run_steps
+// directly: schemaV7's macro_run_steps.run_id REFERENCES macro_runs(id)
+// ON DELETE CASCADE, and store.go's open() unconditionally turns on
+// PRAGMA foreign_keys (proven enforced by TestOpenAppliesPragmas), so
+// deleting a macro_runs row here takes its steps with it — see
+// STEP-9-SPEC.md's Wave 1a brief, "deleting a run's steps with it," and
+// migrations.go's schemaV7 doc comment for why this is a CASCADE FK rather
+// than node_declarations'/config_revisions' deliberate FK absence: a
+// macro_run_steps row has no meaning independent of the run that owns it,
+// unlike a declared node's inventory row surviving its live nodes row.
+func (s *Store) pruneMacroRuns(ctx context.Context, q querier) error {
+	if s.maxMacroRunAge > 0 {
+		cutoff := timeToDB(s.now().Add(-s.maxMacroRunAge))
+		if _, err := q.ExecContext(ctx, `DELETE FROM macro_runs WHERE created_at < ?`, cutoff); err != nil {
+			return fmt.Errorf("store: prune macro runs by age: %w", err)
+		}
+	}
+	if s.maxMacroRunRows > 0 {
+		if _, err := q.ExecContext(ctx, `
+			DELETE FROM macro_runs WHERE id NOT IN (
+				SELECT id FROM macro_runs ORDER BY created_at DESC LIMIT ?
+			)
+		`, s.maxMacroRunRows); err != nil {
+			return fmt.Errorf("store: prune macro runs by row count: %w", err)
 		}
 	}
 	return nil

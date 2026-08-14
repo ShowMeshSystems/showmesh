@@ -256,6 +256,51 @@ func (r *Runner) Nudge(id string) bool {
 	}
 }
 
+// NextNudgeAt reports the earliest time a [Runner.Nudge] call for id would
+// be ACCEPTED rather than suppressed by the per-id rate limit
+// (nudgeMinInterval) — the deterministic query Step 9's macro executor
+// needs (BUILD-PLAN's STEP-9-SPEC.md section 6.3): a macro dispatching a
+// second step at the same FPP instance inside Nudge's own rate-limit
+// window gets no nudge for that step and silently falls back to the
+// collector's ordinary ~15s poll cadence, which can outrun a command's own
+// confirmation deadline. Calling Nudge itself and reading its bool return
+// cannot answer "when would it next be accepted" — only "was it accepted
+// just now" — so a caller that wants to avoid dispatching into that
+// starvation window needs this instead of probing Nudge speculatively.
+//
+// ok is false when id is not registered at all (no [Add] call named it —
+// the identical "unknown id" case [Nudge] itself reports via its own false
+// return), matching this method's sibling exactly. When ok is true and id
+// has never been nudged, the returned time is the zero [time.Time], which
+// every real comparison (`time.Now().Before(next)`) already treats as
+// "in the past" — i.e. a nudge is acceptable right now, with no special
+// case needed at the call site. This method does NOT report whether a
+// nudge is currently PENDING (the buffered-channel coalescing case in
+// [Nudge]'s own doc comment) — that state is transient, self-clearing
+// within one Poll cycle, and already harmless for a second caller (Nudge
+// simply returns false and the collector polls anyway); NextNudgeAt exists
+// for the rate-limit window specifically, the one that actually starves a
+// macro step.
+//
+// Reads the same nudgeMinInterval and lastNudgeAt state [Nudge] itself
+// reads, under the same mutex, and changes neither — purely additive, and
+// safe to call concurrently with [Nudge] and with itself, from any
+// goroutine, at any time (including before [Run] starts, exactly like
+// [Nudge]).
+func (r *Runner) NextNudgeAt(id string) (t time.Time, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, known := r.nudgeChans[id]; !known {
+		return time.Time{}, false
+	}
+	last, seen := r.lastNudgeAt[id]
+	if !seen {
+		return time.Time{}, true
+	}
+	return last.Add(r.nudgeMinInterval), true
+}
+
 // Run polls every registered collector on its own cadence until ctx is
 // cancelled, then waits for every poll loop to exit before returning. Each
 // collector gets its own goroutine and its own self-paced timer (started

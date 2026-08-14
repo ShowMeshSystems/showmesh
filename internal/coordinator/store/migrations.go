@@ -35,6 +35,7 @@ var migrations = []migration{
 	{version: 4, sql: schemaV4},
 	{version: 5, sql: schemaV5},
 	{version: 6, sql: schemaV6},
+	{version: 7, sql: schemaV7},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -622,6 +623,275 @@ CREATE TABLE desired_state (
 	command_id                TEXT NOT NULL DEFAULT '',
 	deadline_at               TEXT,
 	PRIMARY KEY (resource_kind, resource_id, signal)
+);
+`
+
+// schemaV7 adds Step 9's macro execution history (Wave 1a; ADR-031, the
+// "macro execution model" record). This is a pure-addition migration —
+// nothing from schemaV1 through schemaV6 is touched — so, like schemaV5
+// and schemaV6, it needs none of SQLite's "12 steps to altering a table"
+// dance; every statement below is a plain CREATE. Repository methods live
+// in macro_runs.go, following the *Store/*Tx-form-over-one-querier-body
+// pattern every writer since schemaV6 uses (see tx.go's [Tx] doc comment).
+//
+// STEP-9-SPEC.md §3 is explicit that this is new storage, not a config
+// kind: "show.macro" and "show.action" (Track E's namespace, owned by this
+// step per STEP-9-SPEC.md §5.1) are DEFINITIONS, stored as ordinary
+// config_objects/config_revisions rows (schemaV6) with no new table of
+// their own. A macro RUN is different — it is execution history with
+// per-step outcomes, timestamps, and a link to a dispatched commands row
+// — so it needs the two tables below.
+//
+// macro_runs. One row per submitted run (ADR-031 decision 1: a run is
+// asynchronous — POST creates this row and returns immediately; nothing
+// ever blocks waiting for it to reach state='finished').
+//
+//   - macro_revision is the macro's config_revisions.revision PINNED AT
+//     SUBMISSION, never re-read from config_objects.current_revision once
+//     the run exists: ADR-031's own text is "a run pins the macro revision
+//     and each action revision at submission, so editing a macro at 16:58
+//     cannot change what the 17:00 run does halfway through." Same reason
+//     macro_run_steps.action_revision below is pinned per step.
+//
+//   - idempotency_key is UNIQUE, exactly like commands.idempotency_key
+//     (schemaV6): replay detection for a run is that constraint, and
+//     macro_runs.go's createMacroRun follows commands.go's insertCommand
+//     precedent of never trusting a SELECT-then-INSERT as the actual
+//     race-free source of truth for it, for the identical reason
+//     (CLAUDE.md's Step 4 lesson: a read-then-write is a race by
+//     construction). What is NEW here relative to insertCommand is a
+//     second guard layered on top — see the next paragraph — which *is*
+//     implemented as a SELECT-then-conditional-INSERT, but is safe for a
+//     reason specific to this package rather than in spite of it.
+//
+//   - ADR-031 decision 6's overlap refusal ("a run submitted while another
+//     run of the same macro is running is refused") is NOT a second UNIQUE
+//     constraint (e.g. a partial unique index on (macro_object_id) WHERE
+//     state='running'). It is checked by macro_runs.go's createMacroRun
+//     reading macro_runs for an existing running row for the same
+//     macro_object_id, then conditionally inserting, ALL inside one
+//     transaction. That read-then-conditionally-write shape is exactly
+//     queries.go's RecordHealth precedent (its own doc comment: "the read
+//     ... and the conditional write happen in one transaction, which is
+//     exactly what Store.SetMaxOpenConns(1) in open() exists to make safe
+//     against a second concurrent call") — this package's connection pool
+//     is capped at exactly one connection, so two concurrent
+//     Store.CreateMacroRun calls cannot interleave their reads and writes
+//     no matter how the Go scheduler orders them; the second call's
+//     BeginTx blocks until the first's commits or rolls back. A second,
+//     redundant UNIQUE index was deliberately not added: it would either
+//     duplicate a guarantee the connection cap already provides, or (if
+//     the cap were ever relaxed) fail in a way a partial index's ambiguous
+//     "UNIQUE constraint failed" error string could not itself distinguish
+//     from an idempotency_key collision without a second round of
+//     substring matching layered on isUniqueConstraintErr's existing one
+//     (identity.go) — see macro_runs.go's createMacroRun doc comment for
+//     why idempotency lookup deliberately runs BEFORE the overlap check:
+//     a legitimate retry of an already-accepted submission (same
+//     idempotency_key) must return the existing run — even one still
+//     state='running' — never a spurious "already in flight" refusal of
+//     itself.
+//
+//   - completed and confirmed are INTEGER with NO "NOT NULL DEFAULT",
+//     deliberately, and are the single most important columns in this
+//     migration. ADR-031 decision 3 requires them kept as two separate
+//     facts, never collapsed into one another or derived from each other,
+//     and CLAUDE.md's own recurring defect across this project's history
+//     is exactly a value that means "unknown" rendering as a value that
+//     means "no" — an observations.observed_at NOT NULL DEFAULT would have
+//     manufactured a false freshness claim (schemaV3), a bare boolean
+//     health column would have done the identical thing for liveness
+//     (ADR-011), and a NOT NULL DEFAULT 0 on either of these two columns
+//     would do it again here: a run still in flight would report
+//     "completed: false, confirmed: false" — indistinguishable from a run
+//     that finished and failed both — rather than "not decided yet",
+//     which is the true state of a running run per ADR-031 decision 3's
+//     "before a run finishes, neither is known." NULL here means exactly
+//     that, decoded by macro_runs.go's dbToBoolPtr into a Go *bool (nil ==
+//     unknown), matching the *time.Time-for-"genuinely unknown" pattern
+//     this package already uses throughout (schemaV1's HelloRecord.
+//     ObservedAt, schemaV6's CommandRecord.DeadlineAt/DispatchedAt/
+//     ResolvedAt). [Store.FinishMacroRun] is the only writer that ever
+//     sets either column, and it always sets both to a definite value in
+//     the same UPDATE — there is no code path in this package that leaves
+//     a finished run with one of the pair still NULL.
+//
+//   - attribution_degraded IS NOT NULL DEFAULT 0, unlike completed/
+//     confirmed, because ADR-031 decision 5's cost ("a macro containing
+//     both a stop and a start dispatches the start with degraded
+//     attribution too... it must be recorded on the wire as
+//     attributionDegraded: true") is a fact about how the run's steps were
+//     actually dispatched, not an outcome verdict — it is well-defined
+//     (false) from the moment the row is created, unlike completed/
+//     confirmed which are meaningless until the run is over.
+//     [Store.SetMacroRunAttributionDegraded] flips it to true mid-run, the
+//     moment the executor (Wave 2) actually hits an audit-write failure on
+//     an exempt run — a capability this migration's column supports beyond
+//     STEP-9-SPEC.md §6.1's literal ask of "recorded at finish", so an
+//     operator watching a STILL-RUNNING macro through the read API sees
+//     degraded attribution as soon as it happens rather than only once the
+//     run completes; see decision 5's own text, "it must be surfaced,"
+//     which this migration reads as not limited to post-hoc surfacing.
+//
+//   - trigger records who/what caused the run to start ("api" | "plugin" |
+//     "cli" | "ui" per STEP-9-SPEC.md §6.1), which is what lets Wave 3's
+//     plugin-vs-human-operator distinction exist on the wire at all — a
+//     column this package stores as an opaque string and does not validate
+//     the vocabulary of, matching commands.go's Action/TargetKind and
+//     config.go's Source, none of which this package enforces an enum on
+//     either.
+//
+// macro_run_steps. One row per step of a run, written once at creation
+// time (all of them, in [Store.CreateMacroRun]/[Tx.CreateMacroRun]'s one
+// transaction) and updated in place as each step dispatches and resolves
+// — never inserted incrementally as the executor works through the run,
+// so a caller reading a run mid-execution always sees every step it will
+// ever have, distinguishing "not reached yet" (state carries whatever the
+// executor initializes an unstarted step to) from "this run only has 3
+// steps" structurally rather than by the row simply not existing yet.
+//
+//   - PRIMARY KEY (run_id, step_index): step_index is the step's fixed
+//     position in the macro's step list at the pinned revision, assigned
+//     once at creation and never renumbered.
+//
+//   - run_id REFERENCES macro_runs(id) ON DELETE CASCADE, matching
+//     schemaV1's node_lwt/node_health FK-to-nodes style (never
+//     node_declarations' or config_revisions' deliberate FK *absence* —
+//     see schemaV6's doc comment for why those two are different): a
+//     macro_run_steps row has no meaning independent of the run it
+//     belongs to, so retention.go's pruneMacroRuns only ever issues a
+//     DELETE against macro_runs itself and relies on this CASCADE (which
+//     requires PRAGMA foreign_keys=on, already set unconditionally by
+//     store.go's open() and proven enforced by TestOpenAppliesPragmas) to
+//     take that run's steps with it — see STEP-9-SPEC.md's Wave 1a brief,
+//     "deleting a run's steps with it."
+//
+//   - action_revision is pinned at submission for the identical reason
+//     macro_runs.macro_revision is (see above): resolved once, against the
+//     action object's config_revisions row current at creation time, and
+//     never re-read from config_objects.current_revision thereafter.
+//
+//   - dispatched_at/resolved_at are nullable TEXT, matching
+//     commands.dispatched_at/resolved_at (schemaV6) exactly and for the
+//     identical reason (CommandRecord's doc comment in commands.go): nil
+//     means "not yet", never a zero time standing in for it.
+//
+//   - outcome is the ADR-029-decision-4-preserving five-value vocabulary
+//     STEP-9-SPEC.md §6.4 names — confirmed | unconfirmed | unconfirmable |
+//     failed | skipped — plus "" for a step that has not resolved yet;
+//     outcome_state/outcome_reason mirror commands.outcome_state/
+//     outcome_reason and audit_log.outcome_state/outcome_reason
+//     (schemaV5/schemaV6) exactly: an unresolved step carries a state and
+//     a reason, never a null that renders as blank.
+//
+//   - command_id is nullable TEXT (not TEXT NOT NULL DEFAULT ”, unlike
+//     e.g. node_declarations.last_discovery_run_id's empty-string
+//     sentinel for "no discovery run yet") because "" is not a real
+//     ambiguity risk for a discovery run id (an empty string could never
+//     collide with a real one, so the sentinel is safe there), but this
+//     column specifically needs to distinguish two genuinely different
+//     reasons for having no value: an MQTT step (STEP-9-SPEC.md §7) never
+//     dispatches through commands at all and will NEVER have one, versus
+//     an FPP step that has not dispatched YET and will get one once it
+//     does. NULL states the former; the latter round-trips through NULL
+//     too until dispatch, but only ever transitions NULL -> a real id,
+//     never NULL -> "" -> a real id, so there is exactly one "no value"
+//     representation for both, decoded via macro_runs.go's
+//     dbToStringPtr/stringPtrToDB the same *string-means-nullable pattern
+//     completed/confirmed use for bool.
+//
+//     command_id going missing out from under a step is not a bug: commands
+//     (schemaV6) is pruned by retention.go's pruneCommands while this
+//     table is not individually pruned (it only disappears via CASCADE when
+//     its own run is pruned), so a run older than the command retention
+//     window can point at a command_id that no longer resolves. Nothing in
+//     this migration or in macro_runs.go papers over that with a foreign
+//     key: there is deliberately none here, matching node_declarations'
+//     and config_revisions' precedent of a bare id column with no
+//     REFERENCES clause where the referenced row's own lifecycle is allowed
+//     to outlive or be pruned independently of the pointer to it (see
+//     schemaV6's doc comment). macro_runs.go's ResolveMacroRunStepCommand
+//     is the read-path primitive that turns "command_id is set but GetCommand
+//     returns ErrCommandNotFound" into a named, distinguishable state
+//     (CommandDetailNotRetained) rather than making a caller reinvent that
+//     interpretation, or worse, silently treat a failed lookup the same as
+//     command_id having been NULL all along.
+//
+//   - safety_class and local_fallback_class are TEXT NOT NULL DEFAULT ”
+//     (a caller must supply both non-empty, see createMacroRun's
+//     validation, but this migration itself does not constrain their
+//     vocabulary, matching integration/state's existing "not validated by
+//     this package" precedent below). STEP-9-SPEC.md §2.5, corrected
+//     2026-08-14, moved ADR-024 decision 11's audit exemption from a
+//     per-RUN property to a per-STEP one: the first draft made a run exempt
+//     if any step was, which let a `stopPlaylist` step launder an
+//     unattributable `startPlaylist` elsewhere in the same run when the
+//     audit store was down. Recording the run's OWN single
+//     attribution_degraded column (below) is no longer sufficient once the
+//     exemption itself is decided per step: a reader needs to know which
+//     step's dispatch was exempt and which safety class earned it, not just
+//     that the run as a whole was touched by degraded attribution
+//     somewhere. safety_class is the pinned value of the step's action's
+//     own required safetyClass field (STEP-9-SPEC.md §5.3: none | blackout
+//     | stop | powerOff) at ActionRevision; local_fallback_class is the
+//     macro step's own required localFallback.class (§5.4: none |
+//     coordinator-required | silence). Both are resolved and pinned once,
+//     at CreateMacroRun time, for the identical reason ActionRevision
+//     itself is pinned (see macro_runs.macro_revision's paragraph above):
+//     an operator editing the action's safety class or the macro's fallback
+//     label at 16:58 must not change what a run already in flight reports
+//     about itself.
+//
+//   - This table's own attribution_degraded (INTEGER NOT NULL DEFAULT 0,
+//     not nullable, identical reasoning to macro_runs.attribution_degraded
+//     above: it is well-defined false from creation, unlike completed/
+//     confirmed) is the per-step half of that same correction: flipped by
+//     [Store.SetMacroRunStepAttributionDegraded] the moment THIS step
+//     specifically dispatched with degraded attribution, independent of
+//     macro_runs.attribution_degraded, which the executor (Wave 2) is
+//     expected to also set on the run per ADR-031 decision 5's "recorded on
+//     the step and raised onto the run": this package stores both facts
+//     and computes neither from the other.
+const schemaV7 = `
+CREATE TABLE macro_runs (
+	id                    TEXT PRIMARY KEY,
+	macro_object_id       TEXT NOT NULL,
+	macro_revision        INTEGER NOT NULL,
+	show                  TEXT NOT NULL,
+	trigger               TEXT NOT NULL,
+	issuer_principal_id   TEXT NOT NULL DEFAULT '',
+	issuer_principal_name TEXT NOT NULL DEFAULT '',
+	idempotency_key       TEXT NOT NULL UNIQUE,
+	created_at            TEXT NOT NULL,
+	finished_at           TEXT,
+	state                 TEXT NOT NULL,
+	completed             INTEGER,
+	confirmed             INTEGER,
+	reason                TEXT NOT NULL DEFAULT '',
+	attribution_degraded  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_macro_runs_created_at ON macro_runs(created_at);
+CREATE INDEX idx_macro_runs_macro_object_id_state ON macro_runs(macro_object_id, state);
+
+CREATE TABLE macro_run_steps (
+	run_id                TEXT NOT NULL REFERENCES macro_runs(id) ON DELETE CASCADE,
+	step_index            INTEGER NOT NULL,
+	step_id               TEXT NOT NULL,
+	action_object_id      TEXT NOT NULL,
+	action_revision       INTEGER NOT NULL,
+	integration           TEXT NOT NULL,
+	safety_class          TEXT NOT NULL DEFAULT '',
+	local_fallback_class  TEXT NOT NULL DEFAULT '',
+	state                 TEXT NOT NULL,
+	dispatched_at         TEXT,
+	resolved_at           TEXT,
+	outcome               TEXT NOT NULL DEFAULT '',
+	outcome_state         TEXT NOT NULL DEFAULT '',
+	outcome_reason        TEXT NOT NULL DEFAULT '',
+	command_id            TEXT,
+	attribution_degraded  INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (run_id, step_index)
 );
 `
 

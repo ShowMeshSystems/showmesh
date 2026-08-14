@@ -55,6 +55,14 @@ var fppCommandCopyGuardFiles = []string{
 	"fppcommand_primitives.go",
 	"problem.go",
 	"../fppcommand/validation.go",
+
+	// fppcommand_dispatch.go: Step 9's exported in-process dispatch core.
+	// It builds *v1.Problem values through the same constructors this
+	// seam always has (invalidParameterProblem, resourceNotFoundProblem,
+	// ...), so it is exactly the class of file this guard exists to
+	// cover — added in the wave that adds it, not left for a later one to
+	// discover uncovered.
+	"fppcommand_dispatch.go",
 }
 
 // TestOperatorFacingStringsCarryNoInternalCitation is this task's own
