@@ -31,12 +31,12 @@ import (
 func realStatusCaptures(t *testing.T) map[string][]byte {
 	t.Helper()
 	return readCapturesOrFail(t, map[string]string{
-		"fppmqtt/fpp-player_fppd_status.json":      filepath.Join("testdata", "fpp-player_fppd_status.json"),
-		"fppmqtt/fpp-remote-a_fppd_status.json": filepath.Join("testdata", "fpp-remote-a_fppd_status.json"),
+		"fppmqtt/fpp-player_fppd_status.json":       filepath.Join("testdata", "fpp-player_fppd_status.json"),
+		"fppmqtt/fpp-remote-a_fppd_status.json":     filepath.Join("testdata", "fpp-remote-a_fppd_status.json"),
 		"fppmqtt/fpp-ghost_fppd_status.json(ghost)": filepath.Join("testdata", "fpp-ghost_fppd_status.json"),
-		"fpp/live_main_fppd_status.json":         filepath.Join("..", "fpp", "testdata", "live_main_fppd_status.json"),
-		"fpp/live_remote01_fppd_status.json":     filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_status.json"),
-		"fpp/live_remote04_fppd_status.json":     filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_status.json"),
+		"fpp/live_main_fppd_status.json":            filepath.Join("..", "fpp", "testdata", "live_main_fppd_status.json"),
+		"fpp/live_remote01_fppd_status.json":        filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_status.json"),
+		"fpp/live_remote04_fppd_status.json":        filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_status.json"),
 	})
 }
 
@@ -48,10 +48,10 @@ func realPortsCaptures(t *testing.T) map[string][]byte {
 	t.Helper()
 	return readCapturesOrFail(t, map[string]string{
 		"fppmqtt/fpp-ghost_port_status.json(ghost)": filepath.Join("testdata", "fpp-ghost_port_status.json"),
-		"fppmqtt/fpp-remote-b_port_status.json": filepath.Join("testdata", "fpp-remote-b_port_status.json"),
-		"fpp/live_main_fppd_ports.json":          filepath.Join("..", "fpp", "testdata", "live_main_fppd_ports.json"),
-		"fpp/live_remote01_fppd_ports.json":      filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_ports.json"),
-		"fpp/live_remote04_fppd_ports.json":      filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_ports.json"),
+		"fppmqtt/fpp-remote-b_port_status.json":     filepath.Join("testdata", "fpp-remote-b_port_status.json"),
+		"fpp/live_main_fppd_ports.json":             filepath.Join("..", "fpp", "testdata", "live_main_fppd_ports.json"),
+		"fpp/live_remote01_fppd_ports.json":         filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_ports.json"),
+		"fpp/live_remote04_fppd_ports.json":         filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_ports.json"),
 	})
 }
 
