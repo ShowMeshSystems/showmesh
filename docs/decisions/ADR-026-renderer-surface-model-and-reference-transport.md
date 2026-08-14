@@ -79,6 +79,18 @@ FPP Connect uploads the sequence and FSEQ to each renderer node **before**
 playback. Each surface extracts its assigned virtual-matrix channels from the
 local FSEQ file and renders them to its own canvas.
 
+**Amended 2026-08-13: the FSEQ a node receives is node-specific, not the whole
+show.** The reference installation's xLights project carries over 30,000
+channels before any matrix content, so a whole-show FSEQ would be gigabytes per
+song, and xLights already renders per-target files containing only the channels
+that target needs. The consequence is recorded in
+[ADR-028](ADR-028-show-asset-store-and-identity.md) decision 1 and it is not a
+detail: every per-target variant of one sequence **carries the same filename**,
+so a node's FSEQ is identified by show, sequence, target, and content hash
+rather than by what it is called on disk. Local extraction still applies, since
+a node may host more than one surface, but its input is already narrowed to that
+node's channels.
+
 **The renderer does not consume a live matrix stream**, and nothing in this
 architecture may introduce one. This keeps the renderer off the critical network
 path during a show, which is the same property [ADR-008](ADR-008-mqtt-control-plane.md)

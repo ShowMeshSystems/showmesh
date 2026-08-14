@@ -14,12 +14,12 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-006](ADR-006-go-implementation-language.md) | Go is the implementation language | Accepted (frontend clause closed by ADR-014, ADR-015) |
 | [ADR-007](ADR-007-gstreamer-media-engine.md) | Node agent supervises GStreamer as media engine | Accepted |
 | [ADR-008](ADR-008-mqtt-control-plane.md) | MQTT is the coordinator↔agent transport | Accepted |
-| [ADR-009](ADR-009-sqlite-configuration-storage.md) | SQLite authoritative store; YAML portable bundles | Accepted (agent-cache `checksummed` superseded by ADR-025) |
+| [ADR-009](ADR-009-sqlite-configuration-storage.md) | SQLite authoritative store; YAML portable bundles | Accepted (agent-cache `checksummed` superseded by ADR-025; asset bytes excluded by ADR-028) |
 | [ADR-010](ADR-010-apache-2-license.md) | Apache-2.0 license | Accepted |
 | [ADR-011](ADR-011-context-aware-observability.md) | Health and alerts are context-aware | Accepted |
 | [ADR-012](ADR-012-docker-coordinator-deployment.md) | Docker is the primary coordinator deployment | Accepted (bundle extended by ADR-014) |
 | [ADR-013](ADR-013-no-fpp-control-port-sharing.md) | ShowMesh must not share the FPP control port with a running fppd | Accepted |
-| [ADR-014](ADR-014-operator-ui-is-an-api-client.md) | The Operator UI is an optional client of a versioned public control API | Accepted |
+| [ADR-014](ADR-014-operator-ui-is-an-api-client.md) | The Operator UI is an optional client of a versioned public control API | Accepted (extended to authoring by ADR-030) |
 | [ADR-015](ADR-015-typescript-spa-frontend.md) | The Operator UI is a TypeScript single-page application | Accepted |
 | [ADR-016](ADR-016-controlled-devices-and-control-providers.md) | Externally controlled devices are driven by control providers | Accepted |
 | [ADR-017](ADR-017-showmesh-owns-audience-audio.md) | ShowMesh owns audience audio; nodes play local media | Accepted |
@@ -32,6 +32,10 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted |
 | [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
 | [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
+| [ADR-027](ADR-027-show-and-surface-model.md) | Show and surface model; xLights owns authoring, ShowMesh owns configuration | Accepted |
+| [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted |
+| [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted |
+| [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
 
 ## Record template
 
