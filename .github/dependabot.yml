@@ -1,0 +1,63 @@
+# Dependabot keeps versions moving; it does not decide what is dangerous.
+# That split matters here, so it is written down rather than left to be
+# rediscovered: Dependabot alerts Go at module granularity, so a flaw in
+# any package of a module flags the whole module whether or not this
+# project imports the affected package. On 2026-08-14 that meant 16 open
+# alerts, 7 critical, and zero reachable from this build. CI's `vuln` job
+# runs govulncheck, which does call-path analysis, and that job is the one
+# that gets to fail a build.
+#
+# So these PRs are hygiene, not incident response. Treat a Dependabot PR as
+# routine and a red `vuln` job as real.
+
+version: 2
+
+updates:
+  # The coordinator, agent and showmeshctl. ADR-012 forbids anything that
+  # reintroduces CGo (the image is a static binary on distroless and must
+  # cross-compile clean to arm64), so a bump that pulls in a CGo-requiring
+  # dependency must be rejected rather than merged. CI's "Build CGo-free
+  # (ADR-012)" step in the `test` job is what catches that, and it runs on
+  # these PRs like any other.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # golang.org/x/* move together and their advisories arrive in
+      # batches, which is exactly the case that produced 15 separate
+      # alerts for one unimported package. One PR, not fifteen.
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  # The Operator UI (ADR-015). Its own module, so its own entry.
+  - package-ecosystem: npm
+    directory: "/ui"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(ui)"
+    groups:
+      # A dev-tooling bump cannot reach a browser, so batching them keeps
+      # the queue readable and leaves runtime dependency PRs individually
+      # visible, which is where the actual risk is.
+      dev-dependencies:
+        dependency-type: development
+
+  # The workflows themselves. Pinned action majors go stale silently and a
+  # stale action is how a supply-chain advisory sits unnoticed in CI rather
+  # than in the product.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
