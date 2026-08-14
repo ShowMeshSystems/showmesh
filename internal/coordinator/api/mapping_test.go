@@ -247,7 +247,7 @@ func TestDeriveInstanceHealthUnreachableInstanceReportsUnknown(t *testing.T) {
 // healthy") survived only via a pre-existing pkg/observation-level test
 // with no coverage at THIS package's own aggregation layer — exactly the
 // Step 3/4 failure shape of testing an acceptance criterion one layer away
-// from where it must actually hold, applied to the FPP-01 ghost's specific
+// from where it must actually hold, applied to the fpp-ghost ghost's specific
 // case (a retained fpp.reachable, unknown_age, sourced fpp-mqtt).
 func TestDeriveInstanceHealthUnknownAgeCriticalSignalIsUnknown(t *testing.T) {
 	now := time.Now()

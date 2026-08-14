@@ -91,7 +91,7 @@ describe('summarizeFleetPorts', () => {
     expect(summary.instancesWithNoPorts).toBe(0)
   })
 
-  // FPP-Main's real, exact condition: fpp.ports.count === 0 is a
+  // fpp-player's real, exact condition: fpp.ports.count === 0 is a
   // measured fact (a Pi with no cape), not an absence -- it must count as
   // "reporting", contribute to instancesWithNoPorts, and never be
   // conflated with instancesUnknown (an instance whose count could not be

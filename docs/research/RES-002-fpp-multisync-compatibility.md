@@ -107,14 +107,14 @@ Items 4 and 5 stay where they were. No container promoted them and none will.
 
 Read-only `GET /api/system/info` and `GET /api/fppd/status` against the three deployed hosts recorded in the [reference installation](../reference-installation.md). No packets were captured and no probe was run, so **this changes nothing about the wire-protocol evidence level**; it is recorded because the bench tier 2 work will run against exactly these hosts and their state is now known rather than assumed.
 
-- The player (`FPP-Main`, Pi 3 Model B+, FPP 9.4) reports **`multisync: true`** in `/api/fppd/status`. The detection path described below therefore reads a live `true` on the real rig, not only a container-default `false`, which is the case the collector's test could not previously exercise against real hardware.
+- The player (`fpp-player`, Pi 3 Model B+, FPP 9.4) reports **`multisync: true`** in `/api/fppd/status`. The detection path described below therefore reads a live `true` on the real rig, not only a container-default `false`, which is the case the collector's test could not previously exercise against real hardware.
 - The fleet is **not uniform**: 9.4 on the player and one remote, and a master-branch build (`9.x-master-822-g56515e4d`) on the other remote, run deliberately because a bug hit during last season's display was fixed in master. A MultiSync capture is therefore a capture across mixed FPP builds, and the versions of every participant must be recorded with it rather than assumed equal.
 - The player's own `warnings` array reported `MQTT Disconnected` and `A Log Level is set to Debug` at probe time. Both are FPP-side conditions unrelated to MultiSync, noted so a future capture is not read against an assumed-clean baseline.
 - The operator intends to move the fleet to a 9.x release or trial the FPP 10 beta before the season. That is a material environment change: captures taken before it do not carry forward.
 
 ### `warnings` is omitted from the status document when empty (2026-08-11, L1, source-verified)
 
-A second read-only pass over the fleet found the three hosts disagreeing in shape rather than in content: `FPP-remote-04` has **no `warnings` key at all** in `/api/fppd/status`, while its MQTT `warnings` topic publishes `[]`, and the other two hosts carry populated arrays. Absent, empty, and populated are three different claims, and guessing between them is exactly what this project's evidence discipline forbids.
+A second read-only pass over the fleet found the three hosts disagreeing in shape rather than in content: `fpp-remote-b` has **no `warnings` key at all** in `/api/fppd/status`, while its MQTT `warnings` topic publishes `[]`, and the other two hosts carry populated arrays. Absent, empty, and populated are three different claims, and guessing between them is exactly what this project's evidence discipline forbids.
 
 Settled against FPP's own source rather than by inference. In `src/httpAPI.cpp`, the field is built only inside the loop:
 
@@ -125,7 +125,7 @@ for (auto& warn : WarningHolder::GetWarnings()) {
 }
 ```
 
-`.append()` creates the key on first use, so an empty warning list never creates it. **FPP omits `warnings` and `warningInfo` from `/api/fppd/status` when there are no warnings.** Verified at commit `7e3c6acb02386e65855f420aa21cde518453be38`, which is the `RemoteGitVersion` `FPP-Main` itself reports, so it is the correct source for this fleet rather than for `master` generally. Read at lines 120-124 of that file; a builder independently cited the same construct in the same file. [src: `src/httpAPI.cpp` @ `7e3c6acb0`, accessed 2026-08-11]
+`.append()` creates the key on first use, so an empty warning list never creates it. **FPP omits `warnings` and `warningInfo` from `/api/fppd/status` when there are no warnings.** Verified at commit `7e3c6acb02386e65855f420aa21cde518453be38`, which is the `RemoteGitVersion` `fpp-player` itself reports, so it is the correct source for this fleet rather than for `master` generally. Read at lines 120-124 of that file; a builder independently cited the same construct in the same file. [src: `src/httpAPI.cpp` @ `7e3c6acb0`, accessed 2026-08-11]
 
 Also confirmed live in the same pass, and worth recording next to the note above about not assuming a clean baseline: the player's `MQTT Disconnected` warning is **gone**, and all three hosts now report `MQTT: {configured: true, connected: true}` against the operator's existing broker. The earlier reading was a point-in-time observation, not a standing condition.
 

@@ -21,7 +21,7 @@
 	"dateStr" : "Wed Oct 22",
 	"fppd" : "running",
 	"host_description" : "FPP",
-	"host_name" : "FPP-01",
+	"host_name" : "fpp-ghost",
 	"mode" : 2,
 	"mode_name" : "player",
 	"multisync" : true,
@@ -111,7 +111,7 @@
 	"uptimeSeconds" : 38,
 	"uptimeStr" : "0 days, 0 hours, 0 minutes, 38 seconds",
 	"uptimeTotalSeconds" : 38,
-	"uuid" : "M1-3818BBBK1706",
+	"uuid" : "M1-000000000002",
 	"version" : "9.2-2-g71597563",
 	"volume" : 70,
 	"warningInfo" : 
@@ -122,18 +122,18 @@
 		},
 		{
 			"id" : 0,
-			"message" : "UDP Output set to send data to myself.  Disabling 192.168.133.70"
+			"message" : "UDP Output set to send data to myself.  Disabling 192.0.2.11"
 		},
 		{
 			"id" : 0,
-			"message" : "Cannot Ping ArtNet Channel Data Target 192.168.131.99 Ethernet_"
+			"message" : "Cannot Ping ArtNet Channel Data Target 198.51.100.20 Ethernet_"
 		}
 	],
 	"warnings" : 
 	[
 		"Scheduled Playlist 'Halloween 2025' does not exist",
-		"UDP Output set to send data to myself.  Disabling 192.168.133.70",
-		"Cannot Ping ArtNet Channel Data Target 192.168.131.99 Ethernet_"
+		"UDP Output set to send data to myself.  Disabling 192.0.2.11",
+		"Cannot Ping ArtNet Channel Data Target 198.51.100.20 Ethernet_"
 	]
 }
 

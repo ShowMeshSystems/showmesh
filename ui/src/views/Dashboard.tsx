@@ -336,7 +336,7 @@ export function Dashboard() {
                         {typeof count?.value === 'number' && count.value === 0 ? (
                           // Step 5 review finding 6: this used to be a bare
                           // <span> with no state marker, so a zero-port
-                          // reading of unknown age (the FPP-01 ghost shape,
+                          // reading of unknown age (the fpp-ghost ghost shape,
                           // one modelling decision away from this exact
                           // signal) rendered as confidently as a fresh one.
                           // A StatusBadge carries count.state's icon/tone

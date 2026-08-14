@@ -22,7 +22,7 @@ import (
 
 // realStatusCaptures is every real fppd_status document this repository has
 // captured from the live fleet, drawn from BOTH packages' testdata/
-// directories — including the FPP-01 ghost payload (delivered retained
+// directories — including the fpp-ghost ghost payload (delivered retained
 // only, over MQTT, in production; structurally the same document type
 // either way, since neither decoder ever touches a clock). A capture
 // living in only one package's testdata/ still proves agreement: the point
@@ -31,9 +31,9 @@ import (
 func realStatusCaptures(t *testing.T) map[string][]byte {
 	t.Helper()
 	return readCapturesOrFail(t, map[string]string{
-		"fppmqtt/FPP-Main_fppd_status.json":      filepath.Join("testdata", "FPP-Main_fppd_status.json"),
-		"fppmqtt/FPP-remote-01_fppd_status.json": filepath.Join("testdata", "FPP-remote-01_fppd_status.json"),
-		"fppmqtt/FPP-01_fppd_status.json(ghost)": filepath.Join("testdata", "FPP-01_fppd_status.json"),
+		"fppmqtt/fpp-player_fppd_status.json":      filepath.Join("testdata", "fpp-player_fppd_status.json"),
+		"fppmqtt/fpp-remote-a_fppd_status.json": filepath.Join("testdata", "fpp-remote-a_fppd_status.json"),
+		"fppmqtt/fpp-ghost_fppd_status.json(ghost)": filepath.Join("testdata", "fpp-ghost_fppd_status.json"),
 		"fpp/live_main_fppd_status.json":         filepath.Join("..", "fpp", "testdata", "live_main_fppd_status.json"),
 		"fpp/live_remote01_fppd_status.json":     filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_status.json"),
 		"fpp/live_remote04_fppd_status.json":     filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_status.json"),
@@ -41,14 +41,14 @@ func realStatusCaptures(t *testing.T) map[string][]byte {
 }
 
 // realPortsCaptures is the port_status/ /api/fppd/ports mirror of
-// realStatusCaptures, including the FPP-01 ghost's port_status payload and
-// FPP-remote-04's 48-element (32 smart-receiver) capture from both
+// realStatusCaptures, including the fpp-ghost ghost's port_status payload and
+// fpp-remote-b's 48-element (32 smart-receiver) capture from both
 // packages' testdata/.
 func realPortsCaptures(t *testing.T) map[string][]byte {
 	t.Helper()
 	return readCapturesOrFail(t, map[string]string{
-		"fppmqtt/FPP-01_port_status.json(ghost)": filepath.Join("testdata", "FPP-01_port_status.json"),
-		"fppmqtt/FPP-remote-04_port_status.json": filepath.Join("testdata", "FPP-remote-04_port_status.json"),
+		"fppmqtt/fpp-ghost_port_status.json(ghost)": filepath.Join("testdata", "fpp-ghost_port_status.json"),
+		"fppmqtt/fpp-remote-b_port_status.json": filepath.Join("testdata", "fpp-remote-b_port_status.json"),
 		"fpp/live_main_fppd_ports.json":          filepath.Join("..", "fpp", "testdata", "live_main_fppd_ports.json"),
 		"fpp/live_remote01_fppd_ports.json":      filepath.Join("..", "fpp", "testdata", "live_remote01_fppd_ports.json"),
 		"fpp/live_remote04_fppd_ports.json":      filepath.Join("..", "fpp", "testdata", "live_remote04_fppd_ports.json"),
@@ -208,22 +208,22 @@ func TestFoldInPortTopicAgreesWithFPPPortSignals(t *testing.T) {
 // mutation was reverted immediately after.
 func TestPollNeverDuplicatesAnExcludedSignalAcrossTopics(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
 	// fppd_status: a real capture, which by itself carries version, branch,
 	// status, playlist.repeat_mode, playlist.index, and (via its own
 	// "warnings" field or lack thereof) has warnings-derived signals too.
-	deliver(c, "falcon/player/FPP-Main/fppd_status", readTestdata(t, "FPP-Main_fppd_status.json"), false)
+	deliver(c, "falcon/player/fpp-player/fppd_status", readTestdata(t, "fpp-player_fppd_status.json"), false)
 
 	// Each excluded signal's own dedicated topic, delivered independently —
 	// exactly as a real FPP publishes them, per topics.go's table.
-	deliver(c, "falcon/player/FPP-Main/version", []byte("v9.5.3"), false)
-	deliver(c, "falcon/player/FPP-Main/branch", []byte("master"), false)
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
-	deliver(c, "falcon/player/FPP-Main/playlist/repeat/status", []byte("0"), false)
-	deliver(c, "falcon/player/FPP-Main/playlist/position/status", []byte("2"), false)
-	deliver(c, "falcon/player/FPP-Main/warnings", []byte(`[{"id":1,"message":"A Log Level is set to Debug"}]`), false)
+	deliver(c, "falcon/player/fpp-player/version", []byte("v9.5.3"), false)
+	deliver(c, "falcon/player/fpp-player/branch", []byte("master"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
+	deliver(c, "falcon/player/fpp-player/playlist/repeat/status", []byte("0"), false)
+	deliver(c, "falcon/player/fpp-player/playlist/position/status", []byte("2"), false)
+	deliver(c, "falcon/player/fpp-player/warnings", []byte(`[{"id":1,"message":"A Log Level is set to Debug"}]`), false)
 
 	obs, _ := c.Poll(context.Background())
 

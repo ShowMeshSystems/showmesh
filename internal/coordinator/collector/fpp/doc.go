@@ -75,8 +75,8 @@
 // as of 2026-08-10 — see each testdata file and fpp_test.go /
 // integration_test.go for which claims were checked against the live
 // daemon versus against a captured body. Step 5 (2026-08-11) added a
-// read-only REST probe of the operator's live fleet — FPP-Main, FPP-remote-01,
-// FPP-remote-04 (see docs/reference-installation.md) — captured to
+// read-only REST probe of the operator's live fleet — fpp-player, fpp-remote-a,
+// fpp-remote-b (see docs/reference-installation.md) — captured to
 // testdata/live_*.json; those captures are what signals.go's StatusSignals,
 // PortSignals, and SystemInfoSignals are written and tested against.
 // Neither the bench captures nor the live fleet probe raises RES-002's L2
@@ -91,8 +91,8 @@
 //
 // # The "warnings" key: absent-when-empty, verified against FPP's own source
 //
-// FPP-remote-04's live /api/fppd/status capture (testdata/live_remote04_fppd_status.json)
-// has no "warnings" key at all, while FPP-Main's and FPP-remote-01's both
+// fpp-remote-b's live /api/fppd/status capture (testdata/live_remote04_fppd_status.json)
+// has no "warnings" key at all, while fpp-player's and fpp-remote-a's both
 // carry a populated array. Step 5 contract section 3.4 asks this to be
 // checked against FPP's own source rather than assumed: httpAPI.cpp's
 // status handler builds the field with

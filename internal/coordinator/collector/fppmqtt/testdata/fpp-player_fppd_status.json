@@ -21,7 +21,7 @@
 	"dateStr" : "Tue Aug 11",
 	"fppd" : "running",
 	"host_description" : "FPP",
-	"host_name" : "FPP-Main",
+	"host_name" : "fpp-player",
 	"mode" : 2,
 	"mode_name" : "player",
 	"multisync" : true,
@@ -71,7 +71,7 @@
 	"uptimeSeconds" : 35,
 	"uptimeStr" : "0 days, 4 hours, 39 minutes, 35 seconds",
 	"uptimeTotalSeconds" : 16775,
-	"uuid" : "M1-00000000c8398879",
+	"uuid" : "M1-0000000000000001",
 	"version" : "9.4",
 	"volume" : 80,
 	"warningInfo" : 

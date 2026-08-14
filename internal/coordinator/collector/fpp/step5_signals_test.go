@@ -10,9 +10,9 @@ import (
 
 // This file tests signals.go's decode surface (StatusSignals, PortSignals,
 // SystemInfoSignals) directly against the real fleet captures in
-// testdata/live_*.json — main (FPP-Main, Pi 3 B+, player mode, FPP 9.4,
-// ports []), remote01 (FPP-remote-01, K16A-B, remote mode, master build,
-// 32 port elements), and remote04 (FPP-remote-04, K16-Max, remote mode,
+// testdata/live_*.json — main (fpp-player, Pi 3 B+, player mode, FPP 9.4,
+// ports []), remote01 (fpp-remote-a, K16A-B, remote mode, master build,
+// 32 port elements), and remote04 (fpp-remote-b, K16-Max, remote mode,
 // FPP 9.4, 48 port elements, no "warnings" key) — captured read-only from
 // the operator's live fleet on 2026-08-11. Contract section 7: nothing
 // here may claim more than that — see each test's own doc comment for
@@ -156,7 +156,7 @@ func TestRemoteModeAbsenceIsUnsupportedNotCollectionFailed(t *testing.T) {
 }
 
 // TestPlayerModeRemoteOnlyFieldsAreUnsupported is the symmetric case: on
-// FPP-Main (player mode), fpp.media.filename and
+// fpp-player (player mode), fpp.media.filename and
 // fpp.position.elapsed.seconds are the ones that are absent, and their
 // absence must be explained by mode too.
 func TestPlayerModeRemoteOnlyFieldsAreUnsupported(t *testing.T) {
@@ -167,7 +167,7 @@ func TestPlayerModeRemoteOnlyFieldsAreUnsupported(t *testing.T) {
 	for _, sig := range []observation.SignalID{SignalMediaFilename, SignalPositionElapsedSeconds} {
 		got := findSignalValue(t, sigs, sig)
 		if got.Absence != observation.StateUnsupported {
-			t.Errorf("signal %q Absence = %q, want unsupported (FPP-Main is in player mode)", sig, got.Absence)
+			t.Errorf("signal %q Absence = %q, want unsupported (fpp-player is in player mode)", sig, got.Absence)
 			continue
 		}
 		if got.Reason == "" || !contains(got.Reason, "player") {
@@ -175,11 +175,11 @@ func TestPlayerModeRemoteOnlyFieldsAreUnsupported(t *testing.T) {
 		}
 	}
 
-	// And the player-only fields are real values on FPP-Main.
+	// And the player-only fields are real values on fpp-player.
 	for _, sig := range []observation.SignalID{SignalSchedulerStatus, SignalSchedulerEnabled, SignalPlaylistRepeatMode} {
 		got := findSignalValue(t, sigs, sig)
 		if got.Absence != "" {
-			t.Errorf("signal %q Absence = %q, want a value (FPP-Main IS in player mode)", sig, got.Absence)
+			t.Errorf("signal %q Absence = %q, want a value (fpp-player IS in player mode)", sig, got.Absence)
 		}
 	}
 }
@@ -205,7 +205,7 @@ func TestSchedulerNextPlaylistIsMeasuredSentenceNotInterpreted(t *testing.T) {
 // --- warnings (contract section 3.4) ----------------------------------------
 
 // TestWarningsAbsentKeyIsUnsupported verifies the live evidence at the
-// center of contract section 3.4: FPP-remote-04's real /api/fppd/status
+// center of contract section 3.4: fpp-remote-b's real /api/fppd/status
 // capture has no "warnings" key at all (confirmed against FPP's own
 // source — see this package's doc comment), and this package must report
 // that as Unsupported, never a fabricated zero count and never
@@ -213,7 +213,7 @@ func TestSchedulerNextPlaylistIsMeasuredSentenceNotInterpreted(t *testing.T) {
 func TestWarningsAbsentKeyIsUnsupported(t *testing.T) {
 	body := loadTestdata(t, "live_remote04_fppd_status.json")
 	if bytesContains(body, `"warnings"`) {
-		t.Fatalf("test fixture unexpectedly contains a \"warnings\" key; this test assumes FPP-remote-04's real capture omits it entirely")
+		t.Fatalf("test fixture unexpectedly contains a \"warnings\" key; this test assumes fpp-remote-b's real capture omits it entirely")
 	}
 
 	sigs, err := StatusSignals(body)
@@ -231,8 +231,8 @@ func TestWarningsAbsentKeyIsUnsupported(t *testing.T) {
 	}
 }
 
-// TestWarningsPresentArrayIsMeasured verifies the other half: FPP-Main and
-// FPP-remote-01 both carry a populated "warnings" array in their real
+// TestWarningsPresentArrayIsMeasured verifies the other half: fpp-player and
+// fpp-remote-a both carry a populated "warnings" array in their real
 // captures, and this package must report the count and a joined summary
 // as real, current values.
 func TestWarningsPresentArrayIsMeasured(t *testing.T) {
@@ -269,7 +269,7 @@ func TestWarningsPresentArrayIsMeasured(t *testing.T) {
 
 // --- ports: the three absences (contract section 3.2) ----------------------
 
-// TestPortsEmptyArrayIsMeasuredZeroNotAbsence verifies FPP-Main's real
+// TestPortsEmptyArrayIsMeasuredZeroNotAbsence verifies fpp-player's real
 // /api/fppd/ports capture ("[]", a Pi with no pixel output cape): count
 // and blind_count must both be Measured 0, and there must be no per-port
 // signals and no fpp.ports.decode_failed signal at all — zero ports is a

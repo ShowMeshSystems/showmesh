@@ -41,7 +41,7 @@ func measuredValue(sig observation.SignalID, value any, unit string) fpp.SignalV
 // --- warningsSignals: the dedicated "warnings" topic ----------------------
 
 // warningsSignals decodes the "warnings" MQTT topic. Verified against
-// testdata/FPP-Main_warnings.json and testdata/FPP-remote-04_warnings.json:
+// testdata/fpp-player_warnings.json and testdata/fpp-remote-b_warnings.json:
 // the payload is a JSON array of {"id":<int>,"message":<string>} objects —
 // structurally the same shape as /api/fppd/status's "warningInfo" field,
 // NOT its plain-string "warnings" field, despite the MQTT topic being named
@@ -85,10 +85,10 @@ func warningsFromMessages(messages []string) []fpp.SignalValue {
 //
 // version, branch, status, ready, playlist/repeat/status, and
 // playlist/position/status all publish their value as PLAIN TEXT, not a
-// JSON-quoted string — verified against testdata/FPP-Main_status.json
+// JSON-quoted string — verified against testdata/fpp-player_status.json
 // (payload bytes are exactly `idle`, four bytes, no quotes),
-// testdata/FPP-Main_ready.json (`1`), and
-// testdata/FPP-Main_playlist_repeat_status.json (`0`). json.Unmarshal would
+// testdata/fpp-player_ready.json (`1`), and
+// testdata/fpp-player_playlist_repeat_status.json (`0`). json.Unmarshal would
 // reject `idle` outright (not valid JSON), so these topics are read as raw
 // text, trimmed of surrounding whitespace, never JSON-decoded.
 
