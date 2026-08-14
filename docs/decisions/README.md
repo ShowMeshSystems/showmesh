@@ -36,6 +36,8 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted |
 | [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted |
 | [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
+| [ADR-031](ADR-031-macro-execution-model.md) | The macro execution model | Accepted |
+| [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
 
 ## Record template
 

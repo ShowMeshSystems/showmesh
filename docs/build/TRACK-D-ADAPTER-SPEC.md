@@ -306,6 +306,7 @@ safe once the first two are real.
 | Seam | Contents |
 |---|---|
 | **D-1** | The Resolume REST client, the WebSocket change signal, the object-id resolver, and the reachability observation. No composition semantics. **Built 2026-08-14 — see §4.1.** |
+| **D-2a** | **Added 2026-08-14 by [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md).** The composition-file parser, the stored id map, the upload API, `showmeshctl` coverage, and the Operator UI upload control. **This is where the id map comes from now** — see §4.2. |
 | **D-2** | Observations (§5), including layer readiness (§3.7) and composition identity (§3.8), on the dashboard with provenance and freshness. |
 | **D-3** | The action vocabulary (§6) with confirmation (§3.4, §3.5). |
 | **D-4** | `showmeshctl` coverage and the Operator UI controls. |
@@ -342,12 +343,47 @@ composition exists. D-1 therefore re-resolves on change within a bounded window
 after each connect, which makes the resolver **converge**. It does not make it
 *know* it was wrong — that is §3.8, and it is still D-2.
 
-**`GET /composition` crashes Arena 7.23.2**, four times, the fourth from `curl`
+**`GET /composition` crashes Arena 7.23.2**, seven times, one of them from `curl`
 with no ShowMesh process running. `/product` polling and holding a WebSocket were
 each exercised as controls and were fine. Recorded in full in the capture's §14,
 including what is not established. Since §2.3 leaves the full composition read as
-the only way to enumerate anything, this bounds how often the adapter may
-enumerate, and it is an owner decision before it is a build one.
+the only way to enumerate anything, this reshaped the track rather than merely
+bounding it. See §4.2.
+
+### 4.2 The id map comes from the composition file, not the API (ADR-032)
+
+**Decided by the owner 2026-08-14 and recorded as
+[ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md).**
+Seam D-1 bounded `/composition` to a connect plus a 120-second window. **That was
+the wrong answer**: two reads crashed Arena, so a bound leaves a segfault on the
+day-0 critical path for one of the three founding problems.
+
+What decided the fix was the control. **Targeted `by-id` reads are safe** —
+209,916 requests and 6.5 GB over ten minutes with no crash, the layer probe alone
+moving more bytes than the run that crashed. So the hazard is one endpoint, not
+the API, and the only thing `/composition` was ever needed for is discovering the
+id map.
+
+That map is in the `.avc` file, which is plain XML holding every clip, layer,
+group, column and deck id with names, positions, source media paths and
+`TransportType`. Verified against the live Arena by id alone: 18/18 layer ids and
+30/30 non-empty selected-deck clip ids resolve. So:
+
+- the operator uploads a composition file, ShowMesh parses it, and the id map is
+  stored as configuration with the ordinary revision and audit semantics;
+- **no runtime path calls `GET /composition` at all**, and D-1's convergence
+  window is removed rather than tuned;
+- live state is read `by-id`, and `/product` remains the reachability probe;
+- §3.8's composition identity check becomes cheap: resolve a sample of the stored
+  clip ids.
+
+**Two clauses of this specification are narrowed by ADR-032 and must be read
+through it.** §3.3 and §6.4 both treat a `404` on a stored id as a stale reference
+announcing itself. Measured: **a clip id resolves only while its own deck is
+selected**, 30/30 against 0/10, so a `404` can equally mean the operator switched
+decks. Every stored clip reference carries its deck, and that case reports a deck
+mismatch naming the deck, never a stale reference and never an identity failure.
+Layer ids are genuinely deck-independent and §3.3 stands for them unchanged.
 
 ## 5. Observations
 

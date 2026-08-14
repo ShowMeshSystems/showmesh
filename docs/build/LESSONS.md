@@ -18,7 +18,23 @@ The bench capture had already measured that window and the specification had alr
 
 **Track D, seam D-1.** `GET /api/v1/composition` crashes Arena 7.23.2 — four `SIGSEGV`s with byte-identical faulting frames. The fourth was produced by `curl` alone with no ShowMesh process running, which is what turned "our adapter is unstable" into "this call crashes Arena." Controls mattered as much as the result: 7 minutes idle, 30 `/product` polls over 5 minutes, and a WebSocket held open for 5 minutes all survived, so the finding is about one endpoint rather than about reading Resolume.
 
-Two things generalize. **A crash in the target looks exactly like a defect in your own new code**, and the only way to tell is to reproduce it without your code in the picture. **And the read you cannot avoid is the one worth costing**: the same API offers no collection endpoints, so this call is the only way to enumerate anything, which turned a bandwidth question into a design constraint — the adapter enumerates on connect and inside a bounded window after it, and never on a show-time cadence.
+Two things generalize. **A crash in the target looks exactly like a defect in your own new code**, and the only way to tell is to reproduce it without your code in the picture. **And the read you cannot avoid is the one worth costing**: the same API offers no collection endpoints, so this call is the only way to enumerate anything, which turned a bandwidth question into a design constraint.
+
+**The controls are what decided the design, not the crash.** Targeted `by-id` reads survived 209,916 requests and 6.5 GB over ten minutes, with the layer probe alone moving more bytes than the run that crashed. So the hazard was one endpoint rather than the API, which is the difference between "bound how often we enumerate" and ADR-032's "never enumerate over the API at all, the id map is in a file on disk." Bounding the call was the first answer and it was wrong: two reads crashed Arena, so a bound left a segfault on the show's critical path.
+
+**Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation, then run the controls. "Reading it is dangerous" and "this one endpoint is dangerous" build very different systems, and only the controls tell you which one you are in.
+
+## A single confirming observation proves the rule only for the case it sampled
+
+**Track D.** The bench capture tested whether a Resolume clip id resolves regardless of which deck is selected. One request, one clip, correct answer, written up as "**REST `by-id` is immune**" and used as a load-bearing property of the addressing model.
+
+It is false. Measured against the same installation: 30 of 30 selected-deck clip ids resolved, and **0 of 10 non-selected-deck ids did.** The one clip the capture happened to test was a `PersistentClip`, one of exactly four in that composition that live outside any deck and therefore resolve always. The test sampled the exception and generalised it into the rule.
+
+Two things make this worth keeping. The wrong conclusion **left a second mystery unexplained in the same document**: the capture also recorded, as an open item, that clip positions 1 and 2 returned identical ids on all three decks. That was the same four persistent clips seen from the other side. Both entries sat there for a day, each holding the other's answer.
+
+And the consequence was not cosmetic. A stored clip id for an unselected deck returns `404`, which the adapter specification's rule reads as "the composition changed underneath us", so an action would have reported a stale reference and marked the composition unidentified because the operator switched decks.
+
+**Rule:** when one observation establishes a general property, ask what class the sample belonged to before writing it down as a rule. Confirming that nothing varies with X requires a case that would have varied.
 
 **Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation. Then run the controls, because "reading it is dangerous" and "this one endpoint is dangerous" lead to very different systems.
 

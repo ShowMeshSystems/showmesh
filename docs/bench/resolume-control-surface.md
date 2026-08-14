@@ -815,14 +815,21 @@ deck.** Nothing in the OSC send says which deck it assumed, nothing replies, and
 deck selection is itself drivable from OSC (`/composition/decks/{D}/select`,
 confirmed §6.4) and from REST, and from the operator's hand on the keyboard.
 
-**REST `by-id` is immune.** Verified directly: with `Rest Staging` selected,
+~~**REST `by-id` is immune.** Verified directly: with `Rest Staging` selected,
 `GET /composition/clips/by-id/1765224917762` still returned `Virtual Matrix`, a
-`Main` clip. A by-id reference does not need to know which deck is showing.
+`Main` clip. A by-id reference does not need to know which deck is showing.~~
 
-One detail is unexplained and is recorded rather than smoothed over: **clip
+**WRONG, corrected 2026-08-14 in §16.1.** A clip id resolves only while its own
+deck is selected: 30/30 selected-deck ids resolved and **0/10 non-selected-deck ids
+did**, all 404. This paragraph's one test happened to use a `PersistentClip`, which
+is the exception rather than the rule (§16.2). **Layer ids are genuinely
+deck-independent** and that part stands.
+
+~~One detail is unexplained and is recorded rather than smoothed over: **clip
 positions 1 and 2 returned the same object ids on all three decks**, while every
-position from 3 upward differed. Whether those two columns are shared, group-owned,
-or an artefact of this composition was not determined.
+position from 3 upward differed.~~ **Answered 2026-08-14 in §16.2:** they are
+`PersistentClips`, four clips stored outside any deck, which is also why the test
+above came back deck-independent.
 
 **What this does to the tripwire.** Counting decks still works and is still cheap,
 but `Christmas 25` already has three decks, so "more than one deck exists" fires
@@ -1117,13 +1124,16 @@ Resolume is dangerous."**
 - Whether it reproduces on **another host or build**. Everything here is the same
   arm64 laptop as the rest of this document; the show host is a different machine
   and may become Windows.
-- Whether a **smaller targeted read** in a loop does the same thing —
-  `/composition/layers/by-id/{id}` at 62,795 bytes, or `/composition/clips/by-id/{id}`
-  at 6,818. Only the full read was exercised. This matters, because if the targeted
-  reads are safe they are the path D-2's per-layer and per-clip observations would
-  take anyway.
+- Whether it reproduces on **another host or build**. Everything here is the same
+  arm64 laptop as the rest of this document; the show host is a different machine
+  and may become Windows.
 - The mechanism, the frame symbols (the reports are unsymbolicated), and whether
-  Resolume already has a fix.
+  Resolume already has a fix. The owner notes that 7.26's changelog carries
+  "#25086 REST-API Overhead on large compositions" alongside a broader API
+  overhaul, and that 7.26 arrives after Thanksgiving. **That is a guess and a late
+  one**: it reads as a performance item rather than a crash fix, and it lands
+  roughly six weeks *after* the Halloween show. Nothing in this project may be
+  designed on the assumption that #25086 is this.
 
 **This is an owner decision, not a build decision.** Resolume control is one of the
 three founding problems, it is on the day-0 critical path, and a video wall that
@@ -1131,13 +1141,156 @@ segfaults mid-show is a worse failure than anything ShowMesh's own code can
 produce. It needs a vendor report and a decision about how much of Track D may
 depend on enumerating the composition at all.
 
+### 14.3 Targeted `by-id` reads are safe, and that is what makes the rest buildable
+
+The question §14.2 named as the one that most changes D-2's shape, answered the
+same day, from a freshly launched Arena that had never served a full composition
+read in that session:
+
+| Read | Count | Volume | Duration | Result |
+|---|---|---|---|---|
+| `GET /composition/clips/by-id/{id}` back-to-back | **127,128** | 1.45 GB | 5 min | **survived** |
+| `GET /composition/layers/by-id/{id}` back-to-back | **82,788** | 5.08 GB | 5 min | **survived** |
+
+209,916 reads, 6.5 GB, no crash and no new crash report. **The layer probe alone
+moved more bytes (5.08 GB) than the back-to-back full-composition run moved before
+it crashed (4.6 GB).** Stacked with the two-read crash, that rules out byte volume,
+request rate and total request count as the driver, and leaves the `/composition`
+endpoint itself.
+
+So the split is clean, and it is what §15 is built on: **enumerate from the file,
+observe by id.**
+
+## 15. The composition file as a configuration source
+
+**The owner's proposal, 2026-08-14, and it is the answer to §14 rather than a
+workaround.** `/composition` exists in the adapter for exactly one purpose:
+discovering the id map. That map is in the `.avc` file, which is plain XML on
+disk, so ShowMesh can read it at configuration time and never make the crashing
+call at runtime at all.
+
+The shape follows [ADR-027](../decisions/ADR-027-show-and-surface-model.md)'s
+xLights rule in a second vendor: **an authoring-time dependency, never a runtime
+one.** Nothing on a show host parses a `.avc` mid-show; the coordinator parses one
+when the operator uploads it, and stores the resulting id map as configuration.
+
+### 15.1 What the file actually contains, parsed from the operator's `Christmas 25.avc`
+
+407,344 bytes on disk against 2,258,982 over REST, because the file does not
+duplicate every layer inside its layergroup and does not fully populate empty clip
+slots.
+
+| Element | Carries |
+|---|---|
+| `Composition` | `uniqueId` (the installation constant, §12.3), `numDecks`, `numLayers`, `numColumns` |
+| `versionInfo` | the exact Arena that wrote it: `7.23.2 r51094` |
+| `CompositionInfo` | the real composition **name**, and the canvas **`width` 3000 / `height` 1440** |
+| `CompositionInfo/DeckInfo` × 3 | deck `id`, deck **name**, `closed` |
+| `Composition/Layer` × 18 | `uniqueId`, `layerIndex`, **`layerGroup`** |
+| `Composition/Group` × 3 | `uniqueId` |
+| `Composition/Deck/Column` | `uniqueId`, `columnIndex` |
+| `Composition/Deck/Clip` × 576 | `uniqueId`, `layerIndex`, `columnIndex` |
+| a non-empty clip's `Params` | `Name`, and **`TransportType`** |
+| a non-empty clip's `PreloadData/VideoFile` | the **source media path** |
+| `VideoTrack/Params` | per-clip `Width`/`Height` |
+
+Two of those are things REST does not expose at all: the **canvas size**, which
+Track B needs, and **`versionInfo`**, which makes "was this file written by the
+Arena that is running" a checkable question.
+
+And one is strictly more than REST offers: **the file carries all three decks'
+clip grids.** §9.4 established `/composition` returns only the selected deck's,
+with no way to read the others.
+
+### 15.2 The file matches the running composition, verified by id
+
+Checked against the live Arena using only `by-id` reads, with no full composition
+read in the session:
+
+```
+file's 18 layer ids resolving live                     18/18
+file's 30 non-empty Main-deck clip ids resolving live   30/30
+```
+
+`TransportType` being in the file is worth calling out separately: §8's SMPTE
+drift check needs to know which clips are *supposed* to be on timecode, and §11.3
+recorded that as depending on show configuration that does not exist yet. It is in
+the file the operator already has.
+
+### 15.3 The limit, and why the owner assessed it as small
+
+The file is the **last saved** state, and §10.2 measured that Arena never writes it
+on exit and discards in-session changes. So an operator who edits live and does not
+save leaves the file and the running composition divergent.
+
+The owner's assessment, 2026-08-14: once a composition is built, that is
+essentially it. Timing changes are either a source video file overwritten in place,
+which does not move any id, or trigger timing, which is ShowMesh's own
+configuration. The realistic failure is forgetting to re-upload while still
+building the show, and it is caught cheaply. **§15.2 is the check**: take the
+expected clip ids and resolve a sample by id. That is also the first formulation of
+§3.8's composition-identity problem that is both correct and cheap, since §12.3
+established the composition has no id in REST and the name is not an identifier.
+
+## 16. Corrections to §9.4, from the D-1 build
+
+Two, both found while verifying §15 and both changing what the adapter may assume.
+
+### 16.1 `by-id` is NOT immune to deck selection
+
+§9.4 concluded, from one test, that "**REST `by-id` is immune**" and that "a by-id
+reference does not need to know which deck is showing." **That is wrong.**
+
+Measured with `Main` selected, using clip ids taken from the file:
+
+```
+file's Main-deck non-empty clip ids resolving      30/30
+file's NON-selected-deck clip ids resolving         0/10   (all 404)
+```
+
+So a clip id resolves only while its own deck is selected. **Layers are genuinely
+deck-independent** and that half of §9.4 stands: all 18 layer ids resolve
+regardless.
+
+The consequence for the adapter is real: ShowMesh can hold configuration for every
+deck from the file, and can observe or act on clips of the **selected deck only**.
+A stored clip id for another deck returns `404`, which under §6.4's rule reads as a
+stale reference when it is nothing of the kind. **That rule needs a deck term
+before D-3 ships an action.**
+
+### 16.2 The "positions 1 and 2 identical across all three decks" mystery is `PersistentClips`
+
+§9.4 recorded, unexplained, that clip positions 1 and 2 returned the same object
+ids on every deck while every position from 3 upward differed, and §13 carried it
+as an open item. **Answered from the file**: `Composition/PersistentClips` holds
+four clips that live outside any deck.
+
+```
+layerIndex 0, columnIndex 0  1765224917762  Virtual Matrix
+layerIndex 3, columnIndex 0  1765224917409  Video Router
+layerIndex 0, columnIndex 1  1765396769079  Solid Color
+layerIndex 3, columnIndex 1  1765224915153  Solid Color
+```
+
+They resolve by id regardless of which deck is selected, which is why the §16.1
+test above had to be run with ordinary deck clips to see the 404s at all. They also
+close a second small discrepancy: 26 ordinary non-empty clips on `Main` plus these
+4 is the 30 non-empty this document reports from REST.
+
+**Both of the ids §1's OSC A/B test used are persistent clips.** That is why the
+one `by-id` check §9.4 ran came back deck-independent: it tested the exception and
+generalised from it. A single confirming observation of a rule proved the rule only
+for the case it sampled.
+
 ## 13. Open items this capture did not close
 
 - **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
 - **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
 - **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise. **Now doubly open:** §14 means the adapter no longer re-enumerates on a cadence, so this open item is also the reason a swap-without-restart leaves a stale resolution.
-- **Everything in §14.2**, including the one that decides how much of D-2 is buildable: whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does.
-- **Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).
+- **Everything still in §14.2.** ~~Whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does~~ is **closed (§14.3): it does not**, across 209,916 reads and 6.5 GB. What remains open is whether the crash reproduces on another composition, on another host or build, and what actually causes it.
+- **The `.avc` format's stability across Arena versions** (§15). Everything parsed there was read from files written by 7.23.2 and earlier, the format is undocumented, and 7.26 carries an API overhaul that may or may not touch it. `versionInfo` is in the file, so a mismatch is at least detectable.
+- **What `by-id` does during a deck switch** (§16.1). A stored clip id 404s while its deck is not selected, which is indistinguishable from the stale-reference case §6.4 defines. That needs a deck term before D-3 ships an action.
+- ~~**Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).~~ **Closed 2026-08-14 (§16.2): they are `PersistentClips`, stored outside any deck.**
 - **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
 - **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).
 - **Whether the `options` list can change at runtime**, which would make any cached enum stale. It varies per object; it was not observed changing on one object.
