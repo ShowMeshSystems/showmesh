@@ -554,3 +554,14 @@ Answer before or during the build; none of them blocks starting.
   which ADR-016 imposes on any coordinator-hosted provider and which this
   specification originally omitted. The model choice is open; that obligation is
   not.
+
+- **What should actually happen to Resolume when the coordinator goes offline?**
+  Raised by the owner 2026-08-14 and **deliberately held for its own session.**
+  §3.9 and §3.10 establish the mechanics: the wall keeps showing what it was
+  showing, and no ShowMesh-driven transition happens. What they do not settle is
+  whether that is the behaviour the show wants, or whether something should exist
+  on the Resolume host so a coordinator outage during a lifecycle transition is not
+  simply a stuck wall. That is the same question [RES-015](../research/RES-015-fpp-plugin-distribution-model.md)
+  answered for FPP with a plugin, and it should not be answered here by default.
+  **Nothing in seams D-1 through D-4 depends on the answer**, so the build is not
+  blocked by it.

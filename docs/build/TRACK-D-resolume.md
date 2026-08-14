@@ -83,7 +83,8 @@ Note the tension the adapter has to resolve: the owner's shape names **OSC** as 
 
 - **What happens on timecode loss**, once D0 establishes what Resolume actually does. If it holds the last frame, ShowMesh must surface that as a fault rather than trusting the wall to look wrong.
 - ~~How composition state is addressed stably.~~ **Answered by the owner 2026-08-13:** clips and layers are both pinned by identity, and the page is the one dimension that cannot be. See the addressing section below, including the deferred race and the tripwire that guards it.
-- **What ShowMesh does about a composition it does not recognise**, since the operator authors the composition in Resolume and ShowMesh learns about it rather than owning it.
+- **What ShowMesh does about a composition it does not recognise**, since the operator authors the composition in Resolume and ShowMesh learns about it rather than owning it. **Partly answered 2026-08-14**: it is asserted structurally by the expected clip ids resolving, because the composition has no id in REST and its name is not an identifier. What ShowMesh should *do* about a mismatch is still open, beyond surfacing it as evidence and never refusing.
+- **What should happen to Resolume when the coordinator is offline.** Raised by the owner 2026-08-14 and **held for its own session.** The mechanics are settled: the wall keeps showing what it was showing, and no ShowMesh-driven transition happens, which is why every Resolume action is `coordinator-required`. Whether that is the behaviour the show wants is a different question, and it is the same one [RES-015](../research/RES-015-fpp-plugin-distribution-model.md) answered for FPP with a plugin on the host. **It does not block the adapter build.**
 
 ## Addressing: everything is pinned, except the page
 
