@@ -85,7 +85,7 @@ All web access 2026-08-12. The corpus survey in §6 covered 56 repositories, 3,9
 
 ### 5.3 The architecture matrix, and the largest concrete gap in the plan
 
-**Fact.** The deployed fleet spans both ARM word sizes: `FPP-Main` is a Raspberry Pi 3 Model B+ on FPP 9.4, `FPP-remote-01` is a BeagleBone Black, and `FPP-remote-04` is a PocketBeagle2. FPP's installer sets BeagleBone Black to armhf and BeagleBone 64 to aarch64 by a `uname -m` test.
+**Fact.** The deployed fleet spans both ARM word sizes: `fpp-player` is a Raspberry Pi 3 Model B+ on FPP 9.4, `fpp-remote-a` is a BeagleBone Black, and `fpp-remote-b` is a PocketBeagle2. FPP's installer sets BeagleBone Black to armhf and BeagleBone 64 to aarch64 by a `uname -m` test.
 
 **Fact. ShowMesh's build pipeline does not cover this fleet.** CI builds `linux/amd64` and `linux/arm64` only, and produces container images rather than standalone agent release artifacts. A BeagleBone Black needs `GOARCH=arm GOARM=7`, which is not built today. **This directly answers the record's own sub-question: ADR-012's pipeline does not cover the deployed fleet without change.**
 
@@ -258,6 +258,6 @@ Unchanged in substance, with two amendments from §5.2 and §5.4:
 9. Run the registry linter against a candidate repository before submitting, since Best practice findings block a first listing.
 10. Exercise fresh install, upgrade from a pinned older release, uninstall, unreachable release host, and upgrade across an FPP major.
 
-**Could not determine, and each needs the hosts rather than more reading:** whether `FPP-Main` runs a 32-bit or 64-bit userspace, which decides its `GOARCH`; the platform string and word size of the PocketBeagle2; the exact commit of `FPP-remote-01`'s master build, on which every "master only" statement here is conditional; and whether the `phone-home` check fires in practice against an agent connecting to an operator-owned broker.
+**Could not determine, and each needs the hosts rather than more reading:** whether `fpp-player` runs a 32-bit or 64-bit userspace, which decides its `GOARCH`; the platform string and word size of the PocketBeagle2; the exact commit of `fpp-remote-a`'s master build, on which every "master only" statement here is conditional; and whether the `phone-home` check fires in practice against an agent connecting to an operator-owned broker.
 
 **Revalidate** whenever FPP's plugin manager, the registry's requirements, or the fleet's FPP version changes. The fleet's expected move to a 9.x release or the FPP 10 beta is a material change that crosses the regime boundary in §2 and makes the install, upgrade, and architecture-detection conclusions stale on the day it happens.

@@ -94,7 +94,16 @@ func Run() int {
 	// comments for why this exists at all.
 	heartbeatConnected := make(chan struct{}, 1)
 
-	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, logger)
+	// cmdHandler is constructed once, outside newMQTTConn, and reused across
+	// every reconnect: its idempotency cache and allowlisted operations'
+	// state (e.g. agentEchoState's stored value) are this process's memory
+	// of what it has already done, and must survive a broker reconnect —
+	// only the MQTT plumbing around it (the subscription, the
+	// publish-received callback binding) is rebuilt per connect. See
+	// mqtt.go's registerCommandHandling.
+	cmdHandler := newCommandHandler(cfg.NodeID, time.Now, logger)
+
+	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1

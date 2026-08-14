@@ -12,17 +12,23 @@
 // topic strings and encodes and decodes the envelope and payloads that
 // travel on them.
 //
-// # Scope boundary: Step 2 covers hello, observed state, and last will only
+// # Six schemas: advertisement, health, presence, command, result, and echo
 //
-// This package builds and parses every topic in ADR-008's v1 set,
-// including showmesh/nodes/<node-id>/cmd and
-// showmesh/nodes/<node-id>/result/<cmd-id>, because the topic shape is
-// fixed by ADR-008 regardless of what travels on it yet. But it defines NO
-// payload type for cmd or result: the command model (idempotency keys,
-// deadlines, revisions, confirmation methods) is ARCHITECTURE section 8 and
-// pkg/command, and pkg/command remains a stub until a later step. Only
-// three schemas exist here: showmesh.node.hello/v1,
-// showmesh.node.health/v1, and showmesh.node.lwt/v1.
+// This package builds and parses every topic in ADR-008's v1 set, and
+// defines a payload type for each: showmesh.node.hello/v1,
+// showmesh.node.health/v1, and showmesh.node.lwt/v1 (Step 2), plus
+// showmesh.node.cmd/v1, showmesh.node.result/v1, and
+// showmesh.node.agent.echo/v1 (added once pkg/command's command model —
+// ARCHITECTURE section 8's identifier, target, params, idempotency key,
+// deadline, issuer, requested revision, and confirmation method — stopped
+// being a stub). CmdPayload and ResultPayload mirror pkg/command.Envelope's
+// field semantics without importing pkg/command: this package stays a pure
+// data/codec package (see below), and pkg/command "stays deliberately
+// thin" and is not meant to be marshaled directly (see its own doc
+// comment) — two independently defined, JSON-tagged wire types, reconciled
+// by convention and by integration tests, is this codebase's established
+// idiom for a wire boundary (see cmd/showmeshctl's own doc comments on the
+// identical choice for its own wire types).
 //
 // # Envelope compatibility model
 //

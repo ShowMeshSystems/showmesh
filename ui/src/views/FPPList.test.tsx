@@ -90,7 +90,7 @@ describe('FPPList', () => {
   })
 
   // The real, deliberate fleet condition (STEP-5 spec section 6 "Version
-  // skew"): FPP-remote-01 runs a master build while Main and remote-04
+  // skew"): fpp-remote-a runs a master build while Main and remote-04
   // run 9.4. This must be surfaced as a stated fact, not suppressed, and
   // it must not touch either instance's FPPHealthBadge.
   it('marks the list when reachable instances report different fpp.version values, without touching either health badge', () => {
@@ -123,7 +123,7 @@ describe('FPPList', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  // Step 5 review finding 6/7: the FPP-01 ghost's version must never
+  // Step 5 review finding 6/7: the fpp-ghost ghost's version must never
   // count toward the skew statement at all -- its fpp.reachable is
   // unknown_age, so summarizeFleetVersions (fppSignals.ts) excludes it
   // via isReachableInstance, and no banner should appear purely because

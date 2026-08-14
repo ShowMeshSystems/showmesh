@@ -54,7 +54,7 @@ export function FPPList() {
                     {/* Step 5 review finding 6: this used to print
                         version.value bare, ignoring its Evidence.state --
                         so a version pulled from a retained/unknown-age
-                        source (the FPP-01 ghost's exact shape) rendered as
+                        source (the fpp-ghost ghost's exact shape) rendered as
                         a confident version string. FleetSignalBadge is the
                         same state-carrying renderer FleetSignalBadge/
                         PortGrid already use elsewhere for this exact

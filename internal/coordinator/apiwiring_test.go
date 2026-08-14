@@ -569,8 +569,8 @@ func loadFixture(t *testing.T, name string) []byte {
 // TestFPPSinkRealPortFixturesPruneGhostRowsOnEmptyDelivery is the task's
 // named reproduction, driven end to end through a real fpp.Collector (not
 // hand-built observations) against the exact fleet captures that exposed
-// the defect: FPP-remote-04 reporting 48 port elements
-// (live_remote04_fppd_ports.json), then FPP-Main reporting none
+// the defect: fpp-remote-b reporting 48 port elements
+// (live_remote04_fppd_ports.json), then fpp-player reporting none
 // (live_main_fppd_ports.json, a real "[]" from a Pi with no output cape —
 // see fpp/doc.go). Before this fix, the second poll's fpp.port.<key>.*
 // rows from the first poll would still be sitting in the store, aging

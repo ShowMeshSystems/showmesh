@@ -55,8 +55,8 @@ publishing on arbitrary syntactically valid node IDs. ADR-021's own consequences
 judge the broker the larger exposure of the two, because publish rights change
 coordinator state while the read API only discloses it, and `SECURITY.md` says
 the same to anyone who reads it first. Separately, the deployed FPP fleet
-publishes to the operator's home-automation broker authenticating as
-`ha_zigbee`, a shared credential with publish rights, on a broker where
+publishes to the operator's home-automation broker authenticating as a
+shared home-automation account that also holds publish rights, on a broker where
 `falcon/player/<host>/command/run` is a topic FPP acts on. That is not a
 hypothetical about shared broker credentials; it is the reference installation.
 

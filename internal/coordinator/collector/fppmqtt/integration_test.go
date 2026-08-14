@@ -221,7 +221,7 @@ func (p *testPublisher) disconnect(t *testing.T) {
 // real end-to-end case: it starts a genuine Collector.Run against a real
 // broker, publishes a RETAINED message before the collector's subscribe
 // has necessarily happened (so it is replayed on subscribe, exactly the
-// real-FPP-01 scenario), then a LIVE (non-retained) message on a different
+// real-fpp-ghost scenario), then a LIVE (non-retained) message on a different
 // topic, and asserts Poll sees both, with the same retained/live
 // distinction the rest of this package's unit suite proves against a
 // directly-injected handler call.

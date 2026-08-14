@@ -137,7 +137,7 @@ describe('Dashboard', () => {
     expect(pixelCurrentSection?.textContent).toContain('Port inventory not collected for any instance yet.')
   })
 
-  // FPP-Main's real condition: fpp.ports.count === 0. The pixel-current
+  // fpp-player's real condition: fpp.ports.count === 0. The pixel-current
   // panel must state this as a fact ("reports no pixel output ports"),
   // never render it as though nothing was collected.
   it('states "reports no pixel output ports" in the pixel current panel for an instance with a real zero-port count, distinct from "not collected"', () => {
@@ -147,7 +147,7 @@ describe('Dashboard', () => {
 
   // Step 5 review finding 6: the zero-ports statement above used to be a
   // bare <span> with no state marker at all, so a zero-port reading of
-  // unknown age (one modelling decision away from the FPP-01 ghost's
+  // unknown age (one modelling decision away from the fpp-ghost ghost's
   // exact shape on this signal) rendered exactly as confidently as a
   // fresh, current one. It must now carry its own Evidence.state via a
   // StatusBadge, matching FleetSignalBadge/PortGrid's established pattern

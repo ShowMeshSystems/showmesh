@@ -78,7 +78,7 @@ func methodNames(typ reflect.Type) []string {
 func TestNoWillMessageConfigured(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://127.0.0.1:1",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -101,7 +101,7 @@ func TestNoWillMessageConfigured(t *testing.T) {
 func TestBuildClientConfigUsesCleanStartNoSessionExpiry(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://127.0.0.1:1",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -131,9 +131,9 @@ func TestBuildClientConfigUsesCleanStartNoSessionExpiry(t *testing.T) {
 // match the filter strings this package builds — e.g. checking whether the
 // literal text "command" appeared anywhere in a filter. That is NOT how
 // MQTT decides whether a subscription filter matches a topic: a filter of
-// "falcon/player/FPP-Main/#" contains no substring "command" anywhere in
+// "falcon/player/fpp-player/#" contains no substring "command" anywhere in
 // its own text, yet the broker WOULD deliver
-// "falcon/player/FPP-Main/command/run" to a subscriber holding that
+// "falcon/player/fpp-player/command/run" to a subscriber holding that
 // filter, because '#' matches every remaining level. A substring check
 // cannot see that; only real wildcard-matching semantics can, which is
 // exactly what this function implements and what
@@ -184,13 +184,13 @@ func mqttTopicMatches(filter, topic string) bool {
 // OLD (substring-based) version of this test green, because none of the
 // resulting filter strings contain the literal text "command" — yet that
 // mutated subscription genuinely receives
-// "falcon/player/FPP-Main/command/run" from a real broker. This rewritten
+// "falcon/player/fpp-player/command/run" from a real broker. This rewritten
 // version, using mqttTopicMatches, was re-run against that exact mutation
 // and confirmed to fail; see this package's Step 5 review-fix report.
 func TestSubscriptionFiltersNeverIncludeCommandTopics(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://127.0.0.1:1",
-		Hosts:     map[string]string{"main": "FPP-Main", "remote": "FPP-remote-01"},
+		Hosts:     map[string]string{"main": "fpp-player", "remote": "fpp-remote-a"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -212,10 +212,10 @@ func TestSubscriptionFiltersNeverIncludeCommandTopics(t *testing.T) {
 	// resolved against captured via real MQTT matching semantics, never a
 	// substring search.
 	forbiddenTopics := []string{
-		"falcon/player/FPP-Main/command/run",
-		"falcon/player/FPP-Main/command/preset/triggered",
-		"falcon/player/FPP-remote-01/command/run",
-		"falcon/player/FPP-remote-01/command/preset/triggered",
+		"falcon/player/fpp-player/command/run",
+		"falcon/player/fpp-player/command/preset/triggered",
+		"falcon/player/fpp-remote-a/command/run",
+		"falcon/player/fpp-remote-a/command/preset/triggered",
 		"falcon/control/power",
 		"falcon/control/projectors",
 		"falcon/control/transmitter",
@@ -240,13 +240,13 @@ func TestSubscriptionFiltersNeverIncludeCommandTopics(t *testing.T) {
 func TestPublishHandlerNeverStoresCommandTopicPayload(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://127.0.0.1:1",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	deliver(c, "falcon/player/FPP-Main/command/run", []byte(`{"command":"Stop Now"}`), false)
+	deliver(c, "falcon/player/fpp-player/command/run", []byte(`{"command":"Stop Now"}`), false)
 
 	snap := c.store.snapshot("main")
 	if _, stored := snap["command/run"]; stored {
@@ -301,7 +301,7 @@ func (f *fakeSubscriber) Subscribe(_ context.Context, s *paho.Subscribe) (*paho.
 // [observation.MeasuredUnknownAge] — ObservedAt nil, forever
 // unknown_age, never StateCurrent. The consequence is not a subtle
 // staleness bug: it is every signal on every otherwise-healthy configured
-// host rendering as the FPP-01 ghost renders on purpose (contract section
+// host rendering as the fpp-ghost ghost renders on purpose (contract section
 // 4.2), permanently, fleet-wide.
 //
 // Before trusting this test, subscribeAll (mqttclient.go) was changed to
@@ -312,7 +312,7 @@ func (f *fakeSubscriber) Subscribe(_ context.Context, s *paho.Subscribe) (*paho.
 func TestSubscribeAllSetsRetainAsPublishedFalse(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://127.0.0.1:1",
-		Hosts:     map[string]string{"main": "FPP-Main", "remote": "FPP-remote-01"},
+		Hosts:     map[string]string{"main": "fpp-player", "remote": "fpp-remote-a"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

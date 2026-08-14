@@ -13,7 +13,7 @@
 	"dateStr" : "Tue Aug 11",
 	"fppd" : "running",
 	"host_description" : "FPP",
-	"host_name" : "FPP-remote-01",
+	"host_name" : "fpp-remote-a",
 	"media_filename" : "",
 	"mode" : 8,
 	"mode_name" : "remote",
@@ -90,18 +90,18 @@
 	"uptimeSeconds" : 56,
 	"uptimeStr" : "1 days, 6 hours, 37 minutes, 56 seconds",
 	"uptimeTotalSeconds" : 110276,
-	"uuid" : "M1-3818BBBK1706",
+	"uuid" : "M1-000000000002",
 	"version" : "9.x-master-822-g56515e4d",
 	"volume" : 70,
 	"warningInfo" : 
 	[
 		{
 			"id" : 0,
-			"message" : "Cannot Ping ArtNet Channel Data Target 192.168.133.80 Ethernet_"
+			"message" : "Cannot Ping ArtNet Channel Data Target 192.0.2.20 Ethernet_"
 		},
 		{
 			"id" : 0,
-			"message" : "Cannot Ping DDP Channel Data Target 192.168.133.62 WLED-02"
+			"message" : "Cannot Ping DDP Channel Data Target 192.0.2.21 wled-example"
 		},
 		{
 			"id" : 0,
@@ -110,8 +110,8 @@
 	],
 	"warnings" : 
 	[
-		"Cannot Ping ArtNet Channel Data Target 192.168.133.80 Ethernet_",
-		"Cannot Ping DDP Channel Data Target 192.168.133.62 WLED-02",
+		"Cannot Ping ArtNet Channel Data Target 192.0.2.20 Ethernet_",
+		"Cannot Ping DDP Channel Data Target 192.0.2.21 wled-example",
 		"FPP Remote Monitoring could not authenticate.  Try Re-Logging In."
 	]
 }

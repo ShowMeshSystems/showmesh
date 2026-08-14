@@ -1073,7 +1073,7 @@ func TestFPPInstanceDiffProjectionSuppressesChurnFromAPrecedenceFlip(t *testing.
 	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
 
 	obsFrom := func(source string, validFor time.Duration, observedAt time.Time) observation.Observation {
-		o, err := observation.Measured(res, "fpp.host_name", "FPP-remote-04", observedAt,
+		o, err := observation.Measured(res, "fpp.host_name", "fpp-remote-b", observedAt,
 			observation.WithSource(source), observation.WithValidFor(validFor),
 			observation.WithCollectedAt(observedAt))
 		if err != nil {
@@ -1117,8 +1117,8 @@ func TestFPPInstanceDiffProjectionSuppressesChurnFromAPrecedenceFlip(t *testing.
 
 	// Positive half, so this cannot pass by the projection having thrown
 	// everything away: the value an operator actually reads must survive.
-	if got := restProj.Observations[0].Value; got != "FPP-remote-04" {
-		t.Errorf("projection dropped the value itself: got %v, want %q", got, "FPP-remote-04")
+	if got := restProj.Observations[0].Value; got != "fpp-remote-b" {
+		t.Errorf("projection dropped the value itself: got %v, want %q", got, "fpp-remote-b")
 	}
 }
 
@@ -1136,7 +1136,7 @@ func TestDiffMaskingRuleHasExactlyOneImplementation(t *testing.T) {
 	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
 	renderAt := testNow.Add(3 * time.Second)
 
-	current, err := observation.Measured(res, "fpp.host_name", "FPP-remote-04", testNow,
+	current, err := observation.Measured(res, "fpp.host_name", "fpp-remote-b", testNow,
 		observation.WithSource("fpp-rest"), observation.WithValidFor(45*time.Second),
 		observation.WithCollectedAt(testNow))
 	if err != nil {

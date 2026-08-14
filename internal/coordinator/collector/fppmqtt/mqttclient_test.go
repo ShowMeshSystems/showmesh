@@ -39,21 +39,21 @@ func newCapturingLogger(w io.Writer) *slog.Logger {
 }
 
 func TestNewRejectsEmptyBrokerURL(t *testing.T) {
-	_, err := New(Options{Hosts: map[string]string{"main": "FPP-Main"}})
+	_, err := New(Options{Hosts: map[string]string{"main": "fpp-player"}})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for an empty BrokerURL")
 	}
 }
 
 func TestNewRejectsUnsupportedScheme(t *testing.T) {
-	_, err := New(Options{BrokerURL: "http://mqtt.example.com:1883", Hosts: map[string]string{"main": "FPP-Main"}})
+	_, err := New(Options{BrokerURL: "http://mqtt.example.com:1883", Hosts: map[string]string{"main": "fpp-player"}})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for an unsupported scheme")
 	}
 }
 
 func TestNewRejectsBrokerURLWithNoHost(t *testing.T) {
-	_, err := New(Options{BrokerURL: "tcp://", Hosts: map[string]string{"main": "FPP-Main"}})
+	_, err := New(Options{BrokerURL: "tcp://", Hosts: map[string]string{"main": "fpp-player"}})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for a broker URL with no host")
 	}
@@ -84,7 +84,7 @@ func TestNewRejectsBrokerURLWithUserinfo(t *testing.T) {
 	const secret = "supersecretpassword"
 	_, err := New(Options{
 		BrokerURL: "tcp://someuser:" + secret + "@mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for a BrokerURL carrying userinfo")
@@ -105,7 +105,7 @@ func TestNewRejectsBrokerURLWithUserinfo(t *testing.T) {
 func TestNewRejectsBrokerURLWithEmptyUserinfo(t *testing.T) {
 	_, err := New(Options{
 		BrokerURL: "tcp://@mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for a BrokerURL carrying an empty userinfo segment")
@@ -125,7 +125,7 @@ func TestNewRejectsMalformedBrokerURLWithUserinfoWithoutLeaking(t *testing.T) {
 		// A literal space is not valid in a URL host, so url.Parse itself
 		// would fail on this string if it ever got that far.
 		BrokerURL: "tcp://someuser:" + secret + "@bad host name:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for a malformed BrokerURL carrying userinfo")
@@ -138,7 +138,7 @@ func TestNewRejectsMalformedBrokerURLWithUserinfoWithoutLeaking(t *testing.T) {
 func TestNewRejectsInvalidInstanceID(t *testing.T) {
 	_, err := New(Options{
 		BrokerURL: "tcp://mqtt.example.com:1883",
-		Hosts:     map[string]string{"Main_01": "FPP-Main"},
+		Hosts:     map[string]string{"Main_01": "fpp-player"},
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error for an instance id that fails mqttproto.ValidateNodeID")
@@ -170,7 +170,7 @@ func TestNewRejectsHostNameWithWildcard(t *testing.T) {
 func TestNewRejectsDuplicateHostName(t *testing.T) {
 	_, err := New(Options{
 		BrokerURL: "tcp://mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main", "other": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player", "other": "fpp-player"},
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want an error when two instance ids map to the same HostName")
@@ -180,7 +180,7 @@ func TestNewRejectsDuplicateHostName(t *testing.T) {
 func TestNewAppliesDefaults(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL: "tcp://mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -199,7 +199,7 @@ func TestNewAppliesDefaults(t *testing.T) {
 func TestNewCustomTopicPrefixTrimmed(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL:   "tcp://mqtt.example.com:1883",
-		Hosts:       map[string]string{"main": "FPP-Main"},
+		Hosts:       map[string]string{"main": "fpp-player"},
 		TopicPrefix: "/custom/prefix/",
 	})
 	if err != nil {
@@ -213,7 +213,7 @@ func TestNewCustomTopicPrefixTrimmed(t *testing.T) {
 func TestNewCustomPollInterval(t *testing.T) {
 	c, err := New(Options{
 		BrokerURL:    "tcp://mqtt.example.com:1883",
-		Hosts:        map[string]string{"main": "FPP-Main"},
+		Hosts:        map[string]string{"main": "fpp-player"},
 		PollInterval: 42 * time.Second,
 	})
 	if err != nil {
@@ -233,12 +233,12 @@ func TestParseHostAndSuffix(t *testing.T) {
 		wantSuffix    string
 		wantOK        bool
 	}{
-		{"falcon/player", "falcon/player/FPP-Main/fppd_status", "FPP-Main", "fppd_status", true},
-		{"falcon/player", "falcon/player/FPP-Main/playlist/repeat/status", "FPP-Main", "playlist/repeat/status", true},
+		{"falcon/player", "falcon/player/fpp-player/fppd_status", "fpp-player", "fppd_status", true},
+		{"falcon/player", "falcon/player/fpp-player/playlist/repeat/status", "fpp-player", "playlist/repeat/status", true},
 		{"falcon/player", "falcon/control/power", "", "", false},
-		{"falcon/player", "falcon/player/FPP-Main", "", "", false}, // no suffix at all
+		{"falcon/player", "falcon/player/fpp-player", "", "", false}, // no suffix at all
 		{"falcon/player", "falcon/player/", "", "", false},
-		{"falcon/player", "falcon/playerX/FPP-Main/status", "", "", false}, // prefix must match a full segment
+		{"falcon/player", "falcon/playerX/fpp-player/status", "", "", false}, // prefix must match a full segment
 	}
 	for _, tc := range cases {
 		host, suffix, ok := parseHostAndSuffix(tc.prefix, tc.topic)
@@ -260,7 +260,7 @@ func TestUnmatchedHostLoggedOnlyOnce(t *testing.T) {
 
 	c, err := New(Options{
 		BrokerURL: "tcp://mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 		Logger:    logger,
 	})
 	if err != nil {
@@ -283,7 +283,7 @@ func TestUnmatchedHostLoggedSeparatelyPerHost(t *testing.T) {
 
 	c, err := New(Options{
 		BrokerURL: "tcp://mqtt.example.com:1883",
-		Hosts:     map[string]string{"main": "FPP-Main"},
+		Hosts:     map[string]string{"main": "fpp-player"},
 		Logger:    logger,
 	})
 	if err != nil {

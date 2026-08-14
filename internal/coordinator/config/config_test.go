@@ -211,7 +211,7 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 		},
 		{
 			name:    "fpp mqtt hosts entry with empty id",
-			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "=FPP-Main"},
+			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "=fpp-player"},
 			wantVar: "SHOWMESH_FPP_MQTT_HOSTS",
 		},
 		{
@@ -221,7 +221,7 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 		},
 		{
 			name:    "fpp mqtt hosts invalid instance id",
-			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "Player_01=FPP-Main"},
+			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "Player_01=fpp-player"},
 			wantVar: "SHOWMESH_FPP_MQTT_HOSTS",
 		},
 		{
@@ -240,7 +240,7 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 		},
 		{
 			name:    "fpp mqtt hosts duplicate instance id",
-			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "player-01=FPP-Main,player-01=FPP-Other"},
+			env:     map[string]string{"SHOWMESH_FPP_MQTT_HOSTS": "player-01=fpp-player,player-01=FPP-Other"},
 			wantVar: "SHOWMESH_FPP_MQTT_HOSTS",
 		},
 		{
@@ -640,9 +640,9 @@ func TestLoadConfigFPPMQTTBrokerURLWithCredentialsIsRejectedWithoutEchoingThem(t
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadConfigFrom(lookupFrom(map[string]string{
-				"SHOWMESH_FPP_ENDPOINTS":       "main=http://192.168.133.159",
+				"SHOWMESH_FPP_ENDPOINTS":       "main=http://192.0.2.10",
 				"SHOWMESH_FPP_MQTT_BROKER_URL": brokerURL,
-				"SHOWMESH_FPP_MQTT_HOSTS":      "main=FPP-Main",
+				"SHOWMESH_FPP_MQTT_HOSTS":      "main=fpp-player",
 			}))
 			if err == nil {
 				t.Fatal("LoadConfigFrom() error = nil, want a rejection of credentials embedded in the broker URL")
@@ -681,12 +681,12 @@ func TestConfigLogValueRedactsBrokerURLUserinfo(t *testing.T) {
 
 func TestLoadConfigFPPMQTTFullyConfigured(t *testing.T) {
 	env := map[string]string{
-		"SHOWMESH_FPP_ENDPOINTS":         "main=http://192.168.133.159,remote01=http://192.168.133.70",
+		"SHOWMESH_FPP_ENDPOINTS":         "main=http://192.0.2.10,remote01=http://192.0.2.11",
 		"SHOWMESH_FPP_MQTT_BROKER_URL":   "tcp://mqtt.example:1883",
 		"SHOWMESH_FPP_MQTT_USERNAME":     "showmesh",
 		"SHOWMESH_FPP_MQTT_PASSWORD":     "s3cret",
 		"SHOWMESH_FPP_MQTT_TOPIC_PREFIX": "falcon/player",
-		"SHOWMESH_FPP_MQTT_HOSTS":        "main=FPP-Main,remote01=FPP-remote-01",
+		"SHOWMESH_FPP_MQTT_HOSTS":        "main=fpp-player,remote01=fpp-remote-a",
 	}
 
 	cfg, err := LoadConfigFrom(lookupFrom(env))
@@ -706,7 +706,7 @@ func TestLoadConfigFPPMQTTFullyConfigured(t *testing.T) {
 	if cfg.FPPMQTTTopicPrefix != "falcon/player" {
 		t.Errorf("FPPMQTTTopicPrefix = %q, want %q", cfg.FPPMQTTTopicPrefix, "falcon/player")
 	}
-	wantHosts := map[string]string{"main": "FPP-Main", "remote01": "FPP-remote-01"}
+	wantHosts := map[string]string{"main": "fpp-player", "remote01": "fpp-remote-a"}
 	if !reflect.DeepEqual(cfg.FPPMQTTHosts, wantHosts) {
 		t.Errorf("FPPMQTTHosts = %v, want %v", cfg.FPPMQTTHosts, wantHosts)
 	}
@@ -740,7 +740,7 @@ func TestLoadConfigFPPMQTTTopicPrefixCustom(t *testing.T) {
 // for that one.
 func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	env := map[string]string{
-		"SHOWMESH_FPP_ENDPOINTS":  "main=http://192.168.133.159",
+		"SHOWMESH_FPP_ENDPOINTS":  "main=http://192.0.2.10",
 		"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
 	}
 
@@ -780,15 +780,15 @@ func TestLoadConfigFPPMQTTHostsWithEmptyEndpointsDeferredNotRejected(t *testing.
 
 func TestLoadConfigFPPMQTTHostsToleratesWhitespace(t *testing.T) {
 	env := map[string]string{
-		"SHOWMESH_FPP_ENDPOINTS":  "main=http://192.168.133.159",
-		"SHOWMESH_FPP_MQTT_HOSTS": " main = FPP-Main ",
+		"SHOWMESH_FPP_ENDPOINTS":  "main=http://192.0.2.10",
+		"SHOWMESH_FPP_MQTT_HOSTS": " main = fpp-player ",
 	}
 
 	cfg, err := LoadConfigFrom(lookupFrom(env))
 	if err != nil {
 		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
 	}
-	want := map[string]string{"main": "FPP-Main"}
+	want := map[string]string{"main": "fpp-player"}
 	if !reflect.DeepEqual(cfg.FPPMQTTHosts, want) {
 		t.Errorf("FPPMQTTHosts = %v, want %v", cfg.FPPMQTTHosts, want)
 	}
@@ -818,11 +818,11 @@ func TestConfigLogValueEmptyFPPMQTTPassword(t *testing.T) {
 }
 
 func TestConfigLogValueFPPMQTTHostsPresent(t *testing.T) {
-	cfg := Config{FPPMQTTHosts: map[string]string{"main": "FPP-Main"}}
+	cfg := Config{FPPMQTTHosts: map[string]string{"main": "fpp-player"}}
 
 	rendered := renderLogValue(t, cfg)
 
-	if !strings.Contains(rendered, "FPP-Main") {
+	if !strings.Contains(rendered, "fpp-player") {
 		t.Errorf("Config.LogValue() output = %s, want it to name the configured HostName", rendered)
 	}
 }

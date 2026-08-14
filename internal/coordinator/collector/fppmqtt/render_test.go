@@ -75,10 +75,10 @@ func findObservation(t *testing.T, obs []observation.Observation, sig observatio
 // make this test fail; see the Step 5 Seam B report for that verification.
 func TestPollRetainedDeliveryIsUnknownAge(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), true)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), true)
 
 	obs, _ := c.Poll(context.Background())
 	got := findObservation(t, obs, SignalStatus)
@@ -98,10 +98,10 @@ func TestPollRetainedDeliveryIsUnknownAge(t *testing.T) {
 // means ObservedAt is a defensible receipt time, StateCurrent while fresh.
 func TestPollLiveDeliveryUsesReceiptTime(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
 
 	obs, _ := c.Poll(context.Background())
 	got := findObservation(t, obs, SignalStatus)
@@ -126,10 +126,10 @@ func TestPollLiveDeliveryUsesReceiptTime(t *testing.T) {
 // FIRST Poll must equal the ObservedAt from the SECOND.
 func TestPollLiveValueAgesIntoStaleWithoutBeingRefreshedByPolling(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
 
 	firstObs, _ := c.Poll(context.Background())
 	first := findObservation(t, firstObs, SignalStatus)
@@ -163,9 +163,9 @@ func TestPollLiveValueAgesIntoStaleWithoutBeingRefreshedByPolling(t *testing.T) 
 // value.
 func TestPollConnectionDownProducesCollectionFailedForEverySignal(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
 	_, _ = c.Poll(context.Background()) // sanity: was healthy before the drop
 
 	c.setConnected(false, "mqtt broker connect attempt failed: dial tcp: connection refused")
@@ -198,7 +198,7 @@ func TestPollConnectionDownProducesCollectionFailedForEverySignal(t *testing.T) 
 
 func TestPollNeverReceivedTopicIsNotCollected(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
 	obs, _ := c.Poll(context.Background())
@@ -215,11 +215,11 @@ func TestPollNeverReceivedTopicIsNotCollected(t *testing.T) {
 
 func TestPollDecodeFailureIsolatedToItsOwnTopic(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
-	deliver(c, "falcon/player/FPP-Main/ready", []byte("not-a-valid-ready-value"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
+	deliver(c, "falcon/player/fpp-player/ready", []byte("not-a-valid-ready-value"), false)
 
 	obs, _ := c.Poll(context.Background())
 
@@ -238,7 +238,7 @@ func TestPollDecodeFailureIsolatedToItsOwnTopic(t *testing.T) {
 
 func TestPollUnmatchedHostNeverBecomesResource(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
-	c := newTestCollector(t, map[string]string{"main": "FPP-Main"}, &now)
+	c := newTestCollector(t, map[string]string{"main": "fpp-player"}, &now)
 	c.setConnected(true, "")
 
 	deliver(c, "falcon/player/FPP-Shed/status", []byte("idle"), false)
@@ -257,43 +257,43 @@ func TestPollUnmatchedHostNeverBecomesResource(t *testing.T) {
 	}
 }
 
-// --- The acceptance demonstration: the real FPP-01 ghost -------------------
+// --- The acceptance demonstration: the real fpp-ghost ghost -------------------
 
 // TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely is contract section
 // 4.2's named acceptance demonstration, run against the REAL captured
-// FPP-01 payloads (testdata/FPP-01_fppd_status.json,
-// testdata/FPP-01_port_status.json): "Point the collector at the real
-// broker with FPP-01 configured as an instance and assert every one of its
-// signals reports unknown_age, indefinitely, while FPP-Main's report
-// current. If a code path exists that could make FPP-01 read healthy, the
+// fpp-ghost payloads (testdata/fpp-ghost_fppd_status.json,
+// testdata/fpp-ghost_port_status.json): "Point the collector at the real
+// broker with fpp-ghost configured as an instance and assert every one of its
+// signals reports unknown_age, indefinitely, while fpp-player's report
+// current. If a code path exists that could make fpp-ghost read healthy, the
 // rule is not implemented."
 //
 // This test cannot dial the real broker (section 0's absolute rule: never
 // connect to it during development), so it reproduces the broker's
-// documented behavior exactly instead: every one of FPP-01's topics
+// documented behavior exactly instead: every one of fpp-ghost's topics
 // arrived with the retain flag set during the 60-second capture (contract
 // section 1.2), which is simulated here by delivering its real captured
 // bodies with retained=true, on the same code path (newPublishHandler)
-// a real connection would use. FPP-Main is delivered live (retained=false)
+// a real connection would use. fpp-player is delivered live (retained=false)
 // in the same test as the contrasting case the contract asks for.
 func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	c := newTestCollector(t, map[string]string{
-		"ghost": "FPP-01",
-		"main":  "FPP-Main",
+		"ghost": "fpp-ghost",
+		"main":  "fpp-player",
 	}, &now)
 	c.setConnected(true, "")
 
-	// FPP-01: every topic retained, exactly as captured.
-	deliver(c, "falcon/player/FPP-01/fppd_status", readTestdata(t, "FPP-01_fppd_status.json"), true)
-	deliver(c, "falcon/player/FPP-01/port_status", readTestdata(t, "FPP-01_port_status.json"), true)
+	// fpp-ghost: every topic retained, exactly as captured.
+	deliver(c, "falcon/player/fpp-ghost/fppd_status", readTestdata(t, "fpp-ghost_fppd_status.json"), true)
+	deliver(c, "falcon/player/fpp-ghost/port_status", readTestdata(t, "fpp-ghost_port_status.json"), true)
 
-	// FPP-Main: delivered live, as the contrasting "current" case.
-	deliver(c, "falcon/player/FPP-Main/fppd_status", readTestdata(t, "FPP-Main_fppd_status.json"), false)
-	deliver(c, "falcon/player/FPP-Main/status", []byte("idle"), false)
+	// fpp-player: delivered live, as the contrasting "current" case.
+	deliver(c, "falcon/player/fpp-player/fppd_status", readTestdata(t, "fpp-player_fppd_status.json"), false)
+	deliver(c, "falcon/player/fpp-player/status", []byte("idle"), false)
 
 	// Simulate a little real elapsed time between delivery and the poll
-	// that checks it (still well within DefaultValidFor, so FPP-Main's
+	// that checks it (still well within DefaultValidFor, so fpp-player's
 	// live value below is checked as "current", not "stale") — the
 	// ghost's unknown_age property does not depend on ValidFor at all
 	// (see pkg/observation.Observation.StateAt: ObservedAt == nil returns
@@ -311,7 +311,7 @@ func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 		ghostObservations++
 		if o.Absence != "" {
 			// An absence observation (e.g. a mode-explained Unsupported,
-			// or a signal from a topic FPP-01 never published like
+			// or a signal from a topic fpp-ghost never published like
 			// "ready") carries no ObservedAt at all in this model and so
 			// is trivially never "healthy" — only a value-bearing signal
 			// can fail this assertion.
@@ -341,7 +341,7 @@ func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 		}
 	}
 
-	// The contrast: FPP-Main's live-delivered fpp.status must read
+	// The contrast: fpp-player's live-delivered fpp.status must read
 	// current, not unknown_age. Ghost also has a SignalStatus observation
 	// (NotCollected — its own "status" topic was never delivered, only
 	// fppd_status/port_status were), so this must be filtered by resource,
@@ -356,6 +356,6 @@ func TestFPP01GhostAllSignalsReadUnknownAgeIndefinitely(t *testing.T) {
 		t.Fatalf("no fpp.status observation found for resource %q", "main")
 	}
 	if got := mainStatus.StateAt(now.Add(-24 * time.Hour)); got != observation.StateCurrent {
-		t.Errorf("FPP-Main's live fpp.status: StateAt = %q shortly after delivery, want %q", got, observation.StateCurrent)
+		t.Errorf("fpp-player's live fpp.status: StateAt = %q shortly after delivery, want %q", got, observation.StateCurrent)
 	}
 }

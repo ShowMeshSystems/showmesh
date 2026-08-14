@@ -68,7 +68,7 @@ func StatusSignals(body []byte) ([]SignalValue, error) {
 
 	// Playback signals whose absence is explained by the host being in
 	// remote mode (contract section 3.3): all four are only ever present
-	// on FPP-Main's (player-mode) capture and entirely absent, not empty,
+	// on fpp-player's (player-mode) capture and entirely absent, not empty,
 	// on both remote captures.
 	out = append(out, modeGovernedTopLevelInt(doc, SignalPlaylistRepeatMode, "repeat_mode", "",
 		modeName, modeErr, "player", "a repeat mode"))
@@ -88,7 +88,7 @@ func StatusSignals(body []byte) ([]SignalValue, error) {
 		modeName, modeErr, "player", "a scheduled next playlist"))
 
 	// The inverse: present only in remote mode, per contract section 3.1's
-	// "remote-mode only" notes, and absent (not merely empty) on FPP-Main.
+	// "remote-mode only" notes, and absent (not merely empty) on fpp-player.
 	out = append(out, modeGovernedTopLevelString(doc, SignalMediaFilename, "media_filename",
 		modeName, modeErr, "remote", "a media filename"))
 	out = append(out, modeGovernedTopLevelInt(doc, SignalPositionElapsedSeconds, "seconds_elapsed", "seconds",
@@ -462,7 +462,7 @@ func modeGovernedNestedInt(doc rawDoc, sig observation.SignalID, outerKey, inner
 // body is not a JSON array at all.
 //
 // fpp.ports.count and fpp.ports.blind_count are always produced, including
-// zero for both on FPP-Main's captured empty array ([]) — an empty array
+// zero for both on fpp-player's captured empty array ([]) — an empty array
 // is a measured fact about a Pi with no pixel output cape, not an absence
 // (contract section 3.2).
 //

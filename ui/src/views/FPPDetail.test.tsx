@@ -110,7 +110,7 @@ describe('FPPDetail', () => {
     })
   })
 
-  it('states plainly that FPP-Main reports no pixel output ports (a fact, not an error), matching its real empty-array capture', () => {
+  it('states plainly that fpp-player reports no pixel output ports (a fact, not an error), matching its real empty-array capture', () => {
     renderFPPDetail('fpp-main', makeModel({ fpp: [makeMainInstance()], serverTime: FLEET_NOW }))
     expect(screen.getByText('This host reports no pixel output ports.')).toBeInTheDocument()
   })
@@ -132,7 +132,7 @@ describe('FPPDetail', () => {
   // it -- but a UI that dropped the unknown_age handling and rendered a
   // present value as "current" would be exactly the regression this
   // fixture exists to catch.
-  it('renders every observation on the FPP-01 ghost as age-unknown, never as current', () => {
+  it('renders every observation on the fpp-ghost ghost as age-unknown, never as current', () => {
     renderFPPDetail('fpp-01-ghost', makeModel({ fpp: [makeGhostFpp01Instance()], serverTime: FLEET_NOW }))
     const ageUnknownBadges = screen.getAllByText('age unknown')
     expect(ageUnknownBadges.length).toBeGreaterThan(0)

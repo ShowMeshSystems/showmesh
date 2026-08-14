@@ -197,7 +197,7 @@ describe('summarizeFleetVersions', () => {
     expect(summary.versions).toEqual([{ version: '9.4', instanceIds: ['a', 'b'] }])
   })
 
-  // The exact real-fleet condition: FPP-remote-01 deliberately runs a
+  // The exact real-fleet condition: fpp-remote-a deliberately runs a
   // master build while the other two run 9.4. Disagreement must be
   // TRUE here -- this is the scenario the feature exists to surface.
   it('reports disagreement when reachable instances report different versions, grouping instance IDs per version', () => {
@@ -239,7 +239,7 @@ describe('summarizeFleetVersions', () => {
   // version pulled from an instance this coordinator cannot currently
   // confirm is reachable must not count toward the skew statement,
   // covering every shape that is NOT "reachable, current, true" --
-  // unreachable, and the FPP-01 ghost's exact unknown_age shape.
+  // unreachable, and the fpp-ghost ghost's exact unknown_age shape.
   it('excludes an unreachable instance from the version comparison entirely', () => {
     const instances = [
       { instanceId: 'a', observations: reachable('9.4') },
@@ -256,7 +256,7 @@ describe('summarizeFleetVersions', () => {
     expect(summary.versions).toEqual([{ version: '9.4', instanceIds: ['a'] }])
   })
 
-  it('excludes an instance whose fpp.reachable is unknown_age (the FPP-01 ghost shape) from the version comparison', () => {
+  it('excludes an instance whose fpp.reachable is unknown_age (the fpp-ghost ghost shape) from the version comparison', () => {
     const instances = [
       { instanceId: 'a', observations: reachable('9.4') },
       {

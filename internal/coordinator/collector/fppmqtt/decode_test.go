@@ -37,14 +37,14 @@ func findSignalValue(t *testing.T, values []fpp.SignalValue, sig observation.Sig
 // TestStatusSignalsNoCollectionFailedOnRealCaptures is this package's
 // version of the Step 3 rule fpp_test.go established: "if a real captured
 // document produces a decode failure, the decoder is wrong, not the
-// document." All three real fppd_status captures (player-mode FPP-Main and
-// FPP-01, remote-mode FPP-remote-01) must decode with every field either
+// document." All three real fppd_status captures (player-mode fpp-player and
+// fpp-ghost, remote-mode fpp-remote-a) must decode with every field either
 // measured or a mode-explained Unsupported — never collection_failed.
 func TestStatusSignalsNoCollectionFailedOnRealCaptures(t *testing.T) {
 	for _, name := range []string{
-		"FPP-Main_fppd_status.json",
-		"FPP-remote-01_fppd_status.json",
-		"FPP-01_fppd_status.json",
+		"fpp-player_fppd_status.json",
+		"fpp-remote-a_fppd_status.json",
+		"fpp-ghost_fppd_status.json",
 	} {
 		t.Run(name, func(t *testing.T) {
 			values, err := decodeStatusTopic(readTestdata(t, name))
@@ -72,9 +72,9 @@ func TestStatusSignalsStayWithinStatusStaticSignals(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"FPP-Main_fppd_status.json",
-		"FPP-remote-01_fppd_status.json",
-		"FPP-01_fppd_status.json",
+		"fpp-player_fppd_status.json",
+		"fpp-remote-a_fppd_status.json",
+		"fpp-ghost_fppd_status.json",
 	} {
 		values, err := decodeStatusTopic(readTestdata(t, name))
 		if err != nil {
@@ -97,12 +97,12 @@ func isSensorSignal(sig observation.SignalID) bool {
 }
 
 // TestStatusSignalsPlayerModeValues spot-checks specific values against
-// testdata/FPP-Main_fppd_status.json (player mode, idle, nothing
+// testdata/fpp-player_fppd_status.json (player mode, idle, nothing
 // scheduled) rather than only checking "no failure" — a decoder that
 // silently produced the WRONG value for every field would still pass the
 // no-collection-failed test above.
 func TestStatusSignalsPlayerModeValues(t *testing.T) {
-	values, err := decodeStatusTopic(readTestdata(t, "FPP-Main_fppd_status.json"))
+	values, err := decodeStatusTopic(readTestdata(t, "fpp-player_fppd_status.json"))
 	if err != nil {
 		t.Fatalf("decodeStatusTopic() error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestStatusSignalsPlayerModeValues(t *testing.T) {
 		{SignalSchedulerStatus, "idle"},
 		{SignalFppdState, "running"},
 		{SignalPowerBad, false},
-		{SignalHostName, "FPP-Main"},
+		{SignalHostName, "fpp-player"},
 		{SignalMQTTConfigured, true},
 		{SignalMQTTConnected, true},
 		// scheduler.enabled arrives as the NUMBER 1 (contract section
@@ -160,11 +160,11 @@ func TestStatusSignalsPlayerModeValues(t *testing.T) {
 
 // TestStatusSignalsRemoteModeValues is the remote-mode mirror of
 // TestStatusSignalsPlayerModeValues, against
-// testdata/FPP-remote-01_fppd_status.json, which has NO current_playlist
+// testdata/fpp-remote-a_fppd_status.json, which has NO current_playlist
 // or scheduler object at all (verified: absent wholesale, not
 // present-but-empty).
 func TestStatusSignalsRemoteModeValues(t *testing.T) {
-	values, err := decodeStatusTopic(readTestdata(t, "FPP-remote-01_fppd_status.json"))
+	values, err := decodeStatusTopic(readTestdata(t, "fpp-remote-a_fppd_status.json"))
 	if err != nil {
 		t.Fatalf("decodeStatusTopic() error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestStatusSignalsRemoteModeValues(t *testing.T) {
 		{SignalPlaylistName, ""}, // falls back to top-level "playlist"
 		{SignalSequenceName, ""},
 		{SignalMultiSyncEnabled, false},
-		{SignalHostName, "FPP-remote-01"},
+		{SignalHostName, "fpp-remote-a"},
 		{SignalMediaFilename, ""},
 		{SignalPositionElapsedSeconds, int64(0)},
 	}
@@ -209,12 +209,12 @@ func TestStatusSignalsRemoteModeValues(t *testing.T) {
 }
 
 // TestStatusSignalsSensorKeysNormalized verifies contract section 3.5's
-// exact normalization examples against testdata/FPP-remote-01_fppd_status.json
-// ("VIN1: " -> "vin1") and testdata/FPP-Main_fppd_status.json ("CPU: " ->
+// exact normalization examples against testdata/fpp-remote-a_fppd_status.json
+// ("VIN1: " -> "vin1") and testdata/fpp-player_fppd_status.json ("CPU: " ->
 // "cpu"), and that no unit is claimed on the value signal (only "type"
 // carries "Temperature"/"Voltage" — never a guessed scale).
 func TestStatusSignalsSensorKeysNormalized(t *testing.T) {
-	values, err := decodeStatusTopic(readTestdata(t, "FPP-Main_fppd_status.json"))
+	values, err := decodeStatusTopic(readTestdata(t, "fpp-player_fppd_status.json"))
 	if err != nil {
 		t.Fatalf("decodeStatusTopic() error = %v", err)
 	}
@@ -227,7 +227,7 @@ func TestStatusSignalsSensorKeysNormalized(t *testing.T) {
 		t.Errorf("fpp.sensor.cpu.type = %#v, want %q", typ.Value, "Temperature")
 	}
 
-	values, err = decodeStatusTopic(readTestdata(t, "FPP-remote-01_fppd_status.json"))
+	values, err = decodeStatusTopic(readTestdata(t, "fpp-remote-a_fppd_status.json"))
 	if err != nil {
 		t.Fatalf("decodeStatusTopic() error = %v", err)
 	}
@@ -240,11 +240,11 @@ func TestStatusSignalsSensorKeysNormalized(t *testing.T) {
 
 // --- fpp.PortSignals against real captures ------------------------------
 
-// TestPortSignalsEmptyArrayIsMeasuredZero covers testdata/FPP-01_port_status.json
+// TestPortSignalsEmptyArrayIsMeasuredZero covers testdata/fpp-ghost_port_status.json
 // ("[]"): contract section 3.2, "an empty ports array is a measured fact,
 // not an absence."
 func TestPortSignalsEmptyArrayIsMeasuredZero(t *testing.T) {
-	values, err := fpp.PortSignals(readTestdata(t, "FPP-01_port_status.json"))
+	values, err := fpp.PortSignals(readTestdata(t, "fpp-ghost_port_status.json"))
 	if err != nil {
 		t.Fatalf("fpp.PortSignals() error = %v", err)
 	}
@@ -262,7 +262,7 @@ func TestPortSignalsEmptyArrayIsMeasuredZero(t *testing.T) {
 }
 
 // TestSmartReceiverPositionNeverReportsCurrent decodes the real
-// FPP-remote-04 capture (48 elements, 16 output + 32 smart-receiver) and
+// fpp-remote-b capture (48 elements, 16 output + 32 smart-receiver) and
 // proves NO observation for a smart-receiver key ever carries a non-nil
 // Value for current_ma — the exact test contract section 3.2 asks for by
 // name, and the strongest form of "a missing ma is never 0."
@@ -273,7 +273,7 @@ func TestPortSignalsEmptyArrayIsMeasuredZero(t *testing.T) {
 // Unsupported) and confirmed to make this test fail; see the Step 5 Seam B
 // report for that verification.
 func TestSmartReceiverPositionNeverReportsCurrent(t *testing.T) {
-	values, err := fpp.PortSignals(readTestdata(t, "FPP-remote-04_port_status.json"))
+	values, err := fpp.PortSignals(readTestdata(t, "fpp-remote-b_port_status.json"))
 	if err != nil {
 		t.Fatalf("fpp.PortSignals() error = %v", err)
 	}
@@ -306,11 +306,11 @@ func TestSmartReceiverPositionNeverReportsCurrent(t *testing.T) {
 }
 
 // TestPortSignalsOutputPortsMeasured spot-checks that the 16 real output
-// ports (bank Ports 1-4/5-8/17-20/21-24) on FPP-remote-04 decode as
+// ports (bank Ports 1-4/5-8/17-20/21-24) on fpp-remote-b decode as
 // measured values, not absences — the mirror image of the smart-receiver
 // test above.
 func TestPortSignalsOutputPortsMeasured(t *testing.T) {
-	values, err := fpp.PortSignals(readTestdata(t, "FPP-remote-04_port_status.json"))
+	values, err := fpp.PortSignals(readTestdata(t, "fpp-remote-b_port_status.json"))
 	if err != nil {
 		t.Fatalf("fpp.PortSignals() error = %v", err)
 	}
@@ -410,12 +410,12 @@ func TestPortSignalsMissingNameEmitsDecodeFailed(t *testing.T) {
 // --- warningsSignals -----------------------------------------------------
 
 // TestWarningsSignalsObjectShape covers the real MQTT "warnings" topic
-// shape captured from FPP-Main: an array of {"id":<int>,"message":<string>}
+// shape captured from fpp-player: an array of {"id":<int>,"message":<string>}
 // objects — structurally warningInfo, not the plain-string "warnings"
 // array /api/fppd/status carries under the same name (see decode.go's
 // warningsSignals doc comment).
 func TestWarningsSignalsObjectShape(t *testing.T) {
-	values, err := warningsSignals(readTestdata(t, "FPP-Main_warnings.json"))
+	values, err := warningsSignals(readTestdata(t, "fpp-player_warnings.json"))
 	if err != nil {
 		t.Fatalf("warningsSignals() error = %v", err)
 	}
@@ -429,11 +429,11 @@ func TestWarningsSignalsObjectShape(t *testing.T) {
 	}
 }
 
-// TestWarningsSignalsEmptyArray covers testdata/FPP-remote-04_warnings.json
+// TestWarningsSignalsEmptyArray covers testdata/fpp-remote-b_warnings.json
 // ("[]"): zero warnings is a measured fact (count 0), same discipline as
 // an empty ports array.
 func TestWarningsSignalsEmptyArray(t *testing.T) {
-	values, err := warningsSignals(readTestdata(t, "FPP-remote-04_warnings.json"))
+	values, err := warningsSignals(readTestdata(t, "fpp-remote-b_warnings.json"))
 	if err != nil {
 		t.Fatalf("warningsSignals() error = %v", err)
 	}
@@ -451,11 +451,11 @@ func TestWarningsSignalsEmptyArray(t *testing.T) {
 
 // TestSingleValueTopicsAreRawTextNotJSON verifies decode.go's finding that
 // version/branch/status/ready/playlist-repeat/playlist-position all
-// publish PLAIN TEXT, not a JSON-quoted string — testdata/FPP-Main_status.json
+// publish PLAIN TEXT, not a JSON-quoted string — testdata/fpp-player_status.json
 // is exactly the four bytes "idle", which json.Unmarshal into a string
 // would reject outright.
 func TestSingleValueTopicsAreRawTextNotJSON(t *testing.T) {
-	values, err := rawTextStringSignal(SignalStatus)(readTestdata(t, "FPP-Main_status.json"))
+	values, err := rawTextStringSignal(SignalStatus)(readTestdata(t, "fpp-player_status.json"))
 	if err != nil {
 		t.Fatalf("rawTextStringSignal(status)() error = %v", err)
 	}
@@ -464,7 +464,7 @@ func TestSingleValueTopicsAreRawTextNotJSON(t *testing.T) {
 		t.Errorf("fpp.status = %#v, want %q", got.Value, "idle")
 	}
 
-	readyValues, err := readySignal(readTestdata(t, "FPP-Main_ready.json"))
+	readyValues, err := readySignal(readTestdata(t, "fpp-player_ready.json"))
 	if err != nil {
 		t.Fatalf("readySignal() error = %v", err)
 	}
@@ -473,7 +473,7 @@ func TestSingleValueTopicsAreRawTextNotJSON(t *testing.T) {
 		t.Errorf("fpp.ready = %#v, want true (payload was \"1\")", readyGot.Value)
 	}
 
-	repeatValues, err := rawTextIntSignal(SignalPlaylistRepeatMode)(readTestdata(t, "FPP-Main_playlist_repeat_status.json"))
+	repeatValues, err := rawTextIntSignal(SignalPlaylistRepeatMode)(readTestdata(t, "fpp-player_playlist_repeat_status.json"))
 	if err != nil {
 		t.Fatalf("rawTextIntSignal(repeat)() error = %v", err)
 	}

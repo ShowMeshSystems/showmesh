@@ -2,19 +2,28 @@
  * Realistic FPP fixtures, translated from the real read-only captures at
  * `<SCRATCH>/probe/{main,remote01,remote04}_{fppd_status,fppd_ports,system_info}.json`
  * (2026-08-11), into Evidence-shaped observations matching the Step 5 spec
- * section 3.1 signal vocabulary. This intentionally does NOT invent a
- * tidier fleet than the real one:
+ * section 3.1 signal vocabulary.
  *
- * - FPP-Main (player, Raspberry Pi) has an EMPTY ports array -- zero pixel
+ * Deployment identity was substituted on 2026-08-14: host names, addresses and
+ * board serials are placeholders drawn from the RFC 5737 documentation range,
+ * using the same mapping as the Go captures (see
+ * `internal/coordinator/collector/fpp/testdata/README.md`). Shape was not
+ * touched. Nothing below reads a host name back to prove anything; the names
+ * are labels, and `fpp.host_name` is set here but asserted nowhere.
+ *
+ * What the shape does carry intentionally does NOT invent a tidier fleet than
+ * the real one:
+ *
+ * - fpp-player (player, Raspberry Pi) has an EMPTY ports array -- zero pixel
  *   output ports, a fact, not an error (spec section 3.2).
- * - FPP-remote-01 (K16A-B) has 16 real output ports + 16 smart-receiver
+ * - fpp-remote-a (K16A-B) has 16 real output ports + 16 smart-receiver
  *   positions with no `ma` key at all -- the pre-V5 blind spot.
- * - FPP-remote-04 (K16-Max) has 16 real output ports + 32 smart-receiver
+ * - fpp-remote-b (K16-Max) has 16 real output ports + 32 smart-receiver
  *   positions, reproducing the exact bank/name/row/col layout from the
  *   real capture (see this file's `REMOTE04_RAW_PORTS`), because "48
  *   ports" alone does not exercise this seam's grouping the way the real,
  *   irregular bank layout does.
- * - FPP-remote-01 deliberately runs a master build
+ * - fpp-remote-a deliberately runs a master build
  *   ("9.x-master-822-g56515e4d") while the other two run "9.4" -- the
  *   real version-skew condition this fleet has, not a constructed one.
  * - Every `ma` on every real port reads 0, because the display is
@@ -23,7 +32,7 @@
  *   that would be claiming pixel-current verification that has not
  *   happened.
  *
- * The FPP-01 "ghost" fixture is NOT from a REST capture (FPP-01 is not in
+ * The fpp-ghost "ghost" fixture is NOT from a REST capture (fpp-ghost is not in
  * the reference installation) -- it reproduces the MQTT-broker finding
  * from spec section 1.2: a retained, plausible-looking `fppd_status` of
  * completely unknown age, on a host absent from the reference fleet.
@@ -162,12 +171,12 @@ function portObservations(outputs: RawOutputPort[], smartReceivers: RawSmartRece
   return observations
 }
 
-// FPP-Main: the real capture's ports array is `[]`. Zero elements, zero
+// fpp-player: the real capture's ports array is `[]`. Zero elements, zero
 // blind spots -- see PORTS section of the Step 5 spec: "a true statement
 // about a Pi with no cape", not an error.
 const MAIN_PORTS = portObservations([], [])
 
-// FPP-remote-01 (K16A-B): 16 real output ports (bank "Ports 1-4"..."Ports
+// fpp-remote-a (K16A-B): 16 real output ports (bank "Ports 1-4"..."Ports
 // 21-24" per the capture) + 16 smart-receiver positions (Ports 17-32).
 const REMOTE01_OUTPUTS: RawOutputPort[] = [1, 2, 3, 4].map((n) => ({ name: `Port ${n}`, bank: 'Ports 1-4', enabled: false, status: true, ma: 0 }))
 REMOTE01_OUTPUTS.push(...[5, 6, 7, 8].map((n) => ({ name: `Port ${n}`, bank: 'Ports 5-8', enabled: false, status: true, ma: 0 })))
@@ -176,7 +185,7 @@ REMOTE01_OUTPUTS.push(...[13, 14, 15, 16].map((n) => ({ name: `Port ${n}`, bank:
 const REMOTE01_SMART: RawSmartReceiverPort[] = Array.from({ length: 16 }, (_, i) => ({ name: `Port ${17 + i}` }))
 const REMOTE01_PORTS = portObservations(REMOTE01_OUTPUTS, REMOTE01_SMART)
 
-// FPP-remote-04 (K16-Max): the real capture's exact 16 output ports (banks
+// fpp-remote-b (K16-Max): the real capture's exact 16 output ports (banks
 // "Ports 1-4", "Ports 5-8", "Ports 17-20", "Ports 21-24" -- non-contiguous
 // per spec section 1.1) plus its exact 32 smart-receiver positions (Ports
 // 17-48).
@@ -203,7 +212,7 @@ function commonSensorObservations(sensors: { key: string; value: number; type: s
   return observations
 }
 
-/** FPP-Main: player mode, real capture's fppd_status/system_info fields. */
+/** fpp-player: player mode, real capture's fppd_status/system_info fields. */
 export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInstance {
   const observations: Evidence[] = [
     measured('fpp.reachable', true),
@@ -238,8 +247,8 @@ export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInsta
     measured('fpp.channel_inputs.enabled', false),
     measured('fpp.channel_outputs.enabled', false),
     measured('fpp.branch', 'v9.4'),
-    measured('fpp.uuid', 'M1-00000000c8398879'),
-    measured('fpp.host_name', 'FPP-Main'),
+    measured('fpp.uuid', 'M1-0000000000000001'),
+    measured('fpp.host_name', 'fpp-player'),
     measured('fpp.volume', 80),
     measured('fpp.mqtt.configured', true),
     measured('fpp.mqtt.connected', true),
@@ -261,7 +270,7 @@ export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInsta
   ]
   return {
     instanceId: 'fpp-main',
-    endpoint: 'http://192.168.133.159',
+    endpoint: 'http://192.0.2.10',
     health: 'healthy',
     observations,
     lastPollAt: FLEET_NOW,
@@ -270,7 +279,7 @@ export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInsta
   }
 }
 
-/** FPP-remote-01 (K16A-B, BeagleBone Black): remote mode, real capture's fields -- including its deliberate master-branch version. */
+/** fpp-remote-a (K16A-B, BeagleBone Black): remote mode, real capture's fields -- including its deliberate master-branch version. */
 export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPInstance {
   const observations: Evidence[] = [
     measured('fpp.reachable', true),
@@ -301,15 +310,15 @@ export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPI
     measured('fpp.channel_inputs.enabled', true),
     measured('fpp.channel_outputs.enabled', true),
     measured('fpp.branch', 'master'),
-    measured('fpp.uuid', 'M1-3818BBBK1706'),
-    measured('fpp.host_name', 'FPP-remote-01'),
+    measured('fpp.uuid', 'M1-000000000002'),
+    measured('fpp.host_name', 'fpp-remote-a'),
     measured('fpp.volume', 70),
     measured('fpp.mqtt.configured', true),
     measured('fpp.mqtt.connected', true),
     measured('fpp.warnings.count', 3),
     measured(
       'fpp.warnings.summary',
-      'Cannot Ping ArtNet Channel Data Target 192.168.133.80 Ethernet_; Cannot Ping DDP Channel Data Target 192.168.133.62 WLED-02; FPP Remote Monitoring could not authenticate.  Try Re-Logging In.',
+      'Cannot Ping ArtNet Channel Data Target 192.0.2.20 Ethernet_; Cannot Ping DDP Channel Data Target 192.0.2.21 wled-example; FPP Remote Monitoring could not authenticate.  Try Re-Logging In.',
     ),
     ...commonSensorObservations([
       { key: 'temp1', value: 44.0, type: 'Temperature' },
@@ -334,7 +343,7 @@ export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPI
   ]
   return {
     instanceId: 'fpp-remote-01',
-    endpoint: 'http://192.168.133.70',
+    endpoint: 'http://192.0.2.11',
     health: 'healthy',
     observations,
     lastPollAt: FLEET_NOW,
@@ -343,7 +352,7 @@ export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPI
   }
 }
 
-/** FPP-remote-04 (K16-Max, PocketBeagle2): remote mode, real capture's fields. This capture's REST status omits `warnings` entirely (spec section 3.4) -- modeled as Unsupported per the collector-side rule this fixture mirrors on the UI side. */
+/** fpp-remote-b (K16-Max, PocketBeagle2): remote mode, real capture's fields. This capture's REST status omits `warnings` entirely (spec section 3.4) -- modeled as Unsupported per the collector-side rule this fixture mirrors on the UI side. */
 export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPInstance {
   const observations: Evidence[] = [
     measured('fpp.reachable', true),
@@ -374,8 +383,8 @@ export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPI
     measured('fpp.channel_inputs.enabled', true),
     measured('fpp.channel_outputs.enabled', true),
     measured('fpp.branch', 'v9.4'),
-    measured('fpp.uuid', 'M5-011625PB20003499'),
-    measured('fpp.host_name', 'FPP-remote-04'),
+    measured('fpp.uuid', 'M5-000000000000003'),
+    measured('fpp.host_name', 'fpp-remote-b'),
     measured('fpp.volume', 58),
     measured('fpp.mqtt.configured', true),
     measured('fpp.mqtt.connected', true),
@@ -416,7 +425,7 @@ export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPI
   ]
   return {
     instanceId: 'fpp-remote-04',
-    endpoint: 'http://192.168.133.61',
+    endpoint: 'http://192.0.2.12',
     health: 'healthy',
     observations,
     lastPollAt: FLEET_NOW,
@@ -426,13 +435,13 @@ export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPI
 }
 
 /**
- * The FPP-01 ghost (spec section 1.2 / section 4.2's acceptance
+ * The fpp-ghost ghost (spec section 1.2 / section 4.2's acceptance
  * demonstration): a host on the real broker, absent from the reference
  * installation, that published nothing live during a 60-second capture --
  * every topic arrived retained. Every signal is `unknown_age`
  * (`observedAt: null`), sourced `fpp-mqtt`, and stays that way forever:
  * this fixture is what "can never read as healthy, indefinitely" looks
- * like on the UI side. Not from a REST capture -- FPP-01 was never
+ * like on the UI side. Not from a REST capture -- fpp-ghost was never
  * queried over HTTP (see CLAUDE.md's absolute rule); this reproduces the
  * MQTT capture's finding, matching Seam B's `observation.MeasuredUnknownAge`
  * contract (spec section 4.2).
@@ -458,7 +467,7 @@ export function makeGhostFpp01Instance(overrides: Partial<FPPInstance> = {}): FP
     retained('fpp.mode', 'player'),
     retained('fpp.status', 'idle'),
     retained('fpp.branch', 'v9.2'),
-    retained('fpp.host_name', 'FPP-01'),
+    retained('fpp.host_name', 'fpp-ghost'),
     retained('fpp.fppd.state', 'running'),
     retained('fpp.power.bad', false),
     retained('fpp.mqtt.configured', true),
@@ -468,7 +477,7 @@ export function makeGhostFpp01Instance(overrides: Partial<FPPInstance> = {}): FP
   ]
   return {
     instanceId: 'fpp-01-ghost',
-    endpoint: 'http://192.168.133.99',
+    endpoint: 'http://192.0.2.13',
     // Health is the coordinator's own verdict (never recomputed here);
     // an instance whose only evidence is unknown_age has no health-
     // critical evidence with a known age, so per spec section 5.3 it

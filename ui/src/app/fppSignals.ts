@@ -220,7 +220,7 @@ export function findObservation(observations: readonly Evidence[], signal: strin
 // Version skew (Step 5 spec section 6, "Version skew").
 //
 // Presentation of collected facts only -- this never ranks or judges a
-// version, and it is not a health verdict. FPP-remote-01 deliberately
+// version, and it is not a health verdict. fpp-remote-a deliberately
 // runs a master build on this fleet, so disagreement is a stated
 // condition, not something this function labels as wrong.
 // ---------------------------------------------------------------------
@@ -235,7 +235,7 @@ export interface FleetVersionSummary {
 /**
  * True when `instance` has a CURRENT, true `fpp.reachable` evidence entry.
  * Step 5 review finding 6/7: without this, a version pulled from an
- * unreachable or unknown-age source (the FPP-01 ghost's exact shape --
+ * unreachable or unknown-age source (the fpp-ghost ghost's exact shape --
  * unknown_age throughout, per the retained-MQTT case
  * fppFleetFixtures.ts's `makeGhostFpp01Instance` reproduces) rendered as
  * confidently in the skew statement as a freshly-confirmed one from a
