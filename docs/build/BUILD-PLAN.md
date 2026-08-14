@@ -534,7 +534,16 @@ Both were taken by the owner on 2026-08-13, and both are recorded here rather th
 
 ## Step 9: Show macros and the FPP plugin
 
-Status: not started, and **fully unblocked as of 2026-08-13**. Its RES-008 prerequisite was discharged that day, and the open question below was answered the same day by the owner: **the first macros ship with no critical local fallback**, stated in the macro definition rather than left implicit, because the delivery path does not exist and building it is cut from day-0. Revisit after Halloween. **This step is day-0 scope**, not optional: show macros are one of the reasons the project was started.
+Status: **specified and building as of 2026-08-14.** The implementation specification is [STEP-9-SPEC.md](STEP-9-SPEC.md) and its durable decisions are [ADR-031](../decisions/ADR-031-macro-execution-model.md). Its RES-008 prerequisite was discharged on 2026-08-13, and the open question below was answered the same day by the owner: **the first macros ship with no critical local fallback**, stated in the macro definition rather than left implicit, because the delivery path does not exist and building it is cut from day-0. Revisit after Halloween. **This step is day-0 scope**, not optional: show macros are one of the reasons the project was started.
+
+**The specification was reviewed before any of it was built, and that review returned sixteen findings, all confirmed against the code.** This is the first step where the specification itself went under review, on the Step 8 retrospective's finding that a defect introduced by a specification is invisible to a reviewer who trusts the specification. It paid for itself immediately. Four of the sixteen were behavioural rather than editorial:
+
+- **An `unconfirmed` step would have aborted the run**, so a late collector poll at 17:00 would have stopped a working show start before it dispatched, with the cause being that ShowMesh could not watch rather than that anything failed. Corrected to two policy axes: failure aborts, a monitoring gap does not.
+- **The audit exemption was run-wide**, which made a stop step a mechanism for laundering unattributable starts, and which is the same widening Step 8's review had already closed one level down. Corrected to per step, with a declared safety class on the action so an external power-off can be exempt rather than being the one thing refused.
+- **The `RetainAsPublished` justification was backwards**, and a builder following the stated reason would have broken every external MQTT step against any responder that retains its state topic.
+- **The ADR-024 decision 7 discharge did not hold in decision 7's own scenario**, because a refusal buffered until "the next successful authenticated call" is unreachable when the stale credential is the problem.
+
+**The review also recommended cutting the external MQTT step from this step entirely**, on the grounds that it is the only deliverable forcing a new broker subsystem and that day-0 loses nothing because FPP fires those commands directly today. **The owner declined the cut on 2026-08-14** under schedule pressure toward a mid-September day-0. Its findings are therefore fixed in the specification rather than deferred with it. Recorded because a declined cut that is not written down gets re-proposed.
 
 **Goal:** the first show macro, and with it the first ShowMesh code running on an FPP host. This is where ADR-004's three-part model is finally complete: primitives from Steps 7 and 8, macros here, and the reduced local fallback that every critical macro must define.
 
@@ -575,9 +584,11 @@ The plugin needs a ShowMesh credential on an FPP host, and RES-015 section 7.4 e
 
 This is accepted, not overlooked. The installation is single-operator on owned hardware on an isolated show network, which is the same reasoning `SECURITY.md` already records for accepting cleartext on the show LAN for commands and telemetry. It is written here so that the day this software runs somewhere with a crew, the accepted risk is findable rather than reconstructed. **This is the point at which ADR-024's supersession trigger for target-scoped authorization fires, and it is deliberately declined** under Step 8's recorded decision.
 
-**Bound by:** ADR-001, ADR-003, ADR-004, ADR-009, ADR-011, ADR-014, ADR-016, ADR-020, ADR-024, RES-008, RES-015.
+**Bound by:** ADR-001, ADR-003, ADR-004, ADR-009, ADR-011, ADR-014, ADR-016, ADR-020, ADR-024, ADR-029, ADR-031, RES-008, RES-015.
 
 **Out of scope:** controlled devices and providers; audio; the deployed fleet.
+
+**Protected from trimming.** If this step runs short of time, the thing that gets cut is not the plugin's decision-7 behaviour. It is last in the build order, it is the only cross-compiled artefact, it needs a release-artefact pipeline that does not exist yet, and its proof requires three separate live failure conditions rather than one success path. A plugin that installs, fires a macro and receives a `200` looks complete while discharging nothing. This obligation has already slipped from Step 7 and from Step 8, which is exactly how a third slip happens.
 
 ## Not yet sequenced
 
