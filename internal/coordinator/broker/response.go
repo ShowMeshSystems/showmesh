@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
@@ -206,6 +207,14 @@ type pendingWaiter struct {
 	topic string
 	match Matcher
 	ch    chan deliveredMessage
+
+	// drops counts deliveries dispatchToWaiters dropped for this waiter
+	// because ch was already full of qualifying entries it had not
+	// finished draining (see pendingWaiterBuffer and dispatchToWaiters).
+	// Not surfaced through any exported API today; it exists so the count
+	// is at least visible in the warning log dispatchToWaiters emits on
+	// every drop, rather than a silent, unrecorded loss.
+	drops atomic.Uint64
 }
 
 // responseTopicState is the shared, refcounted MQTT subscription state for
@@ -257,17 +266,45 @@ func (b *BrokerManager) dispatchToWaiters(m Message) {
 		if !w.match(m) {
 			continue
 		}
+		dm := deliveredMessage{msg: m, receivedAt: receivedAt}
 		select {
-		case w.ch <- deliveredMessage{msg: m, receivedAt: receivedAt}:
+		case w.ch <- dm:
 		default:
 			// Every queued entry already passed this waiter's own Matcher,
 			// so a full buffer can only mean multiple qualifying
 			// deliveries arrived before AwaitResponse's loop drained any
-			// of them (see pendingWaiterBuffer). Dropping here — rather
-			// than blocking, which this package's callback contract
-			// forbids (see Matcher's doc comment) — only risks losing an
-			// entry AwaitResponse did not need: it stops at the first
-			// delivery whose receivedAt is at or after the publish.
+			// of them (see pendingWaiterBuffer). The prior version of this
+			// code silently dropped THIS arrival — the newest one — which
+			// is backwards: AwaitResponse's own loop (step 5) discards
+			// anything predating the publish and stops at the first
+			// delivery that does not, so the entries most likely to be
+			// stale (and therefore safe to lose) are the OLDEST ones
+			// sitting in the buffer, not whatever just arrived. Drop the
+			// oldest queued entry to make room instead, so a full buffer
+			// biases toward keeping the most recent evidence rather than
+			// discarding it. Still non-blocking throughout, per Matcher's
+			// doc comment on this callback path never blocking, and the
+			// drop is counted and logged rather than silent.
+			select {
+			case <-w.ch:
+				dropped := w.drops.Add(1)
+				b.log().Warn("mqtt response waiter buffer full; dropped the oldest queued delivery to make room for a newer one",
+					"topic", w.topic, "dropped_total", dropped)
+			default:
+				// Drained by AwaitResponse's own loop between our failed
+				// send above and this receive; nothing to drop.
+			}
+			select {
+			case w.ch <- dm:
+			default:
+				// Refilled again in this tiny window by a concurrent
+				// dispatch; give up on this one delivery rather than
+				// spinning or blocking. AwaitResponse's own loop still
+				// resolves off whichever deliveries did make it through.
+				dropped := w.drops.Add(1)
+				b.log().Warn("mqtt response waiter buffer full; dropped a delivery",
+					"topic", w.topic, "dropped_total", dropped)
+			}
 		}
 	}
 }
@@ -296,6 +333,17 @@ func (b *BrokerManager) dispatchToWaiters(m Message) {
 // waiter could roll back a topic another, already-successful waiter still
 // depends on. See releaseResponseWaiter for the matching reasoning on the
 // unsubscribe side.
+//
+// The whole call runs under topic's [BrokerManager.topicLock] — see that
+// method's doc comment for why: a released waiter's UNSUBSCRIBE for this
+// exact topic may be in flight right now, having already removed its
+// routing-table entry, and this call must not be allowed to insert a new
+// entry and SUBSCRIBE while that UNSUBSCRIBE is still outstanding, or the
+// UNSUBSCRIBE can land on the wire AFTER this call's SUBSCRIBE and silently
+// tear the new registration down. That is review finding 3 on commit
+// 9dcab74: reproduced with a gated fake client, the broker's own call order
+// came out subscribe/subscribe/unsubscribe, with the second (live) waiter
+// torn down by the first waiter's stale, in-flight unsubscribe.
 func (b *BrokerManager) registerResponseWaiter(ctx context.Context, topic string, qos byte, match Matcher) (*pendingWaiter, error) {
 	if err := validateResponseTopic(topic); err != nil {
 		return nil, err
@@ -313,6 +361,10 @@ func (b *BrokerManager) registerResponseWaiter(ctx context.Context, topic string
 		match: match,
 		ch:    make(chan deliveredMessage, pendingWaiterBuffer),
 	}
+
+	topicMu := b.topicLock(topic)
+	topicMu.Lock()
+	defer topicMu.Unlock()
 
 	b.respMu.Lock()
 	if b.respTopics == nil {
@@ -339,17 +391,82 @@ func (b *BrokerManager) registerResponseWaiter(ctx context.Context, topic string
 			// retained, destroying that distinction for the response-topic
 			// case exactly as it would have for the fixed one.
 			RetainAsPublished: false,
+			// RetainHandling is deliberately left at its zero value,
+			// "send retained messages at every subscribe", and that is a
+			// decision rather than an omission.
+			//
+			// RetainHandling=2 was applied here as defence in depth and
+			// removed on 2026-08-14, because it silently disarmed the
+			// acceptance criterion that proves the rule it was defending.
+			// A broker told never to replay its retained store cannot
+			// produce the delivery dispatchToWaiters' RETAIN check exists
+			// to discard, so the real-broker test for that check passed
+			// with the check deleted. That was measured, not reasoned
+			// about. The hardening made the trap unreachable and the guard
+			// against the trap unverifiable in the same move, and an
+			// unverifiable guard is how this stops working without anyone
+			// noticing.
+			//
+			// So the trap stays reachable on purpose, and the RETAIN check
+			// in dispatchToWaiters is the single thing that stops it,
+			// which is what this step's specification asks for and what
+			// TestIntegrationRetainedResponseDoesNotConfirm now pins
+			// against a real broker. Wanting RetainHandling=2 back means
+			// first finding another way to prove the RETAIN check works.
 		},
 	}}); err != nil {
 		// Roll back only this waiter's own registration. state may still
 		// hold other, already-successfully-subscribed waiters on the same
 		// topic; this failure must not affect them (see this function's
-		// doc comment).
-		b.releaseResponseWaiter(w)
+		// doc comment). Handled inline rather than by calling
+		// releaseResponseWaiter: that method also acquires topicMu, which
+		// this goroutine already holds, and sync.Mutex is not reentrant.
+		if isLast := b.removeWaiter(w); isLast {
+			b.unsubscribeNow(topic)
+		}
 		return nil, fmt.Errorf("subscribing to response topic %q: %w", topic, err)
 	}
 
 	return w, nil
+}
+
+// removeWaiter deletes w from the routing table and reports whether it was
+// the last live waiter on its topic — in which case a caller holding
+// topic's topicLock may need to issue the network UNSUBSCRIBE (see
+// releaseResponseWaiter and registerResponseWaiter's subscribe-failure
+// rollback). It only ever touches respTopics under respMu; it never makes a
+// network call and never touches topicLock itself, so it is safe to call
+// from a context that already holds a topicLock (registerResponseWaiter's
+// rollback path does exactly that).
+func (b *BrokerManager) removeWaiter(w *pendingWaiter) (lastWaiter bool) {
+	b.respMu.Lock()
+	defer b.respMu.Unlock()
+	state, ok := b.respTopics[w.topic]
+	if !ok {
+		return false
+	}
+	delete(state.waiters, w.id)
+	if len(state.waiters) == 0 {
+		delete(b.respTopics, w.topic)
+		return true
+	}
+	return false
+}
+
+// unsubscribeNow issues the best-effort MQTT UNSUBSCRIBE for topic, logging
+// rather than surfacing a failure to any caller — see releaseResponseWaiter's
+// doc comment for the reasoning. Every caller must hold topic's topicLock
+// for the duration of this call: that is what review finding 3 on commit
+// 9dcab74 needed, so a registerResponseWaiter for the same topic starting
+// concurrently cannot issue its own SUBSCRIBE while this UNSUBSCRIBE is
+// still outstanding on the wire.
+func (b *BrokerManager) unsubscribeNow(topic string) {
+	ctx, cancel := context.WithTimeout(context.Background(), unsubscribeTimeout)
+	defer cancel()
+	if _, err := b.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: []string{topic}}); err != nil {
+		b.log().Warn("mqtt unsubscribe failed after last response waiter released; broker will keep delivering this topic until the next reconnect, which is wasted traffic, not incorrect behavior",
+			"topic", topic, "error", err)
+	}
 }
 
 // releaseResponseWaiter removes w from the routing table and, if it was the
@@ -370,29 +487,48 @@ func (b *BrokerManager) registerResponseWaiter(ctx context.Context, topic string
 // dispatchToWaiters already handles for free (it finds no registered
 // waiter and does nothing). This mirrors subscribeAll's own precedent: log
 // loudly, never fail the caller, for this class of housekeeping failure.
+//
+// Review finding 3 on commit 9dcab74: removeWaiter (map bookkeeping) and the
+// decision to actually unsubscribe used to happen under one respMu
+// critical section that ended BEFORE the network UNSUBSCRIBE call — so a
+// registerResponseWaiter for the same topic, arriving in the window between
+// this function's own unlock and its Unsubscribe call actually reaching the
+// broker, could insert a brand new entry and SUBSCRIBE, and then have this
+// call's stale UNSUBSCRIBE land afterward and tear it down. The fix is two
+// parts: removeWaiter no longer decides anything about the network call by
+// itself, and the network call (in unsubscribeNow) now runs under topic's
+// topicLock with a re-check of the routing table taken immediately before
+// it — so a registerResponseWaiter racing this release either completes
+// entirely before this function acquires topicLock (and the re-check below
+// sees it and skips the stale UNSUBSCRIBE), or blocks on topicLock until
+// this function's UNSUBSCRIBE has fully completed (and only then inserts
+// and SUBSCRIBEs, strictly after, never before or during).
 func (b *BrokerManager) releaseResponseWaiter(w *pendingWaiter) {
-	b.respMu.Lock()
-	state, ok := b.respTopics[w.topic]
-	lastWaiter := false
-	if ok {
-		delete(state.waiters, w.id)
-		if len(state.waiters) == 0 {
-			delete(b.respTopics, w.topic)
-			lastWaiter = true
-		}
-	}
-	b.respMu.Unlock()
-
-	if !lastWaiter || b.cm == nil {
+	isLast := b.removeWaiter(w)
+	if !isLast || b.cm == nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), unsubscribeTimeout)
-	defer cancel()
-	if _, err := b.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: []string{w.topic}}); err != nil {
-		b.log().Warn("mqtt unsubscribe failed after last response waiter released; broker will keep delivering this topic until the next reconnect, which is wasted traffic, not incorrect behavior",
-			"topic", w.topic, "error", err)
+	topicMu := b.topicLock(w.topic)
+	topicMu.Lock()
+	defer topicMu.Unlock()
+
+	// Re-check immediately before issuing the network UNSUBSCRIBE, now that
+	// this goroutine holds topicMu: a registerResponseWaiter for this same
+	// topic that started after removeWaiter above but managed to acquire
+	// topicMu before this function did would already have completed its
+	// entire insert-and-SUBSCRIBE by the time this Lock() call returns. If
+	// the topic is live again, this UNSUBSCRIBE must not run — that stale
+	// UNSUBSCRIBE tearing down the new registration is exactly what finding
+	// 3 reproduced.
+	b.respMu.Lock()
+	_, stillWanted := b.respTopics[w.topic]
+	b.respMu.Unlock()
+	if stillWanted {
+		return
 	}
+
+	b.unsubscribeNow(w.topic)
 }
 
 // AwaitResponse subscribes to req.ResponseTopic, publishes req's publish

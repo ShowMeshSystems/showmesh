@@ -168,8 +168,15 @@ func TestFPPCommandDispatcherUnsupportedAction(t *testing.T) {
 }
 
 // TestFPPCommandSafetyClassForAction proves the exported safety-class
-// lookup Step 9's macro executor needs for ADR-031 decision 5 ("a macro
-// run's audit safety class is the weakest of its steps'") without
+// lookup Step 9's macro executor needs for ADR-031 decision 5 as accepted:
+// "A step's own action decides whether that step is exempt." The lookup is
+// per step and must never be aggregated into one run-wide class. Decision
+// 5's own record quotes and rejects the run-wide draft, because a run that
+// inherits an exemption from any one of its steps turns a stop step into a
+// way to launder an unattributable start. This comment carried that
+// rejected draft as though it were the decision until 2026-08-14, which is
+// worth noting here rather than silently correcting: the reviewer who
+// reads a test to learn what a function is for reads this. Proved without
 // reaching into [fppCommandPrimitives] itself. stopPlaylist and
 // stopPlaylistGracefully are the only two members of ADR-024 decision 11's
 // named safety class; every other registered primitive is not; an

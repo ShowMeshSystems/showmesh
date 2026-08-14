@@ -268,14 +268,32 @@ type BrokerManager struct {
 	mu    sync.Mutex
 	state BrokerState
 
-	// respMu guards respTopics and nextWaiterID: the response-waiter
-	// registry response.go's AwaitResponse machinery uses. Deliberately a
-	// separate lock from mu (BrokerState's), so a burst of MQTT response
-	// step traffic can never contend with, or be blocked by, BrokerState
-	// reads/writes on the readiness path.
+	// respMu guards respTopics, respTopicLocks and nextWaiterID: the
+	// response-waiter registry response.go's AwaitResponse machinery uses.
+	// Deliberately a separate lock from mu (BrokerState's), so a burst of
+	// MQTT response step traffic can never contend with, or be blocked by,
+	// BrokerState reads/writes on the readiness path.
 	respMu       sync.Mutex
 	respTopics   map[string]*responseTopicState
 	nextWaiterID atomic.Uint64
+
+	// respTopicLocks holds one *sync.Mutex per response topic ever
+	// registered, returned by topicLock (below) and held by
+	// registerResponseWaiter/releaseResponseWaiter (response.go) across
+	// their network SUBSCRIBE/UNSUBSCRIBE calls — see topicLock's doc
+	// comment for why this has to live here, outside responseTopicState
+	// itself, and review finding 3 on commit 9dcab74 for the race this
+	// closes.
+	//
+	// Entries are deliberately never removed: response topics come from
+	// operator-authored show macro definitions (STEP-9-SPEC.md §7), not
+	// arbitrary or attacker-controlled input, so the set of distinct topics
+	// this map ever holds is bounded by the deployment's own configuration
+	// — the same reasoning [Registry]'s own map (registry.go), which also
+	// never shrinks, already relies on. This is not the unbounded,
+	// caller-triggerable growth LESSONS.md's "unbounded write on a failure
+	// path" rule warns about.
+	respTopicLocks map[string]*sync.Mutex
 
 	// fixedSubs is the subscription set passed to NewBrokerManager: the
 	// coordinator's own long-lived subscriptions (inventory's hello/lwt
@@ -329,10 +347,45 @@ func (b *BrokerManager) subscriptionsToResubscribe() []paho.SubscribeOptions {
 			// lifetime of this subscription including across a reconnect
 			// that resubscribes it here.
 			RetainAsPublished: false,
+			// RetainHandling deliberately left at its zero value — see
+			// registerResponseWaiter's own SubscribeOptions in response.go
+			// for why review finding 2's optional RetainHandling=2
+			// hardening is not applied here either.
 		})
 		seen[topic] = true
 	}
 	return opts
+}
+
+// topicLock returns the *sync.Mutex serializing every network
+// SUBSCRIBE/UNSUBSCRIBE call response.go's registerResponseWaiter and
+// releaseResponseWaiter issue for topic, creating it on first use.
+//
+// This has to be a mutex keyed by the topic STRING, held independently of
+// any particular [responseTopicState] value, because responseTopicState
+// itself is deleted from respTopics and recreated across a topic's
+// subscribe/unsubscribe lifecycle (see releaseResponseWaiter and
+// registerResponseWaiter): a mutex embedded in that struct would be a new,
+// unrelated lock on every recreation and would serialize nothing across the
+// boundary where the race actually lives. Returning the SAME *sync.Mutex
+// instance across however many times a topic's responseTopicState has been
+// created and deleted is what lets a releaseResponseWaiter's in-flight
+// UNSUBSCRIBE and a concurrent registerResponseWaiter's SUBSCRIBE for the
+// identical topic string actually exclude each other — see review finding
+// 3 on commit 9dcab74 and response.go's own doc comments on both functions
+// for the full race this closes.
+func (b *BrokerManager) topicLock(topic string) *sync.Mutex {
+	b.respMu.Lock()
+	defer b.respMu.Unlock()
+	if b.respTopicLocks == nil {
+		b.respTopicLocks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := b.respTopicLocks[topic]
+	if !ok {
+		mu = &sync.Mutex{}
+		b.respTopicLocks[topic] = mu
+	}
+	return mu
 }
 
 // log returns the logger response.go's housekeeping paths use, falling back

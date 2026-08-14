@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -503,18 +504,33 @@ func TestAwaitResponseSeesResponsePublishedBetweenSubscribeAndWait(t *testing.T)
 
 // TestAwaitResponseRetainedDeliveryDoesNotConfirm is this package's fake-
 // based counterpart of the acceptance-level retained-message trap: a
-// retained delivery arriving as soon as the SUBSCRIBE completes (this is
-// exactly how a real broker behaves — see response_integration_test.go for
-// the same scenario against a real Mosquitto) must not resolve
-// AwaitResponse. Only the live delivery, dispatched afterward, may.
+// retained delivery must not resolve AwaitResponse. Only the live delivery,
+// dispatched afterward, may.
+//
+// Review finding 2 on commit 9dcab74: the original version of this test
+// dispatched its retained delivery from subscribeFunc, i.e. before
+// AwaitResponse stamps publishedAt (that happens right before the Publish
+// call, strictly after Subscribe returns — see AwaitResponse's doc
+// comment). That made the delivery predate the publish, so
+// AwaitResponse's own step-5 publish fence (dm.receivedAt.Before(publishedAt))
+// discarded it independently of line 236's RETAIN check — deleting line 236
+// entirely left this test passing, because it was measuring the fence, not
+// the rule it is named for. Dispatching from publishFunc instead — which
+// only runs after publishedAt is already stamped — makes this test require
+// line 236 specifically: with it deleted, a retained delivery arriving
+// after the publish DOES pass the fence, and only the RETAIN check stops it
+// from confirming.
 func TestAwaitResponseRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	bm := &BrokerManager{now: time.Now}
 	cm := &fakeMQTTClient{
-		subscribeFunc: func(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error) {
-			// A retained replay delivered the instant the subscription is
-			// established, exactly as Home Assistant/Node-RED would.
+		publishFunc: func(ctx context.Context, p *paho.Publish) (*paho.PublishResponse, error) {
+			// Dispatched from inside the PUBLISH call, so this is
+			// unambiguously post-publish: AwaitResponse stamps publishedAt
+			// immediately before calling Publish (see its doc comment), so
+			// this delivery's receivedAt (captured by dispatchToWaiters
+			// itself, moments later) cannot predate it.
 			bm.dispatchToWaiters(Message{Topic: "home/projectors/state", Payload: []byte("on"), Retained: true})
-			return &paho.Suback{}, nil
+			return &paho.PublishResponse{}, nil
 		},
 	}
 	bm.cm = cm
@@ -760,5 +776,175 @@ func TestAwaitResponseReleasesWaiterOnPublishFailure(t *testing.T) {
 
 	if cm.unsubscribeCount() != 1 {
 		t.Errorf("unsubscribeCount = %d after a publish failure, want 1 (the waiter must still be released)", cm.unsubscribeCount())
+	}
+}
+
+// --- Review finding 3 (commit 9dcab74): the release/register race ---
+
+// TestReleaseAndRegisterOnSameTopicDoNotRace reproduces review finding 3:
+// releaseResponseWaiter used to delete a topic's routing-table entry,
+// RELEASE respMu, and only then issue the network UNSUBSCRIBE. A
+// registerResponseWaiter for the same topic landing in that window would
+// insert a brand new entry and SUBSCRIBE, and the first call's now-stale,
+// still-in-flight UNSUBSCRIBE would land afterward and tear the new
+// registration down — leaving the second waiter live in the local routing
+// table but, on a real broker, unsubscribed on the wire.
+//
+// This gates the fake client's Unsubscribe call so a release is caught mid-
+// flight, starts a concurrent register for the identical topic, and proves
+// two things the pre-fix code could not: registerResponseWaiter must not
+// even begin its own SUBSCRIBE until the in-flight UNSUBSCRIBE has fully
+// completed (proved by registerDone not firing while the gate is held), and
+// once it does proceed, the broker's own call order must end on SUBSCRIBE,
+// never UNSUBSCRIBE, for this topic.
+func TestReleaseAndRegisterOnSameTopicDoNotRace(t *testing.T) {
+	const topic = "home/projectors/state"
+
+	var mu sync.Mutex
+	var callOrder []string
+	record := func(name string) {
+		mu.Lock()
+		callOrder = append(callOrder, name)
+		mu.Unlock()
+	}
+
+	unsubStarted := make(chan struct{})
+	releaseGate := make(chan struct{})
+	var unsubOnce sync.Once
+
+	cm := &fakeMQTTClient{
+		subscribeFunc: func(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error) {
+			record("subscribe")
+			return &paho.Suback{}, nil
+		},
+		unsubscribeFunc: func(ctx context.Context, u *paho.Unsubscribe) (*paho.Unsuback, error) {
+			record("unsubscribe")
+			unsubOnce.Do(func() { close(unsubStarted) })
+			<-releaseGate
+			return &paho.Unsuback{}, nil
+		},
+	}
+	bm := newResponseTestBrokerManager(cm)
+
+	wA, err := bm.registerResponseWaiter(context.Background(), topic, 1, textMatcher("on"))
+	if err != nil {
+		t.Fatalf("registering waiter A: %v", err)
+	}
+
+	releaseDone := make(chan struct{})
+	go func() {
+		bm.releaseResponseWaiter(wA)
+		close(releaseDone)
+	}()
+
+	select {
+	case <-unsubStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("release A's UNSUBSCRIBE never started")
+	}
+	// Release A is now blocked inside its own UNSUBSCRIBE call, holding
+	// topic's topicLock for the duration.
+
+	var wB *pendingWaiter
+	var registerErr error
+	registerDone := make(chan struct{})
+	go func() {
+		wB, registerErr = bm.registerResponseWaiter(context.Background(), topic, 1, textMatcher("on"))
+		close(registerDone)
+	}()
+
+	// The fix under test: register B must be serialized behind release A's
+	// in-flight UNSUBSCRIBE via topicLock and must NOT be able to complete
+	// (or even issue its own SUBSCRIBE) while that UNSUBSCRIBE is still
+	// outstanding. Against the pre-fix code, register B raced ahead here —
+	// this is the assertion that catches it.
+	select {
+	case <-registerDone:
+		t.Fatalf("register B completed while release A's UNSUBSCRIBE was still in flight — the two must be serialized per topic, not racing")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseGate)
+
+	select {
+	case <-registerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("register B never completed after release A's UNSUBSCRIBE finished")
+	}
+	<-releaseDone
+
+	if registerErr != nil {
+		t.Fatalf("register B: unexpected error: %v", registerErr)
+	}
+
+	mu.Lock()
+	order := append([]string(nil), callOrder...)
+	mu.Unlock()
+	want := []string{"subscribe", "unsubscribe", "subscribe"}
+	if len(order) != len(want) {
+		t.Fatalf("broker call order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("broker call order = %v, want %v (B's SUBSCRIBE must land strictly after A's UNSUBSCRIBE completes, never before it — a call order ending in unsubscribe means B's live subscription was just torn down)", order, want)
+		}
+	}
+
+	// B must be live in the local routing table: a delivery on the topic
+	// must still reach it.
+	bm.dispatchToWaiters(Message{Topic: topic, Payload: []byte("on"), Retained: false})
+	select {
+	case <-wB.ch:
+	default:
+		t.Fatalf("waiter B did not receive a delivery after registering — its registration did not survive")
+	}
+}
+
+// --- dispatchToWaiters: full-buffer behavior ---
+
+// TestDispatchToWaitersDropsOldestOnFullBufferRatherThanNewest proves the
+// buffer-overflow behavior dispatchToWaiters uses when a waiter's channel
+// is already full of qualifying deliveries: the OLDEST queued entry is
+// dropped to make room for the newest arrival, not the reverse. AwaitResponse's
+// own wait loop (step 5) discards anything predating the publish and
+// resolves on the first delivery that does not, so the entries most likely
+// to already be stale — and therefore safest to lose — are the oldest ones
+// sitting in the buffer, not whatever just arrived.
+func TestDispatchToWaitersDropsOldestOnFullBufferRatherThanNewest(t *testing.T) {
+	bm := newResponseTestBrokerManager(&fakeMQTTClient{})
+	ch := make(chan deliveredMessage, pendingWaiterBuffer)
+	w := &pendingWaiter{id: 1, topic: "home/projectors/state", match: func(Message) bool { return true }, ch: ch}
+	bm.respTopics = map[string]*responseTopicState{
+		"home/projectors/state": {waiters: map[uint64]*pendingWaiter{1: w}},
+	}
+
+	for i := 0; i < pendingWaiterBuffer; i++ {
+		bm.dispatchToWaiters(Message{Topic: "home/projectors/state", Payload: []byte(fmt.Sprintf("msg-%d", i)), Retained: false})
+	}
+	// One more, over capacity.
+	bm.dispatchToWaiters(Message{Topic: "home/projectors/state", Payload: []byte("msg-overflow"), Retained: false})
+
+	var got []string
+	for {
+		select {
+		case dm := <-ch:
+			got = append(got, string(dm.msg.Payload))
+			continue
+		default:
+		}
+		break
+	}
+
+	if len(got) != pendingWaiterBuffer {
+		t.Fatalf("drained %d entries, want %d (buffer capacity)", len(got), pendingWaiterBuffer)
+	}
+	if got[0] != "msg-1" {
+		t.Errorf("oldest surviving entry = %q, want %q (msg-0 should have been dropped to make room)", got[0], "msg-1")
+	}
+	if last := got[len(got)-1]; last != "msg-overflow" {
+		t.Errorf("newest entry = %q, want the overflow delivery %q to have been kept rather than dropped", last, "msg-overflow")
+	}
+	if got := w.drops.Load(); got != 1 {
+		t.Errorf("w.drops = %d, want 1", got)
 	}
 }

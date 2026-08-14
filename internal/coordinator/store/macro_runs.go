@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file holds schemaV7's macro_runs/macro_run_steps repository methods
@@ -110,6 +112,37 @@ type MacroRunStepRecord struct {
 	AttributionDegraded bool
 }
 
+// MacroRunStepOutcomeStatePending and MacroRunStepOutcomeReasonPending are
+// the OutcomeState/OutcomeReason value [Store.CreateMacroRun]/
+// [Tx.CreateMacroRun] require every step to be created with (see
+// createMacroRun's validation below) — the fix for STEP-9-SPEC review
+// finding 8, "reconciliation leaves every unresolved step permanently
+// blank." Before a step has ever been touched by
+// [Store.UpdateMacroRunStepOutcome] or [Store.ResolveUnresolvedMacroRunSteps],
+// this is what OutcomeState/OutcomeReason read as, so "" is never even the
+// as-created value and a step interrupted before either of those runs
+// still carries a stated state and a stated reason, never a blank that
+// renders as fine — see migrations.go's schemaV7 doc comment for the
+// defect this closes and [ReconcileStrandedFPPCommands]
+// (internal/coordinator/api/fppcommand_reconcile.go) for the shape this
+// mirrors one level up, at the command rather than the step.
+//
+// MacroRunStepOutcomeStatePending reuses [observation.StateNotCollected]
+// rather than inventing a parallel vocabulary for "nothing has happened to
+// this step yet": that state's own doc comment is "no attempt has been
+// made," which is exactly true of a freshly created step, and
+// fppcommand_reconcile.go already establishes the precedent of reusing it
+// for the identical "never dispatched" case one layer down (see that
+// file's DispatchedAt == nil branch). This package does not otherwise
+// validate OutcomeState's vocabulary (see [MacroRunStepRecord]'s doc
+// comment), so nothing stops a caller from writing a different value once
+// the step actually resolves; this constant is only the required starting
+// point, not an enforced invariant thereafter.
+const (
+	MacroRunStepOutcomeStatePending  = string(observation.StateNotCollected)
+	MacroRunStepOutcomeReasonPending = "this step has not been dispatched or resolved yet"
+)
+
 // ErrMacroRunNotFound is returned by [Store.GetMacroRun]/[Tx.GetMacroRun],
 // [Store.GetMacroRunByIdempotencyKey]/[Tx.GetMacroRunByIdempotencyKey], and
 // [Store.FindRunningMacroRun]/[Tx.FindRunningMacroRun] when no matching row
@@ -140,6 +173,43 @@ var ErrMacroRunStepNotFound = errors.New("store: macro run step not found")
 // classified identically to the pre-check finding one; see
 // classifyMacroRunIdempotencyMatch, which both call sites share.
 var ErrMacroRunIdempotencyKeyExists = errors.New("store: a macro run with this idempotency key already exists")
+
+// ErrMacroRunIDExists is the [errors.Is] sentinel for a reused
+// macro_runs.id PRIMARY KEY value, distinguished from
+// [ErrMacroRunIdempotencyKeyExists] (STEP-9-SPEC review, Minor finding 1).
+// Before this fix, createMacroRun's UNIQUE-constraint fallback treated ANY
+// "UNIQUE constraint failed" on the macro_runs INSERT as an idempotency-key
+// collision and unconditionally re-read the row by idempotency_key — id is
+// also the table's PRIMARY KEY, and SQLite reports a PRIMARY KEY violation
+// with the identical "UNIQUE constraint failed" text, so a caller that
+// reused a run id (a UUID collision, or a bug generating ids) got
+// re-queried by an idempotency_key that was never actually duplicated,
+// which either found nothing (surfacing the misleading "idempotency key
+// %q already exists but could not be re-read: ... macro run not found") or,
+// worse, found and returned an unrelated existing run that happened to
+// reuse that same key value by coincidence. See createMacroRun for how the
+// two cases are now told apart before either re-read is attempted.
+var ErrMacroRunIDExists = errors.New("store: a macro run with this id already exists")
+
+// DuplicateMacroRunIDError wraps [ErrMacroRunIDExists] with the id that was
+// reused, so a caller can log or report which run id collided without a
+// second round trip. Unlike [DuplicateMacroRunError], this does NOT carry
+// the pre-existing [MacroRunRecord]: a reused id is a caller bug (or an id
+// generator collision), not a legitimate replay, so there is no "existing
+// run" a caller should ever treat as the answer to its own submission —
+// see this type's Unwrap for why errors.Is(err, ErrMacroRunIdempotencyKeyExists)
+// is deliberately false for this error.
+type DuplicateMacroRunIDError struct {
+	ID string
+}
+
+func (e *DuplicateMacroRunIDError) Error() string {
+	return fmt.Sprintf("store: macro run id %q already exists (this is a reused id, not an idempotency-key collision)", e.ID)
+}
+
+// Unwrap makes errors.Is(err, ErrMacroRunIDExists) true for any
+// *DuplicateMacroRunIDError.
+func (e *DuplicateMacroRunIDError) Unwrap() error { return ErrMacroRunIDExists }
 
 // DuplicateMacroRunError wraps [ErrMacroRunIdempotencyKeyExists] with the
 // pre-existing [MacroRunRecord] that owns the idempotency key, mirroring
@@ -444,6 +514,18 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: step %d: LocalFallbackClass is empty", run.ID, i)
 		case st.State == "":
 			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: step %d: State is empty", run.ID, i)
+		case st.OutcomeState == "":
+			// STEP-9-SPEC review finding 8: an unresolved step must carry an
+			// explicit "not yet resolved" state, not an empty string that
+			// renders identically to a genuinely blank column — see
+			// [MacroRunStepOutcomeStatePending], which a caller (Wave 1b/2)
+			// is expected to supply here, and migrations.go's schemaV7 doc
+			// comment for the defect this closes.
+			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: step %d: OutcomeState is empty (use MacroRunStepOutcomeStatePending for a step that has not resolved yet)", run.ID, i)
+		case st.OutcomeReason == "":
+			// Same rule, applied to the reason half of the identical pair —
+			// see [MacroRunStepOutcomeReasonPending].
+			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: step %d: OutcomeReason is empty (use MacroRunStepOutcomeReasonPending for a step that has not resolved yet)", run.ID, i)
 		}
 	}
 
@@ -482,6 +564,34 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 	)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
+			// STEP-9-SPEC review, Minor finding 1: macro_runs has TWO unique
+			// constraints — id (PRIMARY KEY) and idempotency_key (UNIQUE) —
+			// and modernc.org/sqlite reports both kinds of violation with the
+			// identical "UNIQUE constraint failed" text (see
+			// [isUniqueConstraintErr]'s own doc comment on why this package
+			// checks the string at all). Before this fix, EVERY violation on
+			// this INSERT was treated as an idempotency-key collision and
+			// unconditionally re-read by run.IdempotencyKey, so a reused run
+			// id (a caller bug, or a UUID generator collision — the
+			// idempotency key itself may be perfectly unique) produced the
+			// misleading "idempotency key %q already exists but could not be
+			// re-read: ... macro run not found", since no row with THAT
+			// idempotency key actually exists to find.
+			//
+			// The driver's error text names the violated column
+			// ("UNIQUE constraint failed: macro_runs.idempotency_key" or
+			// "UNIQUE constraint failed: macro_runs.id"), so check for the
+			// idempotency_key column specifically — checking for a bare
+			// "macro_runs.id" substring instead would be wrong in the OTHER
+			// direction, since that string is itself a prefix of
+			// "macro_runs.idempotency_key" and would misclassify every real
+			// idempotency collision as an id collision. Only these two
+			// constraints exist on this INSERT (this statement touches no
+			// other unique-constrained column), so "not idempotency_key"
+			// safely means "id" without needing to positively match it.
+			if !strings.Contains(err.Error(), "idempotency_key") {
+				return MacroRunRecord{}, nil, &DuplicateMacroRunIDError{ID: run.ID}
+			}
 			// Belt-and-suspenders fallback: the pre-check above should make
 			// this unreachable in practice, but the UNIQUE constraint
 			// remains the package's actual race-free source of truth for
@@ -504,9 +614,21 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 	run.Completed = nil
 	run.Confirmed = nil
 
-	for i := range steps {
-		steps[i].RunID = run.ID
-		st := steps[i]
+	// STEP-9-SPEC review, Minor finding 2: copy steps into a fresh slice
+	// before writing into it. steps[i].RunID/DispatchedAt/ResolvedAt used to
+	// be assigned directly onto the caller's own slice (Go slices share
+	// their backing array across a function call), so a caller reusing its
+	// input steps slice after a successful CreateMacroRun — or inspecting it
+	// to see what was submitted — observed this package's own bookkeeping
+	// mutations layered onto data it thought it still owned. recSteps is
+	// what this function returns and mutates from here on; steps itself is
+	// never written to again.
+	recSteps := make([]MacroRunStepRecord, len(steps))
+	copy(recSteps, steps)
+
+	for i := range recSteps {
+		recSteps[i].RunID = run.ID
+		st := recSteps[i]
 		if _, err := q.ExecContext(ctx, `
 			INSERT INTO macro_run_steps (
 				run_id, step_index, step_id, action_object_id, action_revision, integration,
@@ -522,8 +644,8 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 		); err != nil {
 			return MacroRunRecord{}, nil, fmt.Errorf("store: insert macro run step %d for run %q: %w", st.StepIndex, run.ID, err)
 		}
-		steps[i].DispatchedAt = nil
-		steps[i].ResolvedAt = nil
+		recSteps[i].DispatchedAt = nil
+		recSteps[i].ResolvedAt = nil
 	}
 
 	// Same two independent prune triggers as insertCommand (commands.go):
@@ -541,7 +663,7 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 		s.lastMacroRunPruneAtNanos.Store(s.now().UnixNano())
 	}
 
-	return run, steps, nil
+	return run, recSteps, nil
 }
 
 // CreateMacroRun records a new run and every one of its steps atomically:
@@ -549,9 +671,18 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 // run with a partial step list, which would leave a reader unable to tell
 // "this macro genuinely has 3 steps" apart from "this run's insert was
 // interrupted after step 2." On a duplicate IdempotencyKey, returns a
-// *[DuplicateMacroRunError]; on ADR-031 decision 6's overlap refusal,
-// returns a *[MacroRunAlreadyInFlightError] — see both types' doc comments
-// for which is checked first and why.
+// *[DuplicateMacroRunError] (same macro, same pinned revision),
+// *[MacroRunIdempotencyMacroMismatchError] (different macro), or
+// *[MacroRunIdempotencyRevisionMismatchError] (same macro, different pinned
+// revision) — see [classifyMacroRunIdempotencyMatch]. On a reused run ID
+// that is NOT an idempotency-key collision, returns a
+// *[DuplicateMacroRunIDError] instead (STEP-9-SPEC review, Minor finding
+// 1) — this is a caller bug or an id-generator collision, never a
+// legitimate replay. On ADR-031 decision 6's overlap refusal, returns a
+// *[MacroRunAlreadyInFlightError] — see these types' doc comments for which
+// is checked first and why. The returned steps slice is this function's
+// own copy; the caller's input steps slice is never mutated (STEP-9-SPEC
+// review, Minor finding 2).
 func (s *Store) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []MacroRunStepRecord) (MacroRunRecord, []MacroRunStepRecord, error) {
 	guardNotInTx(ctx, "Store.CreateMacroRun")
 	sqlTx, err := s.db.BeginTx(ctx, nil)
@@ -879,6 +1010,140 @@ func (s *Store) UpdateMacroRunStepOutcome(ctx context.Context, runID string, ste
 // form.
 func (t *Tx) UpdateMacroRunStepOutcome(ctx context.Context, runID string, stepIndex int, upd MacroRunStepOutcomeUpdate) error {
 	return updateMacroRunStepOutcome(ctx, t.tx, runID, stepIndex, upd)
+}
+
+// This is STEP-9-SPEC review finding 8's fix, part 1: the store-level
+// affordance ADR-031 decision 4's startup reconciler (Wave 2,
+// internal/coordinator/macro, called alongside
+// [api.ReconcileStrandedFPPCommands] per STEP-9-SPEC.md §6.5) needs to
+// close out a run's steps, not just the run itself. [Store.FinishMacroRun]
+// closes the RUN; neither it nor anything else in this file, before this
+// fix, ever touched macro_run_steps for a run that was never resumed — see
+// migrations.go's schemaV7 doc comment for the failure that left
+// unreachable ("three blank rows") and [ReconcileStrandedFPPCommands]
+// (internal/coordinator/api/fppcommand_reconcile.go) for the
+// list-then-resolve shape this mirrors one level down, at the step rather
+// than the command.
+//
+// [Store.ListUnresolvedMacroRunSteps] is the read half (mirrors
+// [Store.ListUnresolvedCommands] exactly, scoped to one run rather than
+// global, since a caller here already has the run id from
+// [Store.ListRunningMacroRuns] and does not need a cross-run scan);
+// [Store.ResolveUnresolvedMacroRunSteps] is the write half (mirrors
+// [ReconcileStrandedFPPCommands]'s own "resolve rather than retry" shape:
+// one bulk UPDATE, not a per-step dispatch retry attempt, because a step
+// stranded by a dead process is exactly as unrecoverable as a command
+// stranded the same way — the process that would have carried it forward
+// no longer exists).
+
+func listUnresolvedMacroRunSteps(ctx context.Context, q querier, runID string) ([]MacroRunStepRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT`+macroRunStepColumns+`FROM macro_run_steps WHERE run_id = ? AND resolved_at IS NULL ORDER BY step_index`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list unresolved macro run steps for %q: %w", runID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []MacroRunStepRecord
+	for rows.Next() {
+		rec, err := scanMacroRunStep(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: list unresolved macro run steps for %q: %w", runID, err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list unresolved macro run steps for %q: %w", runID, err)
+	}
+	return out, nil
+}
+
+// ListUnresolvedMacroRunSteps returns every step of runID whose lifecycle
+// never reached resolution (resolved_at IS NULL — not yet dispatched,
+// dispatched but never confirmed, or confirmed but never durably
+// recorded), in step_index order. Exactly like
+// [Store.ListUnresolvedCommands], a row can end up here only because the
+// process handling it stopped existing before it finished; a step still
+// legitimately in progress from a LIVE run in THIS process never appears
+// here except in the narrow instant right after this coordinator starts,
+// before it has served a single request — see
+// [Store.ResolveUnresolvedMacroRunSteps] for how the reconciler is expected
+// to close out each row this returns, and [api.ReconcileStrandedFPPCommands]
+// for why "call this once, at startup" is what makes that reasoning sound.
+func (s *Store) ListUnresolvedMacroRunSteps(ctx context.Context, runID string) ([]MacroRunStepRecord, error) {
+	guardNotInTx(ctx, "Store.ListUnresolvedMacroRunSteps")
+	return listUnresolvedMacroRunSteps(ctx, s.db, runID)
+}
+
+// ListUnresolvedMacroRunSteps is [Store.ListUnresolvedMacroRunSteps]'s [Tx]
+// form.
+func (t *Tx) ListUnresolvedMacroRunSteps(ctx context.Context, runID string) ([]MacroRunStepRecord, error) {
+	return listUnresolvedMacroRunSteps(ctx, t.tx, runID)
+}
+
+func resolveUnresolvedMacroRunSteps(ctx context.Context, q querier, runID string, resolvedAt time.Time, state, outcome, outcomeState, outcomeReason string) (int, error) {
+	switch {
+	case state == "":
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: state is empty", runID)
+	case outcome == "":
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: outcome is empty", runID)
+	case outcomeState == "":
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: outcomeState is empty", runID)
+	case outcomeReason == "":
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: outcomeReason is empty", runID)
+	}
+	res, err := q.ExecContext(ctx, `
+		UPDATE macro_run_steps SET
+			state         = ?,
+			resolved_at   = ?,
+			outcome       = ?,
+			outcome_state = ?,
+			outcome_reason = ?
+		WHERE run_id = ? AND resolved_at IS NULL
+	`, state, timeToDB(resolvedAt), outcome, outcomeState, outcomeReason, runID)
+	if err != nil {
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: resolve unresolved macro run steps for %q: rows affected: %w", runID, err)
+	}
+	return int(n), nil
+}
+
+// ResolveUnresolvedMacroRunSteps closes out every step of runID that has
+// not yet resolved (resolved_at IS NULL), setting state, outcome,
+// outcome_state and outcome_reason to the SAME caller-supplied values on
+// every affected row and resolved_at to resolvedAt. It never dispatches,
+// retries, or otherwise attempts to make further progress on a step —
+// matching [ReconcileStrandedFPPCommands]'s own "resolves rather than
+// retries" shape (that file's own doc comment: this is what "when the
+// system cannot know, it must not act as though it does" — ADR-011's
+// framing, applied here to a stranded step's confirmation state — actually
+// means in code).
+//
+// All four string arguments are required non-empty, matching
+// [createMacroRun]'s own validation of these same fields at creation: a
+// caller resolving a step with a blank outcome_state or outcome_reason
+// would silently reintroduce STEP-9-SPEC review finding 8 through this
+// exact method, which exists to close that finding, not leave a second
+// door open to it.
+//
+// Returns the number of steps actually resolved (0 if the run has none
+// left unresolved, which is the ordinary case for a run that finished
+// normally before this is ever called on it — calling this on an already-
+// fully-resolved run is a harmless no-op, not an error).
+func (s *Store) ResolveUnresolvedMacroRunSteps(ctx context.Context, runID string, resolvedAt time.Time, state, outcome, outcomeState, outcomeReason string) (int, error) {
+	guardNotInTx(ctx, "Store.ResolveUnresolvedMacroRunSteps")
+	return resolveUnresolvedMacroRunSteps(ctx, s.db, runID, resolvedAt, state, outcome, outcomeState, outcomeReason)
+}
+
+// ResolveUnresolvedMacroRunSteps is [Store.ResolveUnresolvedMacroRunSteps]'s
+// [Tx] form — lets the startup reconciler (Wave 2) compose this with
+// [Tx.FinishMacroRun] in one transaction, so a run's steps and the run
+// itself are closed out atomically rather than leaving a window where the
+// run row reads "finished" while a step row still reads "unresolved."
+func (t *Tx) ResolveUnresolvedMacroRunSteps(ctx context.Context, runID string, resolvedAt time.Time, state, outcome, outcomeState, outcomeReason string) (int, error) {
+	return resolveUnresolvedMacroRunSteps(ctx, t.tx, runID, resolvedAt, state, outcome, outcomeState, outcomeReason)
 }
 
 // MacroRunFinishUpdate is [Store.FinishMacroRun]/[Tx.FinishMacroRun]'s

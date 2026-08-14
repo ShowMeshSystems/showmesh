@@ -72,6 +72,25 @@ test-integration-fpp:
 test-integration-fppmqtt:
 	./scripts/test-integration-fppmqtt.sh
 
+# test-integration-broker proves the two claims about
+# internal/coordinator/broker that need a real broker connection rather than
+# a fake: the retained-message discard (response.go's RETAIN check, and the
+# RetainAsPublished=false subscription option that makes the distinction
+# possible — see that package's doc comments) and, per review finding 1 on
+# commit 9dcab74, a response waiter's subscription surviving a real broker
+# restart mid-wait. Behind the `integration` build tag, so it is never part
+# of `test`/`check`. Unlike test-integration-fpp/fppmqtt, this suite starts
+# and tears down its OWN throwaway Mosquitto container per test (see
+# internal/coordinator/broker/response_integration_test.go's
+# startTestMosquitto) rather than one broker this script starts up front —
+# see scripts/test-integration-broker.sh. Review finding 5 on commit
+# 9dcab74: before this target existed, this suite's own package doc
+# comments documented the `go test -tags=integration` invocation but nothing
+# in this Makefile, in scripts/, or in CI ever ran it.
+.PHONY: test-integration-broker
+test-integration-broker:
+	./scripts/test-integration-broker.sh
+
 GOLANGCI_LINT_VERSION := v2.6.2
 
 .PHONY: lint

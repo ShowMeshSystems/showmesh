@@ -17,6 +17,10 @@ import (
 // realistic values from each field's own closed vocabulary rather than a
 // placeholder string, matching STEP-9-SPEC.md §2.5/§5.4's actual day-0
 // shape: a coordinator-required FPP step with no safety class of its own.
+// OutcomeState/OutcomeReason are set to [MacroRunStepOutcomeStatePending]/
+// [MacroRunStepOutcomeReasonPending] — createMacroRun requires both
+// non-empty since STEP-9-SPEC review finding 8, exactly the two fields a
+// step must never round-trip blank while unresolved.
 func testMacroRun(id, idempotencyKey, macroObjectID string) (MacroRunRecord, []MacroRunStepRecord) {
 	run := MacroRunRecord{
 		ID: id, MacroObjectID: macroObjectID, MacroRevision: 1, Show: "halloween-2026",
@@ -25,9 +29,11 @@ func testMacroRun(id, idempotencyKey, macroObjectID string) (MacroRunRecord, []M
 	}
 	steps := []MacroRunStepRecord{
 		{StepIndex: 0, StepID: "projectors", ActionObjectID: "projectors-on", ActionRevision: 1, Integration: "fpp",
-			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending"},
+			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending",
+			OutcomeState: MacroRunStepOutcomeStatePending, OutcomeReason: MacroRunStepOutcomeReasonPending},
 		{StepIndex: 1, StepID: "start", ActionObjectID: "start-main-show", ActionRevision: 1, Integration: "fpp",
-			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending"},
+			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending",
+			OutcomeState: MacroRunStepOutcomeStatePending, OutcomeReason: MacroRunStepOutcomeReasonPending},
 	}
 	return run, steps
 }
@@ -87,6 +93,102 @@ func TestCreateMacroRunDuplicateIdempotencyKeyReturnsDuplicateError(t *testing.T
 	}
 }
 
+// TestCreateMacroRunReusedIDReturnsDuplicateIDErrorNotIdempotencyError is
+// STEP-9-SPEC review Minor finding 1: a reused macro_runs.id (the table's
+// PRIMARY KEY) with a DIFFERENT, otherwise-unused idempotency_key must be
+// reported as *DuplicateMacroRunIDError, never routed through the
+// idempotency-key machinery. Before this fix, isUniqueConstraintErr's
+// fallback branch treated ANY "UNIQUE constraint failed" on this INSERT as
+// an idempotency-key collision and unconditionally re-read the row by
+// idempotency_key — for this scenario, no row carries the SECOND
+// submission's idempotency key, so that re-read would have failed and
+// surfaced the misleading "idempotency key %q already exists but could not
+// be re-read: ... macro run not found", naming a key that was never
+// actually duplicated.
+func TestCreateMacroRunReusedIDReturnsDuplicateIDErrorNotIdempotencyError(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	first, firstSteps := testMacroRun("run-reused-id", "idem-reused-id-1", "macro-a")
+	if _, _, err := st.CreateMacroRun(ctx, first, firstSteps); err != nil {
+		t.Fatalf("create first run: %v", err)
+	}
+	// Finish the first run so ADR-031 decision 6's overlap guard (a
+	// DIFFERENT check, on macro_object_id + state=='running') does not fire
+	// first and mask the id collision this test is actually proving.
+	if err := st.FinishMacroRun(ctx, "run-reused-id", MacroRunFinishUpdate{
+		FinishedAt: st.now(), Completed: true, Confirmed: true,
+	}); err != nil {
+		t.Fatalf("finish first run: %v", err)
+	}
+
+	// Same id, but a DIFFERENT idempotency key that has never been used —
+	// the only thing colliding is the PRIMARY KEY.
+	second, secondSteps := testMacroRun("run-reused-id", "idem-reused-id-2", "macro-a")
+	_, _, err := st.CreateMacroRun(ctx, second, secondSteps)
+	if err == nil {
+		t.Fatalf("create with a reused id succeeded, want an error")
+	}
+	if !errors.Is(err, ErrMacroRunIDExists) {
+		t.Fatalf("error = %v, want it to wrap ErrMacroRunIDExists", err)
+	}
+	if errors.Is(err, ErrMacroRunIdempotencyKeyExists) {
+		t.Fatalf("error = %v, must NOT also read as an idempotency-key collision: the idempotency key in this scenario was never duplicated", err)
+	}
+	var dupID *DuplicateMacroRunIDError
+	if !errors.As(err, &dupID) {
+		t.Fatalf("error = %v, want errors.As to find a *DuplicateMacroRunIDError", err)
+	}
+	if dupID.ID != "run-reused-id" {
+		t.Errorf("DuplicateMacroRunIDError.ID = %q, want %q", dupID.ID, "run-reused-id")
+	}
+
+	// The rejected second submission's own idempotency key must not have
+	// been consumed by anything — a caller retrying with a FRESH id and the
+	// same key should still be free to use it. Checked directly: no run
+	// exists under "idem-reused-id-2" at all.
+	if _, err := st.GetMacroRunByIdempotencyKey(ctx, "idem-reused-id-2"); !errors.Is(err, ErrMacroRunNotFound) {
+		t.Errorf("GetMacroRunByIdempotencyKey(idem-reused-id-2) error = %v, want ErrMacroRunNotFound (the rejected insert must not have left this key claimed)", err)
+	}
+}
+
+// TestCreateMacroRunDoesNotMutateCallerStepsSlice is STEP-9-SPEC review
+// Minor finding 2: CreateMacroRun used to write run.ID and clear
+// DispatchedAt/ResolvedAt directly onto the caller's own steps slice — Go
+// slices share their backing array across a function call — so a caller
+// that kept its input slice around after a successful create observed this
+// package's own bookkeeping layered onto data it still thought it owned.
+// Proved by capturing the input slice's RunID BEFORE the call (still "",
+// since the caller never set it) and confirming it is STILL "" after,
+// while the RETURNED slice does carry the run id.
+func TestCreateMacroRunDoesNotMutateCallerStepsSlice(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	run, steps := testMacroRun("run-no-mutate", "idem-no-mutate", "macro-a")
+	for _, in := range steps {
+		if in.RunID != "" {
+			t.Fatalf("test setup invariant broken: input step RunID = %q, want empty before the call", in.RunID)
+		}
+	}
+
+	_, recSteps, err := st.CreateMacroRun(ctx, run, steps)
+	if err != nil {
+		t.Fatalf("create macro run: %v", err)
+	}
+
+	for i, s := range steps {
+		if s.RunID != "" {
+			t.Errorf("input steps[%d].RunID = %q after CreateMacroRun, want it left untouched at \"\" (the caller's own slice must not be mutated)", i, s.RunID)
+		}
+	}
+	for i, s := range recSteps {
+		if s.RunID != "run-no-mutate" {
+			t.Errorf("returned recSteps[%d].RunID = %q, want %q", i, s.RunID, "run-no-mutate")
+		}
+	}
+}
+
 // TestGetMacroRunStepsComeBackInIndexOrder proves GetMacroRun returns a
 // run's steps in step_index order regardless of insertion order — an
 // operator or the executor reading a run must see step 0 before step 1
@@ -105,11 +207,14 @@ func TestGetMacroRunStepsComeBackInIndexOrder(t *testing.T) {
 	// (or one relying on insertion/rowid order) would fail this test.
 	steps := []MacroRunStepRecord{
 		{StepIndex: 2, StepID: "third", ActionObjectID: "a3", ActionRevision: 1, Integration: "fpp",
-			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending"},
+			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending",
+			OutcomeState: MacroRunStepOutcomeStatePending, OutcomeReason: MacroRunStepOutcomeReasonPending},
 		{StepIndex: 0, StepID: "first", ActionObjectID: "a1", ActionRevision: 1, Integration: "fpp",
-			SafetyClass: "stop", LocalFallbackClass: "none", State: "pending"},
+			SafetyClass: "stop", LocalFallbackClass: "none", State: "pending",
+			OutcomeState: MacroRunStepOutcomeStatePending, OutcomeReason: MacroRunStepOutcomeReasonPending},
 		{StepIndex: 1, StepID: "second", ActionObjectID: "a2", ActionRevision: 1, Integration: "mqtt",
-			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending"},
+			SafetyClass: "none", LocalFallbackClass: "coordinator-required", State: "pending",
+			OutcomeState: MacroRunStepOutcomeStatePending, OutcomeReason: MacroRunStepOutcomeReasonPending},
 	}
 	if _, _, err := st.CreateMacroRun(ctx, run, steps); err != nil {
 		t.Fatalf("create macro run: %v", err)
@@ -711,6 +816,46 @@ func TestCreateMacroRunStepRequiresSafetyClassAndLocalFallbackClass(t *testing.T
 	}
 }
 
+// TestCreateMacroRunStepRequiresOutcomeStateAndOutcomeReason is
+// STEP-9-SPEC review finding 8's write-time requirement, proved the same
+// way its SafetyClass/LocalFallbackClass sibling above is: a step with an
+// empty OutcomeState or an empty OutcomeReason is rejected at creation, and
+// the rejected create leaves no run or step row behind. Before this fix,
+// createMacroRun validated every other required per-step field and left
+// these two to round-trip as "" — indistinguishable, on read, from a step
+// that resolved to a genuinely empty state — which is finding 8's own
+// "nothing enforced it" defect, and this test breaks that behavior by
+// deleting the validation clause and confirming the create then succeeds
+// with a step OutcomeState/OutcomeReason permanently blank.
+func TestCreateMacroRunStepRequiresOutcomeStateAndOutcomeReason(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	run, steps := testMacroRun("run-missing-outcome-state", "idem-missing-outcome-state", "macro-a")
+	steps[0].OutcomeState = ""
+	if _, _, err := st.CreateMacroRun(ctx, run, steps); err == nil {
+		t.Fatalf("create with an empty OutcomeState succeeded, want an error")
+	} else if !strings.Contains(err.Error(), "OutcomeState") {
+		t.Fatalf("error = %v, want it to name OutcomeState", err)
+	}
+
+	run2, steps2 := testMacroRun("run-missing-outcome-reason", "idem-missing-outcome-reason", "macro-a")
+	steps2[0].OutcomeReason = ""
+	if _, _, err := st.CreateMacroRun(ctx, run2, steps2); err == nil {
+		t.Fatalf("create with an empty OutcomeReason succeeded, want an error")
+	} else if !strings.Contains(err.Error(), "OutcomeReason") {
+		t.Fatalf("error = %v, want it to name OutcomeReason", err)
+	}
+
+	all, err := st.ListMacroRuns(ctx, "", 0)
+	if err != nil {
+		t.Fatalf("list macro runs: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("len(all) = %d, want 0 (both rejected creates must leave no row behind)", len(all))
+	}
+}
+
 // TestCreateMacroRunSameIdempotencyKeyDifferentMacroReturnsMacroMismatch is
 // STEP-9-SPEC.md §6.2's first NEW outcome, corrected 2026-08-14: before
 // this fix, this exact scenario returned a *DuplicateMacroRunError (a false
@@ -968,15 +1113,26 @@ func TestParseMacroRunRequestedRevisionRejectsNonMacroValues(t *testing.T) {
 }
 
 // TestListRunningMacroRunsThenFinishMatchesReconciliationShape proves the
-// two primitives ADR-031 decision 4's startup reconciler needs, this
+// THREE primitives ADR-031 decision 4's startup reconciler needs, this
 // package's own [Store.ListRunningMacroRuns] to find a run stranded by a
-// prior process, then [Store.FinishMacroRun] to close each one out
-// completed:false with a reason, actually compose the way
+// prior process, [Store.ResolveUnresolvedMacroRunSteps] to close out that
+// run's own still-unresolved STEPS, then [Store.FinishMacroRun] to close
+// the run itself completed:false with a reason, actually compose the way
 // STEP-9-SPEC.md §6.5 requires ("called at startup... per §2.4"), mirroring
 // [api.ReconcileStrandedFPPCommands]'s own ListUnresolvedCommands-then-
 // UpdateCommandOutcome shape one level up, at the run rather than the
 // command. The reconciler itself is Wave 2's (internal/coordinator/macro)
 // to write; this test only proves the storage half it will be built on.
+//
+// Extended 2026-08-14 per STEP-9-SPEC review finding 8: the version of this
+// test before the fix proved ONLY the run row reconciles correctly and
+// never read a single macro_run_steps row back — the test's own name
+// invokes "reconciliation shape" while asserting nothing about what that
+// shape actually has to reconcile. Before the fix, this test would have
+// passed even with steps 3/4/5 of a longer run permanently blank, which is
+// exactly finding 8's failure scenario; it does not pass that way now,
+// because a second step (index 1) is deliberately left unresolved past the
+// simulated restart and the assertions below fail if it stays blank.
 func TestListRunningMacroRunsThenFinishMatchesReconciliationShape(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
@@ -984,6 +1140,18 @@ func TestListRunningMacroRunsThenFinishMatchesReconciliationShape(t *testing.T) 
 	run, steps := testMacroRun("run-stranded", "idem-stranded", "macro-a")
 	if _, _, err := st.CreateMacroRun(ctx, run, steps); err != nil {
 		t.Fatalf("create macro run: %v", err)
+	}
+
+	// Step 0 resolved BEFORE the coordinator restarted; step 1 did not —
+	// this is finding 8's own failure scenario ("coordinator restarts at
+	// step 3 of 5... steps 3, 4 and 5 keep outcome='' forever"), scaled down
+	// to this test's two-step run: one step already resolved, one stranded.
+	resolvedAt := st.now()
+	confirmedOutcome, confirmedState := "confirmed", "current"
+	if err := st.UpdateMacroRunStepOutcome(ctx, "run-stranded", 0, MacroRunStepOutcomeUpdate{
+		ResolvedAt: &resolvedAt, Outcome: &confirmedOutcome, OutcomeState: &confirmedState,
+	}); err != nil {
+		t.Fatalf("resolve step 0 before the simulated restart: %v", err)
 	}
 
 	stranded, err := st.ListRunningMacroRuns(ctx)
@@ -995,6 +1163,23 @@ func TestListRunningMacroRunsThenFinishMatchesReconciliationShape(t *testing.T) 
 	}
 
 	for _, r := range stranded {
+		unresolvedSteps, err := st.ListUnresolvedMacroRunSteps(ctx, r.ID)
+		if err != nil {
+			t.Fatalf("list unresolved macro run steps for %q: %v", r.ID, err)
+		}
+		if len(unresolvedSteps) != 1 || unresolvedSteps[0].StepIndex != 1 {
+			t.Fatalf("unresolvedSteps = %+v, want exactly step 1 (step 0 already resolved before the simulated restart)", unresolvedSteps)
+		}
+
+		n, err := st.ResolveUnresolvedMacroRunSteps(ctx, r.ID, st.now(), "resolved", "unconfirmed",
+			MacroRunStepOutcomeStatePending, "the coordinator restarted before this step could be dispatched or resolved")
+		if err != nil {
+			t.Fatalf("resolve unresolved macro run steps for %q: %v", r.ID, err)
+		}
+		if n != 1 {
+			t.Fatalf("resolved %d steps for %q, want 1", n, r.ID)
+		}
+
 		if err := st.FinishMacroRun(ctx, r.ID, MacroRunFinishUpdate{
 			FinishedAt: st.now(), Completed: false, Confirmed: false,
 			Reason: "the coordinator restarted while this run was in flight",
@@ -1011,7 +1196,7 @@ func TestListRunningMacroRunsThenFinishMatchesReconciliationShape(t *testing.T) 
 		t.Fatalf("stillRunning = %+v, want none left running after reconciliation", stillRunning)
 	}
 
-	gotRun, _, err := st.GetMacroRun(ctx, "run-stranded")
+	gotRun, gotSteps, err := st.GetMacroRun(ctx, "run-stranded")
 	if err != nil {
 		t.Fatalf("get macro run: %v", err)
 	}
@@ -1020,5 +1205,157 @@ func TestListRunningMacroRunsThenFinishMatchesReconciliationShape(t *testing.T) 
 	}
 	if gotRun.Reason == "" {
 		t.Errorf("Reason is empty, want the restart reason preserved")
+	}
+
+	// THE ASSERTION FINDING 8 SAYS WAS MISSING: read the steps back and
+	// prove neither one renders blank, which is what "reconciliation shape"
+	// actually has to mean for this table.
+	if len(gotSteps) != 2 {
+		t.Fatalf("len(gotSteps) = %d, want 2", len(gotSteps))
+	}
+	for _, step := range gotSteps {
+		if step.Outcome == "" {
+			t.Errorf("step %d Outcome is empty after reconciliation, want a stated outcome", step.StepIndex)
+		}
+		if step.OutcomeState == "" {
+			t.Errorf("step %d OutcomeState is empty after reconciliation, want a stated state (finding 8's own failure mode)", step.StepIndex)
+		}
+		if step.OutcomeReason == "" {
+			t.Errorf("step %d OutcomeReason is empty after reconciliation, want a stated reason (finding 8's own failure mode)", step.StepIndex)
+		}
+		if step.ResolvedAt == nil {
+			t.Errorf("step %d ResolvedAt is nil after reconciliation, want it resolved", step.StepIndex)
+		}
+	}
+	if gotSteps[0].Outcome != "confirmed" {
+		t.Errorf("step 0 Outcome = %q, want it left as confirmed by the pre-restart resolution (reconciliation must not overwrite an already-resolved step)", gotSteps[0].Outcome)
+	}
+	if gotSteps[1].Outcome != "unconfirmed" {
+		t.Errorf("step 1 Outcome = %q, want unconfirmed (the value the reconciliation pass supplied)", gotSteps[1].Outcome)
+	}
+	if gotSteps[1].OutcomeReason == MacroRunStepOutcomeReasonPending {
+		t.Errorf("step 1 OutcomeReason is still the creation-time placeholder, want the reconciliation's own reason")
+	}
+}
+
+// TestResolveUnresolvedMacroRunStepsOnlyTouchesUnresolvedSteps proves the
+// bulk resolve is scoped to resolved_at IS NULL, not every step of the run:
+// an already-resolved step must survive with its own outcome untouched, and
+// a run with nothing left unresolved reports 0 resolved rather than an
+// error.
+func TestResolveUnresolvedMacroRunStepsOnlyTouchesUnresolvedSteps(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	run, steps := testMacroRun("run-bulk-resolve", "idem-bulk-resolve", "macro-a")
+	if _, _, err := st.CreateMacroRun(ctx, run, steps); err != nil {
+		t.Fatalf("create macro run: %v", err)
+	}
+
+	// Resolve both steps up front, then prove a second call is a no-op.
+	n, err := st.ResolveUnresolvedMacroRunSteps(ctx, "run-bulk-resolve", st.now(), "resolved", "unconfirmed",
+		MacroRunStepOutcomeStatePending, "the coordinator restarted before this step could be dispatched or resolved")
+	if err != nil {
+		t.Fatalf("resolve unresolved macro run steps: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("resolved %d steps, want 2", n)
+	}
+
+	n, err = st.ResolveUnresolvedMacroRunSteps(ctx, "run-bulk-resolve", st.now(), "resolved", "unconfirmed",
+		MacroRunStepOutcomeStatePending, "should not be reachable: nothing left unresolved")
+	if err != nil {
+		t.Fatalf("resolve unresolved macro run steps (second call): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("resolved %d steps on a run with nothing left unresolved, want 0 (a harmless no-op, not an error)", n)
+	}
+
+	_, gotSteps, err := st.GetMacroRun(ctx, "run-bulk-resolve")
+	if err != nil {
+		t.Fatalf("get macro run: %v", err)
+	}
+	for _, step := range gotSteps {
+		if step.OutcomeReason != "the coordinator restarted before this step could be dispatched or resolved" {
+			t.Errorf("step %d OutcomeReason = %q, want it from the FIRST resolve call only (the second call's reason must never have been reachable)", step.StepIndex, step.OutcomeReason)
+		}
+	}
+}
+
+// TestResolveUnresolvedMacroRunStepsRequiresAllFourFields proves the bulk
+// resolve rejects a blank state/outcome/outcomeState/outcomeReason rather
+// than silently writing one — a caller resolving a stranded step with a
+// blank outcome_state or outcome_reason would otherwise reopen finding 8
+// through this exact method.
+func TestResolveUnresolvedMacroRunStepsRequiresAllFourFields(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	run, steps := testMacroRun("run-bulk-resolve-validate", "idem-bulk-resolve-validate", "macro-a")
+	if _, _, err := st.CreateMacroRun(ctx, run, steps); err != nil {
+		t.Fatalf("create macro run: %v", err)
+	}
+
+	cases := []struct {
+		name                                        string
+		state, outcome, outcomeState, outcomeReason string
+	}{
+		{"empty state", "", "unconfirmed", "not_collected", "reason"},
+		{"empty outcome", "resolved", "", "not_collected", "reason"},
+		{"empty outcomeState", "resolved", "unconfirmed", "", "reason"},
+		{"empty outcomeReason", "resolved", "unconfirmed", "not_collected", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := st.ResolveUnresolvedMacroRunSteps(ctx, "run-bulk-resolve-validate", st.now(),
+				c.state, c.outcome, c.outcomeState, c.outcomeReason); err == nil {
+				t.Fatalf("resolve with %s succeeded, want an error", c.name)
+			}
+		})
+	}
+
+	// None of the rejected calls may have touched the steps: still exactly
+	// the creation-time pending sentinel on both.
+	_, gotSteps, err := st.GetMacroRun(ctx, "run-bulk-resolve-validate")
+	if err != nil {
+		t.Fatalf("get macro run: %v", err)
+	}
+	for _, step := range gotSteps {
+		if step.OutcomeState != MacroRunStepOutcomeStatePending {
+			t.Errorf("step %d OutcomeState = %q, want it untouched at the creation-time pending sentinel", step.StepIndex, step.OutcomeState)
+		}
+		if step.ResolvedAt != nil {
+			t.Errorf("step %d ResolvedAt = %v, want nil (untouched by any rejected resolve call)", step.StepIndex, step.ResolvedAt)
+		}
+	}
+}
+
+// TestListUnresolvedMacroRunStepsScopedToOneRun proves the run_id filter
+// actually filters: a second run's unresolved steps must never appear in
+// the first run's list.
+func TestListUnresolvedMacroRunStepsScopedToOneRun(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	runA, stepsA := testMacroRun("run-unresolved-a", "idem-unresolved-a", "macro-a")
+	if _, _, err := st.CreateMacroRun(ctx, runA, stepsA); err != nil {
+		t.Fatalf("create run A: %v", err)
+	}
+	runB, stepsB := testMacroRun("run-unresolved-b", "idem-unresolved-b", "macro-b")
+	if _, _, err := st.CreateMacroRun(ctx, runB, stepsB); err != nil {
+		t.Fatalf("create run B: %v", err)
+	}
+
+	gotA, err := st.ListUnresolvedMacroRunSteps(ctx, "run-unresolved-a")
+	if err != nil {
+		t.Fatalf("list unresolved steps for run A: %v", err)
+	}
+	if len(gotA) != 2 {
+		t.Fatalf("len(gotA) = %d, want 2 (both of run A's own steps, none of run B's)", len(gotA))
+	}
+	for _, step := range gotA {
+		if step.RunID != "run-unresolved-a" {
+			t.Errorf("step.RunID = %q, want run-unresolved-a", step.RunID)
+		}
 	}
 }

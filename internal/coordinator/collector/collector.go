@@ -264,9 +264,17 @@ func (r *Runner) Nudge(id string) bool {
 // window gets no nudge for that step and silently falls back to the
 // collector's ordinary ~15s poll cadence, which can outrun a command's own
 // confirmation deadline. Calling Nudge itself and reading its bool return
-// cannot answer "when would it next be accepted" — only "was it accepted
-// just now" — so a caller that wants to avoid dispatching into that
-// starvation window needs this instead of probing Nudge speculatively.
+// cannot answer "when would it next be accepted", only "was it accepted
+// just now".
+//
+// This is NOT a signal to delay dispatch. STEP-9-SPEC.md section 6.3
+// (corrected 2026-08-14) is explicit that waiting for this window before
+// dispatching delays a show-affecting command, potentially a stop,
+// potentially a blackout, so that its own telemetry arrives sooner, which
+// is monitoring impairing control and inverts the reason this limiter
+// exists in the first place. The executor dispatches every step
+// immediately and uses the returned time only to schedule when it reads
+// for confirmation, never to decide when to act.
 //
 // ok is false when id is not registered at all (no [Add] call named it —
 // the identical "unknown id" case [Nudge] itself reports via its own false

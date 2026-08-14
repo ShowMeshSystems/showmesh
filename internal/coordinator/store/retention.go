@@ -103,21 +103,37 @@ const (
 //
 // SHOWMESH HYPOTHESIS, NOT DERIVED FROM ANY MEASUREMENT — labeled exactly
 // as every other retention bound in this file is, for the identical
-// reason: nothing has measured a real season's macro-run rate. Sized like
-// commands (180 days / 200,000 rows) rather than like discovery_runs (90
-// days / 5,000 rows): a macro run is exactly the kind of record
-// [DefaultMaxCommandAge]'s doc comment already gives the reasoning for —
-// "an operator reaches for when something is disputed months later" — and
-// unlike a discovery run (triggered only by an operator explicitly
-// re-scanning inventory) a macro run can fire on every schedule entry in
-// a show, so its volume is structurally closer to commands' than to
-// discovery_runs'. Pruning a macro_runs row cascades (ON DELETE CASCADE,
-// schemaV7) to that run's macro_run_steps rows, so no separate bound is
-// needed for macro_run_steps — see [Store.pruneMacroRuns] in
-// macro_runs.go.
+// reason: nothing has measured a real season's macro-run rate. Age is
+// still sized like commands (180 days): a macro run is exactly the kind of
+// record [DefaultMaxCommandAge]'s doc comment already gives the reasoning
+// for — "an operator reaches for when something is disputed months later"
+// — and unlike a discovery run (triggered only by an operator explicitly
+// re-scanning inventory) a macro run can fire on every schedule entry in a
+// show, so its volume is structurally closer to commands' than to
+// discovery_runs'.
+//
+// The ROW bound is NOT sized like commands, and this is a correction
+// (STEP-9-SPEC review finding, Minor 3): a first version of this constant
+// copied commands' 200,000 without accounting for the one respect in which
+// this table is NOT like commands — pruning a macro_runs row cascades (ON
+// DELETE CASCADE, schemaV7) to up to 32 macro_run_steps rows (STEP-9-SPEC.md
+// §5.4's step cap), so 200,000 retained runs is a worst-case bound of
+// 200,000 x 32 = 6,400,000 macro_run_steps rows, not 200,000 rows the way
+// it reads at a glance. That arithmetic is exact; whether real macros
+// approach the 32-step cap in practice is NOT measured and this comment
+// makes no claim about it either way.
+//
+// DefaultMaxMacroRunRows is therefore lowered to 50,000 rather than left at
+// 200,000 or "justified" with an unmeasured claim about typical step
+// count: worst case that bounds macro_run_steps at 50,000 x 32 = 1,600,000
+// rows, the same order of magnitude as commands'/audit_log's own 200,000-row
+// bound rather than 32x it, while still keeping four times discovery_runs'
+// 5,000-row bound of run-level history, since a macro run remains closer to
+// commands' volume profile than to discovery_runs' for the reason given
+// above. RES-013 owns the real number for both dimensions of this table.
 const (
 	DefaultMaxMacroRunAge        = 180 * 24 * time.Hour
-	DefaultMaxMacroRunRows int64 = 200_000
+	DefaultMaxMacroRunRows int64 = 50_000
 )
 
 // storeConfig holds every [Option]'s target. It exists only inside Open —

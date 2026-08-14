@@ -778,11 +778,57 @@ CREATE TABLE desired_state (
 //
 //   - outcome is the ADR-029-decision-4-preserving five-value vocabulary
 //     STEP-9-SPEC.md §6.4 names — confirmed | unconfirmed | unconfirmable |
-//     failed | skipped — plus "" for a step that has not resolved yet;
-//     outcome_state/outcome_reason mirror commands.outcome_state/
-//     outcome_reason and audit_log.outcome_state/outcome_reason
-//     (schemaV5/schemaV6) exactly: an unresolved step carries a state and
-//     a reason, never a null that renders as blank.
+//     failed | skipped — plus "" for a step that has not resolved yet, which
+//     is a legitimate, intentional member of THIS column's own vocabulary
+//     (a step's final classification genuinely does not exist until it
+//     resolves) and is why outcome alone keeps its DEFAULT ”.
+//
+//     outcome_state and outcome_reason are a DIFFERENT claim, corrected
+//     2026-08-14 by this step's own review (finding 8): the paragraph
+//     that used to stand here asserted "outcome_state/outcome_reason mirror
+//     commands.outcome_state/outcome_reason... an unresolved step carries a
+//     state and a reason, never a null that renders as blank" as a property
+//     of this schema, and nothing enforced it. TEXT NOT NULL DEFAULT ”
+//     prevents SQL NULL but permits ”, which renders identically blank —
+//     createMacroRun validated every other required per-step field
+//     (StepID, ActionObjectID, Integration, SafetyClass,
+//     LocalFallbackClass, State) but not these two, so a step created
+//     "pending" and never touched by [Store.UpdateMacroRunStepOutcome]
+//     (because the process handling its run died first — a coordinator
+//     restart mid-run, ADR-031 decision 4) kept outcome_state and
+//     outcome_reason at ” forever: the run itself gets finished
+//     completed:false by the startup reconciler, but nothing ever touched
+//     macro_run_steps, so any step past the point of interruption rendered
+//     as a permanently blank row. That is fppcommand_reconcile.go's own
+//     original defect (see that file's doc comment: "the UI rendered
+//     'Pending: this command has not yet resolved' forever"), reintroduced
+//     one table over, one step down.
+//
+//     Fixed three ways, all in macro_runs.go: (1) createMacroRun now
+//     requires OutcomeState and OutcomeReason non-empty at step creation,
+//     the same way SafetyClass/LocalFallbackClass already were — see
+//     [MacroRunStepOutcomeStatePending]/[MacroRunStepOutcomeReasonPending]
+//     for the stated "not yet resolved" values a caller (Wave 1b/2) is
+//     expected to create every step with, so "" is never even the
+//     as-created value; (2) [Store.ListUnresolvedMacroRunSteps] and
+//     [Store.ResolveUnresolvedMacroRunSteps] give the startup reconciler
+//     (Wave 2, ADR-031 decision 4) the affordance
+//     [api.ReconcileStrandedFPPCommands]'s own "resolve rather than retry"
+//     shape needs one level down, at the step rather than the command, so a
+//     run finished by the reconciler leaves no step behind still carrying
+//     its creation-time placeholder; (3) safety_class/local_fallback_class's
+//     DEFAULT ” was ALSO removed from the schema below, for the identical
+//     "the Go layer already requires non-empty, so a schema DEFAULT that
+//     nothing can reach is a shape that gets copied" reasoning this
+//     paragraph itself is proof of (see the safety_class/local_fallback_class
+//     paragraph above and STEP-9-SPEC review finding 9). outcome_state and
+//     outcome_reason follow the same schema change, below.
+//
+//     What this migration does NOT do: validate outcome_state against
+//     pkg/observation's State vocabulary, or outcome_reason against
+//     anything at all — matching every other "not validated by this
+//     package" precedent in this file. Presence, not vocabulary, is what
+//     was missing and is what is fixed.
 //
 //   - command_id is nullable TEXT (not TEXT NOT NULL DEFAULT ”, unlike
 //     e.g. node_declarations.last_discovery_run_id's empty-string
@@ -817,11 +863,20 @@ CREATE TABLE desired_state (
 //     interpretation, or worse, silently treat a failed lookup the same as
 //     command_id having been NULL all along.
 //
-//   - safety_class and local_fallback_class are TEXT NOT NULL DEFAULT ”
-//     (a caller must supply both non-empty, see createMacroRun's
-//     validation, but this migration itself does not constrain their
-//     vocabulary, matching integration/state's existing "not validated by
-//     this package" precedent below). STEP-9-SPEC.md §2.5, corrected
+//   - safety_class and local_fallback_class are TEXT NOT NULL, with NO
+//     DEFAULT (corrected 2026-08-14 by this step's own review, finding 9: a
+//     caller must supply both non-empty — see createMacroRun's validation —
+//     and the only INSERT this package ever issues against this table binds
+//     both columns explicitly, so a DEFAULT here was reachable by nothing;
+//     it was also the wrong shape to leave in place even though nothing
+//     could reach it, because "optional, defaults to the value the Go layer
+//     treats as an error" is exactly the copy-pasted-into-the-next-migration
+//     risk this package's schema comments exist to head off. This migration
+//     itself still does not constrain either column's VOCABULARY, matching
+//     integration/state's existing "not validated by this package"
+//     precedent below — only presence is enforced at the schema layer now,
+//     not the closed-enum membership STEP-9-SPEC.md §5.3/§5.4 define, which
+//     stays Wave 2's job.) STEP-9-SPEC.md §2.5, corrected
 //     2026-08-14, moved ADR-024 decision 11's audit exemption from a
 //     per-RUN property to a per-STEP one: the first draft made a run exempt
 //     if any step was, which let a `stopPlaylist` step launder an
@@ -881,14 +936,14 @@ CREATE TABLE macro_run_steps (
 	action_object_id      TEXT NOT NULL,
 	action_revision       INTEGER NOT NULL,
 	integration           TEXT NOT NULL,
-	safety_class          TEXT NOT NULL DEFAULT '',
-	local_fallback_class  TEXT NOT NULL DEFAULT '',
+	safety_class          TEXT NOT NULL,
+	local_fallback_class  TEXT NOT NULL,
 	state                 TEXT NOT NULL,
 	dispatched_at         TEXT,
 	resolved_at           TEXT,
 	outcome               TEXT NOT NULL DEFAULT '',
-	outcome_state         TEXT NOT NULL DEFAULT '',
-	outcome_reason        TEXT NOT NULL DEFAULT '',
+	outcome_state         TEXT NOT NULL,
+	outcome_reason        TEXT NOT NULL,
 	command_id            TEXT,
 	attribution_degraded  INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (run_id, step_index)

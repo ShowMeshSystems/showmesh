@@ -275,9 +275,14 @@ const (
 // FPPCommandSafetyClassForAction reports action's declared ADR-024
 // decision 11 safety class, without exposing [fppCommandPrimitives] (the
 // private registry) itself. This is what Step 9's macro executor needs for
-// ADR-031 decision 5 ("a macro run's audit safety class is the weakest of
-// its steps'"): computing that rule requires knowing each step's own class
-// before any step dispatches, which means BEFORE calling
+// ADR-031 decision 5 as accepted: "A step's own action decides whether
+// that step is exempt." The exemption is evaluated per step, not per run:
+// decision 5's own record quotes and rejects a draft that made a run
+// exempt if any one step was ("a stop step becomes a laundering
+// mechanism"), so a caller uses this function once per step, at that
+// step's own dispatch decision, never aggregated across a run to produce
+// one run-wide class. Computing a step's class requires knowing it before
+// that step dispatches, which means BEFORE calling
 // [FPPCommandDispatcher.Dispatch] at all — a fact [FPPCommandOutcome]
 // (a POST-dispatch result) cannot supply. ok is false when action is not
 // one of this coordinator's registered wire actions, mirroring
@@ -326,14 +331,33 @@ const (
 // [FPPCommandSafetyClassForAction] reports it for: action names no
 // registered primitive.
 //
-// Every primitive registered today is either
-// [FPPCommandDecision11ClassNone] or [FPPCommandDecision11ClassStop] -
-// see [fppSafetyClass]'s own doc comment in fppcommand_primitives.go,
-// "decision 11's own named 'stop', and nothing else" - so this function
-// never returns Blackout or PowerOff for an FPP action; it still asks the
-// registry rather than hardcoding that fact, so a primitive registered
-// against a different member later is reported correctly without this
-// function changing.
+// This function can only ever return [FPPCommandDecision11ClassNone] or
+// [FPPCommandDecision11ClassStop] for an FPP action, never Blackout or
+// PowerOff. That is NOT a fact about the registry data this function
+// happens to read today; it is a hard limit of the private
+// [fppSafetyClass] type underneath it, which has only two meaningful
+// members (exempt, not-exempt) and has no way to represent a third or
+// fourth decision-11 class. Registering a future primitive against a
+// different member does not make this function report it correctly: no
+// such member exists to register against.
+//
+// So: before any FPP primitive whose true decision-11 class is blackout
+// or power-off is added (a matrix blackout primitive, say), widen
+// [fppSafetyClass] to decision 11's full four-member vocabulary first,
+// and update every place that switches on it, including this function and
+// [FPPCommandSafetyClassForAction]. Registering such a primitive against
+// fppSafetyClassExempt as a stand-in, without doing that widening, makes
+// this function silently report it as "stop": STEP-9-SPEC.md section
+// 5.3's write-time agreement check then rejects any show.action correctly
+// declaring "blackout" for it, and the remedy that rejection implies
+// (declare "stop" instead) puts a wrong safety class into configuration.
+//
+// That mistake does not depend on anyone reading this comment.
+// TestFPPCommandSafetyClassMembershipIsExactlyStopPlaylistPair walks every
+// registered primitive and fails if any primitive other than the two stops
+// is registered exempt, so the stand-in registration described above lands
+// as a red test rather than a silent misreport. This comment explains why
+// that test is failing; the test is what stops it shipping.
 func FPPCommandDecision11ClassForAction(action string) (class FPPCommandDecision11Class, ok bool) {
 	p, ok := fppPrimitivesByWireAction[action]
 	if !ok {
@@ -371,6 +395,16 @@ func FPPCommandDecision11Exempt(class FPPCommandDecision11Class) bool {
 // 5.4 requires at least one step per macro), and the honest answer to
 // "is every element of an empty set exempt" is yes, not a value chosen to
 // make an unreachable case convenient.
+//
+// This is the SUBMISSION-TIME posture check only, and it must never be
+// used to decide a per-step outcome once a run is already dispatching.
+// ADR-031 decision 5 as accepted makes the exemption a per-step property:
+// a refused non-exempt step fails and aborts the run, an exempt step
+// dispatches with degraded attribution recorded on that step. A caller
+// deciding a single step's outcome mid-run calls
+// [FPPCommandDecision11Exempt] on that step's own class directly and never
+// this function, which answers a question about the whole set of steps
+// and is only meaningful before the run has started.
 func FPPCommandAllStepsExempt(classes ...FPPCommandDecision11Class) bool {
 	for _, c := range classes {
 		if !FPPCommandDecision11Exempt(c) {
@@ -441,23 +475,29 @@ type FPPPollNudgeWindower interface {
 // step dispatched inside the collector's post-nudge rate-limit window gets
 // no nudge and falls back to the collector's ordinary ~15s poll cadence,
 // which can outrun that step's own confirmation deadline and report
-// "unconfirmed" for a command that worked. The executor's own use of this
-// is to hold a same-instance step back until `next` has passed rather than
-// dispatch into that window and hope the ordinary cadence is fast enough —
-// STEP-9-SPEC.md section 6.3 is explicit that "usually fits" is exactly
-// the shape of a test that passes whether or not the bug is present, and
-// the same reasoning applies to a macro step in production.
+// "unconfirmed" for a command that worked.
+//
+// This must NEVER be used to delay dispatch, and STEP-9-SPEC.md section
+// 6.3 (corrected 2026-08-14) replaces an earlier version of this section
+// that said otherwise. Holding a step back until the limiter window has
+// passed means delaying a show-affecting dispatch, potentially a stop,
+// potentially a blackout, by up to 2s per step so that its own telemetry
+// arrives sooner. That is monitoring impairing control, the exact
+// inversion of the rule the limiter's own doc comment cites as its reason
+// for existing. The executor dispatches every step immediately, with no
+// exception for this window, and uses the value this method returns only
+// to schedule its own confirmation read: when to look, never when to act.
 //
 // ok is false when the wired [Dependencies.Nudger] does not implement
-// [FPPPollNudgeWindower] — including [noFPPPollNudger], and any test
-// double built only against [FPPPollNudger] itself — or when instanceID
-// names a collector [internal/coordinator/collector.Runner.Add] was never
-// called for. Neither is an error: the caller has no information to act
-// on either way and must fall back to its own judgement (dispatch anyway,
-// or apply its own fixed wait), exactly like a [FPPPollNudger.NudgePoll]
-// call that returns false. This method does not itself call NudgePoll and
-// does not change the limiter's own state or policy — a purely read-only
-// query, added additively.
+// [FPPPollNudgeWindower], including [noFPPPollNudger] and any test double
+// built only against [FPPPollNudger] itself, or when instanceID names a
+// collector [internal/coordinator/collector.Runner.Add] was never called
+// for. Neither is an error: the caller has no information to act on
+// either way and must fall back to its own judgement for scheduling the
+// confirmation read (its own fixed wait, say), exactly like a
+// [FPPPollNudger.NudgePoll] call that returns false. This method does not
+// itself call NudgePoll and does not change the limiter's own state or
+// policy: a purely read-only query, added additively.
 func (d *FPPCommandDispatcher) NextNudgeAt(instanceID string) (t time.Time, ok bool) {
 	w, ok := d.h.deps.Nudger.(FPPPollNudgeWindower)
 	if !ok {
