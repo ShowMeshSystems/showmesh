@@ -1,5 +1,8 @@
 # Reference Installation
 
+> **A note on identifiers, added 2026-08-14.** This repository is public. Hostnames, IP addresses, account names and other values specific to the operator's network are **deliberately omitted** from this document, because none of them is needed to understand the topology and all of them are permanent once committed. What matters here is the *shape*: hardware classes, firmware versions, protocol behaviour, topic structure and cadences. Real addresses live in the deployment's own `.env` and in `docs/private/`, which is gitignored. **Do not reintroduce them**, and do not treat a redacted value as unknown: it is known, and it is simply not written down here.
+
+
 [Documentation index](README.md) · [Architecture specification](architecture/ARCHITECTURE.md) · [Research tracker](research/README.md)
 
 Status: Template — fill in with the actual reference show hardware and topology.
@@ -17,8 +20,8 @@ The architecture spec and every research test matrix refer to "the reference ins
 
 | Role | Hardware | OS / firmware | Software + version | Notes |
 |---|---|---|---|---|
-| FPP player (authoritative scheduler) | Raspberry Pi **3** Model B+ (`FPP-Main`, 192.168.133.159) | OS v2025-09 | FPP **9.4** (branch v9.4) | Probed live 2026-08-11. `multisync: true`. Was recorded as a Pi 4 B+ and "latest"; both were wrong, see the version note below |
-| FPP remotes (if any) | Kulp K16A-B on BeagleBone Black (`FPP-remote-01`, 192.168.133.70); Kulp K16-Max on PocketBeagle2 (`FPP-remote-04`, 192.168.133.61); Kulp K16-Pro (standby, not probed) | OS v2025-11 on both probed remotes | remote-01: **9.x-master-822-g56515e4d** (master branch, not a release); remote-04: 9.4 | K16-Max and K16A-B (eFuse variant, operator-confirmed) both have per-string current monitoring; K16-Pro is standby only, blade-fused, no current telemetry. **remote-01 runs master deliberately**: a bug hit during last year's display was fixed in master, and the operator chose not to move to a release mid-show while master was working |
+| FPP player (authoritative scheduler) | Raspberry Pi **3** Model B+ (`FPP-Main`) | OS v2025-09 | FPP **9.4** (branch v9.4) | Probed live 2026-08-11. `multisync: true`. Was recorded as a Pi 4 B+ and "latest"; both were wrong, see the version note below |
+| FPP remotes (if any) | Kulp K16A-B on BeagleBone Black (`FPP-remote-01`); Kulp K16-Max on PocketBeagle2 (`FPP-remote-04`); Kulp K16-Pro (standby, not probed) | OS v2025-11 on both probed remotes | remote-01: **9.x-master-822-g56515e4d** (master branch, not a release); remote-04: 9.4 | K16-Max and K16A-B (eFuse variant, operator-confirmed) both have per-string current monitoring; K16-Pro is standby only, blade-fused, no current telemetry. **remote-01 runs master deliberately**: a bug hit during last year's display was fixed in master, and the operator chose not to move to a release mid-show while master was working |
 | Sequencing workstation | MacBook Pro M1 Max | | xLights v - latest| |
 | Resolume host | Hackintosh may sawp to windows | | Arena v 7.23.2 | Arena license required for SMPTE input |
 | Media node candidates | Dell Micro 7040 i5 | Linux, probably| | |
@@ -44,7 +47,7 @@ The architecture spec and every research test matrix refer to "the reference ins
 
 The fleet already publishes to a broker, and it is **not** ShowMesh's. Probed read-only 2026-08-11.
 
-- **Broker:** `mqtt.bartos.media:1883` (192.168.140.181), the operator's existing home-automation broker. Anonymous subscribe is refused; FPP authenticates as the `ha_zigbee` account. This is a shared credential with publish rights, which is the ADR-021 exposure in concrete form.
+- **Broker:** the operator's existing home-automation broker on the standard MQTT port. Anonymous subscribe is refused; FPP authenticates as a **shared home-automation account that also holds publish rights**, which is the ADR-021 exposure in concrete form. The hostname, address and account name are deliberately not recorded here: see the note on identifiers at the top of this document.
 - **All three probed hosts report `MQTT: {configured: true, connected: true}`.** An earlier note recording `connected: false` for the player was a point-in-time observation and is superseded.
 - **Topic root** is `falcon/player/<HostName>/`. `MQTTPrefix` is unset on this fleet, so there is no additional prefix segment — but nothing may assume that, since the setting exists and is per host.
 - **Per-host topics:** `fppd_status`, `port_status`, `warnings`, `version`, `branch`, `status`, `ready`, `playlist_details`, `playlist/{position,repeat,sectionPosition,media}/status`, `playlist/sequence/{status,secondsTotal}`, and `ha/sensor/<Name>/{config,state}` for Home Assistant discovery.

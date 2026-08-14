@@ -403,8 +403,7 @@ From the crash log in §3.8: `fppd` publishes each executed command to its own
 `command/run` topic, including commands that arrived over REST, tagged
 `"trigger":"api-get"`.
 
-The deployed fleet publishes to `mqtt.bartos.media`, the operator's live
-home-automation broker, and `falcon/player/<host>/command/run` is a topic FPP
+The deployed fleet publishes to the operator's live home-automation broker, and `falcon/player/<host>/command/run` is a topic FPP
 *acts on*. A ShowMesh command sent to a deployed host would appear on the
 operator's live broker as a command message. The standing rule — bench only, never
 the fleet — is unchanged, and this is one more mechanism by which breaking it would
