@@ -173,9 +173,16 @@ function buildPayload(form: FormState): { payload: ConfigShowAction } | { error:
     if (!Number.isInteger(deadline) || deadline <= 0 || deadline > 120) {
       return { error: 'Deadline must be a whole number of seconds from 1 to 120.' }
     }
-    if (form.expectKind === 'match' && form.expectValue.trim() === '') {
-      return { error: 'A "match" response requires the exact value to match.' }
-    }
+    // This task's finding 4: the server (decodeMQTTExpect,
+    // internal/coordinator/config/showaction.go) requires "match"'s value
+    // KEY to be present but explicitly allows it to be an empty string
+    // (decodeRequiredStringAllowEmpty — matching against an empty payload
+    // is a real, valid target). A client-side refusal of an empty match
+    // value was stricter than the server it is supposed to only MIRROR
+    // (ADR-030), and it made a stored revision with "" as its match value
+    // — which the server had already accepted once — impossible to
+    // re-save unchanged. Removed rather than narrowed: there is no client
+    // check left to make here that the server does not already make.
   }
   return {
     payload: {
@@ -201,9 +208,22 @@ function buildPayload(form: FormState): { payload: ConfigShowAction } | { error:
                 // Same `exactOptionalPropertyTypes` rule as `params`
                 // above: omit `value` entirely rather than set it to
                 // `undefined` when this response kind carries none.
-                ...((form.expectKind === 'match' || form.expectKind === 'number') && form.expectValue !== ''
+                //
+                // "match" and "number" are NOT symmetric here (this
+                // task's finding 4): the server requires "match"'s value
+                // KEY present always, even when it is the empty string —
+                // an empty match target is a real, distinct, valid value,
+                // not a stand-in for "no value" (decodeMQTTExpect,
+                // internal/coordinator/config/showaction.go, via
+                // decodeRequiredStringAllowEmpty). "number"'s value stays
+                // genuinely optional (an omitted key means "accept receipt
+                // with no equality check" server-side), so it is still
+                // sent only when the operator actually typed one.
+                ...(form.expectKind === 'match'
                   ? { value: form.expectValue }
-                  : {}),
+                  : form.expectKind === 'number' && form.expectValue !== ''
+                    ? { value: form.expectValue }
+                    : {}),
                 deadlineSeconds: Number(form.expectDeadlineSeconds),
               },
       },

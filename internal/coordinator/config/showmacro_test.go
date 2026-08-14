@@ -357,3 +357,19 @@ func TestDecodeShowMacroPayloadStepsNullRejected(t *testing.T) {
 		t.Fatalf("expected steps-null error, got %+v", verr)
 	}
 }
+
+// TestDecodeShowMacroPayloadUnknownTopLevelKeyRejected is the defect a
+// second review found: before rejectUnknownTopLevelKeys existed, a typo of
+// a real key — most dangerously one with a default, like "onFailur" one
+// level down inside a step — was silently ignored rather than reported,
+// so the coordinator stored a DIFFERENT policy than the operator typed
+// with no error at all. This proves the top-level sweep specifically (a
+// typo of "steps" itself, "step" singular), which decodeTopLevelObject's
+// own new caller runs before any per-field decode.
+func TestDecodeShowMacroPayloadUnknownTopLevelKeyRejected(t *testing.T) {
+	raw := `{"show": "halloween-2026", "label": "x", "step": [` + validMacroStepJSON("s1", "a1", "") + `]}`
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
+		t.Fatalf("expected field-unknown-key error for typo'd \"step\", got %+v", verr)
+	}
+}

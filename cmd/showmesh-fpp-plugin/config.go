@@ -9,16 +9,168 @@ import (
 	"strings"
 )
 
-// defaultConfigDir is the pinned on-host path this plugin's packaging
-// repo and this binary agree on, used only when neither --config-dir,
-// $SHOWMESH_FPP_PLUGIN_CONFIG_DIR, nor $MEDIADIR (see resolveConfigDir)
-// says otherwise. Overridable so the bench never needs to run as the fpp
-// user or write under /home/fpp.
-const defaultConfigDir = "/home/fpp/media/config/plugin.fpp-showmesh"
+// credentialDir is the FIXED, non-configurable directory the credential
+// lives in. Never a flag, never an environment variable — see doc.go's
+// "the credential" section for why this is not merely a preference.
+//
+// It is deliberately NOT under FPP's own config directory
+// (/home/fpp/media/config), and deliberately NOT under $MEDIADIR at all.
+// The coordinator verified against the running bench FPP's own PHP source
+// that dispatch_get('/configfile/**', 'DownloadConfigFile') resolves a
+// URL-supplied filename against FPP's config directory with no allowlist,
+// unauthenticated, and that dispatch_post on the same route creates
+// subdirectories from a path containing a slash — so anything under
+// FPP's config tree is both readable and WRITABLE by anyone who can reach
+// the FPP host's HTTP port, which includes overwriting this program's own
+// credential or forging status.json, the file whose entire purpose is to
+// be an honest local record. /etc/showmesh-fpp-plugin is outside FPP's
+// web root, outside the media tree entirely, outside the plugin's own git
+// checkout (and therefore outside `git clean -fd`, which FPP 9.x runs as
+// an upgrade fallback and would otherwise delete an untracked credential),
+// and outside FPP's backup download, whose redaction is an exact
+// key-name match list that a file named "credential" is not on.
+const credentialDir = "/etc/showmesh-fpp-plugin"
 
-// configDirUnderMediaSuffix is appended to $MEDIADIR to build this
-// plugin's config directory when FPP itself supplies that variable.
-const configDirUnderMediaSuffix = "config/plugin.fpp-showmesh"
+// credentialDirOverride exists ONLY for this package's own tests. It is
+// never read from a flag, an environment variable, or any file, and
+// nothing in main.go or run.go ever sets it — it can only be assigned by
+// a _test.go file in this same package, which is the only thing able to
+// see an unexported package-level variable. This is a deliberate choice
+// over adding an operator-facing override: the coordinator's own
+// instruction was "prefer not to, since a configurable credential path is
+// one more way to aim it somewhere world readable" — a Go test seam
+// carries none of that risk, because there is no runtime input that can
+// ever set it in a shipped binary.
+var credentialDirOverride string
+
+// resolveCredentialDir returns credentialDirOverride when a test has set
+// it, or the fixed credentialDir otherwise. Never consults a flag or the
+// environment.
+func resolveCredentialDir() string {
+	if credentialDirOverride != "" {
+		return credentialDirOverride
+	}
+	return credentialDir
+}
+
+// requiredCredentialDirMode is the mode the credential directory itself
+// should carry: owner read/write/execute only, nothing else. Unlike
+// requiredCredentialMode (the FILE's mode, which refuses to run on any
+// mismatch — see loadCredential), a directory mode mismatch is repaired
+// in place rather than treated as a reason to refuse. The coordinator's
+// own reasoning, recorded here because it corrects the obvious version:
+// if the directory is already group- or world-readable, the token is
+// already exposed, and refusing to run does not un-expose it — it only
+// also stops the show, which is the wrong direction for a project that
+// degrades toward the show continuing everywhere else. A wrong FILE mode
+// is a strong signal the file is not the one this program's own
+// installer wrote, and there IS a correct action available for a
+// directory (fix it in place), which is not true of a file whose
+// contents might not even be a real credential.
+//
+// This repair is affordable specifically because credentialDir is
+// /etc/showmesh-fpp-plugin, on the root filesystem. FPP's own media
+// directory can live on a USB stick, and on some vfat/exFAT mounts chmod
+// reports success while the actual permissions come from mount options
+// rather than per-file bits — a case this program's state directory
+// (under $MEDIADIR) deliberately does NOT attempt this kind of repair
+// for, because a strict or repair-and-trust check there would turn an
+// install-time storage choice into a showtime failure. /etc is not that
+// kind of filesystem, which is exactly why moving the credential there
+// (see credentialDir's own doc comment) also made this repair trustworthy.
+const requiredCredentialDirMode = 0o700
+
+// credentialDirCheck is what ensureCredentialDirMode found and did, for
+// the caller to fold into the local status record and stderr — a repair
+// (successful or not) is a real event and must never be silent, per the
+// coordinator's own instruction.
+type credentialDirCheck struct {
+	// Checked is false when the directory could not even be stat'd (most
+	// commonly: it does not exist yet). loadCredential's own error is the
+	// operator-facing signal for that case; this struct says nothing more
+	// about it.
+	Checked bool
+	// OK is true when the directory's mode was already correct, or a
+	// repair fixed it.
+	OK bool
+	// Repaired is true only when a chmod was attempted AND a re-stat
+	// afterward confirmed the mode was actually fixed.
+	Repaired bool
+	// FoundMode and WantMode are populated whenever a mismatch was
+	// observed, whether or not the repair succeeded.
+	FoundMode os.FileMode
+	WantMode  os.FileMode
+	// RepairErr is set when a chmod was attempted and either failed
+	// outright or a re-stat afterward still showed the wrong mode.
+	RepairErr error
+}
+
+// Note reports what happened as one operator-facing sentence, or empty
+// when there is nothing worth recording (already correct, or the
+// directory could not be checked at all).
+func (c credentialDirCheck) Note() string {
+	switch {
+	case !c.Checked || c.OK && !c.Repaired:
+		return ""
+	case c.Repaired:
+		return fmt.Sprintf("the credential directory %s had mode %04o (wanted %04o); this program repaired it in place",
+			resolveCredentialDir(), c.FoundMode, c.WantMode)
+	default:
+		return fmt.Sprintf("the credential directory %s has mode %04o (wanted %04o) and this program's attempt to repair it FAILED (%v); proceeding with the run anyway, since refusing would not un-expose a credential that is already exposed",
+			resolveCredentialDir(), c.FoundMode, c.WantMode, c.RepairErr)
+	}
+}
+
+// ensureCredentialDirMode checks the credential directory's own mode and,
+// if it is not exactly requiredCredentialDirMode, attempts to repair it
+// with chmod and re-stats to confirm. It never returns an error a caller
+// is meant to refuse on — see credentialDirCheck's own doc comment and
+// requiredCredentialDirMode's reasoning for why a directory mode
+// mismatch is fixed in place rather than treated as a reason to stop.
+func ensureCredentialDirMode() credentialDirCheck {
+	dir := resolveCredentialDir()
+	info, err := os.Stat(dir)
+	if err != nil {
+		return credentialDirCheck{Checked: false}
+	}
+	mode := info.Mode().Perm()
+	if mode == requiredCredentialDirMode {
+		return credentialDirCheck{Checked: true, OK: true}
+	}
+
+	check := credentialDirCheck{Checked: true, FoundMode: mode, WantMode: requiredCredentialDirMode}
+	if err := os.Chmod(dir, requiredCredentialDirMode); err != nil {
+		check.RepairErr = fmt.Errorf("chmod %s to %04o: %w", dir, requiredCredentialDirMode, err)
+		return check
+	}
+	info2, err := os.Stat(dir)
+	if err != nil {
+		check.RepairErr = fmt.Errorf("re-checking %s after chmod: %w", dir, err)
+		return check
+	}
+	if got := info2.Mode().Perm(); got != requiredCredentialDirMode {
+		check.RepairErr = fmt.Errorf("chmod %s reported success but its mode is still %04o", dir, got)
+		return check
+	}
+	check.OK = true
+	check.Repaired = true
+	return check
+}
+
+// defaultStateDir is the pinned on-host path for everything EXCEPT the
+// credential (config.json, status.json, failures.json, macro-cache.json),
+// used only when neither --config-dir, $SHOWMESH_FPP_PLUGIN_CONFIG_DIR,
+// nor $MEDIADIR (see resolveConfigDir) says otherwise. Unlike the
+// credential, these files carry no secret — a run's outcome, a macro id,
+// a coordinator URL, buffered failure records — and FPP's own convention
+// for exactly this shape of thing is a plugin's own directory under
+// plugindata, which the coordinator confirmed both exists on the bench
+// image and is not served by any FPP API route (unlike config).
+const defaultStateDir = "/home/fpp/media/plugindata/fpp-showmesh"
+
+// stateDirUnderMediaSuffix is appended to $MEDIADIR to build this
+// plugin's state directory when FPP itself supplies that variable.
+const stateDirUnderMediaSuffix = "plugindata/fpp-showmesh"
 
 // requiredCredentialMode is the exact permission bits the credential file
 // must carry. Exact, not "no more permissive than": a file this program
@@ -32,8 +184,11 @@ const configDirUnderMediaSuffix = "config/plugin.fpp-showmesh"
 const requiredCredentialMode = 0o600
 
 // resolveConfigDir applies the precedence flag > $SHOWMESH_FPP_PLUGIN_CONFIG_DIR
-// > $MEDIADIR-derived > pinned literal default. flagValue is empty when
-// --config-dir was not passed.
+// > $MEDIADIR-derived > pinned literal default, for the STATE directory
+// only (config.json, status.json, failures.json, macro-cache.json). It
+// has no bearing on the credential, which resolveCredentialDir resolves
+// independently and never by flag or environment — see that function and
+// doc.go.
 //
 // $MEDIADIR sits ahead of the pinned literal specifically because it is
 // what FPP itself hands this program, not a guess about where FPP put its
@@ -53,24 +208,30 @@ func resolveConfigDir(flagValue string) string {
 		return v
 	}
 	if mediaDir := os.Getenv("MEDIADIR"); mediaDir != "" {
-		return filepath.Join(mediaDir, configDirUnderMediaSuffix)
+		return filepath.Join(mediaDir, stateDirUnderMediaSuffix)
 	}
-	return defaultConfigDir
+	return defaultStateDir
 }
 
-func credentialPath(configDir string) string        { return filepath.Join(configDir, "credential") }
-func coordinatorConfigPath(configDir string) string { return filepath.Join(configDir, "config.json") }
-func statusPath(configDir string) string            { return filepath.Join(configDir, "status.json") }
-func failureBufferPath(configDir string) string     { return filepath.Join(configDir, "failures.json") }
-func macroCachePath(configDir string) string        { return filepath.Join(configDir, "macro-cache.json") }
+// credentialPath is under resolveCredentialDir(), never under the state
+// directory resolveConfigDir() returns. The two are intentionally
+// separate function families (this one takes no argument at all) so a
+// future edit cannot accidentally pass a state directory in here by
+// following the pattern of the other four path helpers below.
+func credentialPath() string { return filepath.Join(resolveCredentialDir(), "credential") }
 
-// loadCredential reads the bearer token from <config-dir>/credential and
+func coordinatorConfigPath(stateDir string) string { return filepath.Join(stateDir, "config.json") }
+func statusPath(stateDir string) string            { return filepath.Join(stateDir, "status.json") }
+func failureBufferPath(stateDir string) string     { return filepath.Join(stateDir, "failures.json") }
+func macroCachePath(stateDir string) string        { return filepath.Join(stateDir, "macro-cache.json") }
+
+// loadCredential reads the bearer token from credentialPath() and
 // enforces the mode-0600 rule. The token is never logged, never included
 // in an error message, and never returned alongside a nil error unless the
 // mode check passed — a caller cannot accidentally use a token from a file
 // this function did not first verify.
-func loadCredential(configDir string) (string, error) {
-	path := credentialPath(configDir)
+func loadCredential() (string, error) {
+	path := credentialPath()
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -99,7 +260,7 @@ func loadCredential(configDir string) (string, error) {
 	return token, nil
 }
 
-// pluginConfig is the decoded body of <config-dir>/config.json.
+// pluginConfig is the decoded body of <state-dir>/config.json.
 // CoordinatorURL absent, present-and-empty, and present-and-null are three
 // distinct decode outcomes: only a present, non-empty, well-formed
 // http(s) URL is accepted, so a builder cannot accidentally treat a
@@ -110,10 +271,10 @@ type pluginConfig struct {
 	CoordinatorURL *string `json:"coordinatorUrl"`
 }
 
-// loadCoordinatorURL reads and validates <config-dir>/config.json,
+// loadCoordinatorURL reads and validates <state-dir>/config.json,
 // returning the parsed base URL.
-func loadCoordinatorURL(configDir string) (*url.URL, error) {
-	path := coordinatorConfigPath(configDir)
+func loadCoordinatorURL(stateDir string) (*url.URL, error) {
+	path := coordinatorConfigPath(stateDir)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

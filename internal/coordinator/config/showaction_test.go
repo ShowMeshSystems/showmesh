@@ -117,7 +117,7 @@ func TestDecodeShowActionPayloadMQTTValidKinds(t *testing.T) {
 		{"none", `{"kind": "none"}`},
 		{"boolean", `{"kind": "boolean", "topic": "home/projectors/state", "deadlineSeconds": 30}`},
 		{"number", `{"kind": "number", "topic": "home/projectors/state", "deadlineSeconds": 30}`},
-		{"number-with-value", `{"kind": "number", "topic": "home/projectors/state", "value": 1, "deadlineSeconds": 30}`},
+		{"number-with-value", `{"kind": "number", "topic": "home/projectors/state", "value": "1", "deadlineSeconds": 30}`},
 		{"text", `{"kind": "text", "topic": "home/projectors/state", "deadlineSeconds": 30}`},
 		{"match", `{"kind": "match", "topic": "home/projectors/state", "value": "on", "deadlineSeconds": 30}`},
 	}
@@ -485,11 +485,114 @@ func TestDecodeShowActionPayloadMQTTExpectValueRulesPerKind(t *testing.T) {
 			t.Fatalf("expected value-invalid error for a non-numeric number value, got %+v", verr)
 		}
 	})
+	// number-value-accepts-numeric-string and
+	// number-value-rejects-bare-json-number-literal are the round-trip
+	// defect this pair exists to lock in (found by review after this file
+	// first shipped): EncodeShowActionPayload always emits value as a
+	// quoted JSON string (ShowActionMQTTExpect.Value is a Go string), so a
+	// decoder that instead required a bare JSON number for kind "number"
+	// rejected its own read output on re-save. value now has exactly one
+	// wire representation for kind "number" — a JSON string that parses
+	// as a number — matching kind "match" and matching what a GET
+	// returns, in both directions.
+	t.Run("number-value-accepts-numeric-string", func(t *testing.T) {
+		p, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": "42", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
+		if verr != nil {
+			t.Fatalf("expected a numeric JSON string to be accepted for kind \"number\", got %+v", verr)
+		}
+		if p.Target.Expect == nil || p.Target.Expect.Value == nil || *p.Target.Expect.Value != "42" {
+			t.Fatalf("expected value %q to be stored verbatim, got %+v", "42", p.Target.Expect)
+		}
+	})
+	t.Run("number-value-rejects-bare-json-number-literal", func(t *testing.T) {
+		// Broken and confirmed to fail: before this fix, this exact body
+		// (an unquoted JSON number for kind "number") was the ONLY shape
+		// decodeMQTTExpect accepted, which is what made the read shape
+		// (always a quoted string) unusable as a write body. Restored
+		// afterward — see this builder's report.
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": 42, "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
+		if verr == nil || verr.Field != "target.expect.value" {
+			t.Fatalf("expected a bare JSON number literal to be rejected for kind \"number\" (value has exactly one wire representation), got %+v", verr)
+		}
+	})
+}
+
+// TestDecodeShowActionPayloadMQTTExpectValueRoundTrips is the property the
+// reviewer named directly: a GET followed by an unchanged PUT must
+// succeed. For every expect.kind that can carry a value ("number" and
+// "match"), decode a request, encode the result exactly as a stored
+// revision would, and decode that encoded JSON again unchanged — the
+// second decode must succeed and must produce the identical Value. This
+// is a plain Go-level version of the same property
+// TestPutShowActionGetThenPutRoundTrips (internal/coordinator/api) proves
+// against the real HTTP handler.
+func TestDecodeShowActionPayloadMQTTExpectValueRoundTrips(t *testing.T) {
+	mk := func(expect string) string {
+		return `{"show": "halloween-2026", "label": "x", "safetyClass": "none", "target": {
+			"integration": "mqtt", "broker": "home-automation",
+			"publish": {"topic": "t", "payload": "ON", "qos": 1},
+			"expect": ` + expect + `
+		}}`
+	}
+	cases := []struct {
+		name   string
+		expect string
+	}{
+		{"number-with-integer-text", `{"kind": "number", "topic": "t2", "value": "42", "deadlineSeconds": 10}`},
+		{"number-with-decimal-text", `{"kind": "number", "topic": "t2", "value": "4.2e1", "deadlineSeconds": 10}`},
+		{"number-without-value", `{"kind": "number", "topic": "t2", "deadlineSeconds": 10}`},
+		{"match-with-value", `{"kind": "match", "topic": "t2", "value": "on", "deadlineSeconds": 10}`},
+		{"match-with-empty-value", `{"kind": "match", "topic": "t2", "value": "", "deadlineSeconds": 10}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			first, verr := DecodeShowActionPayload(mk(tc.expect), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
+			if verr != nil {
+				t.Fatalf("first decode: unexpected error: %+v", verr)
+			}
+			raw, err := EncodeShowActionPayload(first)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			second, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
+			if verr != nil {
+				t.Fatalf("re-decoding the encoded (read) shape unchanged: unexpected error: %+v\nencoded: %s", verr, raw)
+			}
+			firstV, secondV := first.Target.Expect.Value, second.Target.Expect.Value
+			switch {
+			case firstV == nil && secondV == nil:
+				// both absent — fine (kind "number" with no value).
+			case firstV == nil || secondV == nil:
+				t.Fatalf("value presence did not round-trip: first=%v second=%v", firstV, secondV)
+			case *firstV != *secondV:
+				t.Fatalf("value did not round-trip byte-identical: first=%q second=%q", *firstV, *secondV)
+			}
+		})
+	}
 }
 
 func TestDecodeShowActionPayloadBodyInvalid(t *testing.T) {
 	_, verr := DecodeShowActionPayload("not json", testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
 	if verr == nil || verr.Code != ValidationCodeBodyInvalid {
 		t.Fatalf("expected body-invalid error, got %+v", verr)
+	}
+}
+
+// TestDecodeShowActionPayloadUnknownTopLevelKeyRejected is the defect a
+// second review found, proved concretely rather than abstractly: before
+// rejectUnknownTopLevelKeys existed, this exact body — "descriptio"
+// (missing the trailing "n") instead of "description" — decoded
+// successfully with description silently left at its default (empty), so
+// the operator's typed description was silently discarded with no error
+// at all. Silent defaulting on a typo is worse than outright rejection or
+// outright ignoring, because the operator has no signal anything is
+// wrong. Now rejected instead.
+func TestDecodeShowActionPayloadUnknownTopLevelKeyRejected(t *testing.T) {
+	raw := `{"show": "halloween-2026", "label": "x", "descriptio": "oops", "safetyClass": "none", "target": {
+		"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"
+	}}`
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry())
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
+		t.Fatalf("expected field-unknown-key error for typo'd \"descriptio\", got %+v", verr)
 	}
 }

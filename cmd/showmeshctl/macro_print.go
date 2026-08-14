@@ -117,19 +117,31 @@ func printMacroRunsTable(w io.Writer, resp macroRunsListResponse) {
 // confirmed. Mirrors format.go's stateGlyph/scopesStateGlyph convention of
 // making the non-clean case visually loud rather than a bare lowercase
 // word blending into the column.
+//
+// A finished run whose Completed or Confirmed pointer is nil is its own,
+// FOURTH case, deliberately never folded into "ABORTED": collapsing "the
+// coordinator did not report this" into a definite negative would assert
+// something absent evidence never claimed (this project's own recurring
+// rule — absence of evidence is not evidence of absence). A prior version
+// of this function computed `c := completed != nil && *completed`, which
+// silently read a nil pointer as false and rendered a run the coordinator
+// never actually reported as aborted as an outright ABORT, even though the
+// exit-code sibling of this function (exitCodeForMacroRun) already treated
+// nil specially and refused to guess. See exitCodeForMacroRun's own doc
+// comment for the matching exit-code case.
 func macroRunOutcomeGlyph(state string, completed, confirmed *bool, reason string) string {
 	if state != "finished" {
 		return "running"
 	}
-	c := completed != nil && *completed
-	k := confirmed != nil && *confirmed
 	var label string
 	switch {
-	case c && k:
+	case completed == nil || confirmed == nil:
+		label = "OUTCOME NOT REPORTED"
+	case *completed && *confirmed:
 		return "confirmed"
-	case c && !k:
+	case *completed && !*confirmed:
 		label = "COMPLETED, NOT CONFIRMED"
-	case !c:
+	case !*completed:
 		label = "ABORTED"
 	}
 	if reason != "" {
@@ -155,11 +167,67 @@ func printMacroRunDetail(w io.Writer, run macroRun) {
 	}
 	_, _ = fmt.Fprintf(w, "\nSteps (%d):\n", len(run.Steps))
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "  #\tID\tSTATE\tOUTCOME\tREASON")
+	_, _ = fmt.Fprintln(tw, "  #\tID\tSTATE\tOUTCOME\tOUTCOME STATE\tREASON")
 	for _, st := range run.Steps {
-		_, _ = fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\n", st.StepIndex, st.StepID, st.State, st.Outcome, st.OutcomeReason)
+		_, _ = fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\t%s\n", st.StepIndex, st.StepID, st.State, st.Outcome, st.OutcomeState, st.OutcomeReason)
 	}
 	_ = tw.Flush()
+
+	// Each step's own command evidence (macroRunStepCommand: state/id/
+	// reason, plus the dispatched fppCommandResult detail when retained)
+	// is decoded off the wire and, until this fix, discarded before
+	// reaching the operator — indistinguishable in the text renderer from
+	// evidence that was never sent at all, which is exactly what this
+	// API's "absent evidence is stated, never omitted" rule forbids. See
+	// printMacroRunStepCommand.
+	for _, st := range run.Steps {
+		printMacroRunStepCommand(w, st)
+	}
+}
+
+// printMacroRunStepCommand renders one step's macroRunStepCommand.State:
+// "none" (an MQTT step, or an FPP step that never dispatched), "retained"
+// (a dispatched FPP command whose row still exists), or "not_retained"
+// (dispatched, but the commands row has since been pruned by retention —
+// STEP-9-SPEC.md section 6.1: the step's own Outcome/OutcomeState/
+// OutcomeReason above are unaffected by pruning; only this per-command
+// detail can go missing). An operator reading only the steps table above
+// cannot tell "retained" from "not_retained" from "none" — they all just
+// look like a step that ran — so this is its own line per step rather than
+// folded into the table.
+func printMacroRunStepCommand(w io.Writer, st macroRunStep) {
+	cmd := st.Command
+	_, _ = fmt.Fprintf(w, "  step %d (%s) command: %s", st.StepIndex, st.StepID, macroRunStepCommandStateGlyph(cmd.State))
+	if cmd.ID != nil {
+		_, _ = fmt.Fprintf(w, " (id %s)", *cmd.ID)
+	}
+	if cmd.Reason != "" {
+		_, _ = fmt.Fprintf(w, ": %s", cmd.Reason)
+	}
+	_, _ = fmt.Fprintln(w)
+	if cmd.Detail != nil {
+		d := cmd.Detail
+		_, _ = fmt.Fprintf(w, "    dispatched %s on %s: outcome=%s state=%s reason=%s\n",
+			d.Action, d.InstanceID, d.Outcome, d.OutcomeState, d.OutcomeReason)
+	}
+}
+
+// macroRunStepCommandStateGlyph makes "not_retained" visually loud, the
+// same convention stateGlyph/healthGlyph/severityGlyph use elsewhere in
+// this package: it is the one state of the three that means "evidence
+// existed and is now gone", and must not read the same as "none" (no
+// evidence was ever expected) at a glance.
+func macroRunStepCommandStateGlyph(state string) string {
+	switch state {
+	case "none":
+		return "none"
+	case "retained":
+		return "retained"
+	case "not_retained":
+		return "NOT RETAINED"
+	default:
+		return "UNRECOGNIZED(" + state + ")"
+	}
 }
 
 // printMacroRunProgressLine is followMacroRun's own text-mode renderer: one

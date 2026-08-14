@@ -208,7 +208,13 @@ type MacroRunStepCommand struct {
 	Detail *FPPCommandResult `json:"detail,omitempty"`
 }
 
-// MacroRunStep is one element of [MacroRun.Steps].
+// MacroRunStep is one element of [MacroRun.Steps]. Outcome is a pointer:
+// null while State is "pending" (STEP-9-SPEC.md section 6.4's five-member
+// vocabulary describes a RESOLVED step's outcome; a step that has not
+// resolved yet has none to report, and reporting "" for that case reads
+// as a premature verdict the same way completed/confirmed being nullable
+// on [MacroRunSummary] exists to avoid — corrected by review, which found
+// the field published as a bare string with "" doing this same job).
 type MacroRunStep struct {
 	StepIndex           int                 `json:"stepIndex"`
 	StepID              string              `json:"stepId"`
@@ -220,7 +226,7 @@ type MacroRunStep struct {
 	State               string              `json:"state"`
 	DispatchedAt        *string             `json:"dispatchedAt"`
 	ResolvedAt          *string             `json:"resolvedAt"`
-	Outcome             string              `json:"outcome"`
+	Outcome             *string             `json:"outcome"`
 	OutcomeState        string              `json:"outcomeState"`
 	OutcomeReason       string              `json:"outcomeReason"`
 	AttributionDegraded bool                `json:"attributionDegraded"`

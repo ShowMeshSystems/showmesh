@@ -8,15 +8,22 @@ package macro
 // the one place that writes them, not at the store.
 
 // Step State values (store.MacroRunStepRecord.State): the step's own
-// dispatch lifecycle, mirroring commands.go's CommandRecord.State
-// ("dispatched"/"resolved") one level up, with two additions this
-// package's own control flow needs: "pending" (never touched yet) and
-// "skipped" (an abort left this step never attempted).
+// dispatch lifecycle. Three members, not the four commands.go's own
+// CommandRecord.State pattern might suggest: "pending" (never touched
+// yet), "resolved" (an outcome was recorded), and "skipped" (an abort
+// left this step never attempted). There is no "dispatched" intermediate
+// — persistStepOutcome's own comment (run.go) states why: dispatchStep
+// always returns a terminal result before this package writes anything,
+// so the first write a step ever gets IS its resolved state. A fourth
+// constant for "dispatched" existed here through wave 2 and wave 3 with
+// no caller and was removed by review (api/openapi.yaml published it as
+// a permanent enum member nothing produced, which ADR-020's "a client
+// ignores what it does not recognize" rule does not excuse — the
+// producer side must not publish a value it cannot emit).
 const (
-	stepStatePending    = "pending"
-	stepStateDispatched = "dispatched"
-	stepStateResolved   = "resolved"
-	stepStateSkipped    = "skipped"
+	stepStatePending  = "pending"
+	stepStateResolved = "resolved"
+	stepStateSkipped  = "skipped"
 )
 
 // Step Outcome values (store.MacroRunStepRecord.Outcome): STEP-9-SPEC.md

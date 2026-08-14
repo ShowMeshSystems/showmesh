@@ -248,12 +248,20 @@ func (h *handlers) mapMacroRun(ctx context.Context, run store.MacroRunRecord, st
 	return out
 }
 
+// mapMacroRunStep renders st onto the wire. Outcome uses nonEmptyStrPtr
+// (mapping.go), the same "" -> null helper used everywhere else in this
+// package an optional string must render null rather than blank: st.Outcome
+// is "" at the store layer for a step that has not resolved yet
+// (buildStepRecords, macro/resolve.go — this package has no store access
+// to that constant and reads its own value, "", identically), and
+// [v1.MacroRunStep.Outcome]'s own doc comment explains why the wire form
+// must be null, not "".
 func (h *handlers) mapMacroRunStep(ctx context.Context, st store.MacroRunStepRecord) v1.MacroRunStep {
 	return v1.MacroRunStep{
 		StepIndex: st.StepIndex, StepID: st.StepID, ActionObjectID: st.ActionObjectID, ActionRevision: st.ActionRevision,
 		Integration: st.Integration, SafetyClass: st.SafetyClass, LocalFallbackClass: st.LocalFallbackClass,
 		State: st.State, DispatchedAt: formatTimePtr(st.DispatchedAt), ResolvedAt: formatTimePtr(st.ResolvedAt),
-		Outcome: st.Outcome, OutcomeState: st.OutcomeState, OutcomeReason: st.OutcomeReason,
+		Outcome: nonEmptyStrPtr(st.Outcome), OutcomeState: st.OutcomeState, OutcomeReason: st.OutcomeReason,
 		AttributionDegraded: st.AttributionDegraded,
 		Command:             h.mapMacroRunStepCommand(ctx, st.CommandID, st.AttributionDegraded),
 	}

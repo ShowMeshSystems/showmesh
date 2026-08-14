@@ -8,8 +8,9 @@ import (
 )
 
 // statusSchemaVersion guards status.json's own shape so a future field
-// addition can tell an old record apart from a corrupt one.
-const statusSchemaVersion = 1
+// addition can tell an old record apart from a corrupt one. 2: added
+// CredentialDirNote.
+const statusSchemaVersion = 2
 
 // Attempt classes. classOK through classUnreachable are section 8.2's four
 // classes, exactly. classLocalError is this program's own addition for an
@@ -51,6 +52,15 @@ type statusRecord struct {
 	// copy_guard_test.go, which checks this package's own source for
 	// exactly that.
 	Message string `json:"message"`
+	// CredentialDirNote is set only when THIS attempt's startup check of
+	// the credential directory's own mode (config.go's
+	// ensureCredentialDirMode) found something worth recording: a repair,
+	// or a failed repair attempt. Empty on every attempt where the
+	// directory was already correct, or could not be checked at all —
+	// see credentialDirCheck.Note. This is independent of Class: a
+	// repair (or a failed one) is recorded alongside whatever this
+	// attempt's own outcome was, never in place of it.
+	CredentialDirNote string `json:"credentialDirNote,omitempty"`
 }
 
 func writeStatus(configDir string, rec statusRecord) error {
@@ -123,5 +133,8 @@ func cmdStatus(args []string, stdout, stderr io.Writer, _ func() time.Time) int 
 		_, _ = fmt.Fprintf(stdout, "run id:  %s\n", rec.RunID)
 	}
 	_, _ = fmt.Fprintf(stdout, "detail:  %s\n", rec.Message)
+	if rec.CredentialDirNote != "" {
+		_, _ = fmt.Fprintf(stdout, "note:    %s\n", rec.CredentialDirNote)
+	}
 	return exitOK
 }

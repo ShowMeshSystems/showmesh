@@ -30,7 +30,23 @@ const READ_SCOPES = ['show:macro:run', 'config:write']
  */
 const RUNNING_POLL_INTERVAL_MS = 3_000
 
-type LoadState = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; run: MacroRun }
+// This task's finding 5: `loaded` used to be "run", full stop — a failed
+// poll had nowhere to go but `error`, which REPLACED the entire rendered
+// run (outcome badges, step list, everything) with a bare error line
+// until the next tick happened to succeed. OPERATOR-UI section 7 is
+// explicit that a connectivity problem must "retain last known state
+// where it remains useful, show when that state was last updated,"
+// never erase it — and during a live show, this exact view is what an
+// operator is staring at when a poll blips. `loaded` now carries its own
+// `pollError`: non-null means the MOST RECENT refresh attempt failed, but
+// the `run`/`loadedAt` here are still the last one that succeeded, kept
+// exactly as they were rather than discarded. `error` (no `run` at all)
+// stays for the one case with nothing to retain: the very first fetch for
+// this runId failed.
+type LoadState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; run: MacroRun; loadedAt: number; pollError: string | null }
 
 export function MacroRunView() {
   const params = useParams<{ id: string; runId: string }>()
@@ -47,9 +63,16 @@ export function MacroRunView() {
     if (runId === undefined) return
     try {
       const resp = await getMacroRun(runId)
-      setState({ kind: 'loaded', run: resp.run })
+      setState({ kind: 'loaded', run: resp.run, loadedAt: Date.now(), pollError: null })
     } catch (err) {
-      setState({ kind: 'error', message: describeApiError(err) })
+      const message = describeApiError(err)
+      // Functional update, not a closure over `state`: this can fire from
+      // the polling interval below, arbitrarily long after this render.
+      // A run already on screen (`loaded`) keeps it, with the failure
+      // recorded alongside rather than instead of it; only a state with
+      // NOTHING to retain (`loading`, or an earlier `error`) has nowhere
+      // to go but `error`.
+      setState((prev) => (prev.kind === 'loaded' ? { ...prev, pollError: message } : { kind: 'error', message }))
     }
   }
 
@@ -98,7 +121,7 @@ export function MacroRunView() {
     )
   }
 
-  const run = state.run
+  const { run, loadedAt, pollError } = state
 
   return (
     <div>
@@ -107,6 +130,18 @@ export function MacroRunView() {
         <Link to={`/macros/${encodeURIComponent(run.macroObjectId)}`}>{run.macroObjectId}</Link>
         {' '}(revision {run.macroRevision})
       </h2>
+
+      {/* This task's finding 5: the failure signal is a banner, not a
+          replacement — the run below it is always what this browser last
+          successfully fetched, never blanked by a poll error alone. */}
+      {pollError !== null && (
+        <p className="panel panel--error" role="alert">
+          Could not refresh this run just now: {pollError} What is shown below is the last known
+          state, not necessarily current.
+        </p>
+      )}
+      <p className="text-muted">Last updated {formatAbsolute(new Date(loadedAt).toISOString())}.</p>
+
       <p className="text-muted">
         Started {formatAbsolute(run.createdAt)} by {run.issuerPrincipalName} ({run.trigger})
         {run.finishedAt !== null && <> — finished {formatAbsolute(run.finishedAt)}</>}

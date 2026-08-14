@@ -88,15 +88,25 @@ Commands:
   help            show this help
 
 Global flags (per-command; run "showmesh-fpp-plugin <command> --help"):
-  --config-dir <dir>   override this plugin's config directory. Resolved,
+  --config-dir <dir>   override this plugin's STATE directory (config.json,
+                        status.json, failures.json, macro-cache.json —
+                        never the credential, see below). Resolved,
                         highest priority first: this flag, then
                         $SHOWMESH_FPP_PLUGIN_CONFIG_DIR, then
-                        $MEDIADIR/config/plugin.fpp-showmesh when FPP has
-                        set $MEDIADIR (it does on every command this
-                        plugin registers), then
-                        /home/fpp/media/config/plugin.fpp-showmesh as a
-                        last resort.
+                        $MEDIADIR/plugindata/fpp-showmesh when FPP has set
+                        $MEDIADIR (it does on every command this plugin
+                        registers), then
+                        /home/fpp/media/plugindata/fpp-showmesh as a last
+                        resort.
   --output text|json   output format (default text)
+
+The credential (a bearer token) lives at a FIXED path,
+/etc/showmesh-fpp-plugin/credential, mode 0600 — not under --config-dir,
+not under $MEDIADIR, and not configurable by any flag or environment
+variable. This is deliberate: FPP's own config directory (where an
+earlier version of this plugin kept it) is served unauthenticated over
+FPP's own HTTP API with no allowlist, so a secret cannot live anywhere
+under it.
 
 Exit codes (a human's convenience only — FPP's own command path discards
 a script's exit status; the local status record is the real channel):

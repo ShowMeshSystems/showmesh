@@ -527,6 +527,7 @@ var showConfigValidationProblemTypes = map[string]string{
 	config.ValidationCodeStepsEmpty:            ProblemBaseURI + "show-config-steps-empty",
 	config.ValidationCodeStepsTooMany:          ProblemBaseURI + "show-config-steps-too-many",
 	config.ValidationCodeStepIDDuplicate:       ProblemBaseURI + "show-config-step-id-duplicate",
+	config.ValidationCodeFieldUnknownKey:       ProblemBaseURI + "show-config-field-unknown-key",
 }
 
 // mapValidationError renders verr as a v1.Problem whose Type names verr's

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,23 +14,52 @@ func fixtureMacroConfig(revision int, label string, steps ...configShowMacroStep
 	}
 }
 
+// wantNoCacheStatement reconstructs the EXACT text localPolicyStatement's
+// no-cache branch must render for macroID. Used for an exact-equality
+// assertion rather than a substring search, per the reviewer finding this
+// file was rewritten to answer: a mutation that hardcodes the
+// none-fallback's own plain-text sentence ("nothing runs locally if the
+// coordinator is unreachable" — localFallbackClassPlainText's own output
+// for "none") into the no-cache branch contains NEITHER the word
+// "unknown" NOR any of the three enum tokens the old guard searched for,
+// so a substring check for either one passes on that exact mutation. Only
+// an exact match on the real sentence — or, equivalently, asserting the
+// absence of any per-step line, which this file's tests also do — catches
+// it. See TestLocalPolicyStatementNoCache's own doc comment for the
+// mutation this was run against to confirm that.
+func wantNoCacheStatement(macroID string) string {
+	return fmt.Sprintf("local policy for macro %q is unknown: no successful authenticated read of this macro's definition has been cached on this host yet", macroID)
+}
+
+// TestLocalPolicyStatementNoCache asserts EXACT equality against the
+// real no-cache sentence (wantNoCacheStatement), not a substring search.
+// The previous version of this test searched for the three enum tokens
+// ("coordinator-required", "\"none\"", "silence") and separately for the
+// word "unknown", and BOTH checks silently passed when the no-cache
+// branch was replaced with the hardcoded default text section 8.1
+// forbids substituting ("nothing runs locally if the coordinator is
+// unreachable"): that sentence contains none of the enum tokens (it is
+// prose, not an enum value) and does not contain the word "unknown"
+// either. Verified by hand: temporarily replacing this function's
+// `return fmt.Sprintf(...)` in cache.go with
+// `return "nothing runs locally if the coordinator is unreachable"` and
+// rerunning this test turns it from passing to failing — confirmed, then
+// reverted.
 func TestLocalPolicyStatementNoCache(t *testing.T) {
 	dir := t.TempDir()
 	got := localPolicyStatement(dir, "unknown-macro", time.Now())
-	if !strings.Contains(got, "unknown-macro") {
-		t.Errorf("statement %q does not name the macro", got)
+	want := wantNoCacheStatement("unknown-macro")
+	if got != want {
+		t.Errorf("localPolicyStatement with no cache =\n\t%q\nwant exactly\n\t%q", got, want)
 	}
-	if !strings.Contains(got, "unknown") {
-		t.Errorf("statement %q does not say the policy is unknown", got)
-	}
-	// The critical property this test protects: with no cache, the
-	// statement must NEVER claim a specific class (none/coordinator-
-	// required/silence) for any step, because that would be inventing an
-	// answer the definition never gave this program a way to read.
-	for _, forbidden := range []string{"coordinator-required", "\"none\"", "silence"} {
-		if strings.Contains(got, forbidden) {
-			t.Errorf("statement %q names a specific local-fallback class with no cache present — this must never happen", got)
-		}
+	// Belt-and-braces structural check, independent of the exact wording
+	// above: a genuinely cached statement always renders at least one
+	// per-step line (see the step loop below, "\n  step %q: ..."),
+	// because a cache hit requires entry.Steps to be non-empty. The
+	// no-cache branch must never render one, regardless of what prose it
+	// uses.
+	if strings.Contains(got, "\n  step ") {
+		t.Errorf("no-cache statement contains a per-step line, which must never happen with nothing cached: %q", got)
 	}
 }
 
@@ -99,11 +129,9 @@ func TestLocalPolicyStatementDoesNotConfuseDifferentMacros(t *testing.T) {
 	}
 
 	got := localPolicyStatement(dir, "macro-b", now)
-	if strings.Contains(got, "silence") {
-		t.Errorf("statement for macro-b leaked macro-a's cached policy: %q", got)
-	}
-	if !strings.Contains(got, "unknown") {
-		t.Errorf("statement for an uncached macro-b should say unknown: %q", got)
+	want := wantNoCacheStatement("macro-b")
+	if got != want {
+		t.Errorf("statement for uncached macro-b =\n\t%q\nwant exactly\n\t%q (must not leak macro-a's cached policy)", got, want)
 	}
 }
 

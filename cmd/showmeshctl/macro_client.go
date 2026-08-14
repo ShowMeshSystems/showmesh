@@ -129,6 +129,19 @@ const (
 // not exist, 401/403 authorization) is different: that is not silence, it
 // is information, and is reported immediately rather than absorbed as
 // "no update yet".
+//
+// A CANCELLED ctx (Ctrl+C / SIGTERM, via signal.NotifyContext in
+// cmd_macro.go/cmd_run.go) is a THIRD case, distinct from both of the
+// above, and is checked before either: cancelling ctx aborts poll()'s
+// own in-flight request too, which classifyRequestError reports as
+// "could not reach coordinator" — indistinguishable, by error value alone,
+// from an actually dead coordinator. Printing that "temporarily unable to
+// reach the coordinator" note for an operator's own Ctrl+C would tell them
+// their coordinator just went unreachable at the exact moment they asked
+// this program to stop, which is false and alarming. So ctx.Err() is
+// checked FIRST: when it is non-nil, this loop prints nothing about the
+// poll's own error at all and falls straight through to the ctx.Done()
+// case below, which is where the actual clean exit (exitOK) already lives.
 func followMacroRun(ctx context.Context, c *client, g *globalFlags, cmdLabel, runID string, pollInterval, idleTimeout time.Duration, stdout, stderr io.Writer, clock func() time.Time) int {
 	readTimeout := effectiveMacroClientTimeout(g.timeout)
 	noteMacroTimeoutFloorIfRaised(stderr, cmdLabel, g.timeout, readTimeout)
@@ -150,15 +163,21 @@ func followMacroRun(ctx context.Context, c *client, g *globalFlags, cmdLabel, ru
 		run, err := poll()
 		now := clock()
 
-		if err == nil {
+		switch {
+		case err == nil:
 			deadline = now.Add(idleTimeout)
-			if rendered := renderMacroRunProgress(stdout, g, run); rendered != lastRendered {
-				lastRendered = rendered
-			}
+			lastRendered = renderMacroRunProgress(stdout, g, run, lastRendered)
 			if run.State == "finished" {
 				return exitCodeForMacroRun(run)
 			}
-		} else {
+
+		case ctx.Err() != nil:
+			// Ctrl+C/SIGTERM cancelled ctx, which is what made poll()
+			// fail — not a genuine transport problem. Say nothing here;
+			// the ctx.Done() case below is this loop's actual, silent,
+			// exitOK exit for this. See this function's own doc comment.
+
+		default:
 			var ce *cliError
 			if errors.As(err, &ce) && ce.code == exitUnreachable {
 				// A single dropped connection is silence, not an answer —
@@ -174,10 +193,7 @@ func followMacroRun(ctx context.Context, c *client, g *globalFlags, cmdLabel, ru
 		}
 
 		if now.After(deadline) {
-			_, _ = fmt.Fprintf(stdout,
-				"%s: no update on run %s in %s; this command stopped watching. The run may still be in progress "+
-					"or may already have finished — check with \"showmeshctl run show %s\".\n",
-				cmdLabel, runID, idleTimeout, runID)
+			printMacroRunFollowIdleNotice(stdout, g, cmdLabel, runID, idleTimeout)
 			return exitFollowStillWatching
 		}
 
@@ -189,18 +205,74 @@ func followMacroRun(ctx context.Context, c *client, g *globalFlags, cmdLabel, ru
 	}
 }
 
-// renderMacroRunProgress prints run's current state (JSON or text,
-// per --output) and returns a fingerprint string the caller can use to
-// avoid printing an unchanged state twice in text mode. JSON mode prints
-// one object per poll unconditionally (each is a complete, self-describing
-// snapshot a scripted consumer can line-diff itself) rather than trying to
-// suppress duplicates on its behalf.
-func renderMacroRunProgress(stdout io.Writer, g *globalFlags, run macroRun) string {
+// macroRunFollowIdleNotice is --output json's own shape for the terminal
+// "stopped watching" notice below — see printMacroRunFollowIdleNotice's
+// doc comment for why this exists as a distinct type rather than reusing
+// the text-mode sentence.
+type macroRunFollowIdleNotice struct {
+	Event       string `json:"event"`
+	RunID       string `json:"runId"`
+	IdleTimeout string `json:"idleTimeout"`
+	Message     string `json:"message"`
+}
+
+// printMacroRunFollowIdleNotice prints the "this command stopped
+// watching" terminal message that fires when followMacroRun's idle window
+// elapses. In --output json mode this is a JSON object on stdout, not the
+// human sentence: a "showmeshctl macro run --follow --output json <id> |
+// jq" pipeline is exactly the case STEP-9-SPEC.md section 9's whole
+// --follow design exists to keep clean, and a prose line landing on stdout
+// at the one moment this loop legitimately stops watching would break
+// that pipeline's JSON parsing at precisely the point a script most needs
+// a clean, parseable signal that watching ended without a definite
+// outcome.
+func printMacroRunFollowIdleNotice(stdout io.Writer, g *globalFlags, cmdLabel, runID string, idleTimeout time.Duration) {
+	msg := fmt.Sprintf(
+		"%s: no update on run %s in %s; this command stopped watching. The run may still be in progress "+
+			"or may already have finished — check with \"showmeshctl run show %s\".",
+		cmdLabel, runID, idleTimeout, runID)
 	if g.output == outputJSON {
-		_ = printJSON(stdout, run)
-		return ""
+		_ = printJSONCompact(stdout, macroRunFollowIdleNotice{
+			Event: "idleTimeout", RunID: runID, IdleTimeout: idleTimeout.String(), Message: msg,
+		})
+		return
+	}
+	_, _ = fmt.Fprintln(stdout, msg)
+}
+
+// renderMacroRunProgress prints run's current state (JSON or text, per
+// --output) and returns the fingerprint of what this call rendered, which
+// the caller feeds back in as lastRendered on the next poll.
+//
+// JSON mode prints one object per poll UNCONDITIONALLY — each is a
+// complete, self-describing snapshot a scripted consumer can line-diff
+// itself, per this function's own established doc comment — and uses
+// printJSONCompact (one line, no indent) rather than [printJSON]'s
+// multi-line pretty form: a follow stream is many objects concatenated
+// over time, and a multi-line encoding of each one is not line-diffable
+// at all, which was this function's own claim about itself and was false
+// until this fix.
+//
+// TEXT mode is genuinely deduplicated: run is rendered, and lastRendered
+// is updated, ONLY when its fingerprint differs from lastRendered passed
+// in. A prior version of this function always printed and returned a
+// fingerprint the CALLER then compared to its own separate lastRendered
+// variable and then did nothing with the result — an unchanging run
+// printed once per poll regardless, measured at 11 identical lines for 11
+// polls of one unchanging run (roughly 180 identical lines for a six
+// minute run at the shipped defaults). Text mode is deduplicated (unlike
+// JSON) because it exists for a human watching a terminal, who benefits
+// from silence meaning "nothing changed"; a scripted JSON consumer wants
+// the opposite — a steady heartbeat proving the loop is still alive.
+func renderMacroRunProgress(stdout io.Writer, g *globalFlags, run macroRun, lastRendered string) string {
+	if g.output == outputJSON {
+		_ = printJSONCompact(stdout, run)
+		return lastRendered
 	}
 	fp := macroRunFingerprint(run)
+	if fp == lastRendered {
+		return lastRendered
+	}
 	printMacroRunProgressLine(stdout, run)
 	return fp
 }
@@ -221,14 +293,33 @@ func macroRunFingerprint(run macroRun) string {
 // exitCodeForMacroRun maps a FINISHED run's own two booleans (STEP-9-SPEC.md
 // section 2.3) to this program's exit code convention. Callers must only
 // call this once run.State == "finished" — Completed/Confirmed are nil
-// before then (ADR-031 decision 3), and this function's own zero-value
-// reading of a nil pointer would otherwise silently report a still-running
-// run as an unqualified success.
+// while a run is still running (ADR-031 decision 3), and that "still
+// running" case is not this function's business at all.
+//
+// A FINISHED run whose Completed or Confirmed pointer is STILL nil is a
+// fourth, distinct case this function must not collapse into either
+// neighbor: reading a nil pointer's zero value as false would report
+// "the coordinator never told us" as the same outright failure exit
+// (exitMacroRunAborted) as a run the coordinator explicitly said aborted —
+// exactly the "absent evidence asserted as a negative" defect this
+// project's LESSONS.md keeps finding in new disguises. There is no exit
+// code of its own for "finished but the coordinator didn't say" (the task
+// this shipped under deliberately reuses one from the existing scheme
+// rather than adding a 13th): exitAPIError is chosen because it is this
+// program's own established catch-all for "a response this program
+// received and could parse, but does not trust to render a definite
+// verdict from" (see reportError's doc comment) — never exitOK, which
+// would silently report an unknown outcome as an unqualified success, and
+// never exitMacroRunAborted/exitCommandUnconfirmed, both of which assert a
+// SPECIFIC negative fact this run's response never actually stated.
 func exitCodeForMacroRun(run macroRun) int {
-	if run.Completed != nil && !*run.Completed {
+	if run.Completed == nil || run.Confirmed == nil {
+		return exitAPIError
+	}
+	if !*run.Completed {
 		return exitMacroRunAborted
 	}
-	if run.Confirmed != nil && !*run.Confirmed {
+	if !*run.Confirmed {
 		return exitCommandUnconfirmed
 	}
 	return exitOK

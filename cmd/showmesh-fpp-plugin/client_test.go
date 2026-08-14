@@ -200,3 +200,139 @@ func TestFetchMacroConfigNon2xxIsAnError(t *testing.T) {
 		t.Fatal("expected an error for a 403 response")
 	}
 }
+
+// TestSubmitMacroRunDoesNotDoubleEscapeMacroID is the regression guard for
+// a macro id containing characters that need escaping (a space, "&").
+// u.Path holds the DECODED path, and url.URL.String() escapes it when
+// serializing — pre-escaping macroID with url.PathEscape before assigning
+// into u.Path made String() escape the escape's own "%" characters a
+// second time, corrupting the id the server actually received. Uses a
+// real Go 1.22+ ServeMux {id} pattern and r.PathValue("id") — the same
+// mechanism the coordinator's real router uses — so this test fails the
+// same way a real double-escaped request would: not a transport error,
+// but the server receiving a WRONG id and (in production) answering 404
+// "unknown macro" for a macro id that was actually correct.
+func TestSubmitMacroRunDoesNotDoubleEscapeMacroID(t *testing.T) {
+	const macroID = "my macro & friends"
+	var gotID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/macros/{id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.PathValue("id")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(macroRunSubmitResponse{Run: macroRun{ID: "run-1", MacroObjectID: macroID, MacroRevision: 1}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	result := submitMacroRun(context.Background(), srv.Client(), mustParseURL(t, srv.URL), "tok", macroID,
+		createMacroRunRequest{IdempotencyKey: "k1", Trigger: "plugin"})
+
+	if gotID != macroID {
+		t.Fatalf("server received macro id %q, want the original %q untouched (double-escaping corrupts it)", gotID, macroID)
+	}
+	if result.Class != classOK {
+		t.Fatalf("class = %q, want %q (server saw id %q)", result.Class, classOK, gotID)
+	}
+}
+
+func TestFetchMacroConfigDoesNotDoubleEscapeMacroID(t *testing.T) {
+	const macroID = "my macro & friends"
+	var gotID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/config/show.macro/{id}", func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.PathValue("id")
+		_ = json.NewEncoder(w).Encode(showMacroConfigResponse{ID: macroID, Revision: 1})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if _, err := fetchMacroConfig(context.Background(), srv.Client(), mustParseURL(t, srv.URL), "tok", macroID); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != macroID {
+		t.Fatalf("server received macro id %q, want the original %q untouched", gotID, macroID)
+	}
+}
+
+// TestSubmitMacroRun2xxWithEmptyRunIDIsNotOK is the regression guard for
+// the finding proved with a fake coordinator answering "202 {}": a 2xx
+// status code is not itself confirmation, and this program's own doc
+// comment on submitMacroRun says as much — an empty run id decodes with
+// no error and previously reported class ok, printing "accepted as run
+// " with a blank id and flushing a pre-seeded refused buffer entry out
+// of existence for nothing.
+func TestSubmitMacroRun2xxWithEmptyRunIDIsNotOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	result := submitMacroRun(context.Background(), srv.Client(), mustParseURL(t, srv.URL), "tok", "my-macro",
+		createMacroRunRequest{IdempotencyKey: "k1", Trigger: "plugin"})
+
+	if result.Class == classOK {
+		t.Fatalf("class = %q for an empty-run-id 202 body, want anything but ok", result.Class)
+	}
+	if result.Run != nil {
+		t.Errorf("Run = %+v, want nil — an unconfirmed body must not be handed to a caller as though it were a real run", result.Run)
+	}
+}
+
+// TestSubmitMacroRun2xxWithMismatchedMacroIDIsNotOK is
+// TestSubmitMacroRun2xxWithEmptyRunIDIsNotOK's sibling: a 2xx body
+// naming a DIFFERENT macro than the one this call submitted is exactly
+// as unconfirmed as an empty run id, and for the identical reason —
+// nothing demonstrates that THIS request's macro actually ran.
+func TestSubmitMacroRun2xxWithMismatchedMacroIDIsNotOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(macroRunSubmitResponse{
+			Run: macroRun{ID: "run-1", MacroObjectID: "a-different-macro", MacroRevision: 1},
+		})
+	}))
+	defer srv.Close()
+
+	result := submitMacroRun(context.Background(), srv.Client(), mustParseURL(t, srv.URL), "tok", "my-macro",
+		createMacroRunRequest{IdempotencyKey: "k1", Trigger: "plugin"})
+
+	if result.Class == classOK {
+		t.Fatalf("class = %q for a mismatched-macro-id 202 body, want anything but ok", result.Class)
+	}
+}
+
+// TestSubmitMacroRunDoesNotFollowRedirects proves the finding: an unset
+// CheckRedirect turned this program's POST into a GET at the redirect
+// target, still carrying the Authorization header, and reported class ok
+// off whatever JSON the redirect target happened to serve — while the
+// macro named in the ORIGINAL request never ran anywhere. redirectHit
+// proves the redirect target was never even contacted once this
+// program's own client refuses to follow it.
+func TestSubmitMacroRunDoesNotFollowRedirects(t *testing.T) {
+	var redirectTargetHit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectTargetHit = true
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(macroRunSubmitResponse{Run: macroRun{ID: "run-1", MacroObjectID: "my-macro", MacroRevision: 1}})
+	}))
+	defer target.Close()
+
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirecting.Close()
+
+	client := newNonRedirectingHTTPClient(2 * time.Second)
+	result := submitMacroRun(context.Background(), client, mustParseURL(t, redirecting.URL), "secret-token", "my-macro",
+		createMacroRunRequest{IdempotencyKey: "k1", Trigger: "plugin"})
+
+	if redirectTargetHit {
+		t.Fatal("the redirect target was contacted; this client must never follow a redirect at all")
+	}
+	if result.Class != classUnreachable {
+		t.Errorf("class = %q, want %q (a refused redirect is the genuine outage condition, not a served response)", result.Class, classUnreachable)
+	}
+	if result.Run != nil {
+		t.Error("Run must be nil: nothing confirms the macro named in the original request ever ran")
+	}
+}

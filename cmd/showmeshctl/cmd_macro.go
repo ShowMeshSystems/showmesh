@@ -93,7 +93,7 @@ func cmdMacroList(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	if err != nil {
 		return reportError(stderr, "macro list", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
 	var resp showConfigObjectsListResponse
@@ -139,7 +139,7 @@ func cmdMacroShow(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	if err != nil {
 		return reportError(stderr, "macro show", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
 	var resp showMacroConfigResponse

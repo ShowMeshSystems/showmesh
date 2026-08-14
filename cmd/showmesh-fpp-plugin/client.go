@@ -60,7 +60,14 @@ func submitMacroRun(ctx context.Context, httpClient *http.Client, coordinatorURL
 	}
 
 	u := *coordinatorURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/macros/" + url.PathEscape(macroID) + "/runs"
+	// u.Path holds the DECODED path; url.URL.String() (via EscapedPath())
+	// re-encodes it when serializing. macroID therefore goes in RAW, not
+	// pre-escaped with url.PathEscape — escaping it here and letting
+	// String() escape the result a second time turned a literal "%" in
+	// the first escape into "%25" in the second, corrupting any macro id
+	// containing a space or a slash into a 404 that reads as though the
+	// id were wrong when it was not. See TestSubmitMacroRunDoesNotDoubleEscapeMacroID.
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/macros/" + macroID + "/runs"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(encoded))
 	if err != nil {
@@ -99,6 +106,30 @@ func submitMacroRun(ctx context.Context, httpClient *http.Client, coordinatorURL
 		if err := json.Unmarshal(respBody, &decoded); err != nil {
 			return submitResult{Class: classUnreachable, HTTPStatus: resp.StatusCode, TransportErr: fmt.Errorf("decoding a %d response: %w", resp.StatusCode, err)}
 		}
+		// A 2xx status code is not itself confirmation: this program's own
+		// doc comment above says it "cannot honestly claim the run was
+		// accepted if it cannot read what the coordinator said about it",
+		// and an empty or malformed body reads perfectly as valid JSON
+		// while saying nothing at all. Proved live: a fake coordinator
+		// answering "202 {}" decoded with no error, an empty run id, and
+		// this program reported class ok, printed "accepted as run  "
+		// (blank id), and flushed a pre-seeded refused buffer entry out
+		// of existence. Neither an empty run id nor a run answering about
+		// a DIFFERENT macro than the one this call named is treated as
+		// ok, and neither flushes the buffer — see reportOK's caller,
+		// which only flushes on classOK. Classified as classUnreachable,
+		// not a new class: the coordinator did not demonstrably serve
+		// this request, which is exactly what that class means for every
+		// other case reaching it (transport failure, 5xx).
+		if decoded.Run.ID == "" {
+			return submitResult{Class: classUnreachable, HTTPStatus: resp.StatusCode,
+				TransportErr: fmt.Errorf("a %d response carried no run id; refusing to treat an unconfirmed body as an accepted run", resp.StatusCode)}
+		}
+		if decoded.Run.MacroObjectID != macroID {
+			return submitResult{Class: classUnreachable, HTTPStatus: resp.StatusCode,
+				TransportErr: fmt.Errorf("a %d response named macro %q, not the macro %q this request submitted; refusing to treat this as an accepted run",
+					resp.StatusCode, decoded.Run.MacroObjectID, macroID)}
+		}
 		result.Run = &decoded
 		return result
 	}
@@ -125,7 +156,9 @@ func submitMacroRun(ctx context.Context, httpClient *http.Client, coordinatorURL
 // the run that already succeeded.
 func fetchMacroConfig(ctx context.Context, httpClient *http.Client, coordinatorURL *url.URL, token, macroID string) (showMacroConfigResponse, error) {
 	u := *coordinatorURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/config/show.macro/" + url.PathEscape(macroID)
+	// See submitMacroRun's identical comment: macroID goes in raw, not
+	// pre-escaped, so url.URL.String() escapes it exactly once.
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/config/show.macro/" + macroID
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

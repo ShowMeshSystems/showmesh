@@ -3128,6 +3128,14 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     // "replace with a partial object".
     expect(updated?.macroRevision).toBe(run.macroRevision)
     expect(updated?.issuerPrincipalName).toBe(run.issuerPrincipalName)
+    // Regression guard for this task's finding 6: MacroRunChangedEvent
+    // carries no finishedAt at all (unlike serverTime, which every frame
+    // has) — a state transition to "finished" must never manufacture one
+    // from the event's own serverTime. finishedAt stays whatever the run
+    // already held (here: null, from makeMacroRunSummary's own default),
+    // until a full GET /macro-runs/{id} supplies the coordinator's real
+    // value.
+    expect(updated?.finishedAt).toBeNull()
   })
 
   it('drops a macroRun.changed frame for a runId this connection has never seen, rather than inventing a partial entry', async () => {

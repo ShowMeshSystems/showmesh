@@ -48,10 +48,24 @@ export function ShowActions() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
         <h2 className="panel__title">Show actions</h2>
-        {writeGate.allowed && (
+        {/* This task's finding 9, applied identically to Macros.tsx's
+            "New macro" link: hidden outright for a principal without
+            config:write, the one deviation in this app from the standing
+            rule (OPERATOR-UI section 14 / ADR-024 decision 12) that a
+            control the principal may not use is rendered disabled with a
+            stated reason, never hidden. Mirrors ScopedButton's own
+            disabled shape exactly. */}
+        {writeGate.allowed ? (
           <Link className="entity-link" to="/actions/new">
             New action
           </Link>
+        ) : (
+          <span className="scoped-button">
+            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
+              New action
+            </button>
+            <span className="scoped-button__reason">{writeGate.reason}</span>
+          </span>
         )}
       </div>
       <p className="text-muted">
@@ -77,30 +91,36 @@ export function ShowActions() {
           {state.objects.length === 0 ? (
             <p className="text-muted">No show actions are configured yet.</p>
           ) : (
-            <table className="config-table">
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>Show</th>
-                  <th>Revision</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.objects.map((obj) => (
-                  <tr key={obj.id}>
-                    <td>
-                      <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
-                        {obj.label}
-                      </Link>
-                    </td>
-                    <td>{obj.show}</td>
-                    <td>{obj.currentRevision}</td>
-                    <td>{formatAbsolute(obj.updatedAt)}</td>
+            // Same overflow gap this task's finding 11 found and fixed on
+            // Macros.tsx's own .config-table — this table shares the same
+            // markup shape (just without a Run column), so it gets the
+            // same fix.
+            <div className="table-scroll">
+              <table className="config-table">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Show</th>
+                    <th>Revision</th>
+                    <th>Updated</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {state.objects.map((obj) => (
+                    <tr key={obj.id}>
+                      <td>
+                        <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
+                          {obj.label}
+                        </Link>
+                      </td>
+                      <td>{obj.show}</td>
+                      <td>{obj.currentRevision}</td>
+                      <td>{formatAbsolute(obj.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}

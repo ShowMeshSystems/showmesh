@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -172,6 +174,24 @@ const (
 	ValidationCodeStepsEmpty      = "steps-empty"
 	ValidationCodeStepsTooMany    = "steps-too-many"
 	ValidationCodeStepIDDuplicate = "step-id-duplicate"
+
+	// ValidationCodeFieldUnknownKey means the payload's top-level object
+	// carried a key this kind does not recognize. Added by review: before
+	// this code existed, an unrecognized top-level key (most dangerously a
+	// typo of a real one, e.g. "onFailur") was silently ignored by every
+	// decode function in this file and showmacro.go, which for a field
+	// with a default (description, onFailure, onUnconfirmed,
+	// target.publish.retain) meant the coordinator silently stored a
+	// DIFFERENT policy than the one the operator typed, with no error at
+	// all — the worst of the three possible outcomes (reject, silently
+	// ignore, silently apply a default), because the operator has no
+	// signal anything went wrong. decodeFPPCommandParams
+	// (internal/coordinator/api/fppcommand_primitives.go) already refused
+	// an unrecognized params key for exactly this reason; this code
+	// brings show.action and show.macro's own top-level object to the
+	// same posture, matching what api/openapi.yaml's conformance-test
+	// overlay already treats these payloads as (closed objects).
+	ValidationCodeFieldUnknownKey = "field-unknown-key"
 )
 
 // --- show.action's own vocabulary. ---
@@ -237,6 +257,13 @@ const mqttExpectMaxDeadlineSeconds = 120
 
 // --- show.action payload shape. ---
 
+// showActionTopLevelKeys is the complete set of keys
+// DecodeShowActionPayload recognizes at the top level of the request
+// body — see rejectUnknownTopLevelKeys.
+var showActionTopLevelKeys = map[string]bool{
+	"show": true, "label": true, "description": true, "safetyClass": true, "target": true,
+}
+
 // ShowActionPayload is config_revisions.payload_json's decoded, VALIDATED
 // shape for [ShowActionConfigKind]. Every value here has already passed
 // DecodeShowActionPayload's rules; nothing downstream needs to re-check
@@ -295,6 +322,21 @@ type ShowActionMQTTPublish struct {
 // accept, require, or forbid it is decodeMQTTExpect's own rule (a judgment
 // call this builder made beyond what STEP-9-SPEC.md section 7.3 states
 // explicitly for "boolean" and "text" — see this builder's report).
+//
+// Value is always a Go string, deliberately, for BOTH kinds that use it.
+// "match" compares it byte-for-byte against the response payload, so a
+// string is the only sensible shape. "number" is a JSON-round-trip defect
+// found and fixed after this file first shipped: this field is the exact
+// text the operator typed (e.g. "42" or "4.2e1"), parsed with
+// strconv.ParseFloat only to confirm it is a valid number, never
+// normalized to a float and re-formatted — a JSON number decoded through
+// Go's float64 does not survive being written back out unchanged (the
+// wave 2 command-confirmation defect where an int64 came back as a
+// float64 is the same family of bug), and this field is read back on
+// every GET and PUT of the same object, so its wire representation must
+// be stable under that round trip. Storing and reading it as a string
+// keeps that promise; decodeMQTTExpect accepts it as a JSON string on the
+// way in for the identical reason — see that function's own comment.
 type ShowActionMQTTExpect struct {
 	Kind  string  `json:"kind"`
 	Topic string  `json:"topic,omitempty"`
@@ -325,6 +367,9 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry) (ShowActionPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
+		return ShowActionPayload{}, verr
+	}
+	if verr := rejectUnknownTopLevelKeys(top, showActionTopLevelKeys); verr != nil {
 		return ShowActionPayload{}, verr
 	}
 
@@ -579,6 +624,17 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 	// this endpoint's own "supplying one is an error rather than being
 	// ignored" rule for kind "none" — a present value is rejected rather
 	// than silently discarded.
+	//
+	// Both "match" and "number" decode value as a JSON STRING — a
+	// GET-then-unchanged-PUT defect, found by review after this file
+	// first shipped: EncodeShowActionPayload always emits value as a
+	// quoted JSON string (ShowActionMQTTExpect.Value is a Go string; see
+	// that field's own doc comment for why), so a decoder that required a
+	// bare JSON number for kind "number" rejected the coordinator's own
+	// read output on re-save, with an error pointing at a field the
+	// operator never touched. "number"'s string is additionally validated
+	// with strconv.ParseFloat to confirm it is really numeric, but the
+	// text itself is stored verbatim, never reformatted through a float.
 	var value *string
 	switch kind {
 	case MQTTExpectKindMatch:
@@ -596,14 +652,19 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 					Detail: "value must not be null; omit it to accept receipt without an equality check",
 				}
 			}
-			var f float64
-			if err := json.Unmarshal(raw, &f); err != nil {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
 				return ShowActionMQTTExpect{}, &ValidationError{
 					Code: ValidationCodeFieldInvalid, Field: "target.expect.value",
-					Detail: "value must be a JSON number for kind \"number\"",
+					Detail: "value must be a JSON string that parses as a number for kind \"number\" (e.g. \"42\"), matching the shape this action is read back in",
 				}
 			}
-			s := strings.TrimSpace(string(raw))
+			if _, err := strconv.ParseFloat(s, 64); err != nil {
+				return ShowActionMQTTExpect{}, &ValidationError{
+					Code: ValidationCodeFieldInvalid, Field: "target.expect.value",
+					Detail: "value must parse as a number for kind \"number\"",
+				}
+			}
 			value = &s
 		}
 	case MQTTExpectKindBoolean, MQTTExpectKindText:
@@ -690,6 +751,36 @@ func decodeTopLevelObject(raw string) (map[string]json.RawMessage, *ValidationEr
 		}
 	}
 	return top, nil
+}
+
+// rejectUnknownTopLevelKeys reports every key in top that is not in known,
+// or nil if there are none. Both DecodeShowActionPayload and
+// DecodeShowMacroPayload call this immediately after decodeTopLevelObject,
+// before any per-field decode — mirroring decodeFPPCommandParams' own
+// documented ordering rule (fppcommand_primitives.go: the unknown-key
+// sweep runs BEFORE the per-field loop) for the identical reason: running
+// it after would let a misspelled REQUIRED key be reported as "absent"
+// instead of "unrecognized", which points the operator at the wrong
+// remedy (add a field that is not missing, rather than fix its spelling).
+// See ValidationCodeFieldUnknownKey's own doc comment for why this check
+// exists at all.
+func rejectUnknownTopLevelKeys(top map[string]json.RawMessage, known map[string]bool) *ValidationError {
+	var unknown []string
+	for k := range top {
+		if !known[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return &ValidationError{
+		Code: ValidationCodeFieldUnknownKey,
+		Detail: fmt.Sprintf(
+			"the payload contains unrecognized key(s): %s (a typo'd key is refused rather than silently applying that field's own default or being ignored)",
+			strings.Join(unknown, ", ")),
+	}
 }
 
 // decodeRequiredObject reads key from top as a required, non-null JSON

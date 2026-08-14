@@ -14,11 +14,25 @@ import (
 // thing as echoing the coordinator's raw bytes back).
 
 // printJSON marshals v with a stable two-space indent so scripted
-// consumers get predictable output.
+// consumers get predictable output. Used everywhere this program prints
+// exactly one JSON value for one command invocation.
 func printJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// printJSONCompact marshals v as one line with no indentation (still
+// newline-terminated, since json.Encoder.Encode always appends one) and is
+// [printJSON]'s sibling for exactly one caller: macro_client.go's follow
+// loop, which prints many JSON objects over time rather than one. A
+// multi-line, indented object cannot be told apart from the next one by a
+// line-oriented tool (line-diffing, "read one JSON value per line"), which
+// is the exact capability a follow stream's own doc comments claim for
+// it — see renderMacroRunProgress's doc comment for where that claim used
+// to be false.
+func printJSONCompact(w io.Writer, v any) error {
+	return json.NewEncoder(w).Encode(v)
 }
 
 // printClockSkew writes contract-required freshness self-defense (task

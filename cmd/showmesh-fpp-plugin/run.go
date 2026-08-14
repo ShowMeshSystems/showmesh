@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,38 @@ import (
 	"net/url"
 	"time"
 )
+
+// errRedirectRefused is what this program's http.Client.CheckRedirect
+// returns on every redirect, on both request paths this program makes
+// (the run submission and the macro-config cache refresh, which share one
+// *http.Client — see newNonRedirectingHTTPClient). A client that submits
+// a command and reads the response to decide whether a show step
+// happened must not silently follow a redirect: proven against a fake
+// coordinator answering 302, an unset CheckRedirect turned the POST into
+// a GET at the redirect target, still carrying the Authorization header
+// (Go strips it only on a hostname change, so a same-host different-port
+// hop keeps the bearer token), read whatever JSON came back as though it
+// were the run response, and reported class ok with the buffer flushed —
+// while the macro never ran. This is the write-side version of the
+// project's own Step 5 GET-only-is-not-read-only lesson.
+var errRedirectRefused = errors.New("refusing to follow a redirect from the coordinator")
+
+// newNonRedirectingHTTPClient builds the one *http.Client this program's
+// two coordinator requests (submitMacroRun and fetchMacroConfig) share,
+// with CheckRedirect refusing every redirect outright: httpClient.Do
+// returns errRedirectRefused (wrapped in a *url.Error) instead of ever
+// handing either call site a followed response, so a redirect is
+// classified as classUnreachable via the exact same transport-failure
+// path a connection refusal takes — never as a class this program derived
+// from content served by some OTHER URL than the one it asked.
+func newNonRedirectingHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return errRedirectRefused
+		},
+	}
+}
 
 // defaultRunTimeout is this program's own request budget for one run
 // submission. POST /api/v1/macros/{id}/runs answers 202 as soon as the run
@@ -29,7 +62,8 @@ func cmdRun(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 	fs.SetOutput(stderr)
 	var configDirFlag string
 	var timeout time.Duration
-	fs.StringVar(&configDirFlag, "config-dir", "", "override this plugin's config directory")
+	fs.StringVar(&configDirFlag, "config-dir", "", "override this plugin's state directory (config.json, status.json, "+
+		"failures.json, macro-cache.json) — never the credential, whose location is fixed and not configurable")
 	fs.DurationVar(&timeout, "timeout", defaultRunTimeout, "request timeout for the run submission")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmesh-fpp-plugin run <macroId> [flags]")
@@ -49,26 +83,46 @@ func cmdRun(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 	configDir := resolveConfigDir(configDirFlag)
 	now := clock()
 
-	token, err := loadCredential(configDir)
+	// Checked before the credential is even read: a directory mode
+	// mismatch is repaired in place, never a reason to refuse (see
+	// config.go's requiredCredentialDirMode for the full reasoning), and
+	// the note it produces — repaired, or repair failed — is recorded on
+	// every status write for this attempt regardless of how the attempt
+	// itself turns out.
+	credentialDirNote := ensureCredentialDirMode().Note()
+	if credentialDirNote != "" {
+		_, _ = fmt.Fprintf(stderr, "showmesh-fpp-plugin run: %s\n", credentialDirNote)
+	}
+
+	token, err := loadCredential()
 	if err != nil {
-		return reportLocalError(stdout, stderr, configDir, macroID, now, err)
+		return reportLocalError(stdout, stderr, configDir, macroID, now, credentialDirNote, err)
 	}
 	coordinatorURL, err := loadCoordinatorURL(configDir)
 	if err != nil {
-		return reportLocalError(stdout, stderr, configDir, macroID, now, err)
+		return reportLocalError(stdout, stderr, configDir, macroID, now, credentialDirNote, err)
 	}
 
 	key, err := newIdempotencyKey()
 	if err != nil {
-		return reportLocalError(stdout, stderr, configDir, macroID, now, fmt.Errorf("generating an idempotency key: %w", err))
+		return reportLocalError(stdout, stderr, configDir, macroID, now, credentialDirNote, fmt.Errorf("generating an idempotency key: %w", err))
 	}
 
 	buffer, err := loadFailureBuffer(configDir)
 	if err != nil {
-		// A corrupt failure buffer must not block this run from being
-		// attempted — proceed with an empty buffer rather than refusing
-		// to run over a file this program can regenerate.
-		buffer = failureBuffer{}
+		// A corrupt or unreadable failure buffer must not block this run
+		// from being attempted, but the loss it represents must not be
+		// silent either: this program cannot recover how many entries
+		// the unreadable file held, so it counts the corruption event
+		// itself as one dropped record — a real, if approximate, lower
+		// bound — rather than resetting to a fresh buffer that reports
+		// nothing was ever dropped. See TestCmdRunCorruptFailureBufferIsCountedAndLogged.
+		buffer = failureBuffer{Dropped: 1}
+		_, _ = fmt.Fprintf(stderr,
+			"showmesh-fpp-plugin run: the local failure buffer at %s could not be read (%v); any failures it held "+
+				"before now are lost and cannot be counted precisely, so this is recorded as at least 1 dropped "+
+				"record rather than 0\n",
+			failureBufferPath(configDir), err)
 	}
 	buffer.pruneByAge(now)
 	priorFailures, priorFailuresDropped := buffer.asPriorFailures()
@@ -80,7 +134,7 @@ func cmdRun(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		PriorFailuresDropped: priorFailuresDropped,
 	}
 
-	httpClient := &http.Client{Timeout: timeout}
+	httpClient := newNonRedirectingHTTPClient(timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -88,15 +142,15 @@ func cmdRun(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 
 	switch result.Class {
 	case classOK:
-		return reportOK(ctx, httpClient, stdout, stderr, configDir, macroID, coordinatorURL, token, now, result)
+		return reportOK(ctx, httpClient, stdout, stderr, configDir, macroID, coordinatorURL, token, now, credentialDirNote, result)
 	case classRefused:
-		return reportDegraded(stdout, stderr, configDir, macroID, now, &buffer, result, exitRefused,
+		return reportDegraded(stdout, stderr, configDir, macroID, now, credentialDirNote, &buffer, result, exitRefused,
 			"the coordinator answered and refused this caller (authentication or authorization failure)")
 	case classRejected:
-		return reportDegraded(stdout, stderr, configDir, macroID, now, &buffer, result, exitRejected,
+		return reportDegraded(stdout, stderr, configDir, macroID, now, credentialDirNote, &buffer, result, exitRejected,
 			"the coordinator answered and declined the request itself — this is NOT a credential problem")
 	default: // classUnreachable
-		return reportDegraded(stdout, stderr, configDir, macroID, now, &buffer, result, exitUnreachable,
+		return reportDegraded(stdout, stderr, configDir, macroID, now, credentialDirNote, &buffer, result, exitUnreachable,
 			"the coordinator could not be reached, or answered with a server error")
 	}
 }
@@ -124,9 +178,9 @@ func newIdempotencyKey() (string, error) {
 // failure: MacroPriorFailureRequest's class enum has no local-error
 // member, and a local misconfiguration is not something the coordinator
 // can meaningfully be told about later.
-func reportLocalError(stdout, stderr io.Writer, configDir, macroID string, now time.Time, cause error) int {
+func reportLocalError(stdout, stderr io.Writer, configDir, macroID string, now time.Time, credentialDirNote string, cause error) int {
 	msg := cause.Error()
-	rec := statusRecord{Timestamp: now, MacroID: macroID, Class: classLocalError, Message: msg}
+	rec := statusRecord{Timestamp: now, MacroID: macroID, Class: classLocalError, Message: msg, CredentialDirNote: credentialDirNote}
 	if err := writeStatus(configDir, rec); err != nil {
 		_, _ = fmt.Fprintf(stderr, "showmesh-fpp-plugin run: also failed to write the local status record: %v\n", err)
 	}
@@ -138,7 +192,7 @@ func reportLocalError(stdout, stderr io.Writer, configDir, macroID string, now t
 // definition when needed (section 8.1), flushes the failure buffer
 // (section 8.3 path 2 — flush happens on 2xx only), and writes the local
 // status record.
-func reportOK(ctx context.Context, httpClient *http.Client, stdout, stderr io.Writer, configDir, macroID string, coordinatorURL *url.URL, token string, now time.Time, result submitResult) int {
+func reportOK(ctx context.Context, httpClient *http.Client, stdout, stderr io.Writer, configDir, macroID string, coordinatorURL *url.URL, token string, now time.Time, credentialDirNote string, result submitResult) int {
 	run := result.Run.Run
 
 	refreshMacroCacheIfStale(ctx, httpClient, stderr, configDir, macroID, coordinatorURL, token, run.MacroRevision, now)
@@ -159,6 +213,7 @@ func reportOK(ctx context.Context, httpClient *http.Client, stdout, stderr io.Wr
 	rec := statusRecord{
 		Timestamp: now, MacroID: macroID, Class: classOK,
 		HTTPStatus: result.HTTPStatus, RunID: run.ID, Message: msg,
+		CredentialDirNote: credentialDirNote,
 	}
 	if err := writeStatus(configDir, rec); err != nil {
 		_, _ = fmt.Fprintf(stderr, "showmesh-fpp-plugin run: also failed to write the local status record: %v\n", err)
@@ -206,7 +261,7 @@ func refreshMacroCacheIfStale(ctx context.Context, httpClient *http.Client, stde
 // path 2). The buffer is retained, never cleared, on every path through
 // this function — the flush rule is "2xx only", and this function is
 // never called for a 2xx result.
-func reportDegraded(stdout, stderr io.Writer, configDir, macroID string, now time.Time, buffer *failureBuffer, result submitResult, exitCode int, summary string) int {
+func reportDegraded(stdout, stderr io.Writer, configDir, macroID string, now time.Time, credentialDirNote string, buffer *failureBuffer, result submitResult, exitCode int, summary string) int {
 	detail := problemDetailText(result)
 
 	msg := fmt.Sprintf("macro %q: %s (%s)", macroID, summary, detail)
@@ -217,6 +272,7 @@ func reportDegraded(stdout, stderr io.Writer, configDir, macroID string, now tim
 	rec := statusRecord{
 		Timestamp: now, MacroID: macroID, Class: result.Class,
 		HTTPStatus: result.HTTPStatus, Message: msg,
+		CredentialDirNote: credentialDirNote,
 	}
 	if err := writeStatus(configDir, rec); err != nil {
 		_, _ = fmt.Fprintf(stderr, "showmesh-fpp-plugin run: also failed to write the local status record: %v\n", err)

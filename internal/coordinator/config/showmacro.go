@@ -73,6 +73,13 @@ var showMacroLocalFallbackClasses = map[string]bool{
 	ShowMacroLocalFallbackSilence:             true,
 }
 
+// showMacroTopLevelKeys is the complete set of keys
+// DecodeShowMacroPayload recognizes at the top level of the request body
+// — see rejectUnknownTopLevelKeys (showaction.go).
+var showMacroTopLevelKeys = map[string]bool{
+	"show": true, "label": true, "description": true, "steps": true,
+}
+
 // ShowMacroPayload is config_revisions.payload_json's decoded, VALIDATED
 // shape for [ShowMacroConfigKind].
 type ShowMacroPayload struct {
@@ -121,6 +128,9 @@ func EncodeShowMacroPayload(p ShowMacroPayload) (string, error) {
 func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) bool) (ShowMacroPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
+		return ShowMacroPayload{}, verr
+	}
+	if verr := rejectUnknownTopLevelKeys(top, showMacroTopLevelKeys); verr != nil {
 		return ShowMacroPayload{}, verr
 	}
 

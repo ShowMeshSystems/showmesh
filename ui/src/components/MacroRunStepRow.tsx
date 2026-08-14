@@ -1,22 +1,38 @@
 import { useState } from 'react'
 import { StatusBadge, type StatusTone } from './StatusBadge'
 import { MacroRunCommandDetail } from './MacroRunCommandDetail'
+import { formatAbsolute } from '../app/time'
 import type { MacroRunStep } from '../app/types'
 
 // One row of a run's step list (STEP-9-SPEC.md section 6.4's five-value
 // step outcome vocabulary: confirmed | unconfirmed | unconfirmable |
-// failed | skipped). `outcome` is `type: string` on the wire (not a
-// closed enum — api/openapi.yaml's own MacroRunStep.outcome), so this
-// switches on the five known literals and falls through to a generic,
-// still-visible rendering for anything else, matching this codebase's
-// standing "unrecognized value degrades to a generic panel, never
-// blank" rule (OPERATOR-UI section 9) rather than assuming the five
-// values are exhaustive forever.
+// failed | skipped, plus `null` while a step has not yet resolved).
+// `outcome` IS a closed enum (plus `null`) in the generated schema
+// (api/openapi.yaml's own MacroRunStep.outcome). The switch below still
+// falls through to a generic, still-visible rendering for anything
+// outside that closed set, but not because the wire type is open today: a
+// value that reaches this component without matching what TypeScript
+// checked at compile time (a malformed response, or a value from a
+// future, additive-only API major version this build predates) must
+// never render blank, matching OPERATOR-UI section 9's standing
+// "unrecognized value degrades to a generic panel" rule — that is a
+// defense against a value escaping the type system, not evidence the
+// type system does not close this set.
+//
+// step.state is a closed, three-member vocabulary — "pending", "resolved",
+// "skipped" — with no "dispatched" intermediate: the run executor always
+// resolves a step to a terminal outcome before it is ever written, so a
+// value this producer cannot emit is not published here (a prior
+// "dispatched" state was removed from the schema for exactly that
+// reason). outcome is null exactly while state is "pending", so the one
+// lifecycle distinction worth rendering — has this step run yet — is
+// already carried by outcome being null and needs no separate branch on
+// step.state.
 export interface MacroRunStepRowProps {
   step: MacroRunStep
 }
 
-function outcomeBadge(outcome: string): { tone: StatusTone; icon: string; label: string } {
+function outcomeBadge(outcome: MacroRunStep['outcome']): { tone: StatusTone; icon: string; label: string } {
   switch (outcome) {
     case 'confirmed':
       return { tone: 'good', icon: '✓', label: 'Confirmed' }
@@ -31,7 +47,7 @@ function outcomeBadge(outcome: string): { tone: StatusTone; icon: string; label:
       return { tone: 'bad', icon: '✕', label: 'Failed' }
     case 'skipped':
       return { tone: 'unknown', icon: '⏭', label: 'Skipped' }
-    case '':
+    case null:
       return { tone: 'unknown', icon: '…', label: 'Pending' }
     default:
       return { tone: 'unknown', icon: '?', label: outcome }
@@ -79,8 +95,16 @@ export function MacroRunStepRow({ step }: MacroRunStepRowProps) {
             <dd>{describeLocalFallback(step.localFallbackClass)}</dd>
             <dt>Action revision</dt>
             <dd>{step.actionRevision}</dd>
+            {/* This task's finding 7: dispatchedAt/resolvedAt were in hand
+                on MacroRunStep and never rendered anywhere, so an operator
+                had no timing evidence for a step beyond its current
+                badge. */}
+            <dt>Dispatched at</dt>
+            <dd>{step.dispatchedAt !== null ? formatAbsolute(step.dispatchedAt) : 'Not yet dispatched.'}</dd>
+            <dt>Resolved at</dt>
+            <dd>{step.resolvedAt !== null ? formatAbsolute(step.resolvedAt) : 'Not yet resolved.'}</dd>
           </dl>
-          <MacroRunCommandDetail command={step.command} />
+          <MacroRunCommandDetail command={step.command} integration={step.integration} state={step.state} />
         </div>
       )}
     </li>

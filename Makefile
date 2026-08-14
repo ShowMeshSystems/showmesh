@@ -242,56 +242,81 @@ FPP_PLUGIN_VERSION ?= $(VERSION)
 # commit's own commit timestamp, not BUILD_DATE's wall-clock $(shell date
 # ...) above, which by construction differs on every invocation and would
 # make two builds of the identical commit non-reproducible for no reason
-# connected to the actual source. Verified locally (2026-08-14, macOS
-# host cross-compiling linux/amd64, go1.25/1.26): two independent
-# CGO_ENABLED=0 `go build -trimpath` invocations with these ldflags
-# produce byte-identical output — see verify-fpp-plugin-reproducible
-# below, which checks this on every run rather than resting on that one
-# observation.
+# connected to the actual source.
 FPP_PLUGIN_COMMIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 FPP_PLUGIN_LDFLAGS := -X $(MODULE)/internal/version.Version=$(FPP_PLUGIN_VERSION) \
                        -X $(MODULE)/internal/version.Commit=$(COMMIT) \
                        -X $(MODULE)/internal/version.BuildDate=$(FPP_PLUGIN_COMMIT_DATE)
 
-# release-fpp-plugin-<arch> each build one platform's binary at mode
-# 0755, tar it alone (no leading directory) under the pinned asset name,
-# and remove the loose binary so it cannot be mistaken for one of the
-# platform-specific ones on a later run. -trimpath keeps this host's own
-# absolute build path out of the binary, which matters for the
-# reproducibility check below as much as for not leaking a builder's
-# local filesystem layout.
+# TAR resolves to a GNU-compatible tar — GNU tar directly (every Linux CI
+# runner, including this project's own ubuntu-latest jobs) or Homebrew's
+# gtar on macOS (`brew install gnu-tar`) — because the determinism flags
+# below (--sort, --owner, --group, --numeric-owner, --mtime) are GNU
+# tar's own, not macOS's default bsdtar's. TAR_IS_GNU gates on that at
+# parse time rather than failing a local build outright: a machine with
+# neither still gets a correct tarball, just not a byte-reproducible one
+# across two local runs — see fpp_plugin_build_and_package's else branch.
+# What actually has to reproduce is CI's own output, and CI always has
+# GNU tar.
+TAR := $(shell command -v gtar 2>/dev/null || command -v tar 2>/dev/null)
+TAR_IS_GNU := $(shell $(TAR) --version 2>/dev/null | grep -qi 'gnu tar' && echo yes)
+
+# fpp_plugin_build_and_package builds one platform's binary directly into
+# directory $(4), chmod 0755, packages it as
+# $(4)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_$(3).tar.gz, and
+# removes the loose binary so it is never mistaken for a different
+# platform's on a later run. $(1) is GOARCH, $(2) is any extra build-time
+# env (e.g. "GOARM=7", or empty for amd64/arm64), $(3) is the asset
+# filename's ARCH label — NOT always equal to $(1): armv7's own GOARCH is
+# "arm", and RES-015's own "never let arm alone stand in for the word
+# size without GOARM" warning applies here in spirit even though this is
+# a build-time label, not a runtime probe.
+#
+# The tar invocation is this finding's actual fix. Proved broken by
+# running release-fpp-plugin twice at one commit and diffing the three
+# resulting SHA256SUMS: -trimpath already makes the raw BINARIES
+# byte-identical, but a plain `tar -czf` still records each entry's
+# mtime, uid, gid, and owner/group NAME (a real local username, which a
+# GNU tar running as root on the installing FPP host would go on to
+# apply to the extracted file), plus gzip's own header carries a
+# timestamp — none of which -trimpath touches, because none of it is in
+# the binary. When GNU tar is available: --sort=name orders archive
+# members deterministically (moot at one member today, cheap insurance
+# against ever adding a second), --owner=0 --group=0 --numeric-owner
+# zero the uid/gid and force numeric (never a name) rather than whatever
+# this builder's account happens to be, --mtime='@0' zeroes every entry's
+# timestamp, and piping the uncompressed stream to `gzip -n` (rather than
+# tar's own built-in -z) strips gzip's own embedded name and timestamp
+# fields, which GNU tar's -z does not expose a way to suppress. Verified,
+# not assumed: verify-fpp-plugin-reproducible below builds and packages
+# the same commit twice, independently, and diffs the TARBALLS
+# byte-for-byte — not the binaries inside them, which were never what
+# this finding was about.
+define fpp_plugin_build_and_package
+	mkdir -p $(4)
+	rm -f $(4)/showmesh-fpp-plugin
+	GOOS=linux GOARCH=$(1) $(2) CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(4)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
+	chmod 0755 $(4)/showmesh-fpp-plugin
+	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
+		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(4) -cf - showmesh-fpp-plugin | gzip -n -9 > $(4)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_$(3).tar.gz; \
+	else \
+		echo "WARNING: GNU tar not found on PATH (checked gtar, tar); building linux_$(3)'s tarball WITHOUT deterministic mtime/owner/group stripping. It is still correct, but will not reproduce byte-for-byte across two local runs. Install GNU tar (e.g. 'brew install gnu-tar' on macOS) to get that locally; CI always has GNU tar and always gets it." >&2; \
+		tar -C $(4) -czf $(4)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_$(3).tar.gz showmesh-fpp-plugin; \
+	fi
+	rm -f $(4)/showmesh-fpp-plugin
+endef
+
 .PHONY: release-fpp-plugin-amd64
 release-fpp-plugin-amd64:
-	mkdir -p $(FPP_PLUGIN_DIST)
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
-	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_amd64.tar.gz showmesh-fpp-plugin
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	$(call fpp_plugin_build_and_package,amd64,,amd64,$(FPP_PLUGIN_DIST))
 
 .PHONY: release-fpp-plugin-arm64
 release-fpp-plugin-arm64:
-	mkdir -p $(FPP_PLUGIN_DIST)
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
-	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_arm64.tar.gz showmesh-fpp-plugin
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	$(call fpp_plugin_build_and_package,arm64,,arm64,$(FPP_PLUGIN_DIST))
 
-# armv7 is the BeagleBone Black's own word size (GOARCH=arm GOARM=7) —
-# the asset name uses "armv7" per the pinned contract above even though
-# GOARCH itself is "arm"; RES-015 section 5.3's own warning applies here
-# in spirit even though this is a build-time label, not a runtime probe:
-# never let "arm" alone stand in for the word size without GOARM alongside
-# it.
 .PHONY: release-fpp-plugin-armv7
 release-fpp-plugin-armv7:
-	mkdir -p $(FPP_PLUGIN_DIST)
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
-	chmod 0755 $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
-	tar -C $(FPP_PLUGIN_DIST) -czf $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_armv7.tar.gz showmesh-fpp-plugin
-	rm -f $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin
+	$(call fpp_plugin_build_and_package,arm,GOARM=7,armv7,$(FPP_PLUGIN_DIST))
 
 # release-fpp-plugin is the target CI (and the bench) actually run: build
 # all three platforms, write the checksums file the pinned contract
@@ -305,26 +330,36 @@ release-fpp-plugin: release-fpp-plugin-amd64 release-fpp-plugin-arm64 release-fp
 	cd $(FPP_PLUGIN_DIST) && sha256sum -c showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_SHA256SUMS
 	@echo "release-fpp-plugin: built and self-verified $(FPP_PLUGIN_DIST)/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_SHA256SUMS"
 
-# verify-fpp-plugin-reproducible builds ONE platform (amd64 — sufficient
-# to prove the mechanism; the other two share the identical build
-# invocation shape and gain little from repeating this per platform)
-# twice, independently, into two separate directories, and fails unless
-# the two binaries are byte-identical. This is the stronger,
-# cross-invocation reproducibility claim — release-fpp-plugin's own
-# sha256sum -c above only proves the checksums file matches what THIS run
-# produced, not that a second run would produce the same thing.
+# verify-fpp-plugin-reproducible builds and packages ONE platform (amd64
+# — sufficient to prove the mechanism; the other two share the identical
+# build-and-package shape and gain little from repeating this per
+# platform) twice, independently, into two separate directories, and
+# fails unless the two resulting TARBALLS are byte-identical — the actual
+# shipped artifact, not the binary inside it (see
+# fpp_plugin_build_and_package's own doc comment for why those are
+# different claims and this finding was specifically about the former).
+# This is the stronger, cross-invocation reproducibility claim —
+# release-fpp-plugin's own sha256sum -c only proves the checksums file
+# matches what THIS run produced, not that a second run would produce the
+# same thing. Requires GNU tar to actually pass (see TAR_IS_GNU above);
+# without it, this target still runs and still tells you honestly that it
+# could not confirm reproducibility, rather than silently reporting
+# success on a comparison it never made.
 .PHONY: verify-fpp-plugin-reproducible
 verify-fpp-plugin-reproducible:
 	rm -rf $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
-	mkdir -p $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/.reproducible-a/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(FPP_PLUGIN_LDFLAGS)" -o $(FPP_PLUGIN_DIST)/.reproducible-b/showmesh-fpp-plugin ./cmd/showmesh-fpp-plugin
-	@if ! cmp -s $(FPP_PLUGIN_DIST)/.reproducible-a/showmesh-fpp-plugin $(FPP_PLUGIN_DIST)/.reproducible-b/showmesh-fpp-plugin; then \
-		echo "two independent builds of the same commit produced DIFFERENT binaries; the release pipeline is not reproducible"; \
+	$(call fpp_plugin_build_and_package,amd64,,amd64,$(FPP_PLUGIN_DIST)/.reproducible-a)
+	$(call fpp_plugin_build_and_package,amd64,,amd64,$(FPP_PLUGIN_DIST)/.reproducible-b)
+	@if [ "$(TAR_IS_GNU)" != "yes" ]; then \
+		echo "verify-fpp-plugin-reproducible: SKIPPED the actual byte-for-byte comparison — no GNU tar on PATH, so neither tarball was built deterministically and comparing them would only prove that, not reproducibility" >&2; \
+		exit 1; \
+	fi
+	@if ! cmp -s $(FPP_PLUGIN_DIST)/.reproducible-a/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_amd64.tar.gz $(FPP_PLUGIN_DIST)/.reproducible-b/showmesh-fpp-plugin_$(FPP_PLUGIN_VERSION)_linux_amd64.tar.gz; then \
+		echo "two independent builds of the same commit produced DIFFERENT tarballs; the release artifact is not reproducible"; \
 		exit 1; \
 	fi
 	rm -rf $(FPP_PLUGIN_DIST)/.reproducible-a $(FPP_PLUGIN_DIST)/.reproducible-b
-	@echo "verify-fpp-plugin-reproducible: OK, two independent builds are byte-identical"
+	@echo "verify-fpp-plugin-reproducible: OK, two independent builds produced byte-identical TARBALLS"
 
 .PHONY: clean-fpp-plugin-dist
 clean-fpp-plugin-dist:

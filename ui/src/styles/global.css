@@ -252,6 +252,18 @@ input {
   margin-bottom: var(--space-3);
 }
 
+/* This task's finding 11: .config-table had no horizontal-overflow
+   wrapper anywhere, on a surface OPERATOR-UI section 13 makes a show-time
+   phone view (checking system health, running macros) rather than a
+   read-only companion. A wide table on a narrow viewport must scroll
+   inside its own container, never force the page body to scroll
+   horizontally — wrap a <table className="config-table"> in a
+   <div className="table-scroll"> at any call site the table's own column
+   count makes plausible to overflow. */
+.table-scroll {
+  overflow-x: auto;
+}
+
 .config-table th,
 .config-table td {
   text-align: left;

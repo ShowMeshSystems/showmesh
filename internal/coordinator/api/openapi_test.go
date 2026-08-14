@@ -188,6 +188,50 @@ func assertMatchesSchema(t *testing.T, c *jsonschema.Compiler, schemaName string
 	}
 }
 
+// requestBodySchemaRef resolves api/openapi.yaml's own
+// paths[path][method].requestBody.content["application/json"].schema.$ref
+// and returns the schema name it names (the fragment after the final
+// "/"). This is document-pointer resolution, deliberately distinct from
+// [compileSchema]/[assertMatchesSchema], which both take a schema NAME
+// directly and never look at how — or whether — any operation actually
+// references it. A test built only from those two can validate a fixture
+// against "ConfigShowActionWrite" by name forever while the PUT operation
+// itself points somewhere else entirely; this is what closes that gap.
+func requestBodySchemaRef(t *testing.T, method, path string) string {
+	t.Helper()
+	doc := loadOpenAPIDocument(t)
+
+	get := func(node any, key string) any {
+		m, ok := node.(map[string]any)
+		if !ok {
+			t.Fatalf("resolving requestBody ref for %s %s: expected an object while looking for %q, got %T", method, path, key, node)
+		}
+		v, ok := m[key]
+		if !ok {
+			t.Fatalf("resolving requestBody ref for %s %s: %q is missing", method, path, key)
+		}
+		return v
+	}
+
+	node := get(doc, "paths")
+	node = get(node, path)
+	node = get(node, method)
+	node = get(node, "requestBody")
+	node = get(node, "content")
+	node = get(node, "application/json")
+	node = get(node, "schema")
+	refAny := get(node, "$ref")
+	ref, ok := refAny.(string)
+	if !ok {
+		t.Fatalf("resolving requestBody ref for %s %s: $ref is not a string: %v", method, path, refAny)
+	}
+	i := strings.LastIndex(ref, "/")
+	if i < 0 {
+		t.Fatalf("resolving requestBody ref for %s %s: %q has no \"/\"", method, path, ref)
+	}
+	return ref[i+1:]
+}
+
 // TestOpenAPIDocumentIsWellFormed proves the document itself at least
 // parses as YAML and every schema referenced by a path in this test file
 // compiles — a cheap, fast sanity check that fails clearly (not with a Go

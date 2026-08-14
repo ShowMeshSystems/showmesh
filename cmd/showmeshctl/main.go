@@ -77,18 +77,17 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 // help` alone is enough to use this tool without reading source.
 func printTopLevelUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `showmeshctl is the non-UI client for a ShowMesh coordinator's public
-control API (ADR-014). Since ADR-024, reads and the audit log are gated
-by an authenticated principal's scopes rather than by one shared secret,
-see --token below and "showmeshctl session --help".
+control API. Reads and the audit log are gated by an authenticated
+principal's scopes rather than by one shared secret; see --token below
+and "showmeshctl session --help".
 
 Step 7 gave this program its first writes; Step 8 gave it seven more, all
 under "fpp". "config set", "discover", "declare" and "undeclare" change
 this coordinator's own configuration and inventory and need the
-config:write scope. Every "fpp <verb>" subcommand dispatches one of
-docs/bench/fpp-command-vocabulary.md section 4's eight primitive FPP
-commands (ADR-001) and needs fpp:command; none of them ever reports
-success on an HTTP 200 alone, because ADR-003 requires evidence that
-observed state actually moved.
+config:write scope. Every "fpp <verb>" subcommand dispatches one of eight
+primitive FPP commands and needs fpp:command; none of them ever reports
+success on an HTTP 200 alone — evidence that observed state actually
+moved is required before this program calls anything confirmed.
 
 Step 9 gave this program "macro", "run" and "action": reading show.macro
 and show.action definitions, and submitting a macro run. "macro run" needs
@@ -136,7 +135,7 @@ Commands:
 Global flags (place before any positional arguments):
   --server <url>    coordinator base URL (default http://localhost:8080,
                      or $SHOWMESH_SERVER)
-  --token <token>   API bearer token (ADR-024): a token minted for a
+  --token <token>   API bearer token: a token minted for a
                      principal by an admin (see "showmesh-coordinator
                      issue-token" on the coordinator host), sent as
                      "Authorization: Bearer <token>" and NEVER placed in a
@@ -147,25 +146,24 @@ Global flags (place before any positional arguments):
                      visible to anyone on the same host who can read the
                      process table (ps, /proc), while an environment
                      variable is not. This is deliberately NOT
-                     $SHOWMESH_API_TOKEN, the ADR-021 shared secret ADR-024
-                     retired: a coordinator that still sees that variable
-                     set refuses to start, so this CLI uses a distinct
-                     name rather than colliding with a variable an
-                     operator may still have exported for an unrelated
-                     reason. Kind does not restrict credential form: a
-                     human principal may mint a token and use it here
-                     exactly as a machine principal would, and every
+                     $SHOWMESH_API_TOKEN, an older shared-secret variable
+                     this coordinator retired: a coordinator that still
+                     sees that variable set refuses to start, so this CLI
+                     uses a distinct name rather than colliding with a
+                     variable an operator may still have exported for an
+                     unrelated reason. Kind does not restrict credential
+                     form: a human principal may mint a token and use it
+                     here exactly as a machine principal would, and every
                      action taken this way is attributed to that human in
                      the audit log, not to a robot.
   --output text|json
                      output format (default text). json re-serializes this
                      CLI's OWN decoded structs, not the coordinator's raw
                      response bytes: the decoder tolerates unknown fields
-                     per contract section 6.2 (a newer coordinator will not
-                     break this CLI), but that also means a field this
-                     build does not know about is silently absent from
-                     --output json, not merely unrendered as it would be in
-                     the text tables.
+                     by design (a newer coordinator will not break this
+                     CLI), but that also means a field this build does not
+                     know about is silently absent from --output json, not
+                     merely unrendered as it would be in the text tables.
   --timeout <dur>   request timeout, e.g. 10s (default 10s; ignored by watch,
                      which is long-lived by design). Every "fpp <verb>"
                      write subcommand RAISES this to its own, larger
@@ -202,16 +200,27 @@ Exit codes:
      this CLI supports)
   5  not found (404 from the coordinator)
   6  the coordinator returned some other error (see stderr for the
-     RFC 9457 problem detail)
+     RFC 9457 problem detail), OR (Step 9) "macro run"/"run show" read
+     back a FINISHED run that did not report whether it completed or
+     confirmed at all — this program never guesses at an outcome the
+     coordinator's own response left out, and never reports it as either
+     a success or as exit 9/12's specific, named failures
   7  forbidden (403: authenticated, but missing a required scope — see
      stderr for the scope name; distinct from 3, which means no credential
      authenticated at all)
   8  rate limited (429: the login concurrency bound was exceeded — see
      stderr for how long to wait before retrying)
-  9  command unconfirmed (any "fpp <verb>" write subcommand, ADR-003: the
-     request itself succeeded and the coordinator answered honestly that
-     the command's effect was not confirmed by evidence — never conflated
-     with exit 6, which means the request itself failed)
+  9  command unconfirmed. Two different sources share this one code on
+     purpose: any "fpp <verb>" write subcommand (the request itself
+     succeeded and the coordinator answered honestly that the command's
+     effect was not confirmed by evidence), and (Step 9) "macro run"/
+     "run show" reading back a FINISHED run whose completed=true but
+     confirmed=false — every step dispatched and none aborted, but at
+     least one produced no confirming evidence (an MQTT step that
+     declares no expected response reports this on every correct run, by
+     design). Never conflated with exit 6, which means the request itself
+     failed; distinct from exit 12 below, which is a run that did NOT
+     complete
   10 conflict (409: the request was valid, but this coordinator's current
      state makes it unsafe or meaningless to act on right now — a
      different playlist is playing and ifBusy=refuse, the evidence needed
@@ -226,14 +235,20 @@ Exit codes:
      update at all — never because a total duration was exceeded. This is
      NOT a reported failure: the request itself succeeded and the run may
      still be in progress, or may already have finished: check with
-     "showmeshctl run show <runId>")
+     "showmeshctl run show <runId>". It is still a NON-ZERO exit, though:
+     a shell "&&" chain, or a script running under "set -e", treats this
+     exactly like any other failure and stops there — a caller that wants
+     to keep going after "still watching" must check for 11 explicitly
+     rather than relying on "&&"/"set -e" alone)
   12 macro run aborted (Step 9: a macro run reached its terminal state
      with completed=false — a step failed and the remainder was not
      dispatched, or a step's target was removed mid-run; see stderr/the
      run's own "reason" for which step and why. Distinct from exit 9,
      which this program still uses for a run that completed but did not
      confirm — "completed" and "confirmed" are two separate facts and
-     this CLI's exit codes keep them separate too)
+     this CLI's exit codes keep them separate too. A FINISHED run whose
+     coordinator response did not even report completed/confirmed at all
+     is neither of these: see exit 6)
 `)
 }
 

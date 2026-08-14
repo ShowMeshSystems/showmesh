@@ -1,5 +1,5 @@
 import { FPPCommandOutcome } from './FPPCommandOutcome'
-import type { MacroRunStepCommand } from '../app/types'
+import type { MacroRunStep, MacroRunStepCommand } from '../app/types'
 
 // STEP-9-SPEC.md section 6.1: "commands is pruned by retention while
 // config_revisions and node_declarations are not, so a run older than
@@ -15,11 +15,66 @@ import type { MacroRunStepCommand } from '../app/types'
 // degrade to a generic panel... never blank the view."
 export interface MacroRunCommandDetailProps {
   command: MacroRunStepCommand
+  /**
+   * Corrected 2026-08-14 (this task's finding 2): "none" used to render a
+   * single hardcoded past-tense sentence — "This step did not dispatch an
+   * FPP command" — for every cause of "none", including a step that has
+   * not run YET. Watching a live run, that reads as a settled negative
+   * about a step that is about to dispatch. `integration` and `state`
+   * (both already in hand on [MacroRunStep], previously unused here) are
+   * what let this component tell "never will have one" (an mqtt step; a
+   * step the run skipped before it ever dispatched) apart from "does not
+   * have one yet" (a pending fpp step) — mapMacroRunStepCommand
+   * (internal/coordinator/api/macroruns.go) folds both into the SAME
+   * command.state ("none") and the SAME generic server reason, so this
+   * distinction can only be made client-side, from the step itself.
+   */
+  integration: MacroRunStep['integration']
+  state: MacroRunStep['state']
 }
 
-export function MacroRunCommandDetail({ command }: MacroRunCommandDetailProps) {
+export function MacroRunCommandDetail({ command, integration, state }: MacroRunCommandDetailProps) {
   if (command.state === 'none') {
-    return <p className="text-muted">This step did not dispatch an FPP command.</p>
+    // The server's own reason (STEP-9-SPEC.md section 6.1's "absent
+    // evidence is stated, never omitted") is rendered in every branch
+    // below, never thrown away — matching the "not_retained" branch's own
+    // convention a few lines down. The LEAD sentence is chosen from
+    // integration/state so it is never a past-tense claim about a step
+    // that simply has not run yet.
+    if (integration === 'mqtt') {
+      // Structural, permanent: an mqtt step has no commands row by
+      // construction (mapMacroRunStepCommand's own doc comment) and never
+      // will, on any run of this macro.
+      return (
+        <p className="text-muted">
+          This is an external MQTT step; it never dispatches an FPP command.
+          {command.reason !== undefined && command.reason !== '' ? ` ${command.reason}` : ''}
+        </p>
+      )
+    }
+    if (state === 'skipped') {
+      // An abort left this fpp step never attempted (STEP-9-SPEC.md
+      // section 6.4) — also permanent for this run, but for a different
+      // reason than "mqtt": it WOULD have dispatched one had the run
+      // continued.
+      return (
+        <p className="text-muted">
+          This step was skipped before it dispatched; it will not dispatch a command now.
+          {command.reason !== undefined && command.reason !== '' ? ` ${command.reason}` : ''}
+        </p>
+      )
+    }
+    // fpp, not skipped: a pending (or, transiently, an in-flight)
+    // step that has not dispatched YET — the one case this must not read
+    // as a settled negative. role="status" rather than a bare <p>: this
+    // is live, changing information for a run the operator may be
+    // watching right now.
+    return (
+      <p className="text-muted" role="status">
+        This step has not dispatched a command yet.
+        {command.reason !== undefined && command.reason !== '' ? ` ${command.reason}` : ''}
+      </p>
+    )
   }
   if (command.state === 'retained') {
     if (command.detail === undefined) {

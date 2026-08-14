@@ -3243,7 +3243,7 @@ components:
         dereferences it over the network.
 
 
-        Step 9 (STEP-9-SPEC.md) adds fourteen more, in two groups. Eleven
+        Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve
         are internal/coordinator/config's ValidationError.Code values,
         mapped mechanically onto their own "show-config-*" type by
         internal/coordinator/api's mapValidationError (showconfig.go) — a
@@ -3261,7 +3261,7 @@ components:
         macro_seam.go), never by this package itself.
 
 
-        Four of the fourteen are ADR-024: "forbidden" (401 means no valid
+        Four of the fifteen are ADR-024: "forbidden" (401 means no valid
         credential, this means authenticated but missing a scope — the
         detail text names the missing scope), "csrf-rejected" (a
         cookie-authenticated write with no `Sec-Fetch-Site: same-origin`
@@ -3327,6 +3327,7 @@ components:
             - https://showmesh.dev/problems/show-config-steps-empty
             - https://showmesh.dev/problems/show-config-steps-too-many
             - https://showmesh.dev/problems/show-config-step-id-duplicate
+            - https://showmesh.dev/problems/show-config-field-unknown-key
             - https://showmesh.dev/problems/macro-run-already-in-flight
             - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
@@ -3516,6 +3517,7 @@ components:
       properties:
         topic:
           type: string
+          minLength: 1
         payload:
           type: string
         qos:
@@ -3538,6 +3540,7 @@ components:
       properties:
         topic:
           type: string
+          minLength: 1
         payload:
           type: string
         qos:
@@ -3551,7 +3554,14 @@ components:
         show.action.target.expect (STEP-9-SPEC.md section 7.3), present
         only when target.integration is "mqtt". topic, value, and
         deadlineSeconds are omitted entirely for kind "none", which
-        declares no expected response at all.
+        declares no expected response at all. This same schema is used for
+        both the GET and the PUT request body: a GET response, PUT back
+        unchanged, always validates. Only kind is required by THIS schema;
+        topic and deadlineSeconds are required, and value is present or
+        absent per kind's own rule (see value's own description), for
+        every kind other than "none" — enforced by this coordinator's
+        write-time validation rather than by this schema, matching
+        ConfigShowActionTarget's identical escape one level up.
       required: [kind]
       properties:
         kind:
@@ -3559,10 +3569,25 @@ components:
           enum: [none, boolean, number, text, match]
         topic:
           type: string
+          minLength: 1
         value:
           type: string
+          description: >-
+            Present only for kind "number" (optional — an absent value
+            accepts receipt with no equality check) and kind "match"
+            (required; an empty string is a valid, distinct match target).
+            Never present for "none", "boolean", or "text". Always a JSON
+            string on the wire in both directions, including for kind
+            "number": the string is the operator's own typed text (e.g.
+            "42"), validated as parseable as a number but stored and
+            returned verbatim, never reformatted through a float — a JSON
+            number that round-trips through a float64 is not guaranteed to
+            come back byte-identical. A JSON number literal is rejected
+            for kind "number": this field has exactly one wire
+            representation per kind, not two.
         deadlineSeconds:
           type: integer
+          minimum: 1
           maximum: 120
     ConfigShowActionTarget:
       type: object
@@ -3583,13 +3608,16 @@ components:
           enum: [fpp, mqtt]
         instanceId:
           type: string
+          minLength: 1
         primitive:
           type: string
+          minLength: 1
         params:
           type: object
           additionalProperties: true
         broker:
           type: string
+          minLength: 1
         publish:
           $ref: "#/components/schemas/ConfigShowActionMQTTPublish"
         expect:
@@ -3609,13 +3637,16 @@ components:
           enum: [fpp, mqtt]
         instanceId:
           type: string
+          minLength: 1
         primitive:
           type: string
+          minLength: 1
         params:
           type: object
           additionalProperties: true
         broker:
           type: string
+          minLength: 1
         publish:
           $ref: "#/components/schemas/ConfigShowActionMQTTPublishWrite"
         expect:
@@ -3634,8 +3665,10 @@ components:
       properties:
         show:
           type: string
+          minLength: 1
         label:
           type: string
+          minLength: 1
         description:
           type: string
         safetyClass:
@@ -3659,8 +3692,10 @@ components:
       properties:
         show:
           type: string
+          minLength: 1
         label:
           type: string
+          minLength: 1
         description:
           type: string
         safetyClass:
@@ -3709,6 +3744,7 @@ components:
           enum: [none, coordinator-required, silence]
         reason:
           type: string
+          minLength: 1
     ConfigShowMacroStep:
       type: object
       description: >-
@@ -3722,8 +3758,10 @@ components:
       properties:
         id:
           type: string
+          minLength: 1
         action:
           type: string
+          minLength: 1
         onFailure:
           type: string
           enum: [abort, continue]
@@ -3747,8 +3785,10 @@ components:
       properties:
         id:
           type: string
+          minLength: 1
         action:
           type: string
+          minLength: 1
         onFailure:
           type: string
           enum: [abort, continue]
@@ -3771,8 +3811,10 @@ components:
       properties:
         show:
           type: string
+          minLength: 1
         label:
           type: string
+          minLength: 1
         description:
           type: string
         steps:
@@ -3797,8 +3839,10 @@ components:
       properties:
         show:
           type: string
+          minLength: 1
         label:
           type: string
+          minLength: 1
         description:
           type: string
         steps:
@@ -3905,21 +3949,41 @@ components:
       type: object
       description: >-
         One element of MacroRun.steps. state is the step's own dispatch
-        lifecycle: "pending" (not yet touched), "dispatched" (nudged, not
-        yet resolved), "resolved" (an outcome was recorded), or "skipped"
-        (an abort left this step never attempted) — a closed vocabulary.
-        outcome is "" while state is not yet "resolved" or "skipped" (no
-        outcome has been recorded for this step yet — a run's own steps
-        can be observed mid-flight, including through GET /snapshot's
-        in-flight runs), and otherwise one of "confirmed", "unconfirmed",
-        "unconfirmable", "failed", "skipped" — also a closed vocabulary.
-        outcomeState is a free-form evidence code from whichever collector
-        or waiter resolved this step and is intentionally not enumerated
-        here: an fpp step carries the same evidence-state vocabulary used
-        elsewhere in this document, an mqtt step carries a distinct set of
-        response-contract codes, and both sets may grow. Clients must
-        treat outcomeState as opaque and render outcomeReason for a human,
-        per the rule that a client ignores what it does not recognise.
+        lifecycle: "pending" (not yet touched), "resolved" (an outcome was
+        recorded), or "skipped" (an abort left this step never attempted)
+        — a closed, three-member vocabulary. There is no "dispatched"
+        intermediate: this package's own executor always resolves a step
+        to a terminal outcome before it is ever written, so a value this
+        producer cannot emit is not published here (a prior "dispatched"
+        enum member was removed by review for exactly that reason).
+        outcome is null while state is "pending" — most visibly, every
+        202 response from POST /macros/{id}/runs carries the full,
+        just-created step list with outcome null on every step, since
+        none has executed yet — and otherwise one of "confirmed",
+        "unconfirmed", "unconfirmable", "failed", "skipped": section
+        6.4's exact five-member vocabulary, also closed. A blank string
+        was considered and rejected: MacroRunSummary's own
+        completed/confirmed are null rather than defaulted to false for an
+        unresolved run specifically so a "not decided yet" state never
+        reads as a definite, premature verdict, and an empty outcome
+        string here would be that same premature verdict spelled as
+        whitespace.
+        outcomeState is a free-form, opaque status code and is
+        intentionally NOT enumerated or otherwise typed: in practice it is
+        drawn from at least four different, independently-evolving
+        vocabularies depending on integration and on how resolution ended
+        (the FPP dispatch seam's own evidence-state codes; a distinct set
+        of MQTT response-contract codes; a handful of ad hoc codes this
+        package emits itself for conditions neither of those cover; and
+        reuse of this same struct's own "skipped"), so a mapping from
+        producer to vocabulary would already be wrong the next time any
+        one of them changes and is not published. Two of its values
+        already collide by spelling with values in DIFFERENT fields on
+        this same struct ("confirmed" also appears as an outcome value,
+        "skipped" also appears as a state value) without meaning the same
+        thing, so treat outcomeState as opaque, never compare it across
+        fields, and render outcomeReason for a human — per the rule that a
+        client ignores what it does not recognise.
       required:
         [stepIndex, stepId, actionObjectId, actionRevision, integration,
          safetyClass, localFallbackClass, state, dispatchedAt, resolvedAt,
@@ -3944,7 +4008,7 @@ components:
           enum: [none, coordinator-required, silence]
         state:
           type: string
-          enum: [pending, dispatched, resolved, skipped]
+          enum: [pending, resolved, skipped]
         dispatchedAt:
           type: [string, "null"]
           format: date-time
@@ -3952,9 +4016,9 @@ components:
           type: [string, "null"]
           format: date-time
         outcome:
-          type: string
+          type: [string, "null"]
           enum:
-            ["", confirmed, unconfirmed, unconfirmable, failed, skipped]
+            [null, confirmed, unconfirmed, unconfirmable, failed, skipped]
         outcomeState:
           type: string
         outcomeReason:

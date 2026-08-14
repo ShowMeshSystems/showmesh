@@ -50,7 +50,18 @@ import { describe, expect, it } from 'vitest'
 // reach an operator.
 const forbiddenCopyPattern = /docs\/|\.md\b|ADR-\d+|RES-\d{3}|section\s+\d|api\/openapi\.yaml/i
 
-const TARGET_DIRS = [path.join(__dirname), path.join(__dirname, '..', 'views')]
+// Extended 2026-08-14 (this task's finding 3, second half) to include
+// src/app/: `app/session.ts` holds the scope-refusal copy that four of
+// this wave's five new views (Macros, ShowActions, ShowActionDetail,
+// MacroDetail, MacroRunView) render verbatim via evaluateScope/
+// evaluateAnyScope, and nothing under src/app/ was walked at all before
+// this fix. `readdirSync` (see collectTargetFiles below) is NOT
+// recursive, so this only adds app/'s own top-level .ts/.tsx files —
+// app/test-support/ is a subdirectory and stays out of this walk exactly
+// the way components/ and views/ never had a subdirectory pulled in
+// either; that is this walk's existing, unchanged shape, not a new carve
+// -out for app/.
+const TARGET_DIRS = [path.join(__dirname), path.join(__dirname, '..', 'views'), path.join(__dirname, '..', 'app')]
 
 /**
  * One (file basename, exact string/JsxText VALUE) pair this guard does
@@ -98,6 +109,18 @@ function collectViolations(filePath: string, sourceText: string): string[] {
   function textOf(node: ts.Node): string | undefined {
     if (ts.isStringLiteralLike(node)) return node.text
     if (ts.isJsxText(node)) return node.getText(sourceFile)
+    // Fixed 2026-08-14 (this task's finding 3): `ts.isStringLiteralLike`
+    // is ONLY `StringLiteral | NoSubstitutionTemplateLiteral` — a template
+    // literal WITH a substitution (`` `See ${x}` ``) is neither. Its own
+    // text lives split across a TemplateHead, zero or more
+    // TemplateMiddles, and a TemplateTail instead (TemplateExpression's
+    // own children, all visited independently by this walk's own
+    // `forEachChild` recursion below), every one of which was previously
+    // invisible here — a citation embedded in ANY segment tripped nothing.
+    // Proved live with a throwaway probe file (this task's own report):
+    // before this fix, a template literal reading `` `See ADR-999 for
+    // ${label}` `` in JSX passed this guard with zero violations.
+    if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) return node.text
     return undefined
   }
 

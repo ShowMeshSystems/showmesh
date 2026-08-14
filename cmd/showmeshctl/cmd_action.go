@@ -78,7 +78,7 @@ func cmdActionList(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	if err != nil {
 		return reportError(stderr, "action list", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
 	var resp showConfigObjectsListResponse
@@ -122,7 +122,7 @@ func cmdActionShow(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	if err != nil {
 		return reportError(stderr, "action show", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
 	var resp showActionConfigResponse

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -186,6 +187,145 @@ func TestPutShowActionAndGetRoundTrip(t *testing.T) {
 	if len(revs) != 1 {
 		t.Fatalf("REVISIONS count = %d, want 1; body: %s", len(revs), revBody)
 	}
+}
+
+// TestPutShowActionGetThenPutRoundTrips is the property a UI reviewer
+// found broken and named directly: a GET followed by an unchanged PUT
+// must succeed. It had no test, which is why an MQTT show.action with
+// expect.kind "number" shipped with a decoder that required a JSON
+// number for target.expect.value while the read/stored shape (and
+// api/openapi.yaml) always emit it as a JSON string — an action authored
+// correctly loaded into a client, then rejected on re-save with an error
+// naming a field the operator never touched.
+//
+// Covers every expect.kind that carries a value ("number" with a value,
+// "number" with none, and "match" including an empty value — STEP-9-SPEC.md
+// section 7.3 explicitly allows an empty match target) plus an FPP action
+// with no MQTT fields at all, and — since the same defect class
+// (STEP-9-SPEC.md section 5's absent-key-defaults rule) applies to
+// show.macro's onFailure/onUnconfirmed and both kinds' description — a
+// show.macro round trip too.
+func TestPutShowActionGetThenPutRoundTrips(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	roundTrip := func(t *testing.T, resource, initialBody string) {
+		t.Helper()
+		putReq := newJSONRequest(t, http.MethodPut, resource, initialBody, map[string]string{"Authorization": "Bearer " + token})
+		putResp, putBody := doRawRequest(t, api.Handler, putReq)
+		if putResp.StatusCode != http.StatusOK {
+			t.Fatalf("initial PUT: status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+		}
+
+		getResp, getBody := doRequest(t, api.Handler, "GET", resource, map[string]string{"Authorization": "Bearer " + token})
+		if getResp.StatusCode != http.StatusOK {
+			t.Fatalf("GET: status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+		}
+		get := decodeMap(t, getBody)
+		payload, err := json.Marshal(get["payload"])
+		if err != nil {
+			t.Fatalf("re-marshaling the GET response's own payload: %v", err)
+		}
+
+		// The property under test: PUT the GET response's payload back
+		// completely unchanged. If the read shape is not accepted by the
+		// write path, this is where it fails.
+		secondReq := newJSONRequest(t, http.MethodPut, resource, string(payload), map[string]string{"Authorization": "Bearer " + token})
+		secondResp, secondBody := doRawRequest(t, api.Handler, secondReq)
+		if secondResp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT of the unchanged GET body: status = %d, want 200; body: %s\nGET payload was: %s", secondResp.StatusCode, secondBody, payload)
+		}
+		second := decodeMap(t, secondBody)
+		if second["revision"] != float64(2) {
+			t.Errorf("PUT of the unchanged GET body created revision %v, want 2 (a genuinely new, identical revision)", second["revision"])
+		}
+	}
+
+	t.Run("fpp-action", func(t *testing.T) {
+		roundTrip(t, "/api/v1/config/show.action/rt-fpp", validShowActionFPPBody)
+	})
+	t.Run("fpp-action-with-numeric-param", func(t *testing.T) {
+		// This is wave 2's own recorded family of defect (an int64 param
+		// coming back as a float64) checked against THIS surface
+		// specifically: decodeFPPParamValue already stores an int-kind
+		// param as int64 (fppcommand_primitives.go), which Go's
+		// encoding/json marshals as a bare integer with no decimal point,
+		// so it should already round-trip. This subtest is the empirical
+		// check rather than trusting that reasoning.
+		body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"fpp","instanceId":"player-01","primitive":"setVolume","params":{"volume":50}}}`
+		roundTrip(t, "/api/v1/config/show.action/rt-fpp-volume", body)
+	})
+	t.Run("mqtt-action-expect-number-with-value", func(t *testing.T) {
+		body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"mqtt","broker":"home-automation",
+			"publish":{"topic":"home/projectors/set","payload":"ON","qos":1},
+			"expect":{"kind":"number","topic":"home/projectors/state","value":"42","deadlineSeconds":10}}}`
+		roundTrip(t, "/api/v1/config/show.action/rt-mqtt-number", body)
+	})
+	t.Run("mqtt-action-expect-number-without-value", func(t *testing.T) {
+		body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"mqtt","broker":"home-automation",
+			"publish":{"topic":"home/projectors/set","payload":"ON","qos":1},
+			"expect":{"kind":"number","topic":"home/projectors/state","deadlineSeconds":10}}}`
+		roundTrip(t, "/api/v1/config/show.action/rt-mqtt-number-novalue", body)
+	})
+	t.Run("mqtt-action-expect-match-with-empty-value", func(t *testing.T) {
+		// The other half of what the reviewer asked to be confirmed: the
+		// server allows an empty "match" value (decodeRequiredStringAllowEmpty),
+		// and that must round-trip too, not merely decode once.
+		body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"mqtt","broker":"home-automation",
+			"publish":{"topic":"home/projectors/set","payload":"ON","qos":1},
+			"expect":{"kind":"match","topic":"home/projectors/state","value":"","deadlineSeconds":10}}}`
+		roundTrip(t, "/api/v1/config/show.action/rt-mqtt-match-empty", body)
+	})
+	t.Run("show-macro", func(t *testing.T) {
+		putActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/rt-macro-action", validShowActionFPPBody,
+			map[string]string{"Authorization": "Bearer " + token})
+		if resp, body := doRawRequest(t, api.Handler, putActionReq); resp.StatusCode != http.StatusOK {
+			t.Fatalf("prerequisite show.action PUT: status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		roundTrip(t, "/api/v1/config/show.macro/rt-macro", validShowMacroBody("rt-macro-action"))
+	})
+}
+
+// TestPutShowConfigUnknownTopLevelKeyRejected is the HTTP-level half of
+// the defect a second review found: config.DecodeShowActionPayload and
+// DecodeShowMacroPayload used to silently ignore an unrecognized
+// top-level key, which for a field with a default (description,
+// onFailure, onUnconfirmed) meant a typo silently stored a DIFFERENT
+// policy than the one the operator typed, with no error. Proved here
+// through the real route table, asserting the distinct problem type
+// rather than a generic 400.
+func TestPutShowConfigUnknownTopLevelKeyRejected(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	t.Run("show.action", func(t *testing.T) {
+		body := `{"show":"halloween-2026","label":"x","descriptio":"oops","safetyClass":"none","target":{"integration":"fpp","instanceId":"player-01","primitive":"stopPlaylist"}}`
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/typo-test", body, map[string]string{"Authorization": "Bearer " + token})
+		resp, respBody := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
+		}
+		problem := decodeMap(t, respBody)
+		if problem["type"] != "https://showmesh.dev/problems/show-config-field-unknown-key" {
+			t.Errorf("problem.type = %v, want show-config-field-unknown-key", problem["type"])
+		}
+	})
+	t.Run("show.macro", func(t *testing.T) {
+		body := `{"show":"halloween-2026","label":"x","step":[]}`
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/typo-test", body, map[string]string{"Authorization": "Bearer " + token})
+		resp, respBody := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
+		}
+		problem := decodeMap(t, respBody)
+		if problem["type"] != "https://showmesh.dev/problems/show-config-field-unknown-key" {
+			t.Errorf("problem.type = %v, want show-config-field-unknown-key", problem["type"])
+		}
+	})
 }
 
 // TestPutShowActionSafetyClassMismatchRejected: startPlaylist's own
@@ -421,6 +561,7 @@ func TestShowConfigValidationCodesAllMapToDistinctProblemTypes(t *testing.T) {
 		config.ValidationCodeStepsEmpty,
 		config.ValidationCodeStepsTooMany,
 		config.ValidationCodeStepIDDuplicate,
+		config.ValidationCodeFieldUnknownKey,
 	}
 	seen := make(map[string]string, len(codes))
 	for _, code := range codes {

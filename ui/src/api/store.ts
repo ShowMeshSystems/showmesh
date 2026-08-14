@@ -1419,7 +1419,18 @@ export class ApiStore {
       confirmed: event.confirmed,
       reason: event.reason,
       attributionDegraded: event.attributionDegraded,
-      finishedAt: event.state === 'finished' ? (existing.finishedAt ?? event.serverTime) : existing.finishedAt,
+      // [MacroRunChangedEvent] carries no finishedAt (see the type alias
+      // above and its own doc comment) — the transition tells this store
+      // THAT the run finished, never WHEN. Substituting the event's
+      // `serverTime` here would be a fabricated fact stored as though the
+      // coordinator had reported it (this task's own finding 6; CLAUDE.md's
+      // standing rule that absent evidence is stated, never invented), and
+      // it would be silently WRONG by however long this SSE frame took to
+      // arrive after the actual finish. Left exactly as `existing` held it
+      // (null, unless a fuller fetch already populated it) — a consumer
+      // wanting the real value calls `getMacroRun`, which returns the
+      // coordinator's own authoritative `finishedAt` for this run.
+      finishedAt: existing.finishedAt,
     }
     const macroRuns = replaceAt(this.model.macroRuns, idx, updated)
     const receivedAt = this.now()

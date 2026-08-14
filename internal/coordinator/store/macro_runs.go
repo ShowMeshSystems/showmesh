@@ -105,7 +105,7 @@ type MacroRunStepRecord struct {
 	State               string
 	DispatchedAt        *time.Time
 	ResolvedAt          *time.Time
-	Outcome             string // "" | "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "skipped" — STEP-9-SPEC.md §6.4; not validated by this package.
+	Outcome             string // "" | "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "skipped" — STEP-9-SPEC.md §6.4; not validated by this package. "" is this package's own internal sentinel for "not yet resolved" and is never the wire value: internal/coordinator/api's mapping renders it as JSON null (v1.MacroRunStep.Outcome is a pointer), per a review finding that a blank outcome on the wire reads as a premature "nothing happened" verdict rather than "not decided yet".
 	OutcomeState        string
 	OutcomeReason       string
 	CommandID           *string

@@ -109,10 +109,21 @@ func TestOpenAPIShowConfigResponsesMatchRealResponses(t *testing.T) {
 // both omit onFailure/onUnconfirmed already, and this test additionally
 // exercises an mqtt target that omits target.publish.retain. All three
 // must validate against the WRITE schema. The strict READ schema must
-// still reject the identical bodies — proving the split is load-bearing,
-// not merely a rename: a reader who deletes the split and points PUT back
-// at the strict schema gets a failing test here, not a passing one that
-// happens not to notice.
+// still reject the identical bodies — proving the two schemas actually
+// differ.
+//
+// What this test does NOT prove, corrected after a second review: it
+// validates fixtures against schema NAMES looked up directly
+// (compileSchema/assertMatchesSchema), and never reads
+// paths./config/show.{action,macro}/{id}.put.requestBody itself. The
+// first version of this doc comment claimed "a reader who deletes the
+// split and points PUT back at the strict schema gets a failing test
+// here" — the reviewer re-pointed both requestBody refs at the strict
+// schemas, reintroducing the exact shipped defect, and this test stayed
+// green throughout, because a schema compiling and being valid says
+// nothing about which operation references it.
+// TestOpenAPIShowConfigPutRequestBodiesReferenceWriteSchemas is what
+// actually proves that; see its own doc comment.
 func TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody(t *testing.T) {
 	c := newOpenAPICompiler(t)
 
@@ -139,6 +150,27 @@ func TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody(t *testing.T) {
 		if err := sch.Validate(instance); err == nil {
 			t.Errorf("a real, successful write request validated cleanly against the STRICT %s schema; it must be rejected there (that schema requires the resolved value) for %s to be doing anything", tc.schema, tc.schema+"Write")
 		}
+	}
+}
+
+// TestOpenAPIShowConfigPutRequestBodiesReferenceWriteSchemas resolves the
+// document pointer TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody
+// does not: paths./config/show.action/{id}.put.requestBody.content.
+// application/json.schema.$ref and the equivalent for show.macro. Neither
+// compileSchema nor assertMatchesSchema ever reads that pointer — they
+// take a schema NAME directly — so a schema being valid, well-formed, and
+// distinct from its read counterpart proves nothing about which schema an
+// operation actually references. This is the test that closes that gap:
+// it fails if either PUT is re-pointed at the strict read schema, which
+// is precisely the defect this file exists to catch and precisely what
+// TestOpenAPIWriteSchemasAcceptTheOperatorsActualRequestBody was found not
+// to catch.
+func TestOpenAPIShowConfigPutRequestBodiesReferenceWriteSchemas(t *testing.T) {
+	if got := requestBodySchemaRef(t, "put", "/config/show.action/{id}"); got != "ConfigShowActionWrite" {
+		t.Errorf("PUT /config/show.action/{id} requestBody schema = %q, want ConfigShowActionWrite", got)
+	}
+	if got := requestBodySchemaRef(t, "put", "/config/show.macro/{id}"); got != "ConfigShowMacroWrite" {
+		t.Errorf("PUT /config/show.macro/{id} requestBody schema = %q, want ConfigShowMacroWrite", got)
 	}
 }
 

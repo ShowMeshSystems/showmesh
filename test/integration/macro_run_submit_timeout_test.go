@@ -24,15 +24,39 @@ import (
 // run is accepted asynchronously (ADR-031 decision 1: POST
 // /macros/{id}/runs answers 202 before any step ever dispatches, from a
 // background goroutine the HTTP response does not wait on). So there is no
-// server-side wait for a client floor to "survive" here. What this test
-// demonstrates instead is the other half of "reconciled, not assumed": that
-// a real POST /macros/{id}/runs against a real coordinator (with a real
-// bench fppd behind the one show.action step it submits) actually IS fast
-// enough that minMacroClientTimeout's 5s floor is comfortable headroom, not
-// a number chosen blind. If a future change ever made macro submission
-// itself block on step dispatch — resurrecting exactly the Step 7 defect
-// ADR-031 decision 1 exists to prevent — this test would start failing on
-// its own elapsed-time assertion, not just eventually time out.
+// server-side wait for a client floor to "survive" here.
+//
+// The PRIMARY proof below is STRUCTURAL, not a wall-clock race. Review
+// finding 6 (Step 9 wave 3) showed the original elapsed-time-only version
+// was the weaker of two available proofs: it passed no --timeout, so the
+// operative budget was the 10s global default and minMacroClientTimeout
+// was never actually exercised; the regression it names (submission
+// blocking on step dispatch) costs roughly 15-20s by section 6.3's own
+// arithmetic, which already blows past a 10s budget and fails earlier than
+// the elapsed-time assertion ever gets to run; and a wall-clock bound on a
+// machine that may be concurrently hosting containers is exactly the kind
+// of test this project has already caught flaking for reasons unrelated to
+// correctness (see LESSONS.md, "a test can be a coin flip, and platform is
+// the usual disguise").
+//
+// internal/coordinator/macro/submit.go's SubmitRun captures the run and
+// its step records BEFORE launching background execution ("Start
+// background execution and answer 202-shaped: the run's initial state,
+// never a completed result"), so the 202 body is a deterministic
+// pre-dispatch snapshot: state "running", every step "pending", no step's
+// dispatchedAt set. This test decodes that snapshot via --output json and
+// asserts exactly that shape. This is true on every machine, at any
+// speed, and names the regression directly — a future change that made
+// submission wait on the first step's dispatch would flip a step's own
+// state away from "pending" (or set its dispatchedAt), which this
+// assertion catches regardless of how fast or slow the box is.
+//
+// A LOOSE wall-clock ceiling is kept alongside the structural assertion,
+// deliberately far inside the 10s default budget, purely as a sanity
+// check and because acceptance criterion 1 wants the measured number as
+// evidence — see this function's own final t.Logf. It is not the
+// mechanism that proves the regression is absent; the structural
+// assertion above is.
 //
 // Driven through the REAL showmeshctl binary as a subprocess (runShowmeshctl,
 // cli_test.go), not an in-process call — the same reason
@@ -77,11 +101,32 @@ func putRawWithToken(t *testing.T, coord *testCoordinator, path, token string, b
 	return resp.StatusCode, b
 }
 
+// macroRunSubmitResponseForTest decodes the fields this test actually
+// needs from POST /macros/{id}/runs' 202 body (via showmeshctl's own
+// --output json, which re-serializes its OWN decoded struct — see
+// cmd/showmeshctl/types_macro.go's macroRunSubmitResponse for the
+// authoritative shape). Declared locally rather than importing
+// cmd/showmeshctl's types: this package is test/integration, not
+// showmeshctl itself, and duplicating just the handful of fields this
+// test asserts on keeps this test from silently tracking an unrelated
+// package's decode surface.
+type macroRunSubmitResponseForTest struct {
+	Run struct {
+		State string `json:"state"`
+		Steps []struct {
+			State        string  `json:"state"`
+			DispatchedAt *string `json:"dispatchedAt"`
+		} `json:"steps"`
+	} `json:"run"`
+}
+
 // TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency is this
 // file's own name for the reconciliation test cmd/showmeshctl/macro_client.go's
 // minMacroClientTimeout doc comment cites by name. See this file's own doc
 // comment above for exactly what it proves and why that is NOT the same
-// claim its fpp-command sibling proves.
+// claim its fpp-command sibling proves, and for why the structural
+// assertion below — not the elapsed-time one — is what actually pins the
+// regression this test exists to catch.
 func TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency(t *testing.T) {
 	requireBroker(t)
 	fppURL := requireLiveFPP(t)
@@ -128,11 +173,14 @@ func TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency(t *testing.T) 
 	// than the global --timeout default of 10s, so this also proves the
 	// floor never needs to RAISE anything for an ordinary submission; see
 	// noteMacroTimeoutFloorIfRaised, which would print a note to stderr if
-	// it ever fired here). The outer 30s below is this TEST's own patience
-	// for the subprocess, not showmeshctl's request budget.
+	// it ever fired here). --output json is what makes the structural
+	// assertion below possible: the prose "accepted: run ..." line a
+	// human reads carries none of the step-level detail this test needs.
+	// The outer 30s below is this TEST's own patience for the subprocess,
+	// not showmeshctl's request budget.
 	start := time.Now()
 	code, stdout, stderr := runShowmeshctl(t, 30*time.Second,
-		"macro", "run", "--server", "http://"+coord.httpAddr, "--token", adminToken, macroID)
+		"macro", "run", "--server", "http://"+coord.httpAddr, "--token", adminToken, "--output", "json", macroID)
 	elapsed := time.Since(start)
 
 	if code != 0 {
@@ -143,20 +191,45 @@ func TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency(t *testing.T) 
 			"asynchronously (202) and must never legitimately take anywhere near the 5s floor; exit=%d stdout=%q stderr=%q",
 			code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "accepted") {
-		t.Fatalf("stdout = %q, want it to report the run as accepted", stdout)
+
+	// The STRUCTURAL proof (this file's own doc comment explains why this,
+	// not the elapsed-time check below, is what actually pins the
+	// regression): SubmitRun captures the run and its steps BEFORE
+	// launching background execution, so a 202 response reporting
+	// anything OTHER than "running" with every step still "pending" and
+	// no step's dispatchedAt set means submission waited on dispatch —
+	// exactly the Step 7-shaped regression ADR-031 decision 1 exists to
+	// prevent. True on any machine, at any speed.
+	var resp macroRunSubmitResponseForTest
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("decoding --output json stdout as a macro run submission: %v; stdout=%q", err, stdout)
+	}
+	if resp.Run.State != "running" {
+		t.Errorf("run.state = %q, want %q — a 202 response must be the pre-dispatch snapshot, not a result submission waited for", resp.Run.State, "running")
+	}
+	if len(resp.Run.Steps) == 0 {
+		t.Fatalf("run.steps is empty; want the one-step macro fixture's step to be present in the 202 body")
+	}
+	for i, st := range resp.Run.Steps {
+		if st.State != "pending" {
+			t.Errorf("step %d state = %q, want %q — submission must not have waited for this step to dispatch before answering 202", i, st.State, "pending")
+		}
+		if st.DispatchedAt != nil {
+			t.Errorf("step %d dispatchedAt = %v, want nil/absent — a dispatched timestamp on the 202 body means submission waited on dispatch", i, *st.DispatchedAt)
+		}
 	}
 
-	// The actual evidence: real submission latency against a real
-	// coordinator and a real bench fppd, measured, not assumed. Comfortably
-	// under minMacroClientTimeout's 5s floor is the claim; this asserts a
-	// full order of magnitude of headroom (under 1s) so ordinary CI/bench
-	// jitter cannot make this flaky while still catching a genuine
-	// regression toward "submission blocks on dispatch."
-	if elapsed > 1*time.Second {
-		t.Errorf("macro run submission took %s end-to-end (including subprocess startup); want well under 1s, "+
-			"which is what makes the 5s client floor headroom rather than a number chosen blind. A submission "+
-			"this slow is worth investigating before trusting the floor further", elapsed)
+	// The SANITY check: a loose wall-clock ceiling, comfortably inside the
+	// 10s default budget, plus the measured number logged as acceptance
+	// criterion 1's own evidence. This is NOT what proves the regression
+	// is absent — the structural assertion above is — but a submission
+	// that is this slow is still worth knowing about even though the
+	// structural check alone would not catch it.
+	const sanityCeiling = 5 * time.Second
+	if elapsed > sanityCeiling {
+		t.Errorf("macro run submission took %s end-to-end (including subprocess startup); want well under the %s sanity ceiling. "+
+			"This is a secondary check — the structural assertion above already proved submission did not wait on dispatch — "+
+			"but a submission this slow is still worth investigating", elapsed, sanityCeiling)
 	}
-	t.Logf("showmeshctl macro run (no --timeout override) against a real coordinator: exit=%d elapsed=%s stdout=%q", code, elapsed, stdout)
+	t.Logf("showmeshctl macro run --output json (no --timeout override) against a real coordinator: exit=%d elapsed=%s stdout=%q", code, elapsed, stdout)
 }

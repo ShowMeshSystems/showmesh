@@ -253,7 +253,7 @@ export function makeMacroRunStep(overrides: Partial<MacroRunStep> = {}): MacroRu
     state: 'pending',
     dispatchedAt: null,
     resolvedAt: null,
-    outcome: '',
+    outcome: null,
     outcomeState: 'not_collected',
     outcomeReason: '',
     attributionDegraded: false,
