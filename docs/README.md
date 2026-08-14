@@ -13,12 +13,26 @@
 - [Build log](build/BUILD-LOG.md) — the chronological session record of implementation work.
 - [Engineering lessons](build/LESSONS.md) — defects this project has shipped and caught, and the conventions that came out of them.
 
+Work is organised into parallel delivery tracks as well as numbered build steps. The track documents live alongside the build plan: [Track B](build/TRACK-B-nodes-and-projection.md) nodes and projection, [Track C](build/TRACK-C-audio-node.md) the audio node, [Track D](build/TRACK-D-resolume.md) Resolume control and timecode, [Track E](build/TRACK-E-show-authoring-and-assets.md) show authoring and assets.
+
+## Bench captures
+
+What an external system actually does, captured from a running instance before ShowMesh names anything in a specification. These are **evidence, not design**: no capture proposes an interface, and each one records the version, host, and parameters its results are only valid for.
+
+- [FPP command vocabulary](bench/fpp-command-vocabulary.md) — FPP's real command list, argument encoding, and per-command behaviour, plus the exclusion register for every captured command Step 8 did not ship. Established that FPP's `200` means only that its dispatcher ran.
+- [Resolume control surface](bench/resolume-control-surface.md) — Arena 7.23.2's REST, WebSocket, and OSC surfaces: what each exposes, how a clip and a layer are addressed in all three, what confirmation costs in latency and bytes, and what a restart does. Established that OSC cannot address a pinned clip, and that a disconnect confirms one layer transition after a connect does.
+- [RES-002 capture procedure](bench/RES-002-capture-procedure.md) — the method for the FPP MultiSync wire capture.
+- [Track B NDI spike](bench/TRACK-B-NDI-SPIKE.md) — NDI transport spike notes.
+
+A capture supersedes desk research on the same question. Where one contradicts a research record, the research record is corrected by the orchestrating session rather than by the capture editing it in place.
+
 ## Reading order
 
 1. Read the architecture specification for the intended system.
 2. Read the decision records to understand which constraints are settled.
 3. Use the research tracker to distinguish verified behavior from assumptions and to plan experiments.
-4. Read the build plan and build log to see where implementation currently stands.
+4. Read the bench captures for any external system you are about to integrate with, before reading what this project has assumed about it.
+5. Read the build plan and build log to see where implementation currently stands.
 
 ## Document conventions
 
