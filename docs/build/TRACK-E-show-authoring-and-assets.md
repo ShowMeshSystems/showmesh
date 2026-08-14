@@ -56,6 +56,8 @@ Three findings change how this is built.
 
 **An empty `channelRanges` yields a full non-sparse FSEQ**, which is exactly the gigabytes-per-song case being avoided. A surface with no range configured must be caught at configuration time.
 
+**One hard constraint on this work, decided 2026-08-13.** xLights classifies a device as FPP only when `GET /config.php` returns a title containing the substring `"Falcon Player"`. **Faking that is permitted on the bench and forbidden in any release.** Implementing a protocol is interoperability; claiming to be someone else's product is not. The legitimate path is an upstream vendor listing, which is unresearched and flagged in RES-003 §9.7b. Anyone who reaches the point of writing that string should stop and open the research instead.
+
 The owner's position on the residual risk is recorded and worth carrying: none of this project's integrations rest on a published stable contract, an xLights or FPP update could break any of them, and that is not a reason to avoid the work. RES-003 §9.8 lists what remains unknown, and §9.1 warns specifically against designing around the typo rather than implementing the responder.
 
 Everything in E1 through E8 is built so this arrives as an additional ingestion path rather than a redesign. That is the point of ADR-028 decision 8: many ingestion paths, one internal model.

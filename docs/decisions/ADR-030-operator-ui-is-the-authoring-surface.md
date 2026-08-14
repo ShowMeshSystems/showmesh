@@ -29,6 +29,18 @@ The CLI half is the part that will feel like overhead, and it is the part that w
 
 The contract argument still holds and is why `showmeshctl` cannot import a coordinator package. It is now the second reason rather than the first.
 
+### 1a. Parity runs both ways: the UI is a full control surface
+
+Added 2026-08-13 on the owner's instruction, and it is the mirror of decision 1 rather than a restatement.
+
+Decision 1 stops the **UI outrunning the API**. This stops the **CLI outrunning the UI**. Anything an operator can do with `showmeshctl` they can also do in the browser, allowing for the small set of things that genuinely cannot be mirrored, such as streaming raw output or piping to another tool. The UI is a full control surface, not a curated subset of one.
+
+The relationship is therefore `API ⊇ CLI ≡ UI`: the API may carry more than either client exposes, and the two clients stay level with each other.
+
+Why it matters enough to write down: a CLI-only capability is as much a private contract as a UI-only one, just with a different audience, and it pushes the operator to a terminal for something they are doing at a laptop with a mouse. The failure is quieter than the UI-first one because the capability is technically reachable, so nobody notices the UI has become the easy 80% of a system whose remaining 20% requires a different tool and a different mental model.
+
+**Visual design is explicitly not settled by this record**, and is deferred to a dedicated design session. What is settled is the structural rule above and the constraints below. The information architecture that falls out of Track E's screens is a design problem to be solved then, not now.
+
 ### 2. The UI holds no authoring logic
 
 Validation rules, defaults, name resolution, channel-range derivation, and binding checks live server-side. The UI may **mirror** a validation to give immediate feedback, and the server remains the only place a rule is enforced.

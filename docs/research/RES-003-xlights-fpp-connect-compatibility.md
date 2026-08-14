@@ -147,7 +147,20 @@ This explains the operator's observation exactly: a controller is definable offl
 
 **The unreconciled part, flagged rather than smoothed over.** This second pass reports that the **model push** also passes through `AuthenticateAndUpdateVersions()`, and therefore also requires `/config.php` to advertise `"Falcon Player"`. The first pass, which traced the FSEQ and media path, never encountered `/config.php` at all and derived a different gate (`typeId` plus `httpConnected`). Both may be true of different operations, since they are different functions guarding different features. **They have not been reconciled against a single call graph, and until they are, section 9.7's four-item list should be read as covering FSEQ and media upload only.** Anyone implementing the model-receive path should assume `/config.php` is also required and verify it on the bench.
 
-**That requirement is a decision, not a detail.** Serving a `/config.php` whose title claims to be Falcon Player is different in kind from implementing a compatible API: it is asserting another project's identity to pass a string comparison. It is the cheapest possible implementation and it deserves a deliberate record rather than appearing in a commit as a one-line string constant.
+**That requirement is a decision, and the owner made it on 2026-08-13. It is a hard no for any release.**
+
+The line he drew is worth stating precisely, because it is not squeamishness and it generalises past this endpoint. **Implementing someone else's protocol in order to talk to their devices is ordinary interoperability and is what this project already does everywhere.** Serving a document that claims *to be* their product is different in kind: it is asserting an identity, not speaking a language.
+
+So:
+
+- **Development and bench work may fake it**, to prove the concept and to exercise the rest of the path. That is a temporary scaffold and must be recognisable as one in the code.
+- **No release may ship it.** Not behind a flag, not as a default, not as a documented workaround.
+
+**The preferred route is to be listed legitimately**, and section 9.7b turned up the concrete mechanism: xLights ships one `.xcontroller` XML file per vendor in `resources/controllers/`, twenty-five of them at the commit read, and `ControllerCaps::LoadControllers()` knows only what is in those files. Being a real entry in the manufacturer and model list is therefore a matter of getting a vendor definition into xLights, most likely upstream, rather than of imitating an existing one.
+
+**This needs its own research pass and did not get one here.** Open questions, none of them answered: what xLights' own rules and process are for adding a vendor, whether a `.xcontroller` entry alone is sufficient or whether a `ConfigDriver` must also be recognised in `BaseController::CreateBaseController()` (which would mean a C++ change upstream rather than an XML addition), what the maintainers expect of a new vendor, and whether a device can be listed at all when it drives no pixel outputs. The "FPP Player Only" variant suggests the last one is possible, since it is a shipped entry with zero pixel ports.
+
+**Realistic sequencing, per the owner:** the official route is very unlikely to be in place for day-0 on his personal display. So the practical position is a faked identity confined to development, an unfaked release, and the listing question researched properly before any release is contemplated. **This paragraph is the flag: anyone reaching this point should stop and open that research rather than shipping the string.**
 
 #### The model schema, now traced
 
