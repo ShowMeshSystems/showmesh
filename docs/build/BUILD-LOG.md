@@ -142,7 +142,7 @@ Step 0 detail follows.
 
 Step 0 (Foundation) is complete and verified. The repository builds, tests, and lints clean; the coordinator image builds for `linux/amd64` and `linux/arm64` and runs; the Compose bundle brings up Mosquitto and the coordinator together and the coordinator reaches ready. The coordinator survives an unreachable broker, a broker stopped and restarted underneath it, and SIGTERM in every one of those states. There is no show logic, no MQTT topic work, and no persistence yet: `/healthz`, `/readyz`, and `/version` are the entire surface.
 
-The repository is pushed to `github.com/ShowMeshSystems/showmesh`, currently private, and CI has run on a real GitHub runner. It earned its keep on the first run by failing a test that passes on macOS, which is what exposed the `SO_REUSEADDR` behavior difference recorded in ADR-013.
+The repository is pushed to `github.com/ShowMeshSystems/showmesh`, which was private at the time of this entry and is **public as of 2026-08-14**, and CI has run on a real GitHub runner. It earned its keep on the first run by failing a test that passes on macOS, which is what exposed the `SO_REUSEADDR` behavior difference recorded in ADR-013.
 
 No audio code exists. The Audio Engine was specified in the same session (ADR-017..019, `docs/architecture/AUDIO-ENGINE.md`, RES-007 rewritten) and deliberately left unsequenced: RES-007 is critical-risk at L0, the multichannel interface has not been purchased, and every load-bearing claim is a bench fact. The next audio action is the RES-007 prototype, not implementation.
 
