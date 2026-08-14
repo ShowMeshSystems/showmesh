@@ -115,6 +115,18 @@ Directories: `sequences` for FSEQ, `effects` for `.eseq`, `music` for audio, `vi
 3. **`GET /api/fppd/multiSyncSystems`** with a correct self-entry.
 4. **`PATCH /api/file/{dir}`** chunked upload.
 
+### 9.7a A second surface this pass did not cover: the Controllers tab
+
+**Recorded 2026-08-13, raised by the operator after reading section 9.5, and it narrows that section's conclusion.**
+
+This pass was scoped to the **FPP Connect dialog**, so its finding that channel ranges are *pulled from the target* is correct for sequence rendering and **does not generalise**. xLights has a separate **Controllers tab** where a controller is defined by name, address, vendor and protocol, and where an **"Upload Outputs"** action pushes configuration to it. The operator reports that a controller can be defined with no hardware present but that upload requires the device to be online, which implies a reachability or identity check first.
+
+This matters because it appears to be **the only path by which xLights pushes model definitions to a device**, and therefore the only way ShowMesh could learn model names and layouts rather than requiring an operator to transcribe a start channel by hand. That is the capability [ADR-027](../decisions/ADR-027-show-and-surface-model.md) decision 4 calls the preferred mapping.
+
+This pass brushed against the machinery without tracing it: `POST /api/models` with a body from `CreateModelMemoryMap()`, and `GET`/`POST /api/channel/output/universeOutputs` from `FPP::UploadUDPOut()`, both surfacing in the FPP Connect dialog as dropdowns defaulting to "None". Whether the Controllers tab drives the same code is **unverified**, and the `/api/models` body schema is listed below as explicitly undetermined.
+
+A second research pass is running. Until it reports, **assume nothing about this surface**, and note that day-0 does not depend on it: manual channel-range configuration is a first-class permanent path under ADR-027 decision 4, and section 9.5 confirms it is the natural input to sparse rendering.
+
 ### 9.8 What this research could not determine
 
 Recorded because an honest unknown is worth more than a plausible guess.
