@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md) · [Spike procedure](../bench/TRACK-B-NDI-SPIKE.md) · [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md)
 
-Status: not started. Specified 2026-08-13.
+Status: B1 complete (2026-08-14, merged to `main` at `fa5107e`). B0 (the transport spike) has not run and remains the owner's bench work; B2 is not unblocked until it does. Specified 2026-08-13.
 
 ## Goal
 
@@ -25,7 +25,7 @@ Two consequences worth stating before anyone re-derives them:
 
 **B0. The transport spike**, per [`TRACK-B-NDI-SPIKE.md`](../bench/TRACK-B-NDI-SPIKE.md). Run before anything else. It answers whether the NDI assumption in ADR-026 survives contact with the reference hardware, and a failure here changes the track's design rather than delaying it.
 
-**B1. A real node agent.** The current one advertises capabilities and heartbeats. It needs to receive and act: subscribe to its command topic, execute an allowlisted operation, and report the outcome. ARCHITECTURE §10.4's "agents accept only allowlisted operations" is recorded in ADR-024's consequences as **not delivered**, and this is where it lands.
+**B1. A real node agent.** **Done 2026-08-14.** The agent subscribes to its command topic, executes an allowlisted operation, and reports the outcome. ARCHITECTURE §10.4's "agents accept only allowlisted operations" is delivered, with one operation shipped (`agent.echo`); the allowlist grows as later seams add real operations.
 
 **B2. GStreamer pipeline supervision.** The agent builds, starts, watches, and restarts pipelines, and reports their health as observations with provenance. ShowMesh code owns supervision and health and never touches per-frame rendering, per [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md).
 
