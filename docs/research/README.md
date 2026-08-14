@@ -10,7 +10,7 @@ Research records separate verified product behavior from architectural intent. E
 |---|---|---|---|---|
 | [RES-001](RES-001-resolume-smpte-behavior.md) | Resolume SMPTE behavior | planned (L1; fault behavior L0) | critical | RES-007 |
 | [RES-002](RES-002-fpp-multisync-compatibility.md) | FPP MultiSync compatibility | planned (bench; protocol L2, hardware/network L1) | critical | — |
-| [RES-003](RES-003-xlights-fpp-connect-compatibility.md) | xLights/FPP Connect compatibility | planned (renderer delivery decided; integration L0) | high | RES-002 |
+| [RES-003](RES-003-xlights-fpp-connect-compatibility.md) | xLights/FPP Connect compatibility | planned (compat surface L1 2026-08-13; integration L0) | high | RES-002 |
 | [RES-004](RES-004-virtual-matrix-renderer-performance.md) | Virtual-matrix renderer performance | planned (reference profile decided; bench L0) | critical | RES-002 |
 | [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | planned (transport roles decided; bench L0) | critical | RES-004, RES-006 |
 | [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (distribution resolved at L1; sender bench pending) | high | — |

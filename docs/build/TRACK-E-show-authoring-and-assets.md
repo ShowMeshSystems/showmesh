@@ -46,7 +46,17 @@ All four ADRs were written on 2026-08-13 and should be read before starting. The
 
 **FPP Connect compatibility**, meaning ShowMesh render nodes appearing as their own targets in xLights so it renders and delivers per-node FSEQ files automatically. The owner wants this and has scheduled it for early October rather than day-0.
 
-The reason it cannot be scheduled sooner is that **the required API surface is unknown**. Research is under way and will land in [RES-003](../research/RES-003-xlights-fpp-connect-compatibility.md). The owner's position on the risk is recorded and worth carrying: none of this project's integrations rest on a published stable contract, an xLights or FPP update could break any of them, and that is not a reason to avoid the work.
+**The surface is no longer unknown.** [RES-003](../research/RES-003-xlights-fpp-connect-compatibility.md) §9 was source-verified on 2026-08-13 against xLights and FPP master plus the shipping xLights release, and the requirement is four items: a UDP ping responder in the v3 layout, `GET /api/system/info`, `GET /api/fppd/multiSyncSystems`, and chunked `PATCH /api/file/{dir}`.
+
+Three findings change how this is built.
+
+**A UDP ping responder is mandatory**, because a confirmed typo in xLights (present in master and in the shipping release) means `typeId` can never be read from `/api/system/info`, and a zero `typeId` is an unconditional rejection. **ShowMesh already has that responder**: `pkg/multisync`'s discover-ping responder from Step 1, which has never been answered by a real FPP and whose v3 conformance is unverified. This is its first real consumer.
+
+**Per-node sparse rendering is automatic and default-on**, given a `channelRanges` string and a mode other than `"master"`. That is the mechanism [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md) assumed, now confirmed, and it is pulled from the target rather than pushed to it.
+
+**An empty `channelRanges` yields a full non-sparse FSEQ**, which is exactly the gigabytes-per-song case being avoided. A surface with no range configured must be caught at configuration time.
+
+The owner's position on the residual risk is recorded and worth carrying: none of this project's integrations rest on a published stable contract, an xLights or FPP update could break any of them, and that is not a reason to avoid the work. RES-003 §9.8 lists what remains unknown, and §9.1 warns specifically against designing around the typo rather than implementing the responder.
 
 Everything in E1 through E8 is built so this arrives as an additional ingestion path rather than a redesign. That is the point of ADR-028 decision 8: many ingestion paths, one internal model.
 

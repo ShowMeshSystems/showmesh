@@ -51,6 +51,10 @@ A `Surface` is the logical canvas defined in [ADR-026](ADR-026-renderer-surface-
 **Manual channel-range configuration is a permanent supported feature, not an escape hatch.** Three reasons, and the first is the one that matters most right now:
 
 - Named-model mapping depends on xLights metadata reaching ShowMesh, which needs the FPP Connect compatibility work. Until that lands, **manual configuration is the only path that exists**, so treating it as a fallback would mean shipping day-0 on a path the design considers second-class.
+
+  **Corrected 2026-08-13 by [RES-003](../research/RES-003-xlights-fpp-connect-compatibility.md) §9.5, which found the direction of travel is the opposite of what this decision assumed.** xLights **pulls** the channel set from the target, as a `channelRanges` string read during discovery, and renders a sparse FSEQ containing only those channels. It does not push a model definition that ShowMesh must then interpret. So manual range configuration is the **natural input** to the FPP Connect flow rather than a stand-in awaiting it, and model import is a separate opt-in path whose value is saving the operator from transcribing a start channel out of xLights by hand. The conclusion below is unchanged; only this reason was wrong.
+
+  One consequence is sharp enough to state here: **an empty `channelRanges` makes xLights render a full, non-sparse FSEQ**, which is the gigabytes-per-song case [ADR-028](ADR-028-show-asset-store-and-identity.md) exists to avoid. A surface with no channel range configured is therefore a defect to catch at configuration time, not at upload time.
 - ShowMesh must remain usable with sequence-generation systems other than xLights, and requiring xLights would contradict this record's own non-goals.
 - It is the recovery path when automatic discovery is wrong, which is the case where an operator most needs to be able to fix something.
 
