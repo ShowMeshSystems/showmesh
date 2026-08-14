@@ -197,9 +197,9 @@ func validateSubpath(subpath string) error {
 var ErrInvalidCmdID = errors.New("mqttproto: invalid command ID")
 
 // validateCmdID reports whether cmdID is a well-formed single topic
-// segment: pkg/command is still a stub (see the package doc comment), so
-// this package does not know cmdID's real shape (likely a UUID
-// idempotency key); it only enforces that cmdID is one non-empty segment
+// segment: this package does not otherwise constrain cmdID's real shape
+// (in practice, pkg/command.Envelope.ID — a caller-chosen identifier,
+// often a UUID); it only enforces that cmdID is one non-empty segment
 // safe to place directly in a topic string.
 func validateCmdID(cmdID string) error {
 	if !subpathSegmentPattern.MatchString(cmdID) {
@@ -228,8 +228,7 @@ func LWTTopic(nodeID string) (string, error) {
 }
 
 // CmdTopic builds "showmesh/nodes/<node-id>/cmd", the topic commands are
-// sent to a node on. This package only builds and parses the topic; see
-// the package doc comment for why no command payload type lives here yet.
+// sent to a node on. See [CmdPayload] for the payload this topic carries.
 func CmdTopic(nodeID string) (string, error) {
 	if err := ValidateNodeID(nodeID); err != nil {
 		return "", err
@@ -252,9 +251,8 @@ func ObservedTopic(nodeID, subpath string) (string, error) {
 }
 
 // ResultTopic builds "showmesh/nodes/<node-id>/result/<cmd-id>", the topic
-// a node publishes a command's result/evidence to. This package only
-// builds and parses the topic; see the package doc comment for why no
-// result payload type lives here yet.
+// a node publishes a command's result/evidence to. See [ResultPayload] for
+// the payload this topic carries.
 func ResultTopic(nodeID, cmdID string) (string, error) {
 	if err := ValidateNodeID(nodeID); err != nil {
 		return "", err
