@@ -1,9 +1,11 @@
-# ADR-034: Configuration that governs dispatch applies without a restart
+# ADR-036: Configuration that governs dispatch applies without a restart
 
 Status: Accepted
 Date: 2026-08-14
 
 Narrows [ADR-009](ADR-009-storage-and-config.md)'s revision model with a delivery requirement, and closes the gap [STEP-9-SPEC](../build/STEP-9-SPEC.md) §5.6 described but did not have.
+
+Originally issued as ADR-034 on the `step-9-wave-3` branch, and renumbered on 2026-08-15 when that branch merged, alongside [ADR-035](ADR-035-a-run-always-runs-every-step.md) whose number collided with Track D's show mode record. Nothing about this record's content changed.
 
 ## Context
 

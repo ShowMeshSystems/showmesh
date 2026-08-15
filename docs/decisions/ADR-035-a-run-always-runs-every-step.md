@@ -1,9 +1,11 @@
-# ADR-033: A run always runs every step
+# ADR-035: A run always runs every step
 
 Status: Accepted
 Date: 2026-08-14
 
 Supersedes [ADR-031](ADR-031-macro-execution-model.md) decision 2's default, and narrows [ADR-024](ADR-024-identity-authorization-and-audit.md) decision 11 so that it does not apply inside a macro run.
+
+Originally issued as ADR-033 on the `step-9-wave-3` branch, and renumbered on 2026-08-15 when that branch merged. Track D issued [ADR-033](ADR-033-show-mode.md) on `main` the same day and neither session knew of the other; show mode kept the number because it had more references. Nothing about this record's content changed.
 
 ## Context
 
