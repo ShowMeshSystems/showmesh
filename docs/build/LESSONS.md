@@ -24,6 +24,8 @@ Two things generalize. **A crash in the target looks exactly like a defect in yo
 
 **Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation, then run the controls. "Reading it is dangerous" and "this one endpoint is dangerous" build very different systems, and only the controls tell you which one you are in.
 
+**The sequel, recorded 2026-08-15: the controls were still not wide enough.** Every crash occurred on the development laptop, while the playout machine ran the same composition for a month without incident. "Which host" sat in the capture's open-items list and got quoted away. A control that varies your code is not a control that varies the environment.
+
 ## A single confirming observation proves the rule only for the case it sampled
 
 **Track D.** The bench capture tested whether a Resolume clip id resolves regardless of which deck is selected. One request, one clip, correct answer, written up as "**REST `by-id` is immune**" and used as a load-bearing property of the addressing model.
@@ -133,7 +135,7 @@ So Step 8 made the capture a deliverable, taken before any command was named. It
 
 None of these is discoverable by reading, and each would have shipped as a defect.
 
-**Rule:** capture the vocabulary from the system, then write the plan. Where a command's effect is not observable through a signal already collected, it does not ship, and the exclusion is recorded with its reason rather than omitted.
+**Rule:** capture the vocabulary from the system, then write the plan. Where a command's effect is not observable through a signal already collected, it does not ship as a confirmed command: it may ship reporting unconfirmable with a stated reason, or with an operator-supplied observation contract, as Step 9's external MQTT step does under BUILD-PLAN's recorded exemption. What may never ship is a step that reports success it did not verify, and the exclusion or exemption is recorded with its reason rather than omitted.
 
 ## A distinction the operator must see cannot be tested by asserting text
 
@@ -253,6 +255,8 @@ Since schema v4 the observations key includes `source`, so that list legitimatel
 ## Review is where the value has landed
 
 The build workflow delegates review to a separate pass with the diff plus the named ADRs, instructed to hunt for constraint violations rather than style. It has caught defects unit tests could not: broker health exposed as a bare boolean against ADR-011, a Compose `depends_on` that reintroduced the broker dependency [ADR-008](../decisions/ADR-008-mqtt-control-plane.md) forbids, and a discover-ping responder that replied to an ephemeral source port and so could never have worked.
+
+And running it is where more has landed since. Step 6's three unreachable features, Step 7's 179-microsecond confirmation, Step 8's `nextPlaylistItem`, and Step 9's endpoint-removed-mid-run were each found by exercising the assembled system, not by review or tests. Review is cheap insurance on a diff; integration finds what the diff was wrong about. When they compete for time, integrate.
 
 ## Configuration mechanisms do what they do, not what you meant
 

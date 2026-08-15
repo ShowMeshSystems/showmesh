@@ -54,9 +54,9 @@ On every run it also rebuilds the gitignored `mosquitto/acl.generated.conf` from
 
 **Residual exposure, recorded rather than glossed over:** the ACL bounds what a compromised *agent* credential can do (a stolen node, per ADR-024 decision 10's own reasoning: "a node is a Pi in a weatherproof box in a front yard, physically reachable by anyone walking past"). It does not defend against a compromised *coordinator* broker credential: anyone holding it can publish a forged command to any node's `cmd` topic, and an agent has no way to tell. Message-level command authentication would close that and is deliberately not built here (see ADR-024's own consequences and alternatives sections). If FPP's own broker credential — whether on this bundle's broker or, as in the reference installation, a separate home-automation broker — is ever a shared, general-purpose account with publish rights rather than a dedicated read-only or FPP-scoped one, that account is a larger command-authority exposure than anything this ACL restricts; see ADR-024 decision 10's own closing paragraphs.
 
-## The read-only control API
+## The control API
 
-The coordinator serves a versioned, public, read-only API at `/api/v1` on the same HTTP port as the health endpoints, with a Server-Sent Events change stream at `/api/v1/stream`. It is a documented contract designed to be used without any browser ([ADR-014](../docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-020](../docs/decisions/ADR-020-control-api-shape-and-change-stream.md)), so a CLI, a script, or an automation system is a first-class client:
+The coordinator serves a versioned, public API at `/api/v1` on the same HTTP port as the health endpoints, with a Server-Sent Events change stream at `/api/v1/stream`. Reads are open by default; every write requires an authenticated principal holding the named scope ([ADR-024](../docs/decisions/ADR-024-identity-authorization-and-audit.md)), and write endpoints have existed since Step 7 (2026-08-12). It is a documented contract designed to be used without any browser ([ADR-014](../docs/decisions/ADR-014-operator-ui-is-an-api-client.md), [ADR-020](../docs/decisions/ADR-020-control-api-shape-and-change-stream.md)), so a CLI, a script, or an automation system is a first-class client:
 
 ```sh
 curl -s  localhost:8080/api/v1/nodes | jq

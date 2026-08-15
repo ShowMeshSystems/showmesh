@@ -67,7 +67,7 @@ The API must provide, at minimum:
 
 - an authoritative snapshot of inventory, capabilities, assignments, desired state, observed state, reconciliation status, and freshness;
 - a subscribable stream of state changes and events;
-- once write operations exist — the first release is read-only — command submission carrying the fields required by ARCHITECTURE §8.1, including an idempotency key, so a retried submission after a lost response cannot execute twice;
+- for write operations (the first release was read-only; they landed in Step 7, 2026-08-12), command submission carrying the fields required by ARCHITECTURE §8.1, including an idempotency key, so a retried submission after a lost response cannot execute twice;
 - explicit statements of unavailable evidence rather than omission, so the client can distinguish "not supported" from "not collected" from "collection failed".
 
 This list is the API's eventual minimum, not v1's contents. The first version ships inventory, capabilities, observed state and freshness, and deliberately ships **no** assignments, desired state, or reconciliation status, because the coordinator does not model them yet. They arrive additively with the behaviour behind them. A `reconciliationStatus` that no code computes would be worse than its absence: a client would render it and an operator would read it as a verdict. See [ADR-020](../decisions/ADR-020-control-api-shape-and-change-stream.md).
@@ -102,7 +102,7 @@ The UI separates three concerns, and configuration must not dominate the operati
 
 **Monitor** — operational visibility into current behavior: health, show state, active nodes and assignments, synchronization, output state, faults, warnings, and reassignments.
 
-**Control** — safe operational actions: starting and stopping applicable workloads, enabling and disabling outputs, moving between operational states (ARCHITECTURE §7.1) through show macros, executing configured device commands, and applying temporary overrides. Every item here is beyond the first release, which is read-only, and each becomes available only once the corresponding backend capability exists.
+**Control** — safe operational actions: starting and stopping applicable workloads, enabling and disabling outputs, moving between operational states (ARCHITECTURE §7.1) through show macros, executing configured device commands, and applying temporary overrides. The first release was read-only; write operations landed in Step 7 (2026-08-12) and the primitive vocabulary in Step 8, and each item here becomes available only once the corresponding backend capability exists.
 
 **Configure** — persistent desired configuration: controlled-device definitions, output mappings, capability assignments, integration configuration, and system preferences.
 

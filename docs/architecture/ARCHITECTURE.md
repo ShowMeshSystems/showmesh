@@ -332,7 +332,7 @@ Detection, degraded operation, autonomous recovery, operator notification, and p
 
 ## 12. Roadmap
 
-### Phase 0 — Read-only observability baseline
+### Phase 0 — Read-only observability baseline (complete)
 
 - Inventory, topology, and timestamped health collection.
 - FPP, Resolume, controller, projector, and media-node status.
