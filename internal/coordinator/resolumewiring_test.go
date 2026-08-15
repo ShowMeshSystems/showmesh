@@ -113,9 +113,6 @@ func TestResolumeWiringSurfacesReachableObservation(t *testing.T) {
 	if wire.watcher == nil {
 		t.Fatalf("wire.watcher = nil, want a constructed *resolume.Watcher when ResolumeURL is set")
 	}
-	if wire.adapter == nil {
-		t.Fatalf("wire.adapter = nil, want a constructed *resolume.Adapter when ResolumeURL is set (review finding A: coordinator.go must have something to run alongside the watcher)")
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,13 +128,13 @@ func TestResolumeWiringSurfacesReachableObservation(t *testing.T) {
 	// (watch_test.go); this test's srv serves REST only, so the watcher
 	// would sit in its dial-error backoff loop harmlessly for the
 	// duration of this test — started anyway so this test proves what
-	// coordinator.go's real Run does: all three goroutines alive together,
-	// none blocking the others. wire.adapter.Run is the goroutine review
-	// finding A added — coordinator.go's real Run starts it alongside
-	// wire.watcher.Run on the identical backgroundWG, and this test
-	// follows suit rather than leaving it unexercised at this seam.
+	// coordinator.go's real Run does: both goroutines alive together,
+	// neither blocking the other. There used to be a third goroutine here
+	// (wire.adapter.Run) that owned the only GET /composition read this
+	// seam performed; ADR-032 decision 2 forbids that call outright — it
+	// is known to crash the target Arena build — so the adapter, and this
+	// test's own exercise of it, are gone along with it.
 	go wire.watcher.Run(ctx)
-	go wire.adapter.Run(ctx)
 
 	obs := waitForObservation(t, st, "resolume-test", "resolume.reachable", 5*time.Second)
 	if len(obs) != 1 {
@@ -180,9 +177,6 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	}
 	if wire.watcher != nil {
 		t.Errorf("wire.watcher = %v, want nil when ResolumeURL is unset", wire.watcher)
-	}
-	if wire.adapter != nil {
-		t.Errorf("wire.adapter = %v, want nil when ResolumeURL is unset: an unconfigured Resolume collector must contribute no goroutine at all, adapter included", wire.adapter)
 	}
 
 	statuses, err := wire.status.CollectorStatuses(context.Background())

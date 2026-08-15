@@ -56,26 +56,24 @@ func (l resolumeCollectorStatusLister) CollectorStatuses(context.Context) ([]api
 }
 
 // resolumeWiring is what newResolumeWiring hands back to coordinator.go's
-// Run: the watcher AND the adapter, each to run in its own goroutine (both
-// nil when the collector is disabled — see newResolumeWiring's doc
-// comment), and the collector's own status lister for apiDeps.Collectors.
+// Run: the watcher, to run in its own goroutine (nil when the collector is
+// disabled — see newResolumeWiring's doc comment), and the collector's own
+// status lister for apiDeps.Collectors.
 //
-// watcher and adapter are two separate goroutines by design (review
-// finding A, 2026-08-14): adapter.Run owns the ONLY composition read this
-// seam performs and must run continuously for the adapter's own
-// coalescing/retry policy to work (see resolume.Adapter's doc comment),
-// entirely independent of whether the WebSocket happens to be up at any
-// given moment — watcher.Run's OWN job is just driving that WebSocket and
-// turning what it sees into cheap, non-blocking signals
-// (HandleConnect/HandleDisconnect/HandleChange) that adapter.Run consumes.
+// There used to be a second goroutine here, an Adapter that owned the
+// only `GET /composition` read this seam performed. ADR-032 decision 2
+// forbids that call outright — it is known to crash the target Arena
+// build — so the Adapter, and the goroutine that ran it, are gone. What
+// replaces the object-id resolution it used to perform is a later seam's
+// job (a stored id map sourced from the operator's own composition file),
+// not this file's.
 type resolumeWiring struct {
 	watcher *resolume.Watcher
-	adapter *resolume.Adapter
 	status  resolumeCollectorStatusLister
 }
 
-// newResolumeWiring constructs Track D seam D-1's REST client, collector,
-// adapter, and WebSocket watcher, and registers the collector on runner.
+// newResolumeWiring constructs Track D seam D-1's REST collector and
+// WebSocket watcher, and registers the collector on runner.
 // Returns a zero-value watcher (status reporting CollectorNotConfigured)
 // when cfg.ResolumeURL is empty — the identical feature-flag shape
 // cfg.FPPMQTTBrokerURL already established in coordinator.go: no
@@ -115,23 +113,19 @@ func newResolumeWiring(cfg config.Config, runner *collector.Runner, logger *slog
 		return resolumeWiring{status: resolumeCollectorStatusLister{configured: false}}, nil
 	}
 
-	// One shared *http.Client for both the Adapter's own Client and the
-	// Collector's internally-built one, matching coordinator.go's own
-	// fppHTTPClient precedent ("callers SHOULD construct one *http.Client
-	// ... rather than one per instance"). Only two instances ever share
-	// this client (the Adapter's Client and the Collector's own), so the
-	// same small MaxIdleConnsPerHost fppHTTPClient uses is generous here
-	// too.
+	// One shared *http.Client for the Collector's internally-built one,
+	// matching coordinator.go's own fppHTTPClient precedent ("callers
+	// SHOULD construct one *http.Client ... rather than one per
+	// instance"). Only one instance uses this client today (the
+	// Collector's own), but it is still constructed once here rather than
+	// left to resolume.New's own internal default, so a future seam that
+	// adds a second Resolume-facing client at this wiring layer has
+	// something to share rather than a reason to invent its own.
 	resolumeHTTPClient := &http.Client{
 		Transport: &http.Transport{
 			MaxIdleConnsPerHost: 4,
 			IdleConnTimeout:     90 * time.Second,
 		},
-	}
-
-	client, err := resolume.NewClient(cfg.ResolumeURL, resolume.ClientOptions{HTTPClient: resolumeHTTPClient})
-	if err != nil {
-		return resolumeWiring{}, fmt.Errorf("resolume client %q: %w", cfg.ResolumeID, err)
 	}
 
 	resolumeCollector, err := resolume.New(cfg.ResolumeID, cfg.ResolumeURL, resolume.Options{
@@ -142,15 +136,6 @@ func newResolumeWiring(cfg config.Config, runner *collector.Runner, logger *slog
 		return resolumeWiring{}, fmt.Errorf("resolume collector %q: %w", cfg.ResolumeID, err)
 	}
 	runner.Add(resolumeCollector, resolume.DefaultPollInterval)
-
-	// adapter.Run (started by coordinator.go alongside watcher.Run, on the
-	// same backgroundWG) is the ONLY thing in this seam that ever performs
-	// a composition read — see resolume.Adapter's own doc comment for why
-	// that loop exists and what its coalescing/retry policy promises.
-	// Every field left at AdapterOptions' zero value takes that package's
-	// own documented default (resolveDebounceInterval, resolveMinInterval,
-	// resolveRetryMinBackoff/Max) rather than being re-decided here.
-	adapter := resolume.NewAdapter(client, resolume.AdapterOptions{Logger: logger})
 
 	wsURL, err := resolumeWebSocketURL(cfg.ResolumeURL)
 	if err != nil {
@@ -166,41 +151,24 @@ func newResolumeWiring(cfg config.Config, runner *collector.Runner, logger *slog
 		URL:    wsURL,
 		Logger: logger,
 
-		// OnConnect/OnDisconnect fire the Adapter's own connect/disconnect
-		// handling (resolume/adapter.go): a cheap, non-blocking signal to
-		// adapter.Run's own loop, which is what actually performs the
-		// fresh composition read that replaces the held Resolution
-		// wholesale, or drops it entirely. Neither ever produces an
-		// observation — Adapter is deliberately not a collector (see its
-		// own doc comment) — so this wiring introduces no second source of
-		// evidence alongside the collector's own REST poll.
-		OnConnect: func(wsCtx context.Context) {
-			adapter.HandleConnect(wsCtx)
-		},
-		OnDisconnect: func(wsCtx context.Context) {
-			adapter.HandleDisconnect(wsCtx)
-		},
-
-		// OnChange is the whole point of the WebSocket (spec section 3.4):
-		// a message means "something may have changed", and is NEVER
-		// itself an observation. Review finding A (2026-08-14) is why BOTH
-		// calls below fire from this one wake-up rather than either alone:
-		// they are two different consumers of one signal, and neither
-		// replaces the other.
+		// OnConnect and OnDisconnect have no wiring here. They used to
+		// drive the Adapter's own connect/disconnect handling, which
+		// existed only to schedule the composition read ADR-032 decision 2
+		// now forbids outright. Nothing else in this seam needs to know
+		// when the WebSocket connects or disconnects — the collector's own
+		// /product poll runs on its ordinary timer regardless — so both
+		// callbacks are left nil rather than kept as empty hooks with no
+		// remaining purpose. [resolume.WatcherOptions.OnConnect]'s own doc
+		// comment already treats a nil callback as ordinary.
 		//
-		// adapter.HandleChange feeds the Adapter's own resolve loop
-		// (resolume/adapter.go's coalescing/retry policy), which is what
-		// keeps the object/parameter id resolution this seam holds
-		// current. runner.Nudge asks the shared collector.Runner to poll
-		// this collector's own /api/v1/product read immediately instead of
-		// waiting out its ordinary ~10s cadence, so resolume.reachable and
-		// resolume.product catch up too — nothing about what that poll
-		// finds, or how a caller interprets it, changes. Dropping either
-		// call would silently stop updating whichever half it fed: dropping
-		// HandleChange reintroduces this seam's own load-window defect
-		// (Adapter's doc comment), and dropping Nudge means a live
-		// WebSocket message stream with a stale reachable/product pair
-		// until the next ordinary poll.
+		// OnChange is the whole point of the WebSocket: a message means
+		// "something may have changed", and is NEVER itself an
+		// observation. Its only remaining consumer is runner.Nudge, which
+		// asks the shared collector.Runner to poll this collector's own
+		// /api/v1/product read immediately instead of waiting out its
+		// ordinary ~10s cadence, so resolume.reachable and resolume.product
+		// catch up sooner — nothing about what that poll finds, or how a
+		// caller interprets it, changes.
 		//
 		// Nudge is rate-limited per collector id by
 		// collector.DefaultNudgeMinInterval, which is correct and
@@ -215,14 +183,9 @@ func newResolumeWiring(cfg config.Config, runner *collector.Runner, logger *slog
 		// the collector's ordinary cadence is entirely unaffected either
 		// way — so its bool return is deliberately discarded here, exactly
 		// as coordinator.go's fppRunnerNudger callers already treat it:
-		// nothing about a suppressed nudge is worth a log line, let alone
-		// a warning. adapter.HandleChange has its OWN, separate
-		// debounce/min-interval policy (resolveDebounceInterval /
-		// resolveMinInterval) and is never rate-limited by Nudge's — the
-		// two consumers of this one wake-up bound their own costs
-		// independently.
-		OnChange: func(wsCtx context.Context) {
-			adapter.HandleChange(wsCtx)
+		// nothing about a suppressed nudge is worth a log line, let alone a
+		// warning.
+		OnChange: func(context.Context) {
 			runner.Nudge(cfg.ResolumeID)
 		},
 	})
@@ -230,7 +193,7 @@ func newResolumeWiring(cfg config.Config, runner *collector.Runner, logger *slog
 		return resolumeWiring{}, fmt.Errorf("resolume watcher %q: %w", cfg.ResolumeID, err)
 	}
 
-	return resolumeWiring{watcher: watcher, adapter: adapter, status: resolumeCollectorStatusLister{configured: true}}, nil
+	return resolumeWiring{watcher: watcher, status: resolumeCollectorStatusLister{configured: true}}, nil
 }
 
 // resolumeWebSocketURL derives Resolume's WebSocket endpoint from its REST

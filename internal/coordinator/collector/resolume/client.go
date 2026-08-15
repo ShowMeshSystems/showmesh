@@ -22,27 +22,15 @@ const apiPrefix = "/api/v1"
 // Provenance-labeled defaults, in the pattern
 // internal/coordinator/collector/fpp's own Default* constants establish:
 // every threshold states whether it is derived from something measured or
-// is a ShowMesh guess. Both of these are guesses; the bench capture that
+// is a ShowMesh guess. This one is a guess; the bench capture that
 // measured Resolume's REST latency (4-64ms for a connect, on an arm64
 // laptop over loopback) did not measure ordinary GET latency against a
-// live show host, and RES-001/RES-013 own the real values once that
+// live show host, and RES-001/RES-013 own the real value once that
 // exists.
 const (
 	// DefaultRequestTimeout bounds an ordinary GET (/product). SHOWMESH
 	// HYPOTHESIS, NOT MEASURED.
 	DefaultRequestTimeout = 5 * time.Second
-
-	// DefaultCompositionTimeout bounds the one large GET this package
-	// makes, /composition. SHOWMESH HYPOTHESIS, NOT MEASURED, but
-	// deliberately generous rather than reusing DefaultRequestTimeout:
-	// the bench capture measured this response body at up to ~2.27 MB
-	// (docs/bench/resolume-control-surface.md section 4.1 — see this
-	// package's doc comment for why that citation belongs in a comment
-	// and never in an operator-facing string), and encoding, transmitting
-	// and decoding a payload two orders of magnitude larger than an
-	// ordinary FPP status document deserves headroom an ordinary request
-	// timeout was never sized for.
-	DefaultCompositionTimeout = 30 * time.Second
 )
 
 // maxProductResponseBytes bounds how much of the /product response is
@@ -50,18 +38,8 @@ const (
 // headroom above that so a misbehaving or compromised Resolume streaming
 // an unbounded body on this endpoint cannot exhaust coordinator memory —
 // the same reasoning internal/coordinator/collector/fpp's
-// MaxResponseBytes states, applied to the one small endpoint this file
-// reads outside of Composition (which has its own bound, see
-// maxCompositionResponseBytes).
+// MaxResponseBytes states, applied to the one endpoint this file reads.
 const maxProductResponseBytes = 4 << 10 // 4 KiB
-
-// maxCompositionResponseBytes bounds how much of the /composition
-// response Composition will attempt to decode. The capture measured this
-// body at up to ~2.27 MB on one real composition; this is several times
-// that, so an ordinary composition is never truncated, while a Resolume
-// instance streaming an unbounded body still cannot exhaust coordinator
-// memory.
-const maxCompositionResponseBytes = 16 << 20 // 16 MiB
 
 // maxErrorBodyBytes bounds how much of a non-2xx response body [StatusError]
 // retains. Resolume's own errors are plain text and echo the request path
@@ -82,22 +60,19 @@ type ClientOptions struct {
 	// RequestTimeout bounds an ordinary GET, via a context deadline
 	// applied per request. See DefaultRequestTimeout.
 	RequestTimeout time.Duration
-
-	// CompositionTimeout bounds the /composition GET specifically. See
-	// DefaultCompositionTimeout.
-	CompositionTimeout time.Duration
 }
 
 // Client is a read-only REST client for one Resolume Arena instance's
 // `/api/v1` surface. It issues GET requests only — there is no method on
 // this type that can send Resolume a POST, PUT, or DELETE — per this
-// package's doc comment.
+// package's doc comment. It has no method that reads GET /composition:
+// see this package's doc comment and guardfullcomposition_test.go for why
+// that call is forbidden outright, not merely unused.
 type Client struct {
 	baseURL string // scheme://host[:port], no path, no trailing slash
 	http    *http.Client
 
-	requestTimeout     time.Duration
-	compositionTimeout time.Duration
+	requestTimeout time.Duration
 }
 
 // NewClient constructs a Client for one Resolume Arena instance. baseURL
@@ -139,9 +114,6 @@ func NewClient(baseURL string, opts ClientOptions) (*Client, error) {
 	if o.RequestTimeout <= 0 {
 		o.RequestTimeout = DefaultRequestTimeout
 	}
-	if o.CompositionTimeout <= 0 {
-		o.CompositionTimeout = DefaultCompositionTimeout
-	}
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{
 			Transport: &http.Transport{
@@ -165,10 +137,9 @@ func NewClient(baseURL string, opts ClientOptions) (*Client, error) {
 	o.HTTPClient = &guarded
 
 	return &Client{
-		baseURL:            strings.TrimSuffix(parsed.String(), "/"),
-		http:               o.HTTPClient,
-		requestTimeout:     o.RequestTimeout,
-		compositionTimeout: o.CompositionTimeout,
+		baseURL:        strings.TrimSuffix(parsed.String(), "/"),
+		http:           o.HTTPClient,
+		requestTimeout: o.RequestTimeout,
 	}, nil
 }
 
@@ -178,9 +149,8 @@ func NewClient(baseURL string, opts ClientOptions) (*Client, error) {
 // redirect response itself — the 3xx, with its Location header — rather
 // than silently following it (Go's zero-value behavior: up to 10
 // redirects to whatever host and path the response names). The status
-// check in get/getComposition below already treats any non-2xx response,
-// 3xx included, as a [StatusError], so refusing the follow is the whole
-// fix.
+// check in [Client.Product] already treats any non-2xx response, 3xx
+// included, as a [StatusError], so refusing the follow is the whole fix.
 func refuseRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
@@ -231,40 +201,13 @@ func (c *Client) Product(ctx context.Context) (Product, error) {
 	return p, nil
 }
 
-// Composition performs GET /api/v1/composition and decodes it directly
-// from the response body via [json.Decoder] — never into a []byte first,
-// per this package's task brief: the capture measured this body at up to
-// ~2.27 MB, and reading that into memory before decoding it is work this
-// package does not need to do twice. CompositionTimeout (not
-// RequestTimeout) bounds this call — see [DefaultCompositionTimeout].
-func (c *Client) Composition(ctx context.Context) (*Composition, error) {
-	resp, cancel, err := c.doGET(ctx, "/composition", c.compositionTimeout)
-	if err != nil {
-		return nil, err
-	}
-	defer cancel()
-	defer drainAndClose(resp.Body)
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, newStatusError(resp, "/composition")
-	}
-
-	limited := io.LimitReader(resp.Body, maxCompositionResponseBytes+1)
-	dec := json.NewDecoder(limited)
-	var comp Composition
-	if err := dec.Decode(&comp); err != nil {
-		return nil, &DecodeError{Path: "/composition", Err: err}
-	}
-	return &comp, nil
-}
-
 // doGET issues one bounded GET against c.baseURL+apiPrefix+path and
 // returns the response together with the context.CancelFunc the caller
 // must defer. The cancel func is returned rather than applied internally
 // (unlike internal/coordinator/collector/fpp.fetch, which reads the whole
-// body before returning) because Composition streams its decode directly
-// from resp.Body — the request context must stay live for the whole
-// decode, not just until doGET returns.
+// body before returning) so the request context stays live for however
+// long the caller takes to read and decode resp.Body, not just until
+// doGET itself returns.
 func (c *Client) doGET(ctx context.Context, path string, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 
@@ -331,9 +274,7 @@ func newStatusError(resp *http.Response, path string) *StatusError {
 
 // DecodeError wraps a JSON decode failure against a named endpoint, so
 // [ClassifyError] can name the failure class without dumping the
-// underlying decode error (which can be long and, for a streamed
-// [Client.Composition] decode, can reference byte offsets deep into a
-// multi-megabyte document).
+// underlying decode error, which can be long.
 type DecodeError struct {
 	Path string
 	Err  error

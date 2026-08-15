@@ -1059,6 +1059,25 @@ count, deck count and names, and the presence of specific clip ids. A readiness
 check that asserts the expected clip ids resolve is the only formulation found
 that is wrong in none of the three cases above.
 
+## 13. Open items this capture did not close
+
+- **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
+- **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
+- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise. **Now doubly open:** §14 means the adapter no longer re-enumerates on a cadence, so this open item is also the reason a swap-without-restart leaves a stale resolution.
+- **Everything still in §14.2.** ~~Whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does~~ is **closed (§14.3): it does not**, across 209,916 reads and 6.5 GB. What remains open is whether the crash reproduces on another composition, on another host or build, and what actually causes it.
+- **The `.avc` format's stability across Arena versions** (§15). Everything parsed there was read from files written by 7.23.2 and earlier, the format is undocumented, and 7.26 carries an API overhaul that may or may not touch it. `versionInfo` is in the file, so a mismatch is at least detectable.
+- **What `by-id` does during a deck switch** (§16.1). A stored clip id 404s while its deck is not selected, which is indistinguishable from the stale-reference case §6.4 defines. That needs a deck term before D-3 ships an action.
+- ~~**Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).~~ **Closed 2026-08-14 (§16.2): they are `PersistentClips`, stored outside any deck.**
+- **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
+- **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).
+- **Whether the `options` list can change at runtime**, which would make any cached enum stale. It varies per object; it was not observed changing on one object.
+- **The one 204 that did nothing** (§2.6). Not reproduced; cause unknown.
+- **Column, group and layer-clear over OSC input.** Present in the outbound address space; never sent as inputs.
+- **The `Previewing` and `Connected & previewing` clip states.** Never observed; only `Empty`, `Disconnected` and `Connected` occurred.
+- **Whether the full-composition push can be suppressed.** No mechanism was found; absence of a mechanism was not proven.
+- **`targetType="4"`** in `osc.xml`. Meaning unknown.
+- **The Avenue/Arena split.** The served spec is titled "Arena & Avenue", so some paths may not exist on Avenue. Not relevant to this deployment and not tested.
+
 ## 14. Added 2026-08-14, during the D-1 build: `GET /composition` crashes Arena
 
 **This was not found by the capture. It was found by building against the capture**,
@@ -1121,9 +1140,6 @@ Resolume is dangerous."**
 
 - Whether it reproduces on **another composition**. Only `Christmas 25` (252 clip
   slots, 2.26 MB) was used, and payload size is the obvious suspect.
-- Whether it reproduces on **another host or build**. Everything here is the same
-  arm64 laptop as the rest of this document; the show host is a different machine
-  and may become Windows.
 - Whether it reproduces on **another host or build**. Everything here is the same
   arm64 laptop as the rest of this document; the show host is a different machine
   and may become Windows.
@@ -1281,22 +1297,3 @@ close a second small discrepancy: 26 ordinary non-empty clips on `Main` plus the
 one `by-id` check §9.4 ran came back deck-independent: it tested the exception and
 generalised from it. A single confirming observation of a rule proved the rule only
 for the case it sampled.
-
-## 13. Open items this capture did not close
-
-- **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
-- **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
-- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise. **Now doubly open:** §14 means the adapter no longer re-enumerates on a cadence, so this open item is also the reason a swap-without-restart leaves a stale resolution.
-- **Everything still in §14.2.** ~~Whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does~~ is **closed (§14.3): it does not**, across 209,916 reads and 6.5 GB. What remains open is whether the crash reproduces on another composition, on another host or build, and what actually causes it.
-- **The `.avc` format's stability across Arena versions** (§15). Everything parsed there was read from files written by 7.23.2 and earlier, the format is undocumented, and 7.26 carries an API overhaul that may or may not touch it. `versionInfo` is in the file, so a mismatch is at least detectable.
-- **What `by-id` does during a deck switch** (§16.1). A stored clip id 404s while its deck is not selected, which is indistinguishable from the stale-reference case §6.4 defines. That needs a deck term before D-3 ships an action.
-- ~~**Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).~~ **Closed 2026-08-14 (§16.2): they are `PersistentClips`, stored outside any deck.**
-- **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
-- **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).
-- **Whether the `options` list can change at runtime**, which would make any cached enum stale. It varies per object; it was not observed changing on one object.
-- **The one 204 that did nothing** (§2.6). Not reproduced; cause unknown.
-- **Column, group and layer-clear over OSC input.** Present in the outbound address space; never sent as inputs.
-- **The `Previewing` and `Connected & previewing` clip states.** Never observed; only `Empty`, `Disconnected` and `Connected` occurred.
-- **Whether the full-composition push can be suppressed.** No mechanism was found; absence of a mechanism was not proven.
-- **`targetType="4"`** in `osc.xml`. Meaning unknown.
-- **The Avenue/Arena split.** The served spec is titled "Arena & Avenue", so some paths may not exist on Avenue. Not relevant to this deployment and not tested.

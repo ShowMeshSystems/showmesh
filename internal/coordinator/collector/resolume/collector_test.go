@@ -185,8 +185,8 @@ func TestPollDecodeErrorProducesCollectionFailed(t *testing.T) {
 // TestPollNeverRequestsComposition proves the D-1/D-2 boundary at the
 // wire level: Poll must issue exactly one request, to /product, and never
 // touch /composition — composition semantics are out of scope for this
-// seam's Collector (see this package's doc comment and Adapter's separate
-// role).
+// seam's Collector (see this package's doc comment: GET /composition is
+// forbidden outright, not merely out of scope for Poll specifically).
 func TestPollNeverRequestsComposition(t *testing.T) {
 	requested := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

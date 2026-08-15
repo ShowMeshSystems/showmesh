@@ -711,6 +711,37 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handlePromoteNode))
 	mux.HandleFunc("DELETE /api/v1/nodes/{nodeId}/declaration", h.writeGuard(&scopeConfigWrite, h.handleDeleteNodeDeclaration))
 
+	// GET/POST /api/v1/config/resolume/composition (Track D seam D-2a,
+	// ADR-032): the stored Resolume composition id map, sourced only from
+	// an operator-uploaded file — never from Resolume's own crashing
+	// GET /composition (ADR-032 decision 2). See resolumecomposition.go.
+	//
+	// GET is gated behind config:write via [handlers.requireScope],
+	// matching GET /config/fpp.endpoints exactly (config.go's own doc
+	// comment on that handler) rather than [handlers.readGuard]'s ordinary
+	// open-by-default posture. This is deliberate, not an oversight: a
+	// composition upload is this coordinator's record of a configured
+	// external show-control integration's own objects — exactly the class
+	// config.go argues for at length (the same class as GET /audit, not
+	// the telemetry ADR-024 decision 2's open-reads rule exists to
+	// protect) — and it would have been the kind of two-configuration-
+	// surfaces-disagree inconsistency found at 17:00 to gate it any other
+	// way. It also reuses fpp:read no longer applies here: ADR-024
+	// decision 4 fixes exactly four read scopes and defines no
+	// config:read, which is precisely why config.go reaches for
+	// config:write instead of inventing one — this route does the same,
+	// rather than borrowing fpp:read, a different vendor integration's
+	// scope, the way an earlier version of this route did.
+	//
+	// POST requires config:write via [handlers.writeGuard] — identical
+	// gating to PUT /config/fpp.endpoints — because uploading a
+	// composition file is exactly ADR-032 decision 1's "the operator
+	// uploads a composition file... stored as a configuration object with
+	// the existing revision and audit semantics", never its own invented
+	// scope.
+	mux.HandleFunc("GET /api/v1/config/resolume/composition", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeComposition))
+	mux.HandleFunc("POST /api/v1/config/resolume/composition", h.writeGuard(&scopeConfigWrite, h.handlePostResolumeCompositionUpload))
+
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.
 	//

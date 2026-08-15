@@ -56,10 +56,10 @@ type Options struct {
 
 	// Logger is currently unused by Collector itself (Poll never logs;
 	// every outcome is an observation, per [collector.Collector]'s doc
-	// comment) but is accepted for symmetry with [NewAdapter] and because
-	// a future seam wiring this Collector alongside an Adapter will want
-	// to construct both from one Options-shaped configuration. nil means
-	// no logging.
+	// comment) but is accepted for symmetry with this package's other
+	// constructors, and because a future seam wiring this Collector
+	// alongside other Resolume machinery will want to construct all of it
+	// from one Options-shaped configuration. nil means no logging.
 	Logger *slog.Logger
 }
 

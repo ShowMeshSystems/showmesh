@@ -831,6 +831,165 @@ type ConfigRevisionsResponse struct {
 	Revisions  []ConfigRevisionMeta `json:"revisions"`
 }
 
+// ResolumeCompositionWrittenBy identifies the Resolume Arena build that
+// wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc
+// format is undocumented, so this is recorded specifically so a future
+// parse that looks wrong has a version to suspect first — see
+// pkg/resolumecomp.WrittenBy, whose fields this mirrors.
+type ResolumeCompositionWrittenBy struct {
+	Product  string `json:"product"`
+	Major    int    `json:"major"`
+	Minor    int    `json:"minor"`
+	Micro    int    `json:"micro"`
+	Revision int    `json:"revision"`
+}
+
+// ResolumeCompositionCanvas is a stored composition's output size in
+// pixels — not available anywhere over Resolume's own REST API, only in
+// the composition file itself.
+type ResolumeCompositionCanvas struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// ResolumeCompositionDeckSummary is one deck, as it appears both in
+// [ResolumeCompositionSummary.Decks] and in [ResolumeCompositionResponse]'s
+// own top-level "decks" (the full id map's deck list — the same shape,
+// deliberately, since a deck's summary IS its complete representation;
+// unlike a clip, a deck has no further detail the id map carries that the
+// summary omits).
+type ResolumeCompositionDeckSummary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Closed    bool   `json:"closed"`
+	ClipCount int    `json:"clipCount"`
+}
+
+// ResolumeCompositionSummary is what the coordinator parsed from an
+// uploaded composition file, in terms an operator recognizes — never a
+// bare success flag (ADR-032 decisions 7 and 8). Shared verbatim between
+// POST /config/resolume/composition's own response and the "composition"
+// member of GET /config/resolume/composition.
+type ResolumeCompositionSummary struct {
+	Name                string                           `json:"name"`
+	SourceFilename      string                           `json:"sourceFilename"`
+	ContentHash         string                           `json:"contentHash"`
+	SizeBytes           int64                            `json:"sizeBytes"`
+	WrittenBy           ResolumeCompositionWrittenBy     `json:"writtenBy"`
+	Canvas              ResolumeCompositionCanvas        `json:"canvas"`
+	Decks               []ResolumeCompositionDeckSummary `json:"decks"`
+	LayerCount          int                              `json:"layerCount"`
+	LayerGroupCount     int                              `json:"layerGroupCount"`
+	ColumnCount         int                              `json:"columnCount"`
+	ClipCount           int                              `json:"clipCount"`
+	PersistentClipCount int                              `json:"persistentClipCount"`
+}
+
+// ResolumeCompositionUploadResponse is the body of a successful
+// POST /config/resolume/composition. ServerTime is always present (the
+// standing contract convention — see [FPPEndpointsConfigResponse] and
+// every other response in this package), never a pointer or omitted:
+// showmeshctl's own request/response contract for this endpoint decodes
+// serverTime tolerantly because it was written before this was settled,
+// but nothing about this type or its encoding leaves it optional now.
+type ResolumeCompositionUploadResponse struct {
+	ServerTime  string                     `json:"serverTime"`
+	Revision    int64                      `json:"revision"`
+	ActivatedAt string                     `json:"activatedAt"`
+	Composition ResolumeCompositionSummary `json:"composition"`
+}
+
+// ResolumeCompositionLayerGroup is one element of
+// [ResolumeCompositionResponse.LayerGroups]. Index is the group's
+// position among the file's own <Group> elements in document order, which
+// is what [ResolumeCompositionLayer.LayerGroupIndex] refers to.
+type ResolumeCompositionLayerGroup struct {
+	ID    string `json:"id"`
+	Index int    `json:"index"`
+}
+
+// ResolumeCompositionLayer is one element of
+// [ResolumeCompositionResponse.Layers]. Layers are deck-independent (ADR-032
+// decision 6 — only a clip's resolution depends on its deck being
+// selected). LayerGroupIndex is omitted from the wire entirely, not sent
+// as null, when the composition has no layer groups at all: the source
+// file omits the attribute rather than zeroing it, and a 0 would look
+// like membership in a first group that does not exist.
+//
+// When present, LayerGroupIndex is [resolumecomp.Layer.LayerGroupIndex]
+// exactly as parsed — the file's own raw layerGroup value, NOT validated
+// to fall within [0, len(LayerGroups)). See that field's own doc comment
+// for why this package does not bounds-check it: a caller that needs an
+// actual [ResolumeCompositionLayerGroup] must check the index against
+// [ResolumeCompositionResponse.LayerGroups] itself before indexing.
+type ResolumeCompositionLayer struct {
+	ID              string `json:"id"`
+	Index           int    `json:"index"`
+	LayerGroupIndex *int   `json:"layerGroupIndex,omitempty"`
+}
+
+// ResolumeCompositionColumn is one element of
+// [ResolumeCompositionResponse.Columns]: one column position within one
+// deck.
+type ResolumeCompositionColumn struct {
+	ID     string `json:"id"`
+	DeckID string `json:"deckId"`
+	Index  int    `json:"index"`
+}
+
+// ResolumeCompositionClip is one element of
+// [ResolumeCompositionResponse.Clips] or
+// [ResolumeCompositionResponse.PersistentClips].
+//
+// DeckID is omitted from the wire entirely (never sent as an empty
+// string) for a persistent clip: [Composition.PersistentClips] "live
+// outside any deck and resolve regardless of selection" (ADR-032 decision
+// 6), so there is no deck to name — the omission itself IS the fact,
+// mirroring [LayerGroupIndex]'s identical absent-vs-empty rule. Every
+// element of Clips, in contrast, always carries a non-empty DeckID: a
+// Resolume clip id resolves over Resolume's own API only while its own
+// deck is selected (measured 30/30 against 0/10 for other decks), so a
+// clip reference without its deck cannot tell a stale id from an
+// unselected one.
+//
+// TransportTypeIndex is the clip's raw TransportType ParamChoice index,
+// omitted when the clip carries no such param, and never translated to a
+// label: the option list for this parameter is served inline over
+// Resolume's REST API, varies per clip, and is not present in the
+// composition file at all, so inventing a name for an index here would be
+// exactly the mistake ADR-032's own bench capture warns against.
+type ResolumeCompositionClip struct {
+	ID                 string `json:"id"`
+	DeckID             string `json:"deckId,omitempty"`
+	LayerIndex         int    `json:"layerIndex"`
+	ColumnIndex        int    `json:"columnIndex"`
+	Name               string `json:"name"`
+	TransportTypeIndex *int   `json:"transportTypeIndex,omitempty"`
+	SourcePath         string `json:"sourcePath,omitempty"`
+	Width              *int   `json:"width,omitempty"`
+	Height             *int   `json:"height,omitempty"`
+}
+
+// ResolumeCompositionResponse is the body of GET
+// /config/resolume/composition: the stored composition's own summary plus
+// the full id map every ShowMesh reference to a Resolume object resolves
+// through (ADR-032 decision 1). "No composition stored yet" is not this
+// type — see handleGetResolumeComposition's own doc comment for the 404
+// that case produces instead, deliberately matching GET
+// /config/fpp.endpoints' identical answer for its own unset case.
+type ResolumeCompositionResponse struct {
+	ServerTime      string                           `json:"serverTime"`
+	Revision        int64                            `json:"revision"`
+	ActivatedAt     string                           `json:"activatedAt"`
+	Composition     ResolumeCompositionSummary       `json:"composition"`
+	Decks           []ResolumeCompositionDeckSummary `json:"decks"`
+	LayerGroups     []ResolumeCompositionLayerGroup  `json:"layerGroups"`
+	Layers          []ResolumeCompositionLayer       `json:"layers"`
+	Columns         []ResolumeCompositionColumn      `json:"columns"`
+	Clips           []ResolumeCompositionClip        `json:"clips"`
+	PersistentClips []ResolumeCompositionClip        `json:"persistentClips"`
+}
+
 // FPPObservationsChangedEvent is the payload of an
 // "fpp.observations.changed" SSE event (ADR-023), delivered only to a
 // connection that opted into delta frames via

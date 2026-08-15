@@ -13,7 +13,7 @@ import (
 
 // syncBuffer is a concurrency-safe bytes.Buffer: a test's own goroutine
 // reads it (via String()) while a slog handler writes to it from whatever
-// goroutine is running the code under test (e.g. Adapter.Run's own
+// goroutine is running the code under test (e.g. Watcher.Run's own
 // goroutine). A bare bytes.Buffer is not safe for that, and go test -race
 // catches the difference immediately.
 type syncBuffer struct {

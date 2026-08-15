@@ -142,59 +142,6 @@ func TestClientProductDecodeErrorIsDecodeError(t *testing.T) {
 	}
 }
 
-// --- Composition ----------------------------------------------------------
-
-func TestClientCompositionDecodesFromMinimalFixture(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/composition" {
-			t.Errorf("unexpected request path %q", r.URL.Path)
-		}
-		w.Write(loadTestdata(t, "composition_minimal.json"))
-	}))
-	defer srv.Close()
-
-	c, err := NewClient(srv.URL, ClientOptions{})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-
-	comp, err := c.Composition(context.Background())
-	if err != nil {
-		t.Fatalf("Composition() error = %v", err)
-	}
-	if comp.Name.Value != "Christmas 25" {
-		t.Errorf("Composition.Name.Value = %q, want %q", comp.Name.Value, "Christmas 25")
-	}
-	if len(comp.Decks) != 2 {
-		t.Errorf("len(Composition.Decks) = %d, want 2", len(comp.Decks))
-	}
-	if len(comp.Layers) != 2 {
-		t.Errorf("len(Composition.Layers) = %d, want 2", len(comp.Layers))
-	}
-}
-
-func TestClientCompositionNon2xxIsStatusError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("unavailable"))
-	}))
-	defer srv.Close()
-
-	c, err := NewClient(srv.URL, ClientOptions{})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-
-	_, err = c.Composition(context.Background())
-	var se *StatusError
-	if !errors.As(err, &se) {
-		t.Fatalf("Composition() error = %v (%T), want a *StatusError", err, err)
-	}
-	if se.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("StatusError.StatusCode = %d, want 503", se.StatusCode)
-	}
-}
-
 // --- ClassifyError ----------------------------------------------------------
 
 func TestClassifyErrorNames(t *testing.T) {

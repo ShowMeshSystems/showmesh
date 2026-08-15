@@ -366,6 +366,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/resolume/composition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The stored Resolume composition id map (Track D seam D-2a, ADR-032)
+         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one, not one of the four the open-reads posture covers). ADR-032 decision 2 means this coordinator NEVER calls Resolume's own `GET /composition` (known to crash Arena 7.23.2): this stored id map, parsed once at upload time from an operator-supplied file, is the only source for it. `404` when nothing has ever been uploaded, which is a normal, expected state (a fresh coordinator, or one whose operator has not uploaded a show yet), not an error — deliberately the same status and shape `GET /config/fpp.endpoints` uses for its own "nothing configured yet" case, so the two configuration surfaces agree on what an empty store looks like.
+         */
+        get: operations["getResolumeComposition"];
+        put?: never;
+        /**
+         * Upload and store a Resolume composition file (Track D seam D-2a, ADR-032)
+         * @description Requires `config:write`. `multipart/form-data` with exactly one file part named `file`. ShowMesh never reads a composition file from the Resolume host's own filesystem and never calls Resolume's own `GET /composition` (known to crash Arena 7.23.2) — an uploaded file is the only ingestion path (ADR-032 decision 4).
+         *     The file is parsed and validated BEFORE any write: a malformed file is refused with `400` and persists nothing at all — no revision, no config object, no audit entry (ADR-032 decision 7). A request body larger than this coordinator's own upload bound is refused with `413` before being buffered whole.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11), replacing whatever composition was stored before — this endpoint always replaces the entire stored composition, never merges into it. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["uploadResolumeComposition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/fpp.endpoints/revisions": {
         parameters: {
             query?: never;
@@ -877,17 +903,105 @@ export interface components {
             kind: "fpp.endpoints";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
+        /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
+        ResolumeCompositionWrittenBy: {
+            product: string;
+            major: number;
+            minor: number;
+            micro: number;
+            revision: number;
+        };
+        /** @description A composition's output size in pixels, from the composition file — not available anywhere over Resolume's own REST API. */
+        ResolumeCompositionCanvas: {
+            width: number;
+            height: number;
+        };
+        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. */
+        ResolumeCompositionDeckSummary: {
+            id: string;
+            name: string;
+            closed: boolean;
+            clipCount: number;
+        };
+        /** @description What the coordinator parsed from an uploaded composition file, in terms an operator recognizes — never a bare success flag (ADR-032 decisions 7 and 8). Shared verbatim between POST /config/resolume/composition's own response and the "composition" member of GET /config/resolume/composition. */
+        ResolumeCompositionSummary: {
+            name: string;
+            sourceFilename: string;
+            contentHash: string;
+            sizeBytes: number;
+            writtenBy: components["schemas"]["ResolumeCompositionWrittenBy"];
+            canvas: components["schemas"]["ResolumeCompositionCanvas"];
+            decks: components["schemas"]["ResolumeCompositionDeckSummary"][];
+            layerCount: number;
+            layerGroupCount: number;
+            columnCount: number;
+            clipCount: number;
+            persistentClipCount: number;
+        };
+        /** @description The body of a successful POST /config/resolume/composition. */
+        ResolumeCompositionUploadResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            revision: number;
+            /** Format: date-time */
+            activatedAt: string;
+            composition: components["schemas"]["ResolumeCompositionSummary"];
+        };
+        /** @description One element of ResolumeCompositionResponse.layerGroups. index is the group's position among the file's own <Group> elements in document order, which is what ResolumeCompositionLayer.layerGroupIndex refers to. */
+        ResolumeCompositionLayerGroup: {
+            id: string;
+            index: number;
+        };
+        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. */
+        ResolumeCompositionLayer: {
+            id: string;
+            index: number;
+            layerGroupIndex?: number;
+        };
+        /** @description One column position within one deck. */
+        ResolumeCompositionColumn: {
+            id: string;
+            deckId: string;
+            index: number;
+        };
+        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. */
+        ResolumeCompositionClip: {
+            id: string;
+            deckId?: string;
+            layerIndex: number;
+            columnIndex: number;
+            name: string;
+            transportTypeIndex?: number;
+            sourcePath?: string;
+            width?: number;
+            height?: number;
+        };
+        /** @description The body of GET /config/resolume/composition: the stored composition's own summary plus the full id map every ShowMesh reference to a Resolume object resolves through (ADR-032 decision 1). */
+        ResolumeCompositionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            revision: number;
+            /** Format: date-time */
+            activatedAt: string;
+            composition: components["schemas"]["ResolumeCompositionSummary"];
+            decks: components["schemas"]["ResolumeCompositionDeckSummary"][];
+            layerGroups: components["schemas"]["ResolumeCompositionLayerGroup"][];
+            layers: components["schemas"]["ResolumeCompositionLayer"][];
+            columns: components["schemas"]["ResolumeCompositionColumn"][];
+            clips: components["schemas"]["ResolumeCompositionClip"][];
+            persistentClips: components["schemas"]["ResolumeCompositionClip"][];
+        };
         /**
-         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the fourteen values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the fifteen values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
-         *     Four of the fourteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole).
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/payload-too-large";
             title: string;
             status: number;
             detail: string;
@@ -1725,6 +1839,84 @@ export interface operations {
             };
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeComposition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeCompositionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    uploadResolumeComposition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeCompositionUploadResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description The uploaded file exceeds this coordinator's own upload size bound. Nothing was stored. */
+            413: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

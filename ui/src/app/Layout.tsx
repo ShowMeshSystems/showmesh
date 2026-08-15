@@ -40,7 +40,16 @@ const NAV_GROUPS: Array<{
   },
   {
     heading: 'Configure',
-    items: [{ to: '/config', label: 'FPP endpoints', end: false }],
+    // Label was "FPP endpoints" until Track D seam D-2a: /config now also
+    // holds the Resolume composition upload (ADR-032 decision 8), added
+    // to this same page rather than a second route, because the two
+    // configuration surfaces belong together, not because either one
+    // shrank. "FPP endpoints" named only the first of the two things this
+    // page does, giving an operator looking for the composition control
+    // no reason to click it. "FPP & Resolume" names both without adding a
+    // second nav entry or a second page — matching this rename's own
+    // brief: the smaller change is the right one.
+    items: [{ to: '/config', label: 'FPP & Resolume', end: false }],
   },
 ]
 

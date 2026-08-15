@@ -40,8 +40,33 @@ import (
 // CLAUDE.md's own rule restated in this task's brief. Any one of these
 // appearing in a new string literal added to this seam later fails this
 // test immediately, rather than waiting for another owner bug report.
+//
+// Track D seam D-2a added `resolumecomp:` — a SECOND defect class, found
+// the same way (the owner loading the real UI): a rejected composition
+// upload rendered "...: resolumecomp: root element is not <Composition>:
+// found <NotAComposition>" verbatim, where "resolumecomp:" is
+// pkg/resolumecomp's own sentinel-error prefix, a Go package name with no
+// meaning to an operator. That fix moved the translation into
+// resolumecomposition.go (a switch over the sentinel errors, never
+// err.Error()), so this alternative exists only to catch a REGRESSION
+// that reintroduces the package name as a literal (e.g. a hardcoded
+// string copied from a code comment or a wrapped-error example) — it
+// cannot, by itself, catch a revived `fmt.Sprintf("...: %v", err)`, since
+// the offending text would only exist at runtime, in err's own value,
+// never in a string literal this AST walk can see; the runtime half of
+// this regression class is guarded separately, by
+// TestResolumeCompositionUploadRejectionDetailNamesNoGoPackage in
+// resolumecomposition_test.go, which asserts on a REAL response body.
+//
+// This is deliberately the one package name this seam's files actually
+// wrap errors from, not a general `\w+:` rule: a general rule would match
+// ordinary English prose like "Note: " or "Example: " (each a lowercase
+// word followed by a colon-space, indistinguishable from a Go package
+// prefix by shape alone) and make this guard too noisy to keep. Widen
+// this alternation, package name by package name, if a future seam wraps
+// another internal package's sentinel errors the same way.
 var forbiddenCopyPattern = regexp.MustCompile(
-	`docs/|\.md\b|ADR-\d+|RES-\d{3}|(?i)\bsection\s+\d|api/openapi\.yaml`,
+	`docs/|\.md\b|ADR-\d+|RES-\d{3}|(?i)\bsection\s+\d|api/openapi\.yaml|\bresolumecomp:`,
 )
 
 // fppCommandCopyGuardFiles is every source file this step's operator-
@@ -63,6 +88,13 @@ var fppCommandCopyGuardFiles = []string{
 	// cover — added in the wave that adds it, not left for a later one to
 	// discover uncovered.
 	"fppcommand_dispatch.go",
+
+	// resolumecomposition.go: Track D seam D-2a's own operator-facing
+	// strings (the composition upload/read handlers' Problem
+	// Title/Detail). Added alongside the `resolumecomp:` alternative in
+	// forbiddenCopyPattern above, for the identical reason
+	// fppcommand_dispatch.go was added in the wave that added it.
+	"resolumecomposition.go",
 }
 
 // TestOperatorFacingStringsCarryNoInternalCitation is this task's own

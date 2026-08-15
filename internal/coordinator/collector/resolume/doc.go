@@ -1,8 +1,28 @@
 // Package resolume is the Resolume Arena REST adapter's read-only
 // foundation (Track D, seam D-1): a REST client for Arena's `/api/v1`
-// surface, an object-id resolver over one fetched composition, and a
-// two-signal reachability collector implementing
+// surface and a two-signal reachability collector implementing
 // internal/coordinator/collector.Collector.
+//
+// # No runtime path may call GET /composition
+//
+// Not on connect, not on a timer, not on a change signal, not to verify
+// anything. Measured live against the operator's own Arena: `GET
+// /composition` crashed it outright — SIGSEGV, byte-identical faulting
+// frames across seven separate reproductions, including once from `curl`
+// alone with no ShowMesh process running, which is what rules this
+// package out as the cause. Two reads, thirty seconds apart, were enough.
+// This package therefore has NO method that performs that read — see
+// [Client]'s own doc comment — and guardfullcomposition_test.go enforces
+// the prohibition mechanically: it fails the build if any non-test file
+// in this package's directory constructs that request path again.
+//
+// The object-id resolution this package used to perform by reading
+// `/composition` (Track D seam D-1's first cut) is gone with the read
+// that produced it. What replaces it — a stored id map sourced from the
+// operator's composition file, and a `by-id` read for anything live — is
+// a later seam's job, not this package's. See composition.go's own doc
+// comment for exactly which pieces of the old decode survive as building
+// blocks for that later seam, and why.
 //
 // # What this package deliberately is not
 //
@@ -25,16 +45,18 @@
 //
 // It knows nothing about composition semantics. No layer-readiness
 // conjunction, no composition-identity assertion, no "is this layer
-// putting anything on the wall" logic lives here — that is seam D-2. This
-// package resolves object and parameter ids and reports whether Arena
-// answered at all; it does not interpret what a composition contains.
+// putting anything on the wall" logic lives here — that is a later seam.
+// This package reports whether Arena answered at all; it does not
+// interpret what a composition contains.
 //
-// The WebSocket change signal (built in this package's watch.go, by a
-// parallel seam) is a wake-up, never an authority: a message on it means
-// "read the REST API again now," and it is never itself the source of an
-// observed value. The one authority for what Resolume's state actually is
-// is a GET against `/composition` or a `by-id` resource. Nothing in this
-// file's half of the package reads from or depends on the WebSocket.
+// The WebSocket change signal (built in this package's watch.go) is a
+// wake-up, never an authority: a message on it means "something may have
+// changed," and it is never itself the source of an observed value.
+// Today that wake-up only ever triggers an immediate `/product` poll
+// (see resolumewiring.go's own comment on OnChange) — it does not, and
+// while the /composition prohibition above holds, cannot, trigger a
+// re-resolution of any composition state. Nothing in this file's half of
+// the package reads from or depends on the WebSocket.
 //
 // # The parameter-id lifecycle rule
 //
@@ -59,11 +81,4 @@
 // available, deliberately, for a log line: a log is not a persistence or
 // wire boundary, and a maintainer reading a log benefits from seeing the
 // id even though nothing downstream may ever store it.
-//
-// [Resolution], produced by [Resolve], holds parameter ids only in
-// memory, for the lifetime of one held resolution, and is discarded
-// wholesale — never diffed, never merged — on every reconnect by
-// [Adapter.HandleConnect] and [Adapter.HandleDisconnect]. See
-// [Resolution]'s own doc comment for the closed set of parameters this
-// package actually indexes.
 package resolume

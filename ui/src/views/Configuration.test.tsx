@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Configuration } from './Configuration'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
@@ -15,15 +15,45 @@ import { ApiError } from '../api/errors'
 // which calls fire when), not the network behavior itself — store.test.ts
 // and client.test.ts already prove getFPPEndpointsConfig/
 // putFPPEndpointsConfig/getFPPEndpointsConfigRevisions issue the right
-// real requests.
-const { getFPPEndpointsConfig, putFPPEndpointsConfig, getFPPEndpointsConfigRevisions } = vi.hoisted(() => ({
+// real requests. getResolumeComposition/uploadResolumeComposition are
+// mocked here too, for a DIFFERENT reason: ResolumeCompositionUpload
+// (Track D seam D-2a) renders inside this same admin-gated view (see
+// Configuration.tsx's own comment on why), so every test below that
+// reaches the `scopeGate.allowed` branch also mounts it — its own tests
+// live in ResolumeCompositionUpload.test.tsx, and leaving these two
+// unmocked here would let its real (network-failing, in jsdom) fetch
+// render a SECOND `role="alert"`/`role="status"` element, making this
+// file's own `getByRole`/`findByRole` queries ambiguous.
+const {
+  getFPPEndpointsConfig,
+  putFPPEndpointsConfig,
+  getFPPEndpointsConfigRevisions,
+  getResolumeComposition,
+} = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   putFPPEndpointsConfig: vi.fn(),
   getFPPEndpointsConfigRevisions: vi.fn(),
+  getResolumeComposition: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getFPPEndpointsConfig, putFPPEndpointsConfig, getFPPEndpointsConfigRevisions }
+  return {
+    ...actual,
+    getFPPEndpointsConfig,
+    putFPPEndpointsConfig,
+    getFPPEndpointsConfigRevisions,
+    getResolumeComposition,
+  }
+})
+
+beforeEach(() => {
+  // A quiet, settled default so tests that don't care about the
+  // composition control at all still get a deterministic single render
+  // pass rather than a real (and, in jsdom, always-failing) network call —
+  // see this file's own header comment.
+  getResolumeComposition.mockRejectedValue(
+    new ApiError('no Resolume composition has been uploaded yet; upload a composition file to create one', 404),
+  )
 })
 
 afterEach(() => {
@@ -31,6 +61,7 @@ afterEach(() => {
   getFPPEndpointsConfig.mockReset()
   putFPPEndpointsConfig.mockReset()
   getFPPEndpointsConfigRevisions.mockReset()
+  getResolumeComposition.mockReset()
 })
 
 function renderConfiguration(model: Model) {

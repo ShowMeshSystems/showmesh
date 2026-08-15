@@ -56,6 +56,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdDeclare(rest, stdout, stderr, clock)
 	case "undeclare":
 		return cmdUndeclare(rest, stdout, stderr, clock)
+	case "resolume":
+		return cmdResolume(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -109,6 +111,8 @@ Commands:
   discover                 run discovery and print proposals (write)
   declare <id>             promote a node to declared, or update its label/notes (write)
   undeclare <id>           remove a node's declaration, requires --confirm (write)
+  resolume composition upload <path>   parse and store a Resolume composition file (write)
+  resolume composition show            show the stored composition (requires config:write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

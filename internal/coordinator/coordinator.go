@@ -337,6 +337,16 @@ func Run() int {
 		// collector is ever constructed for it to collide with. Track D
 		// seam D-1 review finding 1.
 		ResolumeID: resolumeConfiguredID,
+		// Deliberately no ResolumeCompositionID field here (Track D seam
+		// D-2a review finding F): the stored composition's config_objects
+		// id is a fixed constant inside the api package
+		// (resolumeCompositionObjectIDConst in resolumecomposition.go),
+		// not derived from cfg.ResolumeID. An earlier version of this line
+		// plumbed cfg.ResolumeID through unconditionally, which meant
+		// renaming SHOWMESH_RESOLUME_ID for a reason unrelated to the
+		// composition subsystem — e.g. disambiguating a second live
+		// Resolume instance — would silently orphan every stored
+		// composition revision. See that constant's own doc comment.
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -549,35 +559,18 @@ func Run() int {
 	// mqttFPPCollector.Run): a lost or refused connection is never fatal
 	// here or anywhere in this seam — see newResolumeWiring's own doc
 	// comment for the fatal/non-fatal split this wiring draws.
+	//
+	// There used to be a second goroutine here, resolumeWire.adapter.Run,
+	// which owned the only `GET /composition` read this seam performed.
+	// ADR-032 decision 2 forbids that call outright — measured live, it
+	// crashes the target Arena build — so the adapter, and the goroutine
+	// that ran it, are gone; resolumeWire.watcher.Run is the only
+	// Resolume-specific background goroutine this seam starts now.
 	if resolumeWire.watcher != nil {
 		backgroundWG.Add(1)
 		go func() {
 			defer backgroundWG.Done()
 			resolumeWire.watcher.Run(ctx)
-		}()
-	}
-
-	// resolumeWire.adapter.Run owns its own resolve loop's lifecycle (see
-	// resolume.Adapter's own doc comment for why it needs one, per review
-	// finding A, 2026-08-14): it is the ONLY thing in this seam that ever
-	// performs a composition read, and it must run continuously —
-	// independent of resolumeWire.watcher.Run above — for its own
-	// coalescing/retry policy to hold. Joined via the identical
-	// backgroundWG so shutdown waits for it cleanly alongside every other
-	// background goroutine, and started (and only started) exactly when
-	// resolumeWire.adapter was constructed above — an unconfigured
-	// Resolume collector contributes no goroutine at all, matching
-	// resolumeWire.watcher's own condition immediately above. Run returns
-	// no error and performs no networking of its own beyond the
-	// composition reads its own client makes; a lost or refused connection
-	// surfaces through resolumeWire.watcher's disconnect signal and is
-	// never fatal here, for the identical reason resolumeWire.watcher.Run
-	// is not fatal.
-	if resolumeWire.adapter != nil {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			resolumeWire.adapter.Run(ctx)
 		}()
 	}
 

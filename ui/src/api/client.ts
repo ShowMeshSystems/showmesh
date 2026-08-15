@@ -318,21 +318,7 @@ export class ApiClient {
   }
 
   private checkVersionHeader(response: Response): void {
-    const header = response.headers.get(API_VERSION_HEADER)
-    // Every /api/v1 response carries this header with no exception
-    // (api/openapi.yaml contract section 6.2). Its absence on an
-    // otherwise-OK response is itself a sign this isn't really talking
-    // to a ShowMesh coordinator's v1 API; treat it the same as a
-    // reported mismatch rather than assuming "1" silently.
-    if (header === null || header !== String(REQUIRED_API_VERSION)) {
-      throw new IncompatibleVersionError(
-        REQUIRED_API_VERSION,
-        [],
-        header === null
-          ? 'response carried no ShowMesh-API-Version header'
-          : `coordinator reported version ${header}`,
-      )
-    }
+    checkApiVersionHeaderValue(response.headers.get(API_VERSION_HEADER))
   }
 
   private async throwForFailedResponse(
@@ -347,38 +333,83 @@ export class ApiClient {
       // Malformed or absent problem body — fall through to the generic
       // ApiError below rather than crashing the classification step.
     }
-
-    if (problem?.type === PROBLEM_TYPE.unauthorized) {
-      throw new UnauthorizedError(tokenWasPresent, problem.detail)
-    }
-    if (problem?.type === PROBLEM_TYPE.unsupportedApiVersion) {
-      throw new IncompatibleVersionError(
-        REQUIRED_API_VERSION,
-        problem.supportedVersions ?? [],
-        problem.detail,
-      )
-    }
-    // ADR-024's three new dispatchable problem types — never inferred from
-    // the `403`/`429` HTTP status alone (both statuses cover more than one
-    // `type`: `403` is also plain `forbidden`, and this client must not
-    // guess which). See errors.ts for why forbidden and csrfRejected stay
-    // separate classes despite sharing a status code.
-    if (problem?.type === PROBLEM_TYPE.forbidden) {
-      throw new ForbiddenError(problem.detail)
-    }
-    if (problem?.type === PROBLEM_TYPE.csrfRejected) {
-      throw new CSRFRejectedError(problem.detail)
-    }
-    if (problem?.type === PROBLEM_TYPE.tooManyRequests) {
-      throw new TooManyRequestsError(problem.detail, parseRetryAfter(response))
-    }
-
-    throw new ApiError(
-      problem?.detail ?? `${path} failed with status ${response.status}`,
+    throw classifyProblemResponse(
       response.status,
-      problem?.type,
+      problem,
+      tokenWasPresent,
+      path,
+      response.headers.get('Retry-After'),
     )
   }
+}
+
+/**
+ * `Every /api/v1 response carries the ShowMesh-API-Version header with no
+ * exception` (api/openapi.yaml contract section 6.2) — extracted as a
+ * pure function, taking the header VALUE rather than a `Response`, so a
+ * transport that is not `fetch` (resolumeCompositionUpload.ts's
+ * `XMLHttpRequest`-based upload, chosen there specifically for real
+ * `upload.onprogress` byte counts — see that file's own header comment)
+ * can run the identical check against `XMLHttpRequest.getResponseHeader`
+ * without this client needing a `Response` object to exist. Its absence
+ * on an otherwise-OK response is itself a sign this isn't really talking
+ * to a ShowMesh coordinator's v1 API; treated the same as a reported
+ * mismatch rather than assuming "1" silently.
+ */
+export function checkApiVersionHeaderValue(header: string | null): void {
+  if (header === null || header !== String(REQUIRED_API_VERSION)) {
+    throw new IncompatibleVersionError(
+      REQUIRED_API_VERSION,
+      [],
+      header === null
+        ? 'response carried no ShowMesh-API-Version header'
+        : `coordinator reported version ${header}`,
+    )
+  }
+}
+
+/**
+ * Turns a failed response's status + parsed RFC 9457 problem body into
+ * the typed error this client's callers dispatch on — extracted as a
+ * pure function (taking `status`/`problem`/a `retryAfterHeader` value
+ * rather than a `Response`) for the identical reason
+ * [checkApiVersionHeaderValue] above is: resolumeCompositionUpload.ts's
+ * `XMLHttpRequest`-based upload has no `Response` object to hand this,
+ * only `xhr.status`, `xhr.responseText` (parsed into `problem` by the
+ * caller), and `xhr.getResponseHeader('Retry-After')`. Kept as the
+ * SINGLE place this dispatch table exists, so the fetch-based
+ * `ApiClient.request` and the XHR-based upload can never disagree about
+ * which problem `type` produces which error class.
+ */
+export function classifyProblemResponse(
+  status: number,
+  problem: Problem | null,
+  tokenWasPresent: boolean,
+  path: string,
+  retryAfterHeader: string | null,
+): ApiError {
+  if (problem?.type === PROBLEM_TYPE.unauthorized) {
+    return new UnauthorizedError(tokenWasPresent, problem.detail)
+  }
+  if (problem?.type === PROBLEM_TYPE.unsupportedApiVersion) {
+    return new IncompatibleVersionError(REQUIRED_API_VERSION, problem.supportedVersions ?? [], problem.detail)
+  }
+  // ADR-024's three new dispatchable problem types — never inferred from
+  // the `403`/`429` HTTP status alone (both statuses cover more than one
+  // `type`: `403` is also plain `forbidden`, and this client must not
+  // guess which). See errors.ts for why forbidden and csrfRejected stay
+  // separate classes despite sharing a status code.
+  if (problem?.type === PROBLEM_TYPE.forbidden) {
+    return new ForbiddenError(problem.detail)
+  }
+  if (problem?.type === PROBLEM_TYPE.csrfRejected) {
+    return new CSRFRejectedError(problem.detail)
+  }
+  if (problem?.type === PROBLEM_TYPE.tooManyRequests) {
+    return new TooManyRequestsError(problem.detail, parseRetryAfterValue(retryAfterHeader))
+  }
+
+  return new ApiError(problem?.detail ?? `${path} failed with status ${status}`, status, problem?.type)
 }
 
 /**
@@ -386,9 +417,10 @@ export class ApiClient {
  * in api/openapi.yaml) as whole seconds, or null when absent or not a
  * plain integer — this API never sends the HTTP-date form of the header,
  * so that form is deliberately not parsed here rather than half-supported.
+ * Takes the header VALUE (not a `Response`) for the same reason
+ * [classifyProblemResponse] does.
  */
-function parseRetryAfter(response: Response): number | null {
-  const header = response.headers.get('Retry-After')
+function parseRetryAfterValue(header: string | null): number | null {
   if (header === null) return null
   const seconds = Number(header)
   return Number.isInteger(seconds) && seconds >= 0 ? seconds : null

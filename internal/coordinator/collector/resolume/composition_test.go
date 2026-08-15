@@ -7,12 +7,20 @@ import (
 
 // --- Required test 3: active_clip present/null/absent are distinguishable --
 
+// activeClipHolder is a minimal test-only wrapper: production code used to
+// decode active_clip as a field of the (now deleted) full-composition
+// Layer type, but ActiveClipField's own decode behavior does not depend on
+// what it is embedded in, so this is all a test of it needs.
+type activeClipHolder struct {
+	ActiveClip ActiveClipField `json:"active_clip"`
+}
+
 // TestActiveClipPresentNullAbsentAreDistinguishable is the direct
 // reproduction of this project's already-shipped "ma": null defect
-// (CLAUDE.md), in Resolume's own vocabulary: layers[i].active_clip must
-// decode to three DIFFERENT Presence values depending on whether the key
-// is missing, present-and-null, or present-with-a-value — never
-// collapsing null and absent into the same Go zero value.
+// (CLAUDE.md), in Resolume's own vocabulary: active_clip must decode to
+// three DIFFERENT Presence values depending on whether the key is
+// missing, present-and-null, or present-with-a-value — never collapsing
+// null and absent into the same Go zero value.
 //
 // Before trusting this test, ActiveClipField.UnmarshalJSON was reverted
 // to skip the `bytes.Equal(..., []byte("null"))` check (treating any
@@ -49,24 +57,24 @@ func TestActiveClipPresentNullAbsentAreDistinguishable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var l Layer
-			if err := json.Unmarshal([]byte(tt.json), &l); err != nil {
+			var h activeClipHolder
+			if err := json.Unmarshal([]byte(tt.json), &h); err != nil {
 				t.Fatalf("json.Unmarshal(%s) error = %v", tt.json, err)
 			}
-			if l.ActiveClip.Presence != tt.wantPresence {
-				t.Errorf("ActiveClip.Presence = %v, want %v", l.ActiveClip.Presence, tt.wantPresence)
+			if h.ActiveClip.Presence != tt.wantPresence {
+				t.Errorf("ActiveClip.Presence = %v, want %v", h.ActiveClip.Presence, tt.wantPresence)
 			}
 			switch tt.wantPresence {
 			case PresencePresent:
-				if l.ActiveClip.Clip == nil {
+				if h.ActiveClip.Clip == nil {
 					t.Fatalf("ActiveClip.Clip = nil, want non-nil for PresencePresent")
 				}
-				if l.ActiveClip.Clip.ID != tt.wantClipID {
-					t.Errorf("ActiveClip.Clip.ID = %v, want %v", l.ActiveClip.Clip.ID, tt.wantClipID)
+				if h.ActiveClip.Clip.ID != tt.wantClipID {
+					t.Errorf("ActiveClip.Clip.ID = %v, want %v", h.ActiveClip.Clip.ID, tt.wantClipID)
 				}
 			default:
-				if l.ActiveClip.Clip != nil {
-					t.Errorf("ActiveClip.Clip = %+v, want nil for Presence=%v", l.ActiveClip.Clip, tt.wantPresence)
+				if h.ActiveClip.Clip != nil {
+					t.Errorf("ActiveClip.Clip = %+v, want nil for Presence=%v", h.ActiveClip.Clip, tt.wantPresence)
 				}
 			}
 		})
@@ -94,6 +102,11 @@ func TestActiveClipThreeOutcomesAreMutuallyDistinguishable(t *testing.T) {
 
 // --- The same tri-state rule for transport.controls (capture 11.3) ---------
 
+// TestClipTransportControlsPresentNullAbsentAreDistinguishable decodes
+// straight into [ClipTransport] — production code used to nest this
+// inside the (now deleted) full-composition Clip type, but
+// ClipTransportControls' own decode behavior does not depend on that
+// nesting.
 func TestClipTransportControlsPresentNullAbsentAreDistinguishable(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -102,35 +115,35 @@ func TestClipTransportControlsPresentNullAbsentAreDistinguishable(t *testing.T) 
 	}{
 		{
 			name:         "present",
-			json:         `{"transport": {"controls": {"loop": true}}}`,
+			json:         `{"controls": {"loop": true}}`,
 			wantPresence: PresencePresent,
 		},
 		{
 			name:         "explicit null under SMPTE transport",
-			json:         `{"transport": {"controls": null}}`,
+			json:         `{"controls": null}`,
 			wantPresence: PresenceNull,
 		},
 		{
 			name:         "key absent entirely",
-			json:         `{"transport": {}}`,
+			json:         `{}`,
 			wantPresence: PresenceAbsent,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var c Clip
-			if err := json.Unmarshal([]byte(tt.json), &c); err != nil {
+			var ct ClipTransport
+			if err := json.Unmarshal([]byte(tt.json), &ct); err != nil {
 				t.Fatalf("json.Unmarshal(%s) error = %v", tt.json, err)
 			}
-			if c.Transport.Controls.Presence != tt.wantPresence {
-				t.Errorf("Transport.Controls.Presence = %v, want %v", c.Transport.Controls.Presence, tt.wantPresence)
+			if ct.Controls.Presence != tt.wantPresence {
+				t.Errorf("Controls.Presence = %v, want %v", ct.Controls.Presence, tt.wantPresence)
 			}
-			if tt.wantPresence == PresencePresent && c.Transport.Controls.RawJSON == nil {
-				t.Errorf("Transport.Controls.RawJSON = nil, want non-nil for PresencePresent")
+			if tt.wantPresence == PresencePresent && ct.Controls.RawJSON == nil {
+				t.Errorf("Controls.RawJSON = nil, want non-nil for PresencePresent")
 			}
-			if tt.wantPresence != PresencePresent && c.Transport.Controls.RawJSON != nil {
-				t.Errorf("Transport.Controls.RawJSON = %s, want nil for Presence=%v", c.Transport.Controls.RawJSON, tt.wantPresence)
+			if tt.wantPresence != PresencePresent && ct.Controls.RawJSON != nil {
+				t.Errorf("Controls.RawJSON = %s, want nil for Presence=%v", ct.Controls.RawJSON, tt.wantPresence)
 			}
 		})
 	}
@@ -141,9 +154,9 @@ func TestClipTransportControlsPresentNullAbsentAreDistinguishable(t *testing.T) 
 // TestConnectedNeverReducesToBoolAndPreservesEveryState decodes every one
 // of the five clip `connected` states the capture names, including
 // "Connected & previewing" — the state a naive `== "Connected"` predicate
-// misses — and confirms Options is preserved verbatim rather than
-// hard-coded, per capture section 4.3's warning that Options is not
-// constant across objects of the same kind.
+// misses — directly into [ParamState], and confirms Options is preserved
+// verbatim rather than hard-coded, per capture section 4.3's warning that
+// Options is not constant across objects of the same kind.
 //
 // Before trusting this test, ParamState.Value's type was changed to bool
 // (mapping "Connected"/"Connected & previewing" to true and everything
@@ -162,80 +175,78 @@ func TestConnectedNeverReducesToBoolAndPreservesEveryState(t *testing.T) {
 
 	for _, state := range states {
 		t.Run(state, func(t *testing.T) {
-			raw := `{"connected": {"valuetype":"ParamState","id":8005,"value":"` + state + `","index":3,"options":` + options + `}}`
-			var c Clip
-			if err := json.Unmarshal([]byte(raw), &c); err != nil {
+			raw := `{"valuetype":"ParamState","id":8005,"value":"` + state + `","index":3,"options":` + options + `}`
+			var ps ParamState
+			if err := json.Unmarshal([]byte(raw), &ps); err != nil {
 				t.Fatalf("json.Unmarshal error = %v", err)
 			}
-			if c.Connected.Value != state {
-				t.Errorf("Connected.Value = %q, want %q", c.Connected.Value, state)
+			if ps.Value != state {
+				t.Errorf("Value = %q, want %q", ps.Value, state)
 			}
-			if len(c.Connected.Options) != 5 {
-				t.Errorf("len(Connected.Options) = %d, want 5 (options must be carried verbatim, never hard-coded)", len(c.Connected.Options))
+			if len(ps.Options) != 5 {
+				t.Errorf("len(Options) = %d, want 5 (options must be carried verbatim, never hard-coded)", len(ps.Options))
 			}
 		})
 	}
 }
 
-// TestColumnConnectedIsADifferentOptionSetThanClipConnected proves the
-// capture's other named hazard: a column's `connected` is a three-state
-// set (Empty|Disconnected|Connected), NOT the clip's five-state set, even
-// though both decode through the identical ParamState Go type. A decoder
-// that assumed one universal enum for "connected" would be wrong for one
-// of the two kinds.
-func TestColumnConnectedIsADifferentOptionSetThanClipConnected(t *testing.T) {
-	raw := `{"id": 1765224900001, "connected": {"valuetype":"ParamState","id":9020,"value":"Connected","index":2,"options":["Empty","Disconnected","Connected"]}}`
-	var col Column
-	if err := json.Unmarshal([]byte(raw), &col); err != nil {
-		t.Fatalf("json.Unmarshal error = %v", err)
-	}
-	if len(col.Connected.Options) != 3 {
-		t.Errorf("Column.Connected.Options = %v, want the 3-state set, not the clip's 5-state set", col.Connected.Options)
-	}
-	for _, forbidden := range []string{"Previewing", "Connected & previewing"} {
-		for _, opt := range col.Connected.Options {
-			if opt == forbidden {
-				t.Errorf("Column.Connected.Options contains %q, which is only a valid clip-connected state, never a column state", forbidden)
-			}
-		}
+// --- Required test 5: json.Marshal of a ParameterID errors ------------------
+
+// TestParameterIDMarshalJSONErrors is the structural enforcement, tested
+// directly: a bare ParameterID must refuse to marshal.
+//
+// Before trusting this test, ParameterID.MarshalJSON was temporarily
+// changed to `return []byte(strconv.FormatInt(int64(p), 10)), nil` (the
+// obvious, wrong implementation that just encodes the number) and this
+// test was re-run: it failed, with json.Marshal succeeding and returning
+// the raw parameter id as a JSON number. Reverted afterward.
+func TestParameterIDMarshalJSONErrors(t *testing.T) {
+	id := ParameterID(1786724946918)
+	if _, err := json.Marshal(id); err == nil {
+		t.Fatalf("json.Marshal(ParameterID) error = nil, want a non-nil error")
 	}
 }
 
-// --- layergroups[].layers is decoded down to member ids only ---------------
+// TestStructContainingParameterIDMarshalJSONErrors proves the enforcement
+// survives nesting: a struct that merely CONTAINS a ParameterID field
+// must also fail to marshal, since encoding/json calls the field's own
+// MarshalJSON while encoding the containing struct. This is the case that
+// actually matters — nobody marshals a bare ParameterID by itself; the
+// realistic mistake is a struct with a ParameterID field accidentally
+// reaching an API handler's json.NewEncoder.
+func TestStructContainingParameterIDMarshalJSONErrors(t *testing.T) {
+	type wrapper struct {
+		ObjectID ObjectID    `json:"objectId"`
+		ParamID  ParameterID `json:"paramId"`
+	}
+	w := wrapper{ObjectID: 1765396769079, ParamID: 1786724946918}
+	if _, err := json.Marshal(w); err == nil {
+		t.Fatalf("json.Marshal(struct containing ParameterID) error = nil, want a non-nil error")
+	}
+}
 
-// TestLayerGroupMemberDecodesOnlyID confirms the duplicate-layer discard:
-// a layergroups[].layers entry carrying a full layer's worth of extra
-// fields (bypassed, master, video, clips, ...) decodes to nothing but its
-// object id — proving this package never models the 49%-of-payload
-// duplicate the capture found there.
-func TestLayerGroupMemberDecodesOnlyID(t *testing.T) {
-	raw := `{
-		"id": 1765224910001,
-		"name": {"valuetype":"ParamString","id":9030,"value":"Group 1"},
-		"bypassed": {"valuetype":"ParamBoolean","id":9031,"value":false},
-		"master": {"valuetype":"ParamRange","id":9032,"value":1.0},
-		"layers": [
-			{
-				"id": 1765224917300,
-				"bypassed": {"valuetype":"ParamBoolean","id":99991,"value":false},
-				"master": {"valuetype":"ParamRange","id":99992,"value":0.9},
-				"video": {"opacity": {"valuetype":"ParamRange","id":99993,"value":1.0}},
-				"clips": [{"id": 1}, {"id": 2}, {"id": 3}]
-			}
-		]
-	}`
-	var g LayerGroup
-	if err := json.Unmarshal([]byte(raw), &g); err != nil {
-		t.Fatalf("json.Unmarshal error = %v", err)
+// TestObjectIDMarshalsNormally is the explicit non-regression check: only
+// ParameterID is blocked. ObjectID — safe to hold and, per this package's
+// doc comment, a later seam's decision whether to persist — must marshal
+// like an ordinary integer.
+func TestObjectIDMarshalsNormally(t *testing.T) {
+	b, err := json.Marshal(ObjectID(1765396769079))
+	if err != nil {
+		t.Fatalf("json.Marshal(ObjectID) error = %v, want ObjectID to marshal normally", err)
 	}
-	if len(g.Layers) != 1 {
-		t.Fatalf("len(LayerGroup.Layers) = %d, want 1", len(g.Layers))
+	if string(b) != "1765396769079" {
+		t.Errorf("json.Marshal(ObjectID) = %s, want the bare integer", b)
 	}
-	if g.Layers[0].ID != 1765224917300 {
-		t.Errorf("LayerGroup.Layers[0].ID = %v, want 1765224917300", g.Layers[0].ID)
+}
+
+// ParameterID must still be UNMARSHALABLE — the restriction is on writing
+// it, never on reading it off the wire; see this package's doc comment.
+func TestParameterIDUnmarshalsNormally(t *testing.T) {
+	var id ParameterID
+	if err := json.Unmarshal([]byte("1786724946918"), &id); err != nil {
+		t.Fatalf("json.Unmarshal(ParameterID) error = %v, want ParameterID to still be readable from JSON", err)
 	}
-	// layerGroupMember has no other exported field to assert against by
-	// construction — this test's real assertion is that the type checks
-	// above compile and decode at all despite the extra JSON fields
-	// (bypassed, master, video, clips) present on the wire.
+	if id != 1786724946918 {
+		t.Errorf("ParameterID = %d, want 1786724946918", id)
+	}
 }

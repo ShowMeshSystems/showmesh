@@ -116,4 +116,18 @@ describe('Layout', () => {
     // even while the rest of the page says "no data yet".
     expect(screen.getByText('Signed out on this device.')).toBeInTheDocument()
   })
+
+  // Fix 2 (Track D seam D-2a): /config now holds both the FPP endpoints
+  // configuration AND the Resolume composition upload (ADR-032 decision
+  // 8), added to the SAME page rather than a second route. "FPP
+  // endpoints" named only the first of those and gave an operator looking
+  // for the composition control no reason to click it — this pins the
+  // renamed label so a future edit cannot silently narrow it back to
+  // naming only one of the two things this page does.
+  it('labels the single Configure nav entry for both things /config now holds, not just FPP endpoints', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+    const link = screen.getByRole('link', { name: 'FPP & Resolume' })
+    expect(link).toHaveAttribute('href', '/config')
+    expect(screen.queryByText('FPP endpoints')).not.toBeInTheDocument()
+  })
 })
