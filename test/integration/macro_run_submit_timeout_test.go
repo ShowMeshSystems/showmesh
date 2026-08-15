@@ -39,6 +39,12 @@ import (
 // correctness (see LESSONS.md, "a test can be a coin flip, and platform is
 // the usual disguise").
 //
+// This test's fixture dispatches a real stopPlaylist step against a live
+// FPP, so it calls requireLiveFPPForWrites (fpp_write_guard_test.go), not
+// requireLiveFPP: non-loopback targets are refused unless
+// SHOWMESH_TEST_FPP_ALLOW_NONLOCAL_WRITES names that exact host, which is
+// what keeps this file off the deployed fleet.
+//
 // internal/coordinator/macro/submit.go's SubmitRun captures the run and
 // its step records BEFORE launching background execution ("Start
 // background execution and answer 202-shaped: the run's initial state,
@@ -129,7 +135,7 @@ type macroRunSubmitResponseForTest struct {
 // regression this test exists to catch.
 func TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 
 	dataDir := t.TempDir()
 	adminToken := createAdminAndIssueToken(t, dataDir, "admin-1", "a-strong-password-1")

@@ -21,12 +21,16 @@ import (
 
 // This file is Step 8's own "verified against the running stack" pass:
 // docs/bench/fpp-command-vocabulary.md section 4's eight-primitive table,
-// proven against the real, containerized bench fppd (never the deployed
-// fleet — every test here calls requireLiveFPP, shared with
-// fpp_e2e_test.go and fpp_command_test.go, and every test registers a
-// cleanup that leaves the bench idle). BUILD-PLAN's own acceptance
-// criteria for this step are what each test function below is named
-// after; see this task's own report for the full mapping.
+// proven against the real, containerized bench fppd. The bench container
+// is the only default write target: every test here calls
+// requireLiveFPPForWrites (fpp_write_guard_test.go), which refuses,
+// loudly and before any probe, to dispatch anything against a
+// non-loopback host unless SHOWMESH_TEST_FPP_ALLOW_NONLOCAL_WRITES names
+// that exact host. That is what keeps
+// this file off the deployed fleet; every test also registers a cleanup
+// that leaves the bench idle. BUILD-PLAN's own acceptance criteria for
+// this step are what each test function below is named after; see this
+// task's own report for the full mapping.
 //
 // Every test in this file starts its OWN coordinator subprocess against
 // its OWN temp data directory (matching this package's existing
@@ -255,7 +259,7 @@ func newFPPCoordinatorForTest(t *testing.T, fppURL, namePrefix string) (coord *t
 // this file.
 func TestRemainingFPPPrimitivesConfirmAgainstBenchFPP(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -331,7 +335,7 @@ func TestRemainingFPPPrimitivesConfirmAgainstBenchFPP(t *testing.T) {
 // mistaken for "the show has stopped".
 func TestStopPlaylistGracefullyConfirmsWhileShowStillRunning(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -389,7 +393,7 @@ func TestStopPlaylistGracefullyConfirmsWhileShowStillRunning(t *testing.T) {
 // reason text, since the real system may legitimately take either.
 func TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -446,7 +450,7 @@ func TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms(t *testing.T) {
 // state and reason, never blank and never "confirmed".
 func TestUnconfirmedFPPCommandReportsStatedReasonNeverSuccessful(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -509,7 +513,7 @@ const minPlausiblePostDispatchConfirmWait = 400 * time.Millisecond
 // already-idle host).
 func TestStartAndStopPlaylistConfirmOnlyOnPostDispatchEvidenceTimed(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -564,7 +568,7 @@ func TestStartAndStopPlaylistConfirmOnlyOnPostDispatchEvidenceTimed(t *testing.T
 // never "busy" and is not refused.
 func TestIfBusyRefusesReplacesAndAllowsSamePlaylist(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -641,7 +645,7 @@ type fppParamShapeCase struct {
 // inferred from the 400 status code alone.
 func TestFPPCommandParamsAbsentNullEmptyDistinctionEndToEnd(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
@@ -846,7 +850,7 @@ func startRecordingProxy(t *testing.T, target string) (proxyURL string, rec *req
 // alongside the collector's own reads.
 func TestCollectorReadOnlyPostureUnchangedByCommandSurface(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 

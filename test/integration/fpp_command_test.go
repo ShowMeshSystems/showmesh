@@ -21,10 +21,11 @@ import (
 // /commands, stopPlaylist, or fpp:command — the criterion rested entirely
 // on a by-hand run. This proves 401 unauthenticated, 403 naming the
 // missing scope, 200 for an operator, and the replay behaviour, against a
-// real showmesh-coordinator subprocess and the real bench fppd (never the
-// deployed fleet — see requireLiveFPP, shared with fpp_e2e_test.go, and
-// this task's own standing rule against ever pointing a write at
-// docs/reference-installation.md's hosts).
+// real showmesh-coordinator subprocess and the real bench fppd. Every
+// write dispatched below calls requireLiveFPPForWrites (fpp_write_guard_test.go),
+// not requireLiveFPP: non-loopback targets are refused, loudly, unless
+// SHOWMESH_TEST_FPP_ALLOW_NONLOCAL_WRITES names that exact host, which is
+// what actually keeps this file off docs/reference-installation.md's hosts.
 //
 // scripts/test-integration-fpp.sh's own -run filter is updated alongside
 // this file (see that script) — LESSONS.md's own sharpest lesson, found
@@ -128,7 +129,7 @@ var commandRequestClient = &http.Client{Timeout: commandRequestTimeout}
 // result.
 func TestFPPCommandAgainstRealCoordinatorAndBenchFPP(t *testing.T) {
 	requireBroker(t)
-	url := requireLiveFPP(t)
+	url := requireLiveFPPForWrites(t)
 
 	dataDir := t.TempDir()
 	adminToken := createAdminAndIssueToken(t, dataDir, "admin-1", "a-strong-password-1")
@@ -266,7 +267,7 @@ func TestFPPCommandAgainstRealCoordinatorAndBenchFPP(t *testing.T) {
 // binaries together can.
 func TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline(t *testing.T) {
 	requireBroker(t)
-	url := requireLiveFPP(t)
+	url := requireLiveFPPForWrites(t)
 
 	dataDir := t.TempDir()
 	adminToken := createAdminAndIssueToken(t, dataDir, "admin-1", "a-strong-password-1")
@@ -327,7 +328,7 @@ func TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline(t *testing.T) {
 // 99", the bench's volume would show 99. Neither may happen.
 func TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict(t *testing.T) {
 	requireBroker(t)
-	fppURL := requireLiveFPP(t)
+	fppURL := requireLiveFPPForWrites(t)
 	resetBenchToIdle(t, fppURL)
 	t.Cleanup(func() { resetBenchToIdle(t, fppURL) })
 
