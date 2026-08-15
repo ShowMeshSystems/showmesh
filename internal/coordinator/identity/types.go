@@ -57,6 +57,15 @@ const (
 	ScopeConfigWrite    Scope = "config:write"
 	ScopePrincipalWrite Scope = "principal:write"
 	ScopeAuditRead      Scope = "audit:read"
+
+	// ScopeResolumeAction is Track D seam D-3's own action-dispatch scope
+	// (TRACK-D-D3-SPEC.md section 5.1): every one of the seven Resolume
+	// actions (launchClip, clearLayer, blackout, launchColumn, selectDeck,
+	// setLayerBypass, setLayerMaster) requires it. Reads stay open by
+	// default (ADR-024) — this scope exists only because dispatching one of
+	// these actions changes what the wall shows, the identical reasoning
+	// [ScopeFPPCommand] already carries for FPP's own lifecycle commands.
+	ScopeResolumeAction Scope = "resolume:action"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -65,8 +74,10 @@ const (
 var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}
 
 // operatorActionScopes is what [RoleOperator] adds on top of readScopes:
-// "the show, device, and FPP action scopes".
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand}
+// "the show, device, and FPP action scopes" — extended by Track D seam D-3
+// to include [ScopeResolumeAction], the identical class of action scope for
+// a second vendor.
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

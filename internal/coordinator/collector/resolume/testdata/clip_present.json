@@ -1,0 +1,12 @@
+{
+  "id": 1765396769100,
+  "name": {"valuetype":"ParamString","id":1786724970000,"value":"Test Clip"},
+  "connected": {"valuetype":"ParamState","id":1786724970001,"value":"Connected & previewing","index":4,
+    "options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]},
+  "transport": {
+    "position": {"valuetype":"ParamRange","id":1786724970003,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":0.42},
+    "controls": null
+  },
+  "transporttype": {"valuetype":"ParamChoice","id":1786724970002,"value":"Timeline","index":0,
+    "options":["Timeline","BPM Sync","SMPTE 1","SMPTE 2","Denon DJ","Pioneer DJ"]}
+}

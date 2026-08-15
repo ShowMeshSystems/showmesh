@@ -231,6 +231,8 @@ func cmdResolume(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return exitOK
 	case "composition":
 		return cmdResolumeComposition(rest, stdout, stderr, clock)
+	case "action":
+		return cmdResolumeAction(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume: unknown subcommand %q\n\n", sub)
 		printResolumeUsage(stderr)
@@ -245,8 +247,11 @@ Subcommands:
   composition   upload or show the stored Resolume Arena composition: the
                 id map of decks, layers, columns and clips every ShowMesh
                 reference to a Resolume object resolves through
+  action        dispatch one of the seven Resolume actions (launch a clip,
+                clear a layer, blackout, ...), or list the vocabulary
 
-Run "showmeshctl resolume composition --help" for its own subcommands.
+Run "showmeshctl resolume composition --help" or
+"showmeshctl resolume action --help" for their own subcommands.
 `)
 }
 

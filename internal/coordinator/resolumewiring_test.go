@@ -2,6 +2,8 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,9 +11,11 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
+	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
 // resolumeProductHandler serves a fixed, well-formed GET /api/v1/product
@@ -106,7 +110,7 @@ func TestResolumeWiringSurfacesReachableObservation(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(cfg, runner, testLogger())
+	wire, err := newResolumeWiring(context.Background(), cfg, runner, &resolume.CompositionStore{}, testLogger())
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -171,7 +175,7 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(config.Config{}, runner, testLogger())
+	wire, err := newResolumeWiring(context.Background(), config.Config{}, runner, &resolume.CompositionStore{}, testLogger())
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -199,4 +203,235 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	if len(obs) != 0 {
 		t.Errorf("observations = %v, want none for resource kind resolume when the collector was never configured", obs)
 	}
+}
+
+// --- Track D seam D-2/B: storeCompositionConfigReader and
+// newResolumeCompositionWiring -----------------------------------------------
+//
+// These tests write directly to *store.Store using the SAME
+// resolumeCompositionConfigKind/resolumeCompositionObjectID constants and
+// the SAME "{"composition": ...}" envelope shape
+// internal/coordinator/api/resolumecomposition.go's own upload handler
+// writes (that package's private resolumeCompositionStoredPayload), rather
+// than driving a full authenticated HTTP upload through api.New — building
+// that harness (principal bootstrap, session or token issuance, the
+// config:write scope, CSRF) belongs to api's own test suite (Step 6/7's
+// area), which this seam does not own and did not touch. What these tests
+// DO prove is the thing this file's own doc comments flag as the real risk
+// of duplicating those two constants and this one envelope shape by value
+// instead of by import: that storeCompositionConfigReader reads back
+// exactly the shape that shape implies, and that a mismatch would be
+// caught here rather than only in production.
+
+// writeTestCompositionRevision writes one resolume.composition config
+// revision directly via st's generic config_objects/config_revisions
+// methods (store/config.go) and activates it, mirroring
+// api/resolumecomposition.go's own handlePostResolumeCompositionUpload
+// closure (CreateConfigRevision then ActivateConfigRevision, no separate
+// CreateConfigObject call — see ActivateConfigRevision's own doc comment
+// for why that upserts the pointer row itself).
+func writeTestCompositionRevision(t *testing.T, st *store.Store, revision int64, comp *resolumecomp.Composition) {
+	t.Helper()
+	ctx := context.Background()
+
+	compJSON, err := json.Marshal(comp)
+	if err != nil {
+		t.Fatalf("marshaling test composition: %v", err)
+	}
+	envelope := struct {
+		SourceFilename string          `json:"sourceFilename"`
+		ContentHash    string          `json:"contentHash"`
+		SizeBytes      int64           `json:"sizeBytes"`
+		Composition    json.RawMessage `json:"composition"`
+	}{
+		SourceFilename: "test.avc",
+		ContentHash:    "sha256:test",
+		SizeBytes:      int64(len(compJSON)),
+		Composition:    compJSON,
+	}
+	payloadJSON, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshaling test envelope: %v", err)
+	}
+
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind:        resolumeCompositionConfigKind,
+		ObjectID:    resolumeCompositionObjectID,
+		Revision:    revision,
+		PayloadJSON: string(payloadJSON),
+	}); err != nil {
+		t.Fatalf("CreateConfigRevision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, resolumeCompositionConfigKind, resolumeCompositionObjectID, revision); err != nil {
+		t.Fatalf("ActivateConfigRevision: %v", err)
+	}
+}
+
+func TestStoreCompositionConfigReaderNoRevisionActivated(t *testing.T) {
+	st := openTestStore(t)
+	reader := storeCompositionConfigReader{st: st}
+
+	revision, compJSON, ok, err := reader.CurrentCompositionRevision(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentCompositionRevision: %v", err)
+	}
+	if ok {
+		t.Errorf("ok = true against an empty store, want false")
+	}
+	if revision != 0 {
+		t.Errorf("revision = %d, want 0", revision)
+	}
+	if compJSON != nil {
+		t.Errorf("compositionJSON = %v, want nil", compJSON)
+	}
+}
+
+// TestStoreCompositionConfigReaderReadsActiveRevisionByTheSameConstants is
+// this file's own answer to its "mirrors by value, not by import" risk
+// comment: it writes a revision using EXACTLY the kind/id constants and
+// envelope shape defined here, and confirms the reader reads it back —
+// which is only reassuring because those constants and that shape are
+// copied from api/resolumecomposition.go's own definitions rather than
+// invented independently. A divergence between the two files would not be
+// caught by this test (it would still pass, testing only internal
+// self-consistency); it would be caught by
+// TestBuildTrackedCompositionCountsAndWrittenBy-style fixtures failing to
+// appear on a real upload, which is exactly why this comment says so
+// rather than claiming more than this test actually proves.
+func TestStoreCompositionConfigReaderReadsActiveRevisionByTheSameConstants(t *testing.T) {
+	st := openTestStore(t)
+	comp := &resolumecomp.Composition{
+		Name: "Reader Test Show",
+		Layers: []resolumecomp.Layer{
+			{ID: "3000000000001", Index: 0},
+		},
+	}
+	writeTestCompositionRevision(t, st, 1, comp)
+
+	reader := storeCompositionConfigReader{st: st}
+	revision, compJSON, ok, err := reader.CurrentCompositionRevision(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentCompositionRevision: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true after writing and activating a revision")
+	}
+	if revision != 1 {
+		t.Errorf("revision = %d, want 1", revision)
+	}
+
+	var got resolumecomp.Composition
+	if err := json.Unmarshal(compJSON, &got); err != nil {
+		t.Fatalf("unmarshaling returned compositionJSON: %v", err)
+	}
+	if got.Name != "Reader Test Show" {
+		t.Errorf("decoded composition Name = %q, want %q", got.Name, "Reader Test Show")
+	}
+	if len(got.Layers) != 1 || got.Layers[0].ID != "3000000000001" {
+		t.Errorf("decoded composition Layers = %+v, want one layer with id 3000000000001", got.Layers)
+	}
+}
+
+// TestNewResolumeCompositionWiringNoUploadYet is TRACK-D-D2-SPEC.md §9's
+// D-2/B row's own acceptance criterion, exercised at the coordinator
+// wiring layer rather than only inside package resolume:
+// newResolumeCompositionWiring against a store nothing has ever been
+// uploaded to must produce a store whose Current() reports
+// resolume.ErrCompositionNotUploaded, never a zero-valued
+// *resolume.TrackedComposition a caller could misread as an uploaded
+// composition with nothing in it.
+func TestNewResolumeCompositionWiringNoUploadYet(t *testing.T) {
+	st := openTestStore(t)
+
+	wire := newResolumeCompositionWiring(context.Background(), st, testLogger())
+
+	_, err := wire.store.Current()
+	if !errors.Is(err, resolume.ErrCompositionNotUploaded) {
+		t.Errorf("Current() error = %v, want it to wrap resolume.ErrCompositionNotUploaded", err)
+	}
+}
+
+// TestNewResolumeCompositionWiringLoadsAlreadyActiveRevisionAtStartup
+// proves the synchronous startup load newResolumeCompositionWiring's own
+// doc comment promises: a composition already active in the store (as if
+// uploaded before this process last started) is reflected in the returned
+// wiring's store immediately, with no need to wait out
+// resolumeCompositionRefreshInterval's first tick.
+func TestNewResolumeCompositionWiringLoadsAlreadyActiveRevisionAtStartup(t *testing.T) {
+	st := openTestStore(t)
+	comp := &resolumecomp.Composition{
+		Name: "Startup Load Show",
+		Decks: []resolumecomp.Deck{
+			{ID: "2000000000001", Name: "Main"},
+		},
+		Clips: []resolumecomp.Clip{
+			{ID: "6000000000001", DeckID: "2000000000001", Name: "Clip One"},
+		},
+	}
+	writeTestCompositionRevision(t, st, 1, comp)
+
+	wire := newResolumeCompositionWiring(context.Background(), st, testLogger())
+
+	tc, err := wire.store.Current()
+	if err != nil {
+		t.Fatalf("Current() after startup load: %v", err)
+	}
+	if tc.Name() != "Startup Load Show" {
+		t.Errorf("Name() = %q, want %q", tc.Name(), "Startup Load Show")
+	}
+	if got, want := len(tc.Clips()), 1; got != want {
+		t.Fatalf("Clips() len = %d, want %d", got, want)
+	}
+	if tc.Clips()[0].DeckID != resolume.ObjectID(2000000000001) {
+		t.Errorf("Clips()[0].DeckID = %v, want 2000000000001", tc.Clips()[0].DeckID)
+	}
+	if got, want := wire.store.LoadedRevision(), int64(1); got != want {
+		t.Errorf("LoadedRevision() = %d, want %d", got, want)
+	}
+}
+
+// TestResolumeCompositionWiringRunPicksUpANewUploadWithoutRestart is this
+// seam's own headline requirement, checked end to end at this layer: a
+// composition uploaded (here, written directly to the store, matching
+// this file's own established pattern) AFTER newResolumeCompositionWiring
+// already returned reaches wire.store.Current() once Run's own periodic
+// refresh ticks — with no restart, and with no direct call from this test
+// into Refresh itself, which is what makes this a test of Run's loop
+// rather than of Refresh in isolation (idmap_test.go already covers
+// Refresh directly). resolumeCompositionRefreshInterval is not overridden
+// for this test: it is a small (5s) package-level constant already, and
+// keeping it real here — rather than adding a test-only seam to shrink it
+// — is what actually exercises the ticker Run constructs, not a
+// substitute for it.
+func TestResolumeCompositionWiringRunPicksUpANewUploadWithoutRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out a real resolumeCompositionRefreshInterval tick; skipped in -short")
+	}
+
+	st := openTestStore(t)
+	wire := newResolumeCompositionWiring(context.Background(), st, testLogger())
+
+	if _, err := wire.store.Current(); !errors.Is(err, resolume.ErrCompositionNotUploaded) {
+		t.Fatalf("Current() before any upload = %v, want resolume.ErrCompositionNotUploaded", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go wire.Run(ctx)
+
+	// Simulate an upload landing AFTER this coordinator process already
+	// started and already ran its one synchronous load above — exactly
+	// the scenario TRACK-D-D2-SPEC.md §9's D-2/B row names.
+	comp := &resolumecomp.Composition{Name: "Uploaded After Startup"}
+	writeTestCompositionRevision(t, st, 1, comp)
+
+	deadline := time.Now().Add(resolumeCompositionRefreshInterval + 5*time.Second)
+	for time.Now().Before(deadline) {
+		tc, err := wire.store.Current()
+		if err == nil && tc.Name() == "Uploaded After Startup" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("wire.store.Current() never reflected the post-startup upload within %s", resolumeCompositionRefreshInterval+5*time.Second)
 }

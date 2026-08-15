@@ -48,6 +48,19 @@ const maxProductResponseBytes = 4 << 10 // 4 KiB
 // than the short messages this capture observed.
 const maxErrorBodyBytes = 200
 
+// maxByIDResponseBytes bounds a single by-id object read (Track D seam
+// D-2). Capture section 4.1's cheap-reads table measured
+// `/composition/layers/by-id/{id}` — the largest of the four this package
+// reads, because a layer object carries its whole clip grid alongside the
+// handful of fields this package's [Layer] type actually decodes — at
+// 62,795 bytes, and the positional layergroups read (comparable in shape
+// to a by-id layergroup read, though not itself a by-id path) at 223,957
+// bytes. This bound sits well above both, for the identical reason
+// maxProductResponseBytes exists: a misbehaving or compromised Resolume
+// streaming an unbounded body on any of these endpoints must not be able
+// to exhaust coordinator memory.
+const maxByIDResponseBytes = 512 << 10 // 512 KiB
+
 // ClientOptions configures a [Client]. Every field left at its zero value
 // is replaced by the matching Default* constant.
 type ClientOptions struct {
@@ -201,6 +214,120 @@ func (c *Client) Product(ctx context.Context) (Product, error) {
 	return p, nil
 }
 
+// --- Track D seam D-2: by-id reads --------------------------------------
+//
+// Every method below is a targeted `by-id` GET, decoded into one of
+// composition.go's narrow [Layer]/[LayerGroup]/[Deck]/[Clip] types — never
+// a decode of GET /composition, which stays forbidden (see this package's
+// doc comment and guardfullcomposition_test.go). A 404 from any of them
+// means the object id no longer resolves — genuinely gone, or (for a
+// clip) simply on a deck that is not currently selected, capture section
+// 16.1 — and is reported through the SAME [StatusError] / [IsNotFound]
+// path [Client.Product] already uses, never folded into an ordinary
+// transport failure: a later seam has to tell "this object is gone" apart
+// from "Arena is unreachable" (TRACK-D-D2-SPEC.md §6, ADR-032 decision 6),
+// and collapsing the two here would make that impossible downstream.
+
+// getByID issues one bounded GET against path and decodes the 2xx body
+// into a fresh T, following [Client.Product]'s own shape: any non-2xx
+// status (404 included) becomes a [StatusError], and a body that fails to
+// parse becomes a [DecodeError]. Shared across [Client.Layer],
+// [Client.LayerGroup], [Client.Deck], and [Client.Clip] rather than
+// hand-copied four times, for the same reason composition.go's
+// presenceFieldValue is shared rather than hand-copied five times: a
+// four-way copy of "read, bound, decode, classify" is how one copy quietly
+// drifts from the others.
+func getByID[T any](ctx context.Context, c *Client, path string) (T, error) {
+	var zero T
+
+	resp, cancel, err := c.doGET(ctx, path, c.requestTimeout)
+	if err != nil {
+		return zero, err
+	}
+	defer cancel()
+	defer drainAndClose(resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return zero, newStatusError(resp, path)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxByIDResponseBytes+1))
+	if err != nil {
+		return zero, fmt.Errorf("resolume: reading %s response: %w", path, err)
+	}
+	if int64(len(body)) > maxByIDResponseBytes {
+		return zero, fmt.Errorf("resolume: %s response exceeded %d byte limit", path, maxByIDResponseBytes)
+	}
+
+	var v T
+	if err := json.Unmarshal(body, &v); err != nil {
+		return zero, &DecodeError{Path: path, Err: err}
+	}
+	return v, nil
+}
+
+// Layer performs GET /composition/layers/by-id/{id}. Layer ids are
+// deck-independent (capture section 16.1, 18/18 resolve regardless of
+// selected deck): a caller need not know or check which deck is selected
+// first.
+func (c *Client) Layer(ctx context.Context, id ObjectID) (Layer, error) {
+	return getByID[Layer](ctx, c, "/composition/layers/by-id/"+id.String())
+}
+
+// LayerGroup performs GET /composition/layergroups/by-id/{id}.
+func (c *Client) LayerGroup(ctx context.Context, id ObjectID) (LayerGroup, error) {
+	return getByID[LayerGroup](ctx, c, "/composition/layergroups/by-id/"+id.String())
+}
+
+// Deck performs GET /composition/decks/by-id/{id}. Deck ids are stable
+// across restart (capture section 3.2/9.2).
+func (c *Client) Deck(ctx context.Context, id ObjectID) (Deck, error) {
+	return getByID[Deck](ctx, c, "/composition/decks/by-id/"+id.String())
+}
+
+// Clip performs GET /composition/clips/by-id/{id}. See [Clip]'s own doc
+// comment: a 404 here does not by itself mean the clip reference is
+// stale — it can equally mean the clip's own deck is not currently
+// selected (capture section 16.1) — and callers must not treat this
+// method's [IsNotFound] the same way for a clip as they would for a
+// layer, layer group, or deck, all of which ARE deck-independent.
+func (c *Client) Clip(ctx context.Context, id ObjectID) (Clip, error) {
+	return getByID[Clip](ctx, c, "/composition/clips/by-id/"+id.String())
+}
+
+// --- The composition-level parameter ladder: deleted, not disabled ---------
+//
+// composition.bypassed, composition.master, and composition.name were once
+// pursued through a "ladder" that tried GET /composition/{term} before
+// falling back to reporting the term unreadable. Arena's own OpenAPI
+// specification (docs/bench/resolume-control-surface.md section 17)
+// answered the question the ladder existed to guess at: there is NO
+// `GET /composition/{parameter}` path anywhere in the specification — no
+// `/composition/bypassed`, no `/composition/master`, no `/composition/name`.
+// The only `{parameter}`-addressed composition path in the whole
+// specification is `POST /composition/{parameter}/reset`, a write. So the
+// ladder's rung 1 could only ever 404, and the ladder is removed outright
+// rather than left switched off: ADR-032 decision 2's own reasoning,
+// applied a second time — a bound that still permits a dangerous call
+// leaves it on the critical path, and a configuration flag defaulting to
+// off is still a flag someone could turn on, aimed at an undocumented
+// request into the `/composition/...` URL space next to the one call
+// measured to crash Arena. The two composition-level readiness terms
+// (composition.bypassed, composition.master — see readiness.go) and
+// resolume.composition.name are therefore permanently unavailable by any
+// path this package may use; see collector.go for how that unconditional
+// unavailability is now reported.
+//
+// One route remains and is deliberately not taken: the specification
+// documents `GET /parameter/by-id/{parameter-id}` for any parameter,
+// composition-level ones included. Acquiring a session-scoped parameter id
+// for a composition-level parameter without the forbidden full read is an
+// unanswered question this package does not attempt to answer — the only
+// available source is the WebSocket's connect-time dump, and using it
+// would need this package's own "no observed value is ever read out of a
+// WebSocket message" rule narrowed, which is an owner decision this seam
+// does not make.
+
 // doGET issues one bounded GET against c.baseURL+apiPrefix+path and
 // returns the response together with the context.CancelFunc the caller
 // must defer. The cancel func is returned rather than applied internally
@@ -326,6 +453,19 @@ func ClassifyError(err error) string {
 
 	var statusErr *StatusError
 	if errors.As(err, &statusErr) {
+		if statusErr.StatusCode == http.StatusPreconditionFailed {
+			// 412 is declared on deck open/close and POST /composition/action
+			// — none of which this package calls — but Arena's own API omits
+			// statuses freely elsewhere, and the swagger's own wording for it
+			// ("a precondition failed, e.g. the composition is locked, or
+			// still loading") is the closest thing to a `loading` field this
+			// API has anywhere: the load window (TRACK-D-D3-SPEC.md §3.6) has
+			// no dedicated signal of its own. Classified by name rather than
+			// left to the bare-status-code fallthrough below, so an
+			// operator-facing reason says something a person can act on
+			// instead of "http status 412".
+			return "the composition is locked, or still loading (http 412)"
+		}
 		return fmt.Sprintf("http status %d", statusErr.StatusCode)
 	}
 

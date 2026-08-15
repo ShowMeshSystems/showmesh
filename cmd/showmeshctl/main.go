@@ -113,6 +113,14 @@ Commands:
   undeclare <id>           remove a node's declaration, requires --confirm (write)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
+  resolume action list                 show the Resolume action vocabulary this coordinator supports
+  resolume action launch-clip <id>            launch (connect) a clip and confirm by evidence (write)
+  resolume action clear-layer <id>            clear (disconnect) a layer and confirm by evidence (write)
+  resolume action launch-column <id>          launch (connect) a column and confirm by evidence (write)
+  resolume action select-deck <id>            select a deck and confirm by evidence (write)
+  resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
+  resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
+  resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
@@ -190,7 +198,20 @@ Exit codes:
      to decide that is not current, or an idempotency key was reused
      against a different action/target/params; see stderr for the
      specific reason and remedy. Distinct from exit 6: the coordinator is
-     healthy and answered correctly, it declined on purpose)
+     healthy and answered correctly, it declined on purpose). Also used by
+     a "resolume action <verb>" subcommand for outcome "refused" (the
+     action was refused before dispatch — see stderr for why)
+  11 action unconfirmable (a "resolume action <verb>" subcommand only:
+     the action was dispatched, but its own effect could not be told
+     apart from its state before dispatch, so the coordinator cannot say
+     whether it did anything — never conflated with exit 0, which means
+     the effect WAS observed, or exit 9, which means a deadline expired
+     with no evidence either way)
+  12 action failed (a "resolume action <verb>" subcommand only: dispatch
+     was attempted and the attempt itself failed — distinct from exit 6,
+     which means this program's own request to the coordinator failed;
+     here the coordinator answered normally and reported, honestly, that
+     its own attempt to reach Resolume did not work)
 `)
 }
 

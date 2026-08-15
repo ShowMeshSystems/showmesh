@@ -392,6 +392,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/resolume/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Resolume action vocabulary (Track D seam D-3/B)
+         * @description Never gated by any scope, unlike GET /config/resolume/composition: this is static capability metadata (the seven-action vocabulary and each action's own parameters), identical for every coordinator running this software version, not a resource an operator's own credential controls visibility of.
+         */
+        get: operations["listResolumeActions"];
+        put?: never;
+        /**
+         * Dispatch one Resolume action and confirm by evidence (Track D seam D-3/B)
+         * @description Behind `resolume:action` (ADR-024 decision 4). Dispatches one of the seven actions this coordinator's own registry supports (see GET /resolume/actions) and confirms by evidence before answering, against that action's own derived deadline (ADR-003). A `200` is never this endpoint's own claim of success on its own — see ResolumeActionResult.outcome, which is exactly one of "confirmed", "unconfirmed", "unconfirmable", "refused", or "failed", every one of which is answered with `200`: this endpoint reports honestly what happened, it does not use the HTTP status to editorialize about whether the operator will like the answer. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
+         *     `idempotencyKey` is resolved FIRST, exactly as POST /fpp/{instanceId}/commands documents for its own identical rule: a replayed key — reused against the SAME `action` and the SAME normalized `params` — dispatches nothing and returns the original result, flagged `replay: true`. A key reused against a DIFFERENT `action` or DIFFERENT `params` is a `409` conflict.
+         *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition — see GET /resolume/actions' own `auditExempt` field.
+         */
+        post: operations["dispatchResolumeAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/fpp.endpoints/revisions": {
         parameters: {
             query?: never;
@@ -952,7 +978,7 @@ export interface components {
             id: string;
             index: number;
         };
-        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. */
+        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. When present, it is the layer's own layerGroup value taken as-is from the uploaded composition file — NOT validated to be within [0, layerGroups.length). A client that wants an actual layerGroups element must bounds-check this value itself before indexing with it. */
         ResolumeCompositionLayer: {
             id: string;
             index: number;
@@ -991,17 +1017,127 @@ export interface components {
             clips: components["schemas"]["ResolumeCompositionClip"][];
             persistentClips: components["schemas"]["ResolumeCompositionClip"][];
         };
+        /** @description One named parameter one Resolume action's "params" object accepts. Every parameter in this seven-action vocabulary is required — none of these seven actions has an optional parameter with a default — so there is no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters. */
+        ResolumeActionParam: {
+            name: string;
+            /** @enum {string} */
+            kind: "string" | "bool" | "number";
+            required: boolean;
+        };
+        /** @description One entry of the fixed seven-action vocabulary GET /resolume/actions returns. auditExempt mirrors ADR-024 decision 11's safety class: true only for `blackout` and `clearLayer`. coordinatorRequired is `true` for every entry today — the Resolume adapter is coordinator- hosted and Resolume holds no local fallback — carried on the wire so a macro author never has to know that out of band. */
+        ResolumeAction: {
+            /** @enum {string} */
+            name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster";
+            params: components["schemas"]["ResolumeActionParam"][];
+            auditExempt: boolean;
+            coordinatorRequired: boolean;
+        };
+        /** @description The body of GET /resolume/actions. */
+        ResolumeActionsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            actions: components["schemas"]["ResolumeAction"][];
+        };
+        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. */
+        ResolumeActionRequest: components["schemas"]["ResolumeIDActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
+        /** @description `action` one of `"launchClip"`, `"clearLayer"`, `"launchColumn"`, `"selectDeck"` — every action in this vocabulary whose entire payload is one ShowMesh object reference. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` (never a stale-reference error and never a silent deck change) — see ResolumeActionResult.outcome. */
+        ResolumeIDActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "launchClip" | "clearLayer" | "launchColumn" | "selectDeck";
+            idempotencyKey: string;
+            params: {
+                /** @description The ShowMesh reference this action resolves through the stored composition id map. */
+                id: string;
+            };
+        };
+        /** @description `action: "blackout"`: disconnects every tracked layer. Exempt from ADR-024 decision 11's fail-closed audit rule. */
+        ResolumeBlackoutActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "blackout";
+            idempotencyKey: string;
+            /** @description This action takes no parameters — a non-empty params object is a 400. */
+            params?: Record<string, never>;
+        };
+        /** @description `action: "setLayerBypass"`: sets a layer's bypass state. */
+        ResolumeSetLayerBypassActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "setLayerBypass";
+            idempotencyKey: string;
+            params: {
+                /** @description The ShowMesh reference of the layer to change. */
+                id: string;
+                bypassed: boolean;
+            };
+        };
+        /** @description `action: "setLayerMaster"`: sets a layer's master to a continuous value. Validated server-side against Arena's own declared range for THIS layer's master parameter (RangeParameter min/max, read fresh off the pre-dispatch baseline) rather than a fixed [0, 1] — an out-of-range request is refused with the declared bound stated, never silently clamped. */
+        ResolumeSetLayerMasterActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "setLayerMaster";
+            idempotencyKey: string;
+            params: {
+                /** @description The ShowMesh reference of the layer to change. */
+                id: string;
+                /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
+                master: number;
+            };
+        };
+        /** @description The body of a successful (200) response from POST /resolume/actions. */
+        ResolumeActionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            result: components["schemas"]["ResolumeActionResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) action. outcome is never inferred from this endpoint's own `200` status — it is exactly one of the five values in its enum below, and a `200` is sent for every one of them, including "refused" and "failed": this endpoint reports honestly what happened rather than using the HTTP status to editorialize about the answer. */
+        ResolumeActionResult: {
+            id: string;
+            idempotencyKey: string;
+            action: string;
+            /** @description This action's own normalized parameters — defaults applied, never omitted or null. */
+            params: {
+                [key: string]: unknown;
+            };
+            /** @description True when this response answers a REPLAYED idempotency key: the action described here was NOT dispatched by this request. */
+            replay: boolean;
+            /**
+             * @description "confirmed": the effect was observed on evidence collected strictly after dispatch. "unconfirmed": this action's own derived confirmation deadline expired first. "unconfirmable": dispatched, but its own effect could not be told apart from its pre-dispatch state (e.g. launching an already-playing clip) — never treated as success. "refused": refused before dispatch (a clip's deck was not selected, the composition identity was unknown, or a non-exempt action's audit write failed) — no request ever reached Resolume. "failed": dispatch was attempted and the attempt itself failed.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
+            /** @description A short, human-readable explanation. Non-empty for every resolved result, including "confirmed". */
+            outcomeReason: string;
+            /** @description True when this action's dispatch or outcome audit entry could not be written — the `blackout`/`clearLayer` safety-class exemption proceeding anyway with a degraded, stderr-only attribution record. */
+            attributionDegraded: boolean;
+            /**
+             * Format: date-time
+             * @description Null only when this action was refused before dispatch was ever attempted, or in the narrow accepted replay race `replay`'s own description names.
+             */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+        };
         /**
-         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the fifteen values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the sixteen values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole).
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action — every action except `blackout` and `clearLayer` — `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface).
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/payload-too-large";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -1918,6 +2054,79 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
+        };
+    };
+    listResolumeActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeActionsResponse"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchResolumeAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolumeActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeActionResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description An idempotency key was already used for a command whose `action` or normalized `params` differs from this request's own — a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key". */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /** @description ADR-024 decision 11's fail-closed default: this action is not exempt (not `blackout` or `clearLayer`), and the pre-dispatch write that must durably record it before dispatch could not be appended to this coordinator's audit store. `type` `resolume-action-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched to Resolume; retry once the audit store is writable again. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listFPPEndpointsConfigRevisions: {

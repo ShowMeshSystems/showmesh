@@ -1,7 +1,9 @@
 // Package resolume is the Resolume Arena REST adapter's read-only
-// foundation (Track D, seam D-1): a REST client for Arena's `/api/v1`
-// surface and a two-signal reachability collector implementing
-// internal/coordinator/collector.Collector.
+// observation layer: a REST client for Arena's `/api/v1` surface (Track D
+// seam D-1), the stored composition id map (seam D-2/A, D-2/B), and the
+// composition survey — layer readiness, composition identity, and the
+// rest of the signal vocabulary — built on top of both (seam D-2/C). It
+// implements internal/coordinator/collector.Collector.
 //
 // # No runtime path may call GET /composition
 //
@@ -33,30 +35,45 @@
 // adapter seam, speaks. Nothing in this package imports or writes any OSC
 // wire format.
 //
-// It issues no action against Resolume: no POST, PUT, or DELETE. Every
-// exported Client method is a GET, and Client's CheckRedirect refuses
-// every redirect unconditionally — the same defence
-// internal/coordinator/collector/fpp uses, for the identical reason even
-// though this package's own requests are all GETs: Resolume's REST API
-// also serves destructive POSTs and DELETEs on the same host, so a
-// coordinator that silently followed a 3xx could be turned into a
-// confused deputy issuing one of those. Actions, and the confirmation
-// vocabulary built on top of this foundation, are a later seam (D-3).
+// Through seam D-2 this package issued no action against Resolume at all:
+// no POST, PUT, or DELETE, every exported Client method a GET. Track D seam
+// D-3 (action.go and its siblings) is the first code in this package
+// permitted to change anything on the wall, and it does so through a fixed,
+// closed vocabulary of exactly seven actions (TRACK-D-D3-SPEC.md §2) —
+// launch a clip, clear a layer, blackout, launch a column, select a deck,
+// and set a layer's bypass or master parameter — each dispatched by object
+// id through new Client methods D-3 adds in its own files, never by editing
+// client.go's original GET-only methods. `POST /composition/action`
+// (undo/redo) and every `DELETE` remain permanently outside that
+// vocabulary: D-3's own specification excludes them outright, and nothing
+// in this package's Client has a method that could issue either. No method
+// anywhere in this package, before or after D-3, performs GET /composition
+// — see this comment's own section above, which D-3 does not narrow.
+// Client's CheckRedirect refuses every redirect unconditionally regardless
+// of HTTP method — the same defence internal/coordinator/collector/fpp
+// uses, for the identical reason: Resolume's REST API serves destructive
+// calls on the same host as everything this package reads, so a
+// coordinator that silently followed a 3xx could be turned into a confused
+// deputy issuing one of them.
 //
-// It knows nothing about composition semantics. No layer-readiness
-// conjunction, no composition-identity assertion, no "is this layer
-// putting anything on the wall" logic lives here — that is a later seam.
-// This package reports whether Arena answered at all; it does not
-// interpret what a composition contains.
+// The layer-readiness conjunction ([LayerReady], readiness.go) and the
+// composition-identity check ([CheckIdentity], identity.go) DO live in
+// this package as of seam D-2/C, each computed in exactly one function —
+// see those two files' own doc comments. What still does not live here is
+// how often either one runs: [Collector.Poll]'s steady-state timer only
+// ever performs the two-signal liveness probe D-1 shipped; a survey (the
+// only thing that produces readiness or identity evidence) runs
+// exclusively via [Collector.RequestSurvey] — an explicit request or a
+// confirmed WebSocket reconnect, never on a timer.
 //
 // The WebSocket change signal (built in this package's watch.go) is a
 // wake-up, never an authority: a message on it means "something may have
-// changed," and it is never itself the source of an observed value.
-// Today that wake-up only ever triggers an immediate `/product` poll
-// (see resolumewiring.go's own comment on OnChange) — it does not, and
-// while the /composition prohibition above holds, cannot, trigger a
-// re-resolution of any composition state. Nothing in this file's half of
-// the package reads from or depends on the WebSocket.
+// changed," and it is never itself the source of an observed value. A
+// connect wakes resolumewiring.go's own OnConnect callback, which calls
+// [Collector.RequestSurvey]; an ordinary change message still only ever
+// triggers an immediate `/product` poll (see resolumewiring.go's own
+// comment on OnChange). No observed value is ever read out of a WebSocket
+// message on either path.
 //
 // # The parameter-id lifecycle rule
 //

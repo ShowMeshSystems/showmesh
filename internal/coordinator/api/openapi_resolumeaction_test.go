@@ -1,0 +1,163 @@
+package api
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+)
+
+// This file is Track D seam D-3/B's own OpenAPI conformance suite,
+// mirroring openapi_fppcommand_test.go's own split between request-side
+// schema-only coverage (the exact bytes this file is about to POST,
+// validated against ResolumeActionRequest's discriminated oneOf BEFORE
+// being sent) and response-side coverage (a REAL response from a REAL
+// [API], driven against the fake [ResolumeActionDispatcher]
+// resolumeaction_test.go already builds, validated against the schema
+// that endpoint actually returns).
+
+func TestOpenAPIResolumeActionListResponseMatchesRealResponse(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resolume/actions", nil)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "ResolumeActionsResponse", body)
+}
+
+// TestOpenAPIResolumeActionRequestAndResponseVariantsMatchSchemas is the
+// request+response half proving every one of ResolumeActionRequest's four
+// oneOf variants (the plain object-id shape shared by launchClip/
+// clearLayer/launchColumn/selectDeck, blackout's zero-parameter shape, and
+// the two set-layer-bool shapes) both validate as a REQUEST and, once
+// dispatched against a real [API], produce a response validating against
+// ResolumeActionResponse.
+func TestOpenAPIResolumeActionRequestAndResponseVariantsMatchSchemas(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	for _, name := range []string{"launchClip", "clearLayer", "launchColumn", "selectDeck", "blackout", "setLayerBypass", "setLayerMaster"} {
+		setup.dispatcher.results[name] = confirmedResult("test evidence for " + name)
+	}
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"launchClip", resolumeActionBody("launchClip", "conf-key-launchClip", `{"id":"clip-1"}`)},
+		{"clearLayer", resolumeActionBody("clearLayer", "conf-key-clearLayer", `{"id":"layer-1"}`)},
+		{"launchColumn", resolumeActionBody("launchColumn", "conf-key-launchColumn", `{"id":"col-1"}`)},
+		{"selectDeck", resolumeActionBody("selectDeck", "conf-key-selectDeck", `{"id":"deck-1"}`)},
+		{"blackout", resolumeActionBody("blackout", "conf-key-blackout", "")},
+		{"setLayerBypass", resolumeActionBody("setLayerBypass", "conf-key-setLayerBypass", `{"id":"layer-1","bypassed":true}`)},
+		{"setLayerMaster", resolumeActionBody("setLayerMaster", "conf-key-setLayerMaster", `{"id":"layer-1","master":0.4}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Request-side: the exact bytes about to be sent must match
+			// exactly one ResolumeActionRequest oneOf branch.
+			assertMatchesSchema(t, c, "ResolumeActionRequest", []byte(tt.body))
+
+			req := newResolumeActionRequest(t, tt.body, token)
+			resp, respBody := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
+			}
+			// Response-side: a REAL response from a real [API].
+			assertMatchesSchema(t, c, "ResolumeActionResponse", respBody)
+		})
+	}
+}
+
+// TestOpenAPIResolumeActionOutcomeVocabularyResponsesMatchSchema proves
+// every one of the five outcome words — including "unconfirmable",
+// "refused", and "failed", none of which any FPP primitive ever produces —
+// still validates against ResolumeActionResponse on a real 200 response.
+func TestOpenAPIResolumeActionOutcomeVocabularyResponsesMatchSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	outcomes := []ResolumeActionOutcome{
+		ResolumeOutcomeConfirmed, ResolumeOutcomeUnconfirmed, ResolumeOutcomeUnconfirmable,
+		ResolumeOutcomeRefused, ResolumeOutcomeFailed,
+	}
+	for _, outcome := range outcomes {
+		t.Run(string(outcome), func(t *testing.T) {
+			setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+			setup.dispatcher.results["launchColumn"] = ResolumeActionResult{
+				Outcome: outcome, Reason: "test reason", Dispatched: outcome != ResolumeOutcomeRefused,
+			}
+			api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+			operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+			token := mustIssueToken(t, setup.svc, operator.ID)
+
+			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-"+string(outcome), `{"id":"col-1"}`), token)
+			resp, body := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+			}
+			assertMatchesSchema(t, c, "ResolumeActionResponse", body)
+		})
+	}
+}
+
+// TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse
+// proves the 503 fail-closed refusal (launchClip, not exempt) validates
+// against the shared Problem schema and carries the new
+// resolume-action-refused-audit-unavailable type this task added to the
+// document's Problem.type enum.
+func TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.results["launchClip"] = confirmedResult("clip connected")
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	installFailAuditTrigger(t, setup.storeDir)
+
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-audit-unavailable", `{"id":"clip-1"}`), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "Problem", body)
+
+	m := decodeMap(t, body)
+	if m["type"] != ProblemTypeResolumeActionRefusedAuditUnavailable {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeResolumeActionRefusedAuditUnavailable)
+	}
+}
+
+// TestOpenAPIResolumeActionReplayConflictResponseMatchesSchema proves the
+// 409 idempotency-conflict problem validates against the shared Problem
+// schema.
+func TestOpenAPIResolumeActionReplayConflictResponseMatchesSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.results["launchColumn"] = confirmedResult("column connected")
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-conflict", `{"id":"col-1"}`), token)
+	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
+	}
+
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "conf-key-conflict", `{"id":"deck-1"}`), token)
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
+	}
+	assertMatchesSchema(t, c, "Problem", body2)
+}

@@ -217,6 +217,31 @@ type Config struct {
 	// nudge meant for one device silently retarget the other. See
 	// Validate and [ValidateResolumeIDAgainstFPPEndpoints].
 	ResolumeID string
+
+	// --- Track D seam D-2/C: the two ADR-033-shaped footprint knobs, plus
+	// the composition-level parameter ladder's own gate ---
+
+	// ResolumePollInterval is SHOWMESH_RESOLUME_POLL_INTERVAL: the initial
+	// value of resolume.FootprintControls.PollInterval at startup. Zero
+	// (the default when unset) leaves that type's own fallback
+	// (resolume.DefaultPollInterval) in place. This is only ever the
+	// STARTING value — ADR-033/TRACK-D-D2-SPEC.md §3.3 is explicit that
+	// the real knob is a runtime-readable value
+	// (resolume.FootprintControls), not a constant baked in once; a
+	// future installation-wide show mode changes it after startup without
+	// touching this field or requiring a restart. Ignored entirely when
+	// ResolumeURL is empty (see [Config.ResolumeURL]).
+	ResolumePollInterval time.Duration
+
+	// ResolumeWebSocketDisabled is SHOWMESH_RESOLUME_WEBSOCKET_DISABLED: the
+	// initial value of resolume.FootprintControls.WebSocketEnabled at
+	// startup, INVERTED (false, the Go zero value, means enabled) so a
+	// directly-constructed Config with every Resolume field left at zero
+	// except ResolumeURL/ResolumeID — exactly what this seam's own tests
+	// already build — keeps the WebSocket enabled without having to name
+	// it. See ResolumePollInterval's own doc comment for why this is only
+	// ever a starting value, not the knob itself.
+	ResolumeWebSocketDisabled bool
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -336,6 +361,21 @@ const (
 	// (e.g. defaultClientID above) — there is only ever one Resolume
 	// instance this seam configures, so no numbering scheme is needed.
 	defaultResolumeID = "resolume"
+
+	// envResolumePollInterval and envResolumeWebSocketDisabled back the
+	// Track D seam D-2/C fields above. See [Config.ResolumePollInterval]
+	// and [Config.ResolumeWebSocketDisabled].
+	//
+	// SHOWMESH_RESOLUME_COMPOSITION_LADDER_ENABLED existed here once, back
+	// when composition.bypassed/master/name were pursued through a
+	// composition-level parameter ladder. That ladder was deleted (defect
+	// 2, 2026-08-15) because no `GET /composition/{parameter}` path exists
+	// anywhere in Arena's own OpenAPI specification — see
+	// internal/coordinator/collector/resolume/client.go's own doc comment
+	// — so there is nothing left for a flag to gate. The env var name is
+	// deliberately NOT reused for anything else.
+	envResolumePollInterval      = "SHOWMESH_RESOLUME_POLL_INTERVAL"
+	envResolumeWebSocketDisabled = "SHOWMESH_RESOLUME_WEBSOCKET_DISABLED"
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -429,6 +469,15 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	resolumePollInterval, err := parseDurationEnv(lookup, envResolumePollInterval, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	resolumeWebSocketDisabled, err := parseBoolEnv(lookup, envResolumeWebSocketDisabled, false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
@@ -461,6 +510,9 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 
 		ResolumeURL: getEnvDefault(lookup, envResolumeURL, ""),
 		ResolumeID:  getEnvDefault(lookup, envResolumeID, defaultResolumeID),
+
+		ResolumePollInterval:      resolumePollInterval,
+		ResolumeWebSocketDisabled: resolumeWebSocketDisabled,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -710,6 +762,9 @@ func (c Config) Validate() error {
 
 	if err := validateResolumeConfig(c); err != nil {
 		return err
+	}
+	if c.ResolumePollInterval < 0 {
+		return fmt.Errorf("%s must not be negative, got %s", envResolumePollInterval, c.ResolumePollInterval)
 	}
 
 	return nil
@@ -1072,6 +1127,8 @@ func (c Config) LogValue() slog.Value {
 		// directly rather than through redactURLUserinfo.
 		slog.String("resolume_url", c.ResolumeURL),
 		slog.String("resolume_id", c.ResolumeID),
+		slog.Duration("resolume_poll_interval", c.ResolumePollInterval),
+		slog.Bool("resolume_websocket_disabled", c.ResolumeWebSocketDisabled),
 	)
 }
 

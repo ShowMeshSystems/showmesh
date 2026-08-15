@@ -95,6 +95,14 @@ var fppCommandCopyGuardFiles = []string{
 	// forbiddenCopyPattern above, for the identical reason
 	// fppcommand_dispatch.go was added in the wave that added it.
 	"resolumecomposition.go",
+
+	// resolumeaction.go and resolumeaction_interfaces.go: Track D seam
+	// D-3/B's own operator-facing strings (the Resolume action dispatch
+	// handler's Problem Title/Detail, and its decode/validation
+	// messages) — added in the wave that added them, for the identical
+	// reason every entry above was.
+	"resolumeaction.go",
+	"resolumeaction_interfaces.go",
 }
 
 // TestOperatorFacingStringsCarryNoInternalCitation is this task's own

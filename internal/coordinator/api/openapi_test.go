@@ -207,6 +207,11 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"FPPCommandRequest", "StartPlaylistCommandRequest",
 		"StopPlaylistGracefullyCommandRequest", "SetVolumeCommandRequest",
 		"NoParamsFPPCommandRequest", "FPPCommandResponse", "FPPCommandResult",
+		"ResolumeActionParam", "ResolumeAction", "ResolumeActionsResponse",
+		"ResolumeActionRequest", "ResolumeIDActionRequest",
+		"ResolumeBlackoutActionRequest", "ResolumeSetLayerBypassActionRequest",
+		"ResolumeSetLayerMasterActionRequest", "ResolumeActionResponse",
+		"ResolumeActionResult",
 	} {
 		compileSchema(t, c, name)
 	}

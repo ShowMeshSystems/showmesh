@@ -153,6 +153,32 @@ const (
 	// and the operator's own remedy is in stderr (e.g. "retry with
 	// --if-busy=replace").
 	exitConflict = 10
+
+	// exitActionUnconfirmable is Track D seam D-3/B's own addition: a
+	// "resolume action <verb>" write subcommand completed a full,
+	// successful HTTP round trip and the coordinator answered "unconfirmable"
+	// — the action was dispatched, but its own effect could not be told
+	// apart from its pre-dispatch state (e.g. launching a clip that was
+	// already playing), so no post-dispatch evidence can confirm or refute
+	// it (ADR-029: an action whose effect cannot be observed reports as
+	// unconfirmable, never as success). Distinct from
+	// [exitCommandUnconfirmed] (a deadline expired with no evidence either
+	// way) and from [exitOK] (this is deliberately NOT treated as success,
+	// even though nothing went wrong): a script checking $? needs to tell
+	// "this coordinator could not tell you" apart from both "it told you no"
+	// and "it told you yes."
+	exitActionUnconfirmable = 11
+
+	// exitActionFailed is Track D seam D-3/B's own addition: a
+	// "resolume action <verb>" write subcommand completed a full,
+	// successful HTTP round trip and the coordinator answered "failed" —
+	// dispatch was attempted and the attempt itself failed (a transport
+	// error talking to Resolume, or an unexpected response from it).
+	// Deliberately distinct from [exitAPIError] (6): that code means THIS
+	// PROGRAM's own request to the coordinator produced an error response;
+	// this one means the coordinator answered normally (200) and reported,
+	// honestly, that ITS OWN attempt to reach Resolume did not work.
+	exitActionFailed = 12
 )
 
 // cliError carries an exit code alongside a human-readable message, so

@@ -168,6 +168,18 @@ type Dependencies struct {
 	// every other unwired dependency in this struct, and is correct for
 	// tests and for any embedder that has not wired it in.
 	ResolumeID string
+
+	// ResolumeActions is Track D seam D-3/A's action engine
+	// (internal/coordinator/collector/resolume), reached only through
+	// [ResolumeActionDispatcher] — see that interface's own doc comment
+	// (resolumeaction_interfaces.go) for why this package declares its own
+	// consumer-side view rather than importing that package directly. A
+	// nil field is replaced by [noResolumeActionDispatcher]
+	// (resolumeaction.go): GET /resolume/actions reports an empty
+	// vocabulary and POST /resolume/actions refuses every action as
+	// unsupported, matching this struct's standing "an unwired dependency
+	// is not this API failing" posture.
+	ResolumeActions ResolumeActionDispatcher
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -211,6 +223,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Nudger == nil {
 		d.Nudger = noFPPPollNudger{}
+	}
+	if d.ResolumeActions == nil {
+		d.ResolumeActions = noResolumeActionDispatcher{}
 	}
 	return d
 }
@@ -741,6 +756,20 @@ func New(deps Dependencies, opts Options) *API {
 	// scope.
 	mux.HandleFunc("GET /api/v1/config/resolume/composition", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeComposition))
 	mux.HandleFunc("POST /api/v1/config/resolume/composition", h.writeGuard(&scopeConfigWrite, h.handlePostResolumeCompositionUpload))
+
+	// GET/POST /api/v1/resolume/actions (Track D seam D-3/B): the seven-
+	// action Resolume vocabulary. GET is never gated by any scope — this
+	// is static capability metadata, identical for every coordinator
+	// running this software version, not a resource a credential controls
+	// visibility of (see handleListResolumeActions' own doc comment) — and
+	// is deliberately NOT the same posture as GET /config/resolume/
+	// composition above, which renders an operator's own uploaded show
+	// data. POST requires resolume:action via [handlers.writeGuard]: no
+	// state change here is reachable by GET, and a principal without the
+	// scope gets 403 with no HTTP request ever reaching Resolume — see
+	// resolumeaction.go.
+	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
+	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

@@ -192,9 +192,20 @@ Measured across a restart: **object ids 14/14 identical, parameter ids 0/14
 identical.** Parameter ids are minted at composition load.
 
 So parameter ids live only in memory, only for the lifetime of one WebSocket
-connection, and are re-resolved from a fresh composition read every time the
-connection is established. A parameter id must not appear in SQLite, in a config
-revision, in an export bundle, or in an API payload.
+connection, and are re-resolved every time the connection is established. A
+parameter id must not appear in SQLite, in a config revision, in an export bundle,
+or in an API payload.
+
+**Corrected 2026-08-14 by [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md)
+decision 2.** This section previously said parameter ids are re-resolved "from a
+fresh composition read". That call is now forbidden on every runtime path without
+exception, so re-resolution is by `by-id` reads of the objects the stored id map
+already names. Nothing about the rule itself changes — the ids still die on every
+restart and still may never be persisted — only where their replacements come
+from. The cost is stated rather than hidden: a by-id re-resolve reads only the
+objects ShowMesh tracks, so a parameter on an object outside the stored map has no
+id and is not subscribable, which §11's "which clips does ShowMesh track?" now
+also decides.
 
 **A subscription to a dead parameter id does not error. It goes quiet.** Nothing
 distinguishes it from a parameter that has not changed, which is precisely the
@@ -460,12 +471,53 @@ It returns **204 and does nothing**. It is mouse-up, not disconnect. Measured. T
 disconnect operations are `clear` and `disconnect-all`, and they are the only ones
 in §6.
 
-### 6.4 A `404` on a stored id is a composition change, not a failed command
+### 6.4 A `404` on a stored id is a composition change *or a deck mismatch*, and the two are different outcomes
 
-It aborts the action as `failed` with the reason stated as a stale reference, and
-it triggers a fresh full composition read to re-resolve everything (§3.6), and it
-sets `resolume.composition.identified` to false. It does **not** retry, and it does
-**not** fall back to a positional path.
+**Rewritten 2026-08-14. The previous version of this section was wrong twice**, and
+both errors were the kind that reads as obviously correct: it treated every `404`
+as a stale reference, and it prescribed a remedy —
+"triggers a fresh full composition read" — that
+[ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md)
+decision 2 now forbids on every runtime path. A rule whose remedy is the call
+measured to crash Arena in two requests is worse than no rule.
+
+A `404` is never a retry and is never a fallback to a positional path. Beyond
+that, what it means depends on what was addressed.
+
+**A layer, column, group or deck id.** Layer ids are deck-independent (§16.1 of
+the capture, 18/18 regardless of selection), so a `404` here is a genuine stale
+reference. The action aborts as `failed` with the reason stated as a stale
+reference, and `resolume.composition.identified` goes to false. Re-resolution
+requires a fresh composition **upload**, which is an operator action, not
+something the adapter can perform for itself. That is the accepted cost of
+ADR-032, and the observation must say so rather than leaving the operator to infer
+that ShowMesh will fix it.
+
+**A clip id.** Measured: **a clip id resolves only while its own deck is
+selected**, 30/30 selected against 0/10 non-selected, all 404. So a `404` on a
+clip cannot distinguish "this clip was replaced" from "this clip's deck is not
+showing", and the naive reading manufactures an identity failure out of an
+operator pressing a deck button.
+
+Every stored clip reference carries its deck (ADR-032 decision 6), so the adapter
+can tell them apart before it guesses:
+
+- the clip's deck is **not** the selected deck → outcome is a **deck mismatch,
+  naming the expected deck and the selected one**. Never a stale reference, never
+  an identity failure, and `resolume.composition.identified` is **not** touched.
+  Whether the adapter may select the deck itself is `selectDeck`'s decision and a
+  macro author's, never an implicit side effect of another action.
+- the clip's deck **is** the selected deck → a genuine stale reference, handled as
+  the layer case above.
+- the clip is a **`PersistentClip`** → it lives outside any deck and resolves
+  regardless of selection, so a `404` is a genuine stale reference with no deck
+  term to consider.
+
+**The deck reading is itself evidence and is fenced like any other.** `selected`
+is read from state that can be stale, so the adapter states which reading it
+decided on and when. Deciding "deck mismatch" off a pre-dispatch reading of
+`selected` that the operator has since changed is Step 7's confirmation defect
+wearing a third disguise.
 
 ## 7. Two behaviours that must be built for, not discovered
 
@@ -565,9 +617,16 @@ suite. Track D's own criteria are marked with which are in scope here.
    deadline is derived and not constant.
 5. **Arena is restarted while the adapter is connected**, and the adapter neither
    reports the show as present during the load window nor dispatches an action into
-   it. It re-resolves parameter ids and resumes without a coordinator restart.
+   it. It re-resolves parameter ids by id, from the stored map, and resumes without
+   a coordinator restart — and without a single `GET /composition` (§3.6, ADR-032
+   decision 2).
 6. **A stored clip id that no longer exists produces a stated stale reference**, not
-   a retry and not a positional fallback.
+   a retry and not a positional fallback. **Its paired negative criterion is the one
+   that matters**: a stored clip id belonging to a deck that is not selected
+   produces a **deck mismatch naming both decks**, leaves
+   `resolume.composition.identified` untouched, and does not select the deck for
+   itself (§6.4). The two cases are demonstrated against the same running Arena,
+   because a build that only demonstrates the first cannot tell them apart.
 7. Resolume state appears in the Operator UI with provenance and freshness, and
    `showmeshctl` can drive every §6 action, per
    [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md).
