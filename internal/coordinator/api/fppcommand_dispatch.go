@@ -431,58 +431,6 @@ func FPPCommandDecision11Exempt(class FPPCommandDecision11Class) bool {
 	}
 }
 
-// FPPCommandAllStepsExempt reports whether every class in classes is
-// exempt per [FPPCommandDecision11Exempt] - STEP-9-SPEC.md section 2.5's
-// submission-time test, "is this set of steps all exempt", which decides
-// whether a run whose audit write fails at submission may still proceed
-// (every step exempt, degraded attribution) or must be refused
-// ([FPPCommandAuditUnavailableProblem]). Reports true for an empty
-// classes: that case does not arise in practice (STEP-9-SPEC.md section
-// 5.4 requires at least one step per macro), and the honest answer to
-// "is every element of an empty set exempt" is yes, not a value chosen to
-// make an unreachable case convenient.
-//
-// This is the SUBMISSION-TIME posture check only, and it must never be
-// used to decide a per-step outcome once a run is already dispatching.
-// ADR-031 decision 5 as accepted makes the exemption a per-step property:
-// a refused non-exempt step fails and aborts the run, an exempt step
-// dispatches with degraded attribution recorded on that step. A caller
-// deciding a single step's outcome mid-run calls
-// [FPPCommandDecision11Exempt] on that step's own class directly and never
-// this function, which answers a question about the whole set of steps
-// and is only meaningful before the run has started.
-func FPPCommandAllStepsExempt(classes ...FPPCommandDecision11Class) bool {
-	for _, c := range classes {
-		if !FPPCommandDecision11Exempt(c) {
-			return false
-		}
-	}
-	return true
-}
-
-// FPPCommandAuditUnavailableProblem exposes this file's own
-// fppCommandAuditUnavailableProblem (problem.go) to a caller outside this
-// package. Step 9's macro executor needs the identical refusal STEP-9-
-// SPEC.md section 2.5 requires when a run submitted while the audit store
-// is unwritable is not composed entirely of exempt steps: the same 503
-// shape [handlers.dispatchFPPCommand] already answers with for one
-// primitive's own pre-dispatch write, reused here rather than a second,
-// differently worded refusal for the identical condition.
-//
-// label identifies what is being refused for the operator-facing detail
-// text (a macro id, never this endpoint's own wire-action vocabulary,
-// which does not apply to a run); cause should be, or wrap,
-// [identity.ErrAuditWrite] - exactly what a caller gets back from
-// [identity.Service.AuditedWrite] on this failure. This function does not
-// itself decide fail-closed versus proceed-degraded: that decision is
-// [FPPCommandAllStepsExempt] evaluated over the run's own steps, made by
-// the caller before it ever reaches for this constructor, exactly as
-// [handlers.dispatchFPPCommand] decides it per primitive before calling
-// the unexported constructor directly.
-func FPPCommandAuditUnavailableProblem(label string, cause error) v1.Problem {
-	return fppCommandAuditUnavailableProblem(label, cause)
-}
-
 // fppCommandAuditRunParams builds the [identity.AuditEntry.Params] value
 // naming which macro run caused a dispatch, outcome, or replay audit
 // entry - see [FPPCommandIssuer.RunID]'s own doc comment for why this is

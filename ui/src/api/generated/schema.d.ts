@@ -566,7 +566,7 @@ export interface paths {
         put?: never;
         /**
          * Submit a macro run (Step 9, STEP-9-SPEC.md section 6.6, ADR-031)
-         * @description Requires `show:macro:run` specifically (never satisfied by `config:write` alone — an admin who has never been granted `show:macro:run` may not fire a show through a different scope). `202`, never `200` or `201`: the run is accepted and not complete (ADR-031 decision 1). The body is the run's initial state, so a client that never watches still holds the run id and the pinned macro/action revisions; the outcome is learned by GET /macro-runs/{runId} or the `macroRun.changed` change-stream event, never by waiting on this response. `idempotencyKey` governs a three-way replay rule (STEP-9-SPEC.md section 6.2): the same key with the same macro at the same pinned revision replays (returns the existing run, `replay: true`, not a new one); the same key against a different macro, or the same macro at a different pinned revision, is each its own distinct `409`. A second run of the same macro already in flight is refused `409` naming the in-flight run (ADR-031 decision 6). A run whose steps are not all ADR-024 decision 11 safety-class-exempt is refused `503` when the audit store is unwritable at submission (decision 5).
+         * @description Requires `show:macro:run` specifically (never satisfied by `config:write` alone — an admin who has never been granted `show:macro:run` may not fire a show through a different scope). `202`, never `200` or `201`: the run is accepted and not complete (ADR-031 decision 1). The body is the run's initial state, so a client that never watches still holds the run id and the pinned macro/action revisions; the outcome is learned by GET /macro-runs/{runId} or the `macroRun.changed` change-stream event, never by waiting on this response. `idempotencyKey` governs a three-way replay rule (STEP-9-SPEC.md section 6.2): the same key with the same macro at the same pinned revision replays (returns the existing run, `replay: true`, not a new one); the same key against a different macro, or the same macro at a different pinned revision, is each its own distinct `409`. A second run of the same macro already in flight is refused `409` naming the in-flight run (ADR-031 decision 6).
          */
         post: operations["submitMacroRun"];
         delete?: never;
@@ -2896,16 +2896,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11 / ADR-031 decision 5: this run's steps are not all safety-class exempt, and this coordinator's audit store is currently unavailable. Evaluated at submission, not mid-run — once a 202 is out there is no HTTP response left to carry a later refusal. `type` `fpp-command-refused-audit-unavailable`. Nothing was recorded and no step was dispatched; retry once the audit store is writable again. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     listMacroRuns: {

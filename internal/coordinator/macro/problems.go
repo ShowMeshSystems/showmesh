@@ -38,8 +38,8 @@ import (
 // api/problem.go's own writeProblem doc comment ("every problem
 // constructor deliberately leaves ServerTime unset ... only writeProblem
 // can supply it"): whichever route eventually renders one of these problems
-// on the wire is responsible for stamping it, exactly as it already is for
-// api.FPPCommandAuditUnavailableProblem's return value.
+// on the wire is responsible for stamping it, exactly as api's own
+// problem constructors already leave it to writeProblem.
 
 // problemBaseURI is [api.ProblemBaseURI], not a second copy of the string.
 // It was a copied literal when this file was written, because the api-side

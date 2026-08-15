@@ -358,44 +358,15 @@ func TestFPPCommandDecision11ClassForAction(t *testing.T) {
 	}
 }
 
-// TestFPPCommandAllStepsExempt proves the submission-time "is this set of
-// steps all exempt" combinator STEP-9-SPEC.md section 2.5 requires: every
-// step exempt is the only true case, an unrecognized value fails closed
-// (not exempt), and a zero-step run is vacuously true (STEP-9-SPEC.md
-// section 5.4 makes that case unreachable in practice; this proves the
-// function does not special-case it to something else).
-func TestFPPCommandAllStepsExempt(t *testing.T) {
-	cases := []struct {
-		name    string
-		classes []FPPCommandDecision11Class
-		want    bool
-	}{
-		{"empty", nil, true},
-		{"single stop", []FPPCommandDecision11Class{FPPCommandDecision11ClassStop}, true},
-		{"single none", []FPPCommandDecision11Class{FPPCommandDecision11ClassNone}, false},
-		{"blackout and powerOff", []FPPCommandDecision11Class{FPPCommandDecision11ClassBlackout, FPPCommandDecision11ClassPowerOff}, true},
-		{"stop then none", []FPPCommandDecision11Class{FPPCommandDecision11ClassStop, FPPCommandDecision11ClassNone}, false},
-		{"unrecognized value fails closed", []FPPCommandDecision11Class{"reticulateSplines"}, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := FPPCommandAllStepsExempt(c.classes...); got != c.want {
-				t.Errorf("FPPCommandAllStepsExempt(%v) = %v, want %v", c.classes, got, c.want)
-			}
-		})
-	}
-}
-
-// TestFPPCommandAuditUnavailableProblemMatchesRealRefusal proves the
-// exported [FPPCommandAuditUnavailableProblem] is not a second,
-// independently worded refusal: dispatching a non-exempt primitive
-// (startPlaylist) against a real, genuinely failing audit_log
-// ([installFailAuditTrigger]) is refused with exactly the Type and Status
-// the exported constructor itself would build - Step 9's macro executor
-// needs this for the identical submission-time refusal STEP-9-SPEC.md
-// section 2.5 requires, and a drifted second copy would defeat the point
-// of exposing one.
-func TestFPPCommandAuditUnavailableProblemMatchesRealRefusal(t *testing.T) {
+// TestNonExemptPrimitiveRefusedWhenAuditUnavailable proves the ADR-024
+// decision 11 fail-closed refusal that SURVIVES ADR-035: a single
+// non-exempt primitive (startPlaylist) dispatched while the audit_log is
+// genuinely unwritable ([installFailAuditTrigger]) is refused with the
+// fpp-command-refused-audit-unavailable 503, checked against the
+// package's own constructor so the wire refusal and the constructor
+// cannot drift apart. Only a macro RUN never refuses on this condition
+// (ADR-035); the per-primitive refusal here is unchanged by it.
+func TestNonExemptPrimitiveRefusedWhenAuditUnavailable(t *testing.T) {
 	srv := newFailIfHitFPPCommandServer(t)
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: srv.URL}}
@@ -430,9 +401,9 @@ func TestFPPCommandAuditUnavailableProblemMatchesRealRefusal(t *testing.T) {
 		t.Fatal("Dispatch did not refuse a non-exempt primitive with the audit store failing")
 	}
 
-	want := FPPCommandAuditUnavailableProblem("begin-set", identity.ErrAuditWrite)
+	want := fppCommandAuditUnavailableProblem("begin-set", identity.ErrAuditWrite)
 	if problem.Type != want.Type {
-		t.Errorf("problem.Type = %q, want %q (the exported constructor's own type)", problem.Type, want.Type)
+		t.Errorf("problem.Type = %q, want %q (the constructor's own type)", problem.Type, want.Type)
 	}
 	if problem.Status != want.Status {
 		t.Errorf("problem.Status = %d, want %d", problem.Status, want.Status)
