@@ -4,9 +4,10 @@ Status: specified 2026-08-14. **Built 2026-08-15, reviewed the same day, and ame
 what the review found.** Four sections below carry a dated amendment: §3.4's deck term now
 costs one by-id read rather than zero requests, §3.6's identity gate does not refuse an
 exempt action for a stale reading, §4.2's baseline failure does not refuse an exempt
-action, and §4.3's confirmation is a backed-off poll rather than a single read. Unit-test
-evidence only; nothing here has run against the real Arena. See
-[the live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md).
+action, and §4.3's confirmation is a backed-off poll rather than a single read. **Driven against a real Arena 2026-08-15** (development laptop, not the playout machine):
+see [the live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md) §6.
+**§9's open question was answered by the owner and is now
+[ADR-037](../decisions/ADR-037-resolume-references-are-names-not-ids.md).**
 
 Bound by: [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md),
 [ADR-003](../decisions/ADR-003-desired-and-observed-state.md),

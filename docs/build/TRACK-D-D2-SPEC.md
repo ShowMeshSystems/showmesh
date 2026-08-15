@@ -1,8 +1,9 @@
 # Track D seam D-2: Resolume observations
 
 Status: specified 2026-08-14. **Built 2026-08-14, defect-fix pass the same day, reviewed
-and closed 2026-08-15.** Unit-test evidence only; nothing here has run against the real
-Arena. See [the live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md).
+and closed 2026-08-15.** **Driven against a real Arena 2026-08-15**, including the steady-state
+traffic property counted through a proxy: see
+[the live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md) §6.
 
 Bound by: [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md),
 [ADR-003](../decisions/ADR-003-desired-and-observed-state.md),

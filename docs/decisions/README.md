@@ -40,6 +40,8 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
 | [ADR-033](ADR-033-show-mode.md) | Program Mode and Show Mode are one system-wide operating mode | Accepted |
 
+| [ADR-037](ADR-037-resolume-references-are-names-not-ids.md) | A Resolume reference is a name, not an object id | Accepted (owner, 2026-08-15; not yet implemented) |
+
 **ADR-035 and ADR-036 are reserved.** The `step-9-wave-3` branch carries two ADRs numbered 033 and 034 there, which collide with ADR-033 above; they are renumbered to 035 and 036 when that branch merges. A new record on `main` starts at ADR-037.
 
 ## Record template

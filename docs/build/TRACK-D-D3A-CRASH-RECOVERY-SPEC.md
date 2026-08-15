@@ -1,7 +1,7 @@
 # Track D seam D-3a: Arena crash recovery
 
-Status: **specified 2026-08-15. Not built.** Three decisions in §7 need the owner
-before this is buildable.
+Status: **specified 2026-08-15. Not built.** §7's three decisions were **answered by the
+owner the same day** and are folded in below; this is buildable as written.
 
 Bound by: [ADR-003](../decisions/ADR-003-desired-and-observed-state.md),
 [ADR-001](../decisions/ADR-001-fpp-is-authoritative.md),
@@ -127,41 +127,72 @@ Each restore is an ordinary D-3 dispatch and inherits its confirmation, its dead
 its budget. **The whole restore is bounded** and reports per layer: restored, skipped with
 a reason, or failed with a reason. A partial restore is reported as partial.
 
-## 7. Three decisions the owner has to make, because guessing them wrong is expensive
+## 7. The three decisions, answered by the owner 2026-08-15
 
-### 7.1 Is the restore automatic, or does it wait for the operator?
+### 7.1 Automatic, with a toggle
 
-Automatic is what "restores the layers that were playing" says, and requiring the operator
-to notice defeats the point during a show. But it is a write, issued from a record that
-§3 says can be incomplete, at a moment when a human may already be fixing things.
+**The restore runs automatically, and it has an operator toggle.** Not gated on anything
+else. §6's five skip rules are what stop it fighting a human who is already fixing things.
 
-**Recommendation: automatic, with §6's five skip rules doing the protecting**, and a
-`showmeshctl` command to run it manually for the case where it was skipped or declined.
+The toggle is ordinary configuration: revisioned, audited, readable and writable through
+the API and `showmeshctl`, and its current value is visible on the dashboard. **Its state
+must be visible without being hunted for**, because an operator who thinks recovery is
+armed and finds out otherwise mid-show is worse off than one who knows it is off.
 
-### 7.2 Does Show Mode gate it?
+The manual path exists either way: a `showmeshctl` command that runs the same restore on
+demand, for the case where the toggle is off, or where the automatic attempt skipped
+layers and the operator wants a second pass after fixing the cause.
 
-This is the first genuinely good use of [ADR-033](../decisions/ADR-033-show-mode.md)'s mode
-that has come up, and the mode **is not built** (D-2 built the seams that read it, not the
-mode itself). During a show, automatic recovery is the whole point. While programming, a
-coordinator relaunching clips underneath the operator is exactly what nobody wants.
+### 7.2 Show Mode does not gate it
 
-ADR-033's clause that mode never gates blackout, stop or power-off does not apply: a
-restore is not in that class.
+**Answered: no.** The earlier recommendation here was that the restore should be armed in
+`show` and inert in `program`, which would have made this seam the one that builds
+[ADR-033](../decisions/ADR-033-show-mode.md)'s mode. The owner's answer is simpler and it
+removes that scope: **auto restore may happen at any time, and the toggle is the control.**
 
-**Recommendation: armed in `show`, and in `program` it detects and reports but does not
-write.** That makes this seam the one that builds the mode, which is a larger scope than
-"crash recovery" reads like, and the owner should know that before it starts.
+So this seam does **not** build Show Mode, does not read a mode value, and does not
+create a private boolean that means "we are running a show now" (ADR-033 exists precisely
+to stop four subsystems inventing that separately). The mode remains unbuilt and unblocked.
 
-### 7.3 Does it need a new scope, or does it use `resolume:action`?
+### 7.3 The automatic path acts as a named system principal
 
-The restore is a sequence of `launchClip` calls, so `resolume:action` covers the manual
-command. But an **automatic** restore has no principal, which is the exact situation the
-Step 7 startup-migration lesson is about: fail-closed protects the operator from an
-unaccountable actor, and where there is no actor it protects nobody.
+The manual command is an ordinary authenticated write needing `resolume:action`. The
+automatic restore has no human behind it, which is the Step 7 startup-migration situation
+exactly: fail-closed protects the operator from an unaccountable actor, and where there is
+no actor it protects nobody.
 
-**Recommendation: the automatic path acts as a named system principal** so the audit trail
-says who, and it is never refused for want of an audit write, because refusing it leaves
-the wall dark, which is the same failure direction as refusing blackout.
+So the automatic path acts as a **named system principal** so the audit trail says who,
+and it is **never refused for want of an audit write**, because refusing it leaves the
+wall dark, which is the same failure direction as refusing blackout.
+
+## 7a. Controlling a Resolume machine that is not the coordinator, answered by measurement
+
+The owner asked what the plan is for driving the Resolume host when it is a different
+machine, and whether that needs a helper app. **It does not, and this is measured rather
+than assumed.**
+
+Arena's own REST server is a network server. On the operator's installation
+`Preferences/server.xml` reads `enabled="1" port="9080" address="0.0.0.0"`, so it listens
+on every interface, and the coordinator reaches it over the network exactly as it reaches
+an FPP host. Everything D-1, D-2 and D-3 do, and everything this seam does, works from
+another machine with no ShowMesh code on the Resolume host at all. **`SHOWMESH_RESOLUME_URL`
+is the whole integration.**
+
+What a helper on the Resolume host would add, and why none of it is needed now:
+
+| Would add | Verdict |
+|---|---|
+| Telling apart "Arena crashed" from "the machine is off" from "the network is down" | Genuinely useful and **not** available remotely: all three look identical to the coordinator. Worth revisiting **only if** the operator finds that distinction matters in practice |
+| Faster crash detection | The poll interval already bounds this, and a few seconds does not change the recovery |
+| Relaunching Arena | **Explicitly rejected** (§1). Not a reason to build a helper |
+| Reading the `.avc` off the host | **Forbidden** by ADR-032. Upload is the only ingestion path |
+
+**Recommendation: no helper app.** The one real gap is the failure-cause distinction, and
+the honest response to it is that ShowMesh reports "Resolume is unreachable" with the
+evidence it actually has, rather than guessing which of three causes it is. That is
+ADR-011's rule and it is the same thing the FPP collector already does for an unreachable
+host. A helper is a new deployment target on a Windows or macOS box, which is a real cost,
+and it should be paid only against a named problem.
 
 ## 8. Acceptance criteria
 
@@ -178,7 +209,13 @@ the wall dark, which is the same failure direction as refusing blackout.
 7. **Nothing in the seam starts, restarts or signals the Arena process**, enforced by the
    same kind of structural guard as the positional and OSC guards, because "just relaunch
    it" is the obvious thing a future builder adds.
-8. Steady-state traffic is unchanged: still exactly one `GET /product` per interval.
+8. Steady-state traffic is unchanged: still exactly one `GET /product` per interval,
+   which is now a measured property of the real adapter and not only a unit test (see
+   [the live verification](../bench/TRACK-D-LIVE-VERIFICATION.md) §6).
+9. **The toggle is readable and writable through the API and `showmeshctl`, is audited,
+   and its state is visible on the dashboard**, per §7.1.
+10. **With the toggle off, a crash and return produce the report and no write**, with a
+   test that fails if any restore write escapes while it is off.
 
 ## 9. What this seam does not do
 
@@ -187,4 +224,7 @@ the wall dark, which is the same failure direction as refusing blackout.
 - **No reconciler.** Nothing closes desired and observed state on a loop; this fires on a
   transition and stops. ShowMesh does not become a second scheduler for Resolume any more
   than it does for FPP.
-- **No Operator UI.** That is D-4.
+- **No Operator UI.** That is D-4. The toggle needs a control there, and that control is
+  D-4's, not this seam's; the API and CLI come first per ADR-030.
+- **No Show Mode.** §7.2 removed it from this seam's scope.
+- **No helper app on the Resolume host.** §7a.
