@@ -925,8 +925,9 @@ func (tc *testCoordinator) shutdown() {
 	_ = tc.cmd.Process.Signal(syscall.SIGTERM)
 	// 15s, deliberately wider than the coordinator's own 10s shutdownCtx
 	// (internal/coordinator/coordinator.go): with a macro run in flight,
-	// macro.Executor.Stop legitimately holds shutdown for that full budget
-	// before the process exits, because a run is uncancellable by design.
+	// shutdown legitimately runs that full budget (macro.Executor.Stop
+	// holds most of it, since a run is uncancellable by design, and the
+	// broker disconnects hold a reserved slice) before the process exits.
 	// This bound was 10s, equal to the server's, so the first test to tear
 	// down mid-run SIGKILLed a coordinator that was 60ms from a clean exit:
 	// two timeouts on opposite sides of one contract are a single decision.

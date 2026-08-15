@@ -789,30 +789,40 @@ func Run() int {
 	// goroutines" something a test can assert instead of merely hope for.
 	backgroundWG.Wait()
 
-	// macroExecutor.Stop waits, bounded by shutdownCtx, for any macro run
-	// goroutine's own bookkeeping (a step's final store write, an audit
-	// append) to land before the store it writes to is closed below — see
-	// that method's own doc comment for what it deliberately does NOT do
-	// (cancel an in-flight run; a running macro cannot be stopped by this
-	// or by anything else, by construction). Best-effort: a timeout here
-	// is logged, not fatal, matching every other shutdown step in this
-	// sequence.
-	if err := macroExecutor.Stop(shutdownCtx); err != nil {
-		logger.Warn("macro executor stop error", "error", err)
+	// macroExecutor.Stop waits for any macro run goroutine's own bookkeeping
+	// (a step's final store write, an audit append) to land before the
+	// store it writes to is closed below; see that method's own doc
+	// comment for what it deliberately does NOT do (cancel an in-flight
+	// run; a running macro cannot be stopped by this or by anything else,
+	// by construction). runShutdown gives Stop its own earlier sub-deadline
+	// so a run still in flight cannot also starve the disconnects below of
+	// their share of shutdownCtx.
+	// ok is asserted rather than discarded: a deadline-free shutdownCtx
+	// would make the zero time.Time below read as "already expired" and
+	// silently turn an unbounded shutdown into zero budget for everything.
+	shutdownDeadline, ok := shutdownCtx.Deadline()
+	if !ok {
+		shutdownDeadline = time.Now().Add(10 * time.Second)
 	}
-
-	// Step 9: every integration broker connection this coordinator opened
-	// (buildIntegrationBrokerRegistry, above) is torn down alongside the
-	// control-plane broker immediately below — same shutdownCtx, same
-	// best-effort posture.
-	for _, ibm := range integrationBrokerManagers {
-		if err := ibm.Disconnect(shutdownCtx); err != nil {
-			logger.Warn("integration broker disconnect error", "error", err)
+	stopErr := runShutdown(shutdownCtx, shutdownDeadline, macroExecutor.Stop, func(disconnectCtx context.Context) {
+		// Step 9: every integration broker connection this coordinator
+		// opened (buildIntegrationBrokerRegistry, above) is torn down
+		// alongside the control-plane broker immediately below.
+		for _, ibm := range integrationBrokerManagers {
+			if err := ibm.Disconnect(disconnectCtx); err != nil {
+				logger.Warn("integration broker disconnect error", "error", err)
+			}
 		}
-	}
 
-	if err := bm.Disconnect(shutdownCtx); err != nil {
-		logger.Warn("mqtt disconnect error", "error", err)
+		if err := bm.Disconnect(disconnectCtx); err != nil {
+			logger.Warn("mqtt disconnect error", "error", err)
+		}
+	})
+	// The message makes no causal claim: this branch is also reachable
+	// with zero runs in flight, when earlier shutdown steps consumed the
+	// whole budget and Stop's clamped context was born expired.
+	if stopErr != nil {
+		logger.Warn("macro executor stop did not finish within its shutdown budget", "error", stopErr)
 	}
 
 	if err := st.Close(); err != nil {
@@ -821,6 +831,46 @@ func Run() int {
 
 	logger.Info("showmesh-coordinator exited cleanly")
 	return 0
+}
+
+// macroExecutorStopReserve is how much of the overall shutdown deadline
+// [runShutdown] reserves for what runs after macroExecutor.Stop, so a run
+// still in flight when shutdown begins (Stop cannot cancel one; see its own
+// doc comment) cannot also consume the budget the broker disconnects need.
+// 3s is A SHOWMESH HYPOTHESIS, not a measured value: a clean MQTT
+// DISCONNECT is far under it, and it leaves Stop the larger share.
+const macroExecutorStopReserve = 3 * time.Second
+
+// macroStopContext derives Stop's own sub-deadline from the shared shutdown
+// deadline, reserving reserve for whatever runs after Stop returns. If less
+// than reserve is already left, it returns a context deadlined at now
+// instead of one already in the past.
+func macroStopContext(parent context.Context, deadline time.Time, reserve time.Duration) (context.Context, context.CancelFunc) {
+	stopBy := deadline.Add(-reserve)
+	if now := time.Now(); stopBy.Before(now) {
+		stopBy = now
+	}
+	return context.WithDeadline(parent, stopBy)
+}
+
+// runShutdown runs stop against its own earlier sub-deadline (see
+// [macroStopContext]) and then afterStop against the full shared deadline,
+// so stop's consumption can never eat afterStop's share. afterStop gets
+// whatever remains of the shared deadline: real time whenever stop was
+// what expired, and an already-expired context only if the steps BEFORE
+// runShutdown consumed the entire budget themselves. Returns stop's error;
+// afterStop reports its own errors itself since it may run more than one
+// step.
+func runShutdown(ctx context.Context, deadline time.Time, stop func(context.Context) error, afterStop func(context.Context)) error {
+	stopCtx, cancelStop := macroStopContext(ctx, deadline, macroExecutorStopReserve)
+	defer cancelStop()
+	stopErr := stop(stopCtx)
+
+	afterCtx, cancelAfter := context.WithDeadline(ctx, deadline)
+	defer cancelAfter()
+	afterStop(afterCtx)
+
+	return stopErr
 }
 
 // bootstrapWarningInterval is how often [watchUnclaimedBootstrap] re-logs
