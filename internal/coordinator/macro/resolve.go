@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -243,19 +242,4 @@ func buildStepRecords(rm resolvedMacro) []store.MacroRunStepRecord {
 		}
 	}
 	return steps
-}
-
-// stepSafetyClasses reports every step's own [api.FPPCommandDecision11Class],
-// in step order — ADR-024 decision 11's four-member vocabulary, which
-// config.ShowSafetyClass{None,Blackout,Stop,PowerOff}'s string values
-// already match exactly (both are the literal strings "none", "blackout",
-// "stop", "powerOff"; see config/showaction.go's own const block), so this
-// is a plain type conversion, never a second hand-maintained mapping that
-// could drift from either vocabulary.
-func stepSafetyClasses(steps []store.MacroRunStepRecord) []api.FPPCommandDecision11Class {
-	classes := make([]api.FPPCommandDecision11Class, len(steps))
-	for i, st := range steps {
-		classes[i] = api.FPPCommandDecision11Class(st.SafetyClass)
-	}
-	return classes
 }

@@ -129,6 +129,11 @@ func (b failureBuffer) asPriorFailures() ([]macroPriorFailureRequest, int) {
 			dropped++
 			continue
 		}
+		// Field-by-field on purpose, not a type conversion: bufferedFailure
+		// is this host's on-disk record and macroPriorFailureRequest is the
+		// wire shape, and they happen to match today. A conversion would
+		// couple them, so changing one would silently change the other.
+		//nolint:staticcheck // S1016: the two types are deliberately independent
 		out = append(out, macroPriorFailureRequest{
 			MacroObjectID: f.MacroObjectID,
 			Class:         f.Class,

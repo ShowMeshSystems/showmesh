@@ -62,7 +62,7 @@ func TestClientProductDecodesCapturedShape(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("unexpected method %q, want GET", r.Method)
 		}
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -87,7 +87,7 @@ func TestClientProductDecodesCapturedShape(t *testing.T) {
 func TestClientProductNon2xxIsStatusError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("The requested resource '/api/v1/product' was not found on this server."))
+		_, _ = w.Write([]byte("The requested resource '/api/v1/product' was not found on this server."))
 	}))
 	defer srv.Close()
 
@@ -117,7 +117,7 @@ func TestClientProductNon2xxIsStatusError(t *testing.T) {
 
 func TestClientProductDecodeErrorIsDecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -210,7 +210,7 @@ func TestClientLayerDecodesPresentFields(t *testing.T) {
 		if r.URL.Path != "/api/v1/composition/layers/by-id/1765224917300" {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
-		w.Write(loadTestdata(t, "layer_present.json"))
+		_, _ = w.Write(loadTestdata(t, "layer_present.json"))
 	}))
 	defer srv.Close()
 
@@ -250,7 +250,7 @@ func TestClientLayerDecodesPresentFields(t *testing.T) {
 // dark layer report ready.
 func TestClientLayerNullFieldsAreNeverReadAsZeroValues(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(loadTestdata(t, "layer_null_terms.json"))
+		_, _ = w.Write(loadTestdata(t, "layer_null_terms.json"))
 	}))
 	defer srv.Close()
 
@@ -291,7 +291,7 @@ func TestClientLayerNullFieldsAreNeverReadAsZeroValues(t *testing.T) {
 // present: layer_absent_terms.json carries only "id".
 func TestClientLayerAbsentFieldsArePresenceAbsent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(loadTestdata(t, "layer_absent_terms.json"))
+		_, _ = w.Write(loadTestdata(t, "layer_absent_terms.json"))
 	}))
 	defer srv.Close()
 
@@ -324,7 +324,7 @@ func TestClientLayerAbsentFieldsArePresenceAbsent(t *testing.T) {
 func TestClientLayerNotFoundIsDistinguishableFromTransportFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("The requested resource '/api/v1/composition/layers/by-id/999' was not found on this server."))
+		_, _ = w.Write([]byte("The requested resource '/api/v1/composition/layers/by-id/999' was not found on this server."))
 	}))
 	defer srv.Close()
 
@@ -372,7 +372,7 @@ func TestClientLayerGroupDecodesPresentAndNullFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write(loadTestdata(t, tt.fixture))
+				_, _ = w.Write(loadTestdata(t, tt.fixture))
 			}))
 			defer srv.Close()
 
@@ -400,7 +400,7 @@ func TestClientLayerGroupPathAndNotFound(t *testing.T) {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		_, _ = w.Write([]byte("not found"))
 	}))
 	defer srv.Close()
 
@@ -427,7 +427,7 @@ func TestClientDeckDecodesPresentAndNullFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write(loadTestdata(t, tt.fixture))
+				_, _ = w.Write(loadTestdata(t, tt.fixture))
 			}))
 			defer srv.Close()
 
@@ -455,7 +455,7 @@ func TestClientDeckPathAndNotFound(t *testing.T) {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		_, _ = w.Write([]byte("not found"))
 	}))
 	defer srv.Close()
 
@@ -478,7 +478,7 @@ func TestClientClipDecodesPresentFields(t *testing.T) {
 		if r.URL.Path != "/api/v1/composition/clips/by-id/1765396769100" {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
-		w.Write(loadTestdata(t, "clip_present.json"))
+		_, _ = w.Write(loadTestdata(t, "clip_present.json"))
 	}))
 	defer srv.Close()
 
@@ -520,7 +520,7 @@ func TestClientClipNullAndAbsentFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write(loadTestdata(t, tt.fixture))
+				_, _ = w.Write(loadTestdata(t, tt.fixture))
 			}))
 			defer srv.Close()
 
@@ -558,7 +558,7 @@ func TestClientClipNotFoundIsNotByItselfAStaleReference(t *testing.T) {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("The requested resource '/api/v1/composition/clips/by-id/42' was not found on this server."))
+		_, _ = w.Write([]byte("The requested resource '/api/v1/composition/clips/by-id/42' was not found on this server."))
 	}))
 	defer srv.Close()
 

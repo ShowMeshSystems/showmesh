@@ -429,16 +429,6 @@ func dbToBoolPtr(n sql.NullInt64) *bool {
 	return &v
 }
 
-// boolPtrToDB is [dbToBoolPtr]'s inverse: nil binds as SQL NULL (which the
-// driver accepts directly, matching [timePtrToDB]'s `any` return
-// convention), a non-nil *bool binds as [boolToDB]'s existing 0/1 encoding.
-func boolPtrToDB(b *bool) any {
-	if b == nil {
-		return nil
-	}
-	return boolToDB(*b)
-}
-
 // dbToStringPtr converts a nullable TEXT column into *string: nil when the
 // column was SQL NULL. Used for macro_run_steps.command_id — see
 // [MacroRunStepRecord]'s doc comment for why this column is nullable

@@ -50,7 +50,7 @@ func TestPollSuccessProducesBothSignals(t *testing.T) {
 		if r.URL.Path != "/api/v1/product" {
 			t.Errorf("unexpected request path %q; with nothing ever uploaded, even the defect-3 startup-transition survey primed below issues zero by-id requests", r.URL.Path)
 		}
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -165,7 +165,7 @@ func TestPollConnectionRefusedProducesCollectionFailedOnBothSignals(t *testing.T
 func TestPollHTTPStatusErrorProducesCollectionFailed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("unavailable"))
+		_, _ = w.Write([]byte("unavailable"))
 	}))
 	defer srv.Close()
 
@@ -184,7 +184,7 @@ func TestPollHTTPStatusErrorProducesCollectionFailed(t *testing.T) {
 
 func TestPollDecodeErrorProducesCollectionFailed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -210,7 +210,7 @@ func TestPollNeverRequestsComposition(t *testing.T) {
 	requested := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested[r.URL.Path]++
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -252,7 +252,7 @@ func TestPollNeverEmitsAnySignalOtherThanTheTwoOnSteadyState(t *testing.T) {
 	// the two liveness signals.
 	t.Run("success", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 		}))
 		defer srv.Close()
 		now := time.Now()
@@ -305,7 +305,7 @@ func TestSteadyStateIsExactlyOneProductRequestPerInterval(t *testing.T) {
 	var requested []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = append(requested, r.URL.Path)
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -378,7 +378,7 @@ func TestSteadyStateAfterADispatchStillExactlyOneProductRequestPerInterval(t *te
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = append(requested, r.URL.Path)
 		if r.URL.Path == "/api/v1/product" {
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 			return
 		}
 		arena.ServeHTTP(w, r)
@@ -443,7 +443,7 @@ func TestPollSkipsWhenNotYetDueUnderDynamicInterval(t *testing.T) {
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -479,7 +479,7 @@ func TestFootprintControlsPollIntervalChangeTakesEffectWithoutReconstruction(t *
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -514,7 +514,7 @@ func TestRequestSurveyBypassesLivenessThrottle(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested[r.URL.Path]++
 		if r.URL.Path == "/api/v1/product" {
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 			return
 		}
 		http.NotFound(w, r)
@@ -615,7 +615,7 @@ func TestSurveyNoCompositionUploadedReportsNotCollected(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.URL.Path)
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -703,7 +703,7 @@ func TestSurveyEndToEndAgainstFixtureComposition(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 
@@ -1014,7 +1014,7 @@ func TestTransitionToReachableTriggersSurveyInTheSamePoll(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -1070,7 +1070,7 @@ func TestTransitionToReachableTriggersSurveyInTheSamePoll(t *testing.T) {
 // still hold).
 func TestSteadyStateAfterInitialTransitionNeverSurveysAgain(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(loadTestdata(t, "product.json"))
+		_, _ = w.Write(loadTestdata(t, "product.json"))
 	}))
 	defer srv.Close()
 
@@ -1129,7 +1129,7 @@ func TestFlappingReachabilityRateLimitsTransitionSurveys(t *testing.T) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 			return
 		}
 		mu.Lock()
@@ -1264,12 +1264,12 @@ func TestTransitionTriggeredSurveyAppliesTheLoadWindow(t *testing.T) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 			return
 		}
 		if body, ok := deckLayerGroupResponses[r.URL.Path]; ok {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(body)
+			_, _ = w.Write(body)
 			return
 		}
 		mu.Lock()
@@ -1278,7 +1278,7 @@ func TestTransitionTriggeredSurveyAppliesTheLoadWindow(t *testing.T) {
 		if resolve {
 			if body, ok := clipResponses[r.URL.Path]; ok {
 				w.Header().Set("Content-Type", "application/json")
-				w.Write(body)
+				_, _ = w.Write(body)
 				return
 			}
 		}
@@ -1364,7 +1364,7 @@ func TestCompositionUploadTriggersSurveyWithoutWaitingForAnythingElse(t *testing
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/product" {
-			w.Write(loadTestdata(t, "product.json"))
+			_, _ = w.Write(loadTestdata(t, "product.json"))
 			return
 		}
 		http.NotFound(w, r)

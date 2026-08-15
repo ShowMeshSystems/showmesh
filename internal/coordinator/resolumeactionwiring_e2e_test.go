@@ -111,27 +111,27 @@ func (a *e2eFakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/product":
-		fmt.Fprint(w, `{"name":"Arena","major":7,"minor":23,"micro":2,"revision":1}`)
+		_, _ = fmt.Fprint(w, `{"name":"Arena","major":7,"minor":23,"micro":2,"revision":1}`)
 
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/composition/decks/by-id/"+e2eDeckID:
-		fmt.Fprintf(w, `{"id":%s,"selected":{"id":1,"value":true},"name":{"id":2,"value":"Deck One"}}`, e2eDeckID)
+		_, _ = fmt.Fprintf(w, `{"id":%s,"selected":{"id":1,"value":true},"name":{"id":2,"value":"Deck One"}}`, e2eDeckID)
 
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/composition/layers/by-id/"+e2eLayerID:
 		activeClip := "null"
 		if a.layerActiveClip != nil {
 			activeClip = fmt.Sprintf(`{"id":%d}`, *a.layerActiveClip)
 		}
-		fmt.Fprintf(w, `{"id":%s,"active_clip":%s}`, e2eLayerID, activeClip)
+		_, _ = fmt.Fprintf(w, `{"id":%s,"active_clip":%s}`, e2eLayerID, activeClip)
 
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/composition/clips/by-id/"+e2eClipID:
-		fmt.Fprintf(w, `{"id":%s,"connected":{"id":10,"value":%q,"options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]}}`,
+		_, _ = fmt.Fprintf(w, `{"id":%s,"connected":{"id":10,"value":%q,"options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]}}`,
 			e2eClipID, a.clipConnected)
 
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/composition/clips/by-id/"+e2eDecoyClipID:
 		// See e2eDecoyClipID's own doc comment: this clip is never
 		// dispatched against, it exists only so a composition-identity
 		// sample drawn from deck two has something to resolve.
-		fmt.Fprintf(w, `{"id":%s,"connected":{"id":11,"value":"Disconnected","options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]}}`,
+		_, _ = fmt.Fprintf(w, `{"id":%s,"connected":{"id":11,"value":"Disconnected","options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]}}`,
 			e2eDecoyClipID)
 
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/composition/clips/by-id/"+e2eClipID+"/connect":
@@ -413,7 +413,7 @@ func (a *e2eFakeArenaWithSecondDeck) ServeHTTP(w http.ResponseWriter, r *http.Re
 		a.record(r)
 		a.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":1001,"selected":{"id":1,"value":false},"name":{"id":2,"value":"Deck One"}}`)
+		_, _ = fmt.Fprint(w, `{"id":1001,"selected":{"id":1,"value":false},"name":{"id":2,"value":"Deck One"}}`)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/composition/decks/by-id/1002" {
@@ -421,7 +421,7 @@ func (a *e2eFakeArenaWithSecondDeck) ServeHTTP(w http.ResponseWriter, r *http.Re
 		a.record(r)
 		a.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":1002,"selected":{"id":3,"value":true},"name":{"id":4,"value":"Deck Two"}}`)
+		_, _ = fmt.Fprint(w, `{"id":1002,"selected":{"id":3,"value":true},"name":{"id":4,"value":"Deck Two"}}`)
 		return
 	}
 	a.e2eFakeArena.ServeHTTP(w, r)

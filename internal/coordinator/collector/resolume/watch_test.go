@@ -94,7 +94,7 @@ func bigFullPushJSON(approxBytes int) []byte {
 func TestWatcherOnConnectFiresBeforeFirstMessage(t *testing.T) {
 	const serverDelay = 250 * time.Millisecond
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		time.Sleep(serverDelay)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"thumbnail_update","value":1}`))
 		time.Sleep(100 * time.Millisecond)
@@ -136,7 +136,7 @@ func TestWatcherFullPushOver2MBFiresOnChangeOnce(t *testing.T) {
 	}
 
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.TextMessage, payload)
 		time.Sleep(300 * time.Millisecond) // hold the connection so no reconnect occurs mid-assertion
 	})
@@ -185,7 +185,7 @@ func TestWatcherTypedParameterUpdateFiresOnChange(t *testing.T) {
 		`"options":["Empty","Disconnected","Previewing","Connected","Connected & previewing"]}}`
 
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 		time.Sleep(300 * time.Millisecond)
 	})
@@ -232,7 +232,7 @@ func TestWatcherTypedThumbnailUpdateDoesNotFireOnChange(t *testing.T) {
 	const msg = `{"type":"thumbnail_update","clip":1786724953484,"value":"base64thumbnaildata"}`
 
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 		time.Sleep(300 * time.Millisecond)
 	})
@@ -282,7 +282,7 @@ func TestWatcherAbruptCloseReconnects(t *testing.T) {
 			_ = conn.UnderlyingConn().Close()
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		time.Sleep(500 * time.Millisecond)
 	})
 
@@ -360,7 +360,7 @@ func TestWatcherRunLeavesNoGoroutineAfterCancel(t *testing.T) {
 	// return, because with nothing forcing the close, neither side of the
 	// connection had any reason to unblock. Restored afterward.
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _, _ = conn.ReadMessage() // blocks until the CLIENT closes; nothing here can end it first
 	})
 
@@ -424,7 +424,7 @@ func TestWatcherSilenceProducesNoCallback(t *testing.T) {
 	const silence = 300 * time.Millisecond
 
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		time.Sleep(silence)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"parameter_update","value":1}`))
 		time.Sleep(150 * time.Millisecond)
@@ -542,7 +542,7 @@ func TestWatcherDialFailureIsLoggedAndCounted(t *testing.T) {
 // connection churn.
 func TestWatcherCleanShutdownOfEstablishedConnectionIncrementsDisconnects(t *testing.T) {
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _, _ = conn.ReadMessage() // blocks until the client force-closes
 	})
 
@@ -598,7 +598,7 @@ func TestWatcherUnrecognizedTypedMessageFiresOnChange(t *testing.T) {
 	const msg = `{"type":"structure_update","value":1}` // not a real Arena type — invented to prove the "unknown" path
 
 	srv := newWSTestServer(t, func(conn *websocket.Conn) {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 		time.Sleep(300 * time.Millisecond)
 	})
@@ -653,7 +653,7 @@ func TestWatcherExcludedTypesStillDoNotFireOnChange(t *testing.T) {
 		t.Run(typ, func(t *testing.T) {
 			msg := `{"type":"` + typ + `","value":1}`
 			srv := newWSTestServer(t, func(conn *websocket.Conn) {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 				time.Sleep(300 * time.Millisecond)
 			})

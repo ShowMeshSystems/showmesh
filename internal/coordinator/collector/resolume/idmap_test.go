@@ -31,7 +31,7 @@ func parseTestComposition(t *testing.T) *resolumecomp.Composition {
 	if err != nil {
 		t.Fatalf("opening testdata fixture: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	comp, err := resolumecomp.Parse(f)
 	if err != nil {

@@ -589,16 +589,16 @@ func TestCmdResolumeCompositionShowGroupsClipsByDeck(t *testing.T) {
 		}
 	}
 
-	if !(mainIdx < snowIdx && snowIdx < halloweenIdx) {
+	if mainIdx >= snowIdx || snowIdx >= halloweenIdx {
 		t.Errorf("clip-1 (deck-a) must appear after the Main deck header and before the Halloween deck header; stdout=%s", out)
 	}
-	if !(mainIdx < wreathIdx && wreathIdx < halloweenIdx) {
+	if mainIdx >= wreathIdx || wreathIdx >= halloweenIdx {
 		t.Errorf("clip-2 (deck-a) must appear after the Main deck header and before the Halloween deck header; stdout=%s", out)
 	}
-	if !(halloweenIdx < pumpkinIdx) {
+	if halloweenIdx >= pumpkinIdx {
 		t.Errorf("clip-3 (deck-b) must appear after the Halloween deck header; stdout=%s", out)
 	}
-	if !(persistentIdx < countdownIdx) {
+	if persistentIdx >= countdownIdx {
 		t.Errorf("clip-p1 (persistent) must appear after the persistent clips section header; stdout=%s", out)
 	}
 	// The load-bearing negative check: a persistent clip must never

@@ -197,7 +197,7 @@ func (a *fakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			l.activeClip = nil
 			l.clearPending = false
 		}
-		w.Write([]byte(layerJSON(l)))
+		_, _ = w.Write([]byte(layerJSON(l)))
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/composition/clips/by-id/"):
 		id := idFromTail(path)
@@ -206,7 +206,7 @@ func (a *fakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(clipJSON(c)))
+		_, _ = w.Write([]byte(clipJSON(c)))
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/composition/columns/by-id/"):
 		id := idFromTail(path)
@@ -215,7 +215,7 @@ func (a *fakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(columnJSON(c)))
+		_, _ = w.Write([]byte(columnJSON(c)))
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/composition/decks/by-id/"):
 		id := idFromTail(path)
@@ -224,7 +224,7 @@ func (a *fakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(deckJSON(dk)))
+		_, _ = w.Write([]byte(deckJSON(dk)))
 
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/composition/clips/by-id/") && strings.HasSuffix(path, "/connect"):
 		id := idFromTail(strings.TrimSuffix(path, "/connect"))

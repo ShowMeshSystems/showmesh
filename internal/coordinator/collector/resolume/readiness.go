@@ -62,29 +62,29 @@ const (
 	ReadinessTermCompositionMaster   ReadinessTerm = "composition.master"
 
 	// ReadinessTermSolo is [ApplySoloOverride]'s own term name — NOT a
-	// member of readinessTermOrder or [ReadinessInputs], because it is
+	// member of the evaluation order or [ReadinessInputs], because it is
 	// never one of [LayerReady]'s seven Kleene-AND inputs. It exists only
 	// so a solo-caused Unknown verdict names itself the same way every
 	// other unknown term does.
 	ReadinessTermSolo ReadinessTerm = "solo"
 )
 
-// readinessTermOrder is the fixed evaluation order [LayerReady] walks in.
-// It matches TRACK-D-ADAPTER-SPEC.md §3.7's own pseudocode top to bottom.
-// Fixed order matters for exactly one thing: when more than one term is
-// known-false, or more than one is unknown, the RESULT lists them in this
-// same order every time, so two runs against identical evidence always
-// produce an identically-worded observation — never a map-iteration-order
-// flap that would make a stable input look like it changed.
-var readinessTermOrder = []ReadinessTerm{
-	ReadinessTermLayerBypassed,
-	ReadinessTermLayerMaster,
-	ReadinessTermLayerVideoOpacity,
-	ReadinessTermGroupBypassed,
-	ReadinessTermGroupMaster,
-	ReadinessTermCompositionBypassed,
-	ReadinessTermCompositionMaster,
-}
+// The fixed evaluation order [LayerReady] walks in lives in
+// [ReadinessInputs.byTerm], and matches TRACK-D-ADAPTER-SPEC.md §3.7's own
+// pseudocode top to bottom. Fixed order matters for exactly one thing:
+// when more than one term is known-false, or more than one is unknown, the
+// RESULT lists them in this same order every time, so two runs against
+// identical evidence always produce an identically-worded observation,
+// never a map-iteration-order flap that would make a stable input look
+// like it changed.
+//
+// A readinessTermOrder slice used to sit here as well, described as the
+// one place that ordering lived. Nothing read it: byTerm walks the fields
+// directly, so the two were duplicates that could have drifted, and the
+// comment promising a single source of truth was the only thing keeping
+// them honest. Removed 2026-08-15 rather than kept as a decorative
+// constant; if a second consumer ever needs the order as data, derive it
+// from byTerm rather than re-typing the list.
 
 // ReadinessTermInput is the caller's own evidence for exactly one
 // conjunction term, already reduced to the three-valued shape this
@@ -143,11 +143,11 @@ type ReadinessInputs struct {
 	CompositionMaster   ReadinessTermInput
 }
 
-// byTerm returns in's seven inputs as a term-keyed slice, in
-// readinessTermOrder, pairing each with its ReadinessTerm name. Kept as an
-// unexported helper rather than inlined into LayerReady so the fixed
-// ordering lives in exactly one place (readinessTermOrder) rather than
-// being re-typed as a literal struct-field walk.
+// byTerm returns in's seven inputs as a term-keyed slice, in the fixed
+// evaluation order, pairing each with its ReadinessTerm name. This is
+// where that ordering lives; kept as an unexported helper rather than
+// inlined into LayerReady so LayerReady and the result-building paths all
+// walk one list.
 func (in ReadinessInputs) byTerm() [7]struct {
 	term  ReadinessTerm
 	input ReadinessTermInput
@@ -182,7 +182,7 @@ type Readiness struct {
 	State ReadinessState
 
 	// FailingTerms is non-empty only when State == ReadinessNotReady: every
-	// term that was Known and NOT HeldTrue, in readinessTermOrder. Kleene
+	// term that was Known and NOT HeldTrue, in evaluation order. Kleene
 	// AND means a not-ready verdict can be reached by ANY ONE known-false
 	// term regardless of what the others are — FailingTerms names every one
 	// that was actually false, not only the first, because an operator
@@ -192,7 +192,7 @@ type Readiness struct {
 	FailingTerms []ReadinessTerm
 
 	// UnknownTerms is non-empty only when State == ReadinessUnknown: every
-	// term that was !Known, in readinessTermOrder, paired 1:1 with
+	// term that was !Known, in evaluation order, paired 1:1 with
 	// UnknownReasons.
 	UnknownTerms   []ReadinessTerm
 	UnknownReasons []string
