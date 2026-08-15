@@ -1177,6 +1177,40 @@ endpoint itself.
 So the split is clean, and it is what §15 is built on: **enumerate from the file,
 observe by id.**
 
+### 14.4 Removing our composition reads did not stop Arena crashing
+
+**Recorded the same evening, because it corrects the conclusion a reader would
+otherwise draw from §14.3, and it is the more important half.**
+
+After the composition read was deleted from the adapter, two coordinator processes
+ran against Arena with **zero** composition reads, confirmed from their own logs.
+Arena crashed anyway, at 19:30:14, with the same faulting signature as the other
+nine. The watcher recorded the `1006` close and then `connection refused`, so the
+timeline is not in doubt.
+
+At the moment of that crash the only ShowMesh traffic was **`/product` every 10
+seconds and one held WebSocket** — the two things §14 lists as controls that
+survived. They survived 5 minutes each. This run was about ten.
+
+So the honest statement of what is known is narrower than §14.3 implies on its own:
+
+- `GET /composition` is **sufficient** to crash Arena. Two reads did it.
+- Removing it is **not sufficient** to prevent a crash.
+- The controls in §14 were too short to establish that `/product` polling and a
+  held WebSocket are safe over a show-length run, and they should not be cited as
+  though they were.
+
+**Nothing here weakens the case for ADR-032** — the file removes a call measured to
+kill Arena in two requests, and that is worth doing on its own. What it does weaken
+is any claim that ADR-032 makes Resolume *safe*. It does not. **A vendor report is
+now the load-bearing action, not a formality**, and "run ShowMesh against Arena for
+a show-length period and count the crashes" is a bench that has not been run.
+
+Two counts and 10,000 words of analysis cannot substitute for that run. It should
+happen on the **show host**, since every number in this document is from an arm64
+laptop, and it should happen before anything depends on Resolume surviving an
+evening.
+
 ## 15. The composition file as a configuration source
 
 **The owner's proposal, 2026-08-14, and it is the answer to §14 rather than a

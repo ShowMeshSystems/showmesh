@@ -78,7 +78,9 @@ The UI holds no parsing and no validation logic. It posts the file and renders w
 
 ## Consequences
 
-**The crash leaves ShowMesh's critical path.** The only remaining way to reach it is an operator or another tool calling `/composition` by hand.
+**The call that is measured to crash Arena in two requests leaves ShowMesh's runtime path.** The only remaining way to reach it is an operator or another tool calling `/composition` by hand.
+
+**This does not make Resolume safe, and the measurement says so.** After the composition read was removed, two coordinator processes ran against Arena with zero composition reads and **Arena still crashed**, with the same faulting signature, while the only ShowMesh traffic was `/product` polling and one held WebSocket. So `GET /composition` is *sufficient* to crash Arena and removing it is *not sufficient* to prevent a crash. The capture's §14.4 records the timeline. **The vendor report is therefore load-bearing rather than a formality**, and a show-length run against the real show host, counting crashes, is a bench that has not happened and that nothing should be assumed past.
 
 **Configuration covers more than the API could.** All decks rather than the selected one, plus canvas size and per-clip `TransportType`, which is what the SMPTE drift check in the specification's §8 needed and did not have.
 
