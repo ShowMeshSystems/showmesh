@@ -1,0 +1,8 @@
+{
+  "id": 1765224917301,
+  "name": null,
+  "bypassed": null,
+  "master": {"valuetype":"ParamRange","id":1786724944401,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":0.0},
+  "video": {"opacity": null},
+  "active_clip": null
+}

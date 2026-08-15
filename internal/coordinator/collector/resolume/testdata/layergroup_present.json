@@ -1,0 +1,5 @@
+{
+  "id": 1733100600800,
+  "bypassed": {"valuetype":"ParamBoolean","id":1786724955000,"value":false},
+  "master": {"valuetype":"ParamRange","id":1786724955001,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":1.0}
+}

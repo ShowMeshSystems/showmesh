@@ -50,6 +50,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// which defaults even when the broker itself is not configured
 		// (see FPPMQTTTopicPrefix's doc comment).
 		FPPMQTTTopicPrefix: "falcon/player",
+
+		// SHOWMESH_RESOLUME_URL is unset (the collector never runs), but
+		// SHOWMESH_RESOLUME_ID still defaults — the identical
+		// "defaults regardless of whether the feature is active" posture
+		// FPPMQTTTopicPrefix already has, see ResolumeID's doc comment.
+		ResolumeID: "resolume",
 	}
 
 	// reflect.DeepEqual, not ==: FPPEndpoints is a slice, which made Config
@@ -88,6 +94,7 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		FPPEndpoints: nil,
 
 		FPPMQTTTopicPrefix: "falcon/player",
+		ResolumeID:         "resolume",
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
@@ -282,6 +289,53 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 			name:    "fpp mqtt broker url set with no hosts",
 			env:     map[string]string{"SHOWMESH_FPP_MQTT_BROKER_URL": "tcp://mqtt.example:1883"},
 			wantVar: "SHOWMESH_FPP_MQTT_BROKER_URL",
+		},
+		{
+			name:    "resolume url invalid",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "://not a url:::"},
+			wantVar: "SHOWMESH_RESOLUME_URL",
+		},
+		{
+			name:    "resolume url missing scheme",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "127.0.0.1:9080"},
+			wantVar: "SHOWMESH_RESOLUME_URL",
+		},
+		{
+			name:    "resolume url unsupported scheme",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "ftp://127.0.0.1:9080"},
+			wantVar: "SHOWMESH_RESOLUME_URL",
+		},
+		{
+			name:    "resolume url with no host",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "http://"},
+			wantVar: "SHOWMESH_RESOLUME_URL",
+		},
+		{
+			name:    "resolume url with userinfo",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "http://user:pass@127.0.0.1:9080"},
+			wantVar: "SHOWMESH_RESOLUME_URL",
+		},
+		{
+			// mqttproto.ValidateNodeID rejects uppercase; proves Validate
+			// actually checks SHOWMESH_RESOLUME_ID's syntax rather than
+			// accepting anything non-empty, mirroring the identical FPP
+			// endpoint id check above.
+			name:    "resolume id invalid syntax",
+			env:     map[string]string{"SHOWMESH_RESOLUME_URL": "http://127.0.0.1:9080", "SHOWMESH_RESOLUME_ID": "Resolume_1"},
+			wantVar: "SHOWMESH_RESOLUME_ID",
+		},
+		{
+			// The load-bearing collision guard this seam adds: the
+			// Resolume collector and every FPP collector share one
+			// collector.Runner keyed by this exact id string (see
+			// ValidateResolumeIDAgainstFPPEndpoints's doc comment).
+			name: "resolume id collides with an fpp endpoint id",
+			env: map[string]string{
+				"SHOWMESH_FPP_ENDPOINTS": "player-01=http://10.0.1.20",
+				"SHOWMESH_RESOLUME_URL":  "http://127.0.0.1:9080",
+				"SHOWMESH_RESOLUME_ID":   "player-01",
+			},
+			wantVar: "SHOWMESH_RESOLUME_ID",
 		},
 	}
 
@@ -824,5 +878,134 @@ func TestConfigLogValueFPPMQTTHostsPresent(t *testing.T) {
 
 	if !strings.Contains(rendered, "fpp-player") {
 		t.Errorf("Config.LogValue() output = %s, want it to name the configured HostName", rendered)
+	}
+}
+
+// --- Track D seam D-1: SHOWMESH_RESOLUME_URL / SHOWMESH_RESOLUME_ID ---
+
+// TestLoadConfigResolumeUnsetIsDisabled proves the feature-flag shape
+// [Config.ResolumeURL]'s doc comment claims: with SHOWMESH_RESOLUME_URL
+// unset, ResolumeURL is empty (the collector never gets constructed —
+// see internal/coordinator's own wiring), while ResolumeID still carries
+// its default — exactly [Config.FPPMQTTTopicPrefix]'s own "defaults
+// regardless of whether the feature is active" posture, applied here.
+func TestLoadConfigResolumeUnsetIsDisabled(t *testing.T) {
+	cfg, err := LoadConfigFrom(lookupFrom(nil))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.ResolumeURL != "" {
+		t.Errorf("ResolumeURL = %q, want empty when SHOWMESH_RESOLUME_URL is unset", cfg.ResolumeURL)
+	}
+	if cfg.ResolumeID != defaultResolumeID {
+		t.Errorf("ResolumeID = %q, want default %q even when the collector is disabled", cfg.ResolumeID, defaultResolumeID)
+	}
+}
+
+// TestLoadConfigResolumeDefaultID proves SHOWMESH_RESOLUME_ID defaults to
+// "resolume" when the URL is set but the id is not.
+func TestLoadConfigResolumeDefaultID(t *testing.T) {
+	env := map[string]string{"SHOWMESH_RESOLUME_URL": "http://127.0.0.1:9080"}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.ResolumeURL != "http://127.0.0.1:9080" {
+		t.Errorf("ResolumeURL = %q, want %q", cfg.ResolumeURL, "http://127.0.0.1:9080")
+	}
+	if cfg.ResolumeID != "resolume" {
+		t.Errorf("ResolumeID = %q, want default %q", cfg.ResolumeID, "resolume")
+	}
+}
+
+// TestLoadConfigResolumeExplicitID proves an explicit SHOWMESH_RESOLUME_ID
+// overrides the default, and — the port TRACK-D-ADAPTER-SPEC.md and the
+// bench capture both flag as deployment configuration, not a protocol
+// constant — that a non-8080 port (9080, the operator's own installation)
+// round-trips unchanged rather than being silently defaulted or rejected.
+func TestLoadConfigResolumeExplicitID(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_RESOLUME_URL": "http://10.0.1.30:9080",
+		"SHOWMESH_RESOLUME_ID":  "resolume-main",
+	}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.ResolumeURL != "http://10.0.1.30:9080" {
+		t.Errorf("ResolumeURL = %q, want %q", cfg.ResolumeURL, "http://10.0.1.30:9080")
+	}
+	if cfg.ResolumeID != "resolume-main" {
+		t.Errorf("ResolumeID = %q, want %q", cfg.ResolumeID, "resolume-main")
+	}
+}
+
+// TestLoadConfigResolumeIDCollisionWithFPPEndpoint is this seam's own
+// load-bearing regression test. Before trusting it: broken by temporarily
+// removing the ValidateResolumeIDAgainstFPPEndpoints call from
+// validateResolumeConfig and confirmed to fail (see this task's own
+// report) — a config accepting a colliding id would let the Resolume
+// collector's Add call silently overwrite the FPP endpoint's own entry in
+// the shared collector.Runner's nudge map (see
+// ValidateResolumeIDAgainstFPPEndpoints's doc comment for the exact
+// mechanism), which no test exercising Validate() in isolation could ever
+// catch once the guard were removed — only this test, asserting the error
+// itself, can.
+func TestLoadConfigResolumeIDCollisionWithFPPEndpoint(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_FPP_ENDPOINTS": "player-01=http://10.0.1.20,shed=http://10.0.1.21",
+		"SHOWMESH_RESOLUME_URL":  "http://10.0.1.30:9080",
+		"SHOWMESH_RESOLUME_ID":   "shed",
+	}
+
+	_, err := LoadConfigFrom(lookupFrom(env))
+	if err == nil {
+		t.Fatal("LoadConfigFrom() error = nil, want an error naming the id collision between SHOWMESH_RESOLUME_ID and SHOWMESH_FPP_ENDPOINTS")
+	}
+	if !strings.Contains(err.Error(), "SHOWMESH_RESOLUME_ID") || !strings.Contains(err.Error(), "shed") {
+		t.Errorf("LoadConfigFrom() error = %q, want it to name SHOWMESH_RESOLUME_ID and the colliding id %q", err.Error(), "shed")
+	}
+}
+
+// TestLoadConfigResolumeIDCollisionIgnoredWhenURLUnset proves the
+// collision guard is gated on ResolumeURL exactly like every other
+// Resolume check (see validateResolumeConfig's doc comment): an operator
+// who has SHOWMESH_RESOLUME_ID left over from a previous configuration,
+// with the URL now unset, must not be blocked from starting over an id
+// that can never actually collide with anything, because the collector
+// this id would apply to never gets constructed.
+func TestLoadConfigResolumeIDCollisionIgnoredWhenURLUnset(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_FPP_ENDPOINTS": "shed=http://10.0.1.21",
+		"SHOWMESH_RESOLUME_ID":   "shed",
+	}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil: the collision guard must not fire while ResolumeURL is unset", err)
+	}
+	if cfg.ResolumeID != "shed" {
+		t.Errorf("ResolumeID = %q, want %q", cfg.ResolumeID, "shed")
+	}
+}
+
+// TestConfigLogValueDoesNotLeakResolumeURLIsIrrelevant is deliberately not
+// named "Redacts": ResolumeURL carries no credential (Validate rejects
+// userinfo outright, see the "resolume url with userinfo" case in
+// TestLoadConfigValidationFailures), so LogValue logs it in the clear —
+// this test pins that the host/port stay visible for operator debugging,
+// the opposite property from the broker-URL redaction tests above.
+func TestConfigLogValueResolumeFieldsVisible(t *testing.T) {
+	cfg := Config{ResolumeURL: "http://10.0.1.30:9080", ResolumeID: "resolume-main"}
+
+	rendered := renderLogValue(t, cfg)
+
+	if !strings.Contains(rendered, "10.0.1.30:9080") {
+		t.Errorf("Config.LogValue() output = %s, want it to name the configured Resolume host", rendered)
+	}
+	if !strings.Contains(rendered, "resolume-main") {
+		t.Errorf("Config.LogValue() output = %s, want it to name the configured Resolume id", rendered)
 	}
 }

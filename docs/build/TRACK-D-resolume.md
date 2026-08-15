@@ -2,7 +2,11 @@
 
 [Build plan](BUILD-PLAN.md) · [RES-001](../research/RES-001-resolume-smpte-behavior.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-003](../decisions/ADR-003-desired-and-observed-state.md)
 
-Status: capture complete, adapter specified, build not started. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
+Status: D-1 built and verified against the running Arena 2026-08-14; D-2 built 2026-08-14 and closed 2026-08-15; **D-3 built, reviewed and closed 2026-08-15, and driven against a real Arena the same day** ([results](../bench/TRACK-D-LIVE-VERIFICATION.md) §6, on the development laptop and not the playout machine); [D-3a, crash recovery](TRACK-D-D3A-CRASH-RECOVERY-SPEC.md) is specified and not built, with three owner decisions outstanding; D-4 (the Operator UI) is next after it; D0 (the timecode bench) outstanding and not gating. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
+
+> **Seam letters and deliverable letters are not the same list, and this document uses both.** The deliverables below are D0 and D1 through D4 as they were scoped on 2026-08-13. The build seams are D-1 (the adapter), D-2 (observations), D-3 (the action vocabulary) and D-4 (the Operator UI), and those are what [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md) and the per-seam specifications mean. Deliverable D2 (explicit composition control) and deliverable D4 (confirmation by evidence) both landed inside seam D-3.
+>
+> **D-2 and D-3 have now run against a real Arena**, thirteen checks passed and none failed, on the development laptop rather than the playout machine. [The results are in the checklist](../bench/TRACK-D-LIVE-VERIFICATION.md) §6, along with what is still not run.
 
 > **Corrected 2026-08-14 by [the bench capture](../bench/resolume-control-surface.md).** Resolume's REST, WebSocket and OSC surfaces were captured from a running Arena 7.23.2, and **four things this document asserts turned out to be false**. They are corrected in place below and each correction is dated, rather than being left for a builder to trip over. The implementation specification is [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md).
 >
@@ -47,7 +51,7 @@ That last point is the hole, and it is exactly the shape this project keeps gett
 
 ## Deliverables
 
-**D0. Bench RES-001 before building the adapter.** Acquisition, late start, loss of one to ten seconds, jumps, source restart, and a Resolume restart mid-show. This is the record's own test matrix and it needs the real Resolume and an LTC source, **which is any working generator rather than Track C's node** per the correction above. It gates the adapter's error handling, because that is otherwise a design against behaviour nobody has observed.
+**D0. The timecode-fault bench (RES-001).** Acquisition, late start, loss of one to ten seconds, jumps, source restart, and a Resolume restart mid-show. This is the record's own test matrix and it needs the real Resolume and an LTC source, **which is any working generator rather than Track C's node** per the correction above. It bounds the adapter's timecode-loss handling specifically; it does not gate D1 through D4, which were built from the control-surface capture.
 
 **D0 is not the only thing that can start, and it is not the first.** Capturing what Resolume's REST, WebSocket and OSC surfaces actually expose needs no timecode and no cable, only a running Arena. It is the same ordering Step 8 used when it captured FPP's real command vocabulary before naming a single command, which immediately overturned four assumptions that read as entirely plausible. Everything in D1 through D4 is currently reasoned from documentation and forum posts.
 

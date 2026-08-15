@@ -38,4 +38,4 @@ A capture supersedes desk research on the same question. Where one contradicts a
 
 Normative terms such as **must**, **should**, and **may** describe project requirements. Research documents use explicit lifecycle states: `unresearched`, `planned`, `testing`, `verified`, `rejected`, `blocked`, and `stale`.
 
-Architecture-critical claims should reach integrated verification before adoption and failure-injection verification before show readiness.
+The verification ladder measures confidence attained, not permission to proceed: building against an unverified claim is normal, and what must never happen is claiming verification that has not occurred. Only records explicitly named as blocking research (RES-002 on MultiSync, RES-006's Linux NDI question) gate build work, because their result decides an architecture question. Show readiness needs failure-injection (L4) verification.

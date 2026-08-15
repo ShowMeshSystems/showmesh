@@ -189,6 +189,70 @@ type Config struct {
 	// integrationbrokers.go's own top doc comment for why the control-plane
 	// broker must never be auto-registered under any identifier here.
 	IntegrationBrokers []IntegrationBroker
+	// --- Track D seam D-1: the Resolume Arena collector (internal/coordinator/collector/resolume) ---
+
+	// ResolumeURL is SHOWMESH_RESOLUME_URL, the REST base URL of one
+	// Resolume Arena instance, e.g. "http://127.0.0.1:9080" (no version
+	// path — see resolume.NewClient's doc comment). Empty (the default)
+	// means the Resolume collector does not exist at all for this
+	// process: no goroutine, no warning storm, no failed-connection
+	// signals for a feature the operator did not enable — exactly the
+	// posture FPPMQTTBrokerURL above already established for a second,
+	// independently-enabled collector source.
+	//
+	// RES-001 and TRACK-D-resolume.md both name port 8080 as Resolume's
+	// REST port; the bench capture that actually reached a live instance
+	// (docs/bench/resolume-control-surface.md) found it running on 9080
+	// on the operator's own installation. That is deployment
+	// configuration, not a protocol constant, so this value carries no
+	// default host and no default port: the full URL is required.
+	ResolumeURL string
+
+	// ResolumeID is SHOWMESH_RESOLUME_ID: the identifier this Resolume
+	// instance is reported under everywhere one is needed — the
+	// observation resource id (pkg/observation.ResourceResolume), the
+	// collector.Runner registration id used for logging and out-of-band
+	// poll nudges (internal/coordinator/collector.Runner.Nudge), and the
+	// "collectors" list id in GET /api/v1/snapshot. Defaults to
+	// defaultResolumeID when unset, even when ResolumeURL is empty and
+	// the collector never runs — a pure string default, the same
+	// "defaults regardless of whether the feature is active" posture
+	// FPPMQTTTopicPrefix already documents for itself.
+	//
+	// Validated with the same [mqttproto.ValidateNodeID] syntax every FPP
+	// endpoint id already uses, and — only when ResolumeURL is set —
+	// checked against every configured FPP endpoint id: this collector
+	// and every FPP REST/MQTT collector share one
+	// internal/coordinator/collector.Runner, keyed by this id, so an id a
+	// configured FPP endpoint also uses would make an out-of-band poll
+	// nudge meant for one device silently retarget the other. See
+	// Validate and [ValidateResolumeIDAgainstFPPEndpoints].
+	ResolumeID string
+
+	// --- Track D seam D-2/C: the two ADR-033-shaped footprint knobs, plus
+	// the composition-level parameter ladder's own gate ---
+
+	// ResolumePollInterval is SHOWMESH_RESOLUME_POLL_INTERVAL: the initial
+	// value of resolume.FootprintControls.PollInterval at startup. Zero
+	// (the default when unset) leaves that type's own fallback
+	// (resolume.DefaultPollInterval) in place. This is only ever the
+	// STARTING value — ADR-033/TRACK-D-D2-SPEC.md §3.3 is explicit that
+	// the real knob is a runtime-readable value
+	// (resolume.FootprintControls), not a constant baked in once; a
+	// future installation-wide show mode changes it after startup without
+	// touching this field or requiring a restart. Ignored entirely when
+	// ResolumeURL is empty (see [Config.ResolumeURL]).
+	ResolumePollInterval time.Duration
+
+	// ResolumeWebSocketDisabled is SHOWMESH_RESOLUME_WEBSOCKET_DISABLED: the
+	// initial value of resolume.FootprintControls.WebSocketEnabled at
+	// startup, INVERTED (false, the Go zero value, means enabled) so a
+	// directly-constructed Config with every Resolume field left at zero
+	// except ResolumeURL/ResolumeID — exactly what this seam's own tests
+	// already build — keeps the WebSocket enabled without having to name
+	// it. See ResolumePollInterval's own doc comment for why this is only
+	// ever a starting value, not the knob itself.
+	ResolumeWebSocketDisabled bool
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -297,6 +361,32 @@ const (
 	// unprefixed topic root (contract section 1.2: "MQTTPrefix is unset on
 	// this fleet, so there is no extra prefix segment"), not a guess.
 	defaultFPPMQTTTopicPrefix = "falcon/player"
+
+	// envResolumeURL and envResolumeID back the Track D seam D-1 fields
+	// above. See [Config.ResolumeURL] and [Config.ResolumeID].
+	envResolumeURL = "SHOWMESH_RESOLUME_URL"
+	envResolumeID  = "SHOWMESH_RESOLUME_ID"
+
+	// defaultResolumeID is used when SHOWMESH_RESOLUME_ID is unset. Plain
+	// and short, matching every other default id this codebase mints
+	// (e.g. defaultClientID above) — there is only ever one Resolume
+	// instance this seam configures, so no numbering scheme is needed.
+	defaultResolumeID = "resolume"
+
+	// envResolumePollInterval and envResolumeWebSocketDisabled back the
+	// Track D seam D-2/C fields above. See [Config.ResolumePollInterval]
+	// and [Config.ResolumeWebSocketDisabled].
+	//
+	// SHOWMESH_RESOLUME_COMPOSITION_LADDER_ENABLED existed here once, back
+	// when composition.bypassed/master/name were pursued through a
+	// composition-level parameter ladder. That ladder was deleted (defect
+	// 2, 2026-08-15) because no `GET /composition/{parameter}` path exists
+	// anywhere in Arena's own OpenAPI specification — see
+	// internal/coordinator/collector/resolume/client.go's own doc comment
+	// — so there is nothing left for a flag to gate. The env var name is
+	// deliberately NOT reused for anything else.
+	envResolumePollInterval      = "SHOWMESH_RESOLUME_POLL_INTERVAL"
+	envResolumeWebSocketDisabled = "SHOWMESH_RESOLUME_WEBSOCKET_DISABLED"
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -395,6 +485,15 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	resolumePollInterval, err := parseDurationEnv(lookup, envResolumePollInterval, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	resolumeWebSocketDisabled, err := parseBoolEnv(lookup, envResolumeWebSocketDisabled, false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
@@ -426,6 +525,11 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		FPPMQTTHosts:       fppMQTTHosts,
 
 		IntegrationBrokers: integrationBrokers,
+		ResolumeURL:        getEnvDefault(lookup, envResolumeURL, ""),
+		ResolumeID:         getEnvDefault(lookup, envResolumeID, defaultResolumeID),
+
+		ResolumePollInterval:      resolumePollInterval,
+		ResolumeWebSocketDisabled: resolumeWebSocketDisabled,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -673,6 +777,13 @@ func (c Config) Validate() error {
 		return err
 	}
 
+	if err := validateResolumeConfig(c); err != nil {
+		return err
+	}
+	if c.ResolumePollInterval < 0 {
+		return fmt.Errorf("%s must not be negative, got %s", envResolumePollInterval, c.ResolumePollInterval)
+	}
+
 	return nil
 }
 
@@ -879,6 +990,86 @@ func ValidateFPPMQTTHostIDs(hosts map[string]string, endpoints []FPPEndpoint) er
 	return nil
 }
 
+// validateResolumeConfig enforces Track D seam D-1's startup rules for
+// SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID. Every check here runs only
+// when ResolumeURL is non-empty: an empty URL means the collector never
+// gets constructed (see [Config.ResolumeURL]), so an id syntax error or an
+// id collision the operator would never actually hit is not worth
+// rejecting startup over — the identical reasoning
+// [validateFPPMQTTConfig] already applies to its own broker-URL-gated
+// checks.
+//
+//   - The URL must be http or https with a host and no userinfo — the same
+//     three checks [validateFPPEndpoints] applies to an FPP endpoint URL,
+//     duplicated here rather than shared because the two validate
+//     unrelated fields of unrelated structs; resolume.NewClient re-checks
+//     the identical shape at construction time for the "safe to construct
+//     directly, without relying on config validation having already run"
+//     reason its own doc comment states, so a failure there would mean
+//     these two checks have drifted apart, not a condition this function
+//     needs to anticipate.
+//   - The id must satisfy [mqttproto.ValidateNodeID], the same syntax
+//     every FPP endpoint id already uses.
+//   - The id must not collide with any configured FPP endpoint id — see
+//     [ValidateResolumeIDAgainstFPPEndpoints].
+func validateResolumeConfig(c Config) error {
+	if c.ResolumeURL == "" {
+		return nil
+	}
+
+	u, err := url.Parse(c.ResolumeURL)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid URL: %w", envResolumeURL, c.ResolumeURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s %q must use http or https", envResolumeURL, c.ResolumeURL)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s %q must include a host", envResolumeURL, c.ResolumeURL)
+	}
+	if u.User != nil {
+		// See FPPEndpoint.URL's identical rule: rejected here, at the only
+		// entry point, rather than relying on every downstream consumer
+		// (log lines, error reasons, the API) to remember to scrub it.
+		return fmt.Errorf("%s: url must not include userinfo/credentials", envResolumeURL)
+	}
+
+	if err := mqttproto.ValidateNodeID(c.ResolumeID); err != nil {
+		return fmt.Errorf("%s: %q: %w", envResolumeID, c.ResolumeID, err)
+	}
+
+	return ValidateResolumeIDAgainstFPPEndpoints(c.ResolumeID, c.FPPEndpoints)
+}
+
+// ValidateResolumeIDAgainstFPPEndpoints checks that resolumeID does not
+// collide with any id in endpoints, factored out — mirroring
+// [ValidateFPPMQTTHostIDs]'s identical split — so [validateResolumeConfig]
+// (against the env-parsed FPP endpoint list at config-load time) and
+// internal/coordinator's post-migration re-validation (against the
+// store-authoritative list, once SHOWMESH_FPP_ENDPOINTS may no longer be
+// the source of truth — see internal/coordinator/configsync.go) run the
+// IDENTICAL rule rather than two copies that could silently drift apart.
+//
+// The collision this guards against is concrete, not theoretical: the
+// Resolume collector and every configured FPP collector are registered on
+// one shared internal/coordinator/collector.Runner, whose Add and Nudge
+// both key their internal maps by this exact id string
+// (internal/coordinator/collector/collector.go). A resolumeID equal to an
+// FPP endpoint id would make the second Add call silently overwrite the
+// first's nudge channel, so an out-of-band poll nudge meant for one device
+// would silently retarget the other — a startup error naming both ids is
+// what stops that from ever being reachable, rather than a silent rename.
+func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEndpoint) error {
+	for _, ep := range endpoints {
+		if ep.ID == resolumeID {
+			return fmt.Errorf("%s %q collides with an FPP endpoint id configured in %s; "+
+				"both are registered on the same collector.Runner and must be unique — rename one",
+				envResolumeID, resolumeID, envFPPEndpoints)
+		}
+	}
+	return nil
+}
+
 func getEnvDefault(lookup func(string) (string, bool), key, def string) string {
 	if v, ok := lookup(key); ok {
 		return v
@@ -951,6 +1142,14 @@ func (c Config) LogValue() slog.Value {
 		// per-broker Username/Password are never logged, in the clear or
 		// otherwise (see IntegrationBroker.Password's own doc comment).
 		slog.Any("integration_brokers", integrationBrokerIDs(c.IntegrationBrokers)),
+		// ResolumeURL carries no credential (Validate rejects userinfo, so
+		// there is structurally nothing to redact — unlike MQTTBroker/
+		// FPPMQTTBrokerURL, whose protocols do allow it), so it is logged
+		// directly rather than through redactURLUserinfo.
+		slog.String("resolume_url", c.ResolumeURL),
+		slog.String("resolume_id", c.ResolumeID),
+		slog.Duration("resolume_poll_interval", c.ResolumePollInterval),
+		slog.Bool("resolume_websocket_disabled", c.ResolumeWebSocketDisabled),
 	)
 }
 

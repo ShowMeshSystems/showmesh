@@ -38,8 +38,12 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
 | [ADR-031](ADR-031-macro-execution-model.md) | The macro execution model | Accepted (decision 2's default superseded by ADR-035) |
 | [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
+| [ADR-033](ADR-033-show-mode.md) | Program Mode and Show Mode are one system-wide operating mode | Accepted |
 | [ADR-035](ADR-035-a-run-always-runs-every-step.md) | A run always runs every step | Accepted (supersedes ADR-031 decision 2's default; narrows ADR-024 decision 11) |
 | [ADR-036](ADR-036-dispatch-configuration-applies-without-a-restart.md) | Configuration that governs dispatch applies without a restart | Accepted |
+| [ADR-037](ADR-037-resolume-references-are-names-not-ids.md) | A Resolume reference is a name, not an object id | Accepted (owner, 2026-08-15; not yet implemented) |
+
+**There is no ADR-034, and that is deliberate.** ADR-035 and ADR-036 were issued on the `step-9-wave-3` branch as 033 and 034, colliding with show mode, which Track D issued on `main` the same day. They were renumbered when that branch merged on 2026-08-15; 034 was left unused rather than reassigned, so that the number in an older reference is never ambiguous.
 
 ## Record template
 

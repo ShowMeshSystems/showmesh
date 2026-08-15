@@ -815,14 +815,21 @@ deck.** Nothing in the OSC send says which deck it assumed, nothing replies, and
 deck selection is itself drivable from OSC (`/composition/decks/{D}/select`,
 confirmed §6.4) and from REST, and from the operator's hand on the keyboard.
 
-**REST `by-id` is immune.** Verified directly: with `Rest Staging` selected,
+~~**REST `by-id` is immune.** Verified directly: with `Rest Staging` selected,
 `GET /composition/clips/by-id/1765224917762` still returned `Virtual Matrix`, a
-`Main` clip. A by-id reference does not need to know which deck is showing.
+`Main` clip. A by-id reference does not need to know which deck is showing.~~
 
-One detail is unexplained and is recorded rather than smoothed over: **clip
+**WRONG, corrected 2026-08-14 in §16.1.** A clip id resolves only while its own
+deck is selected: 30/30 selected-deck ids resolved and **0/10 non-selected-deck ids
+did**, all 404. This paragraph's one test happened to use a `PersistentClip`, which
+is the exception rather than the rule (§16.2). **Layer ids are genuinely
+deck-independent** and that part stands.
+
+~~One detail is unexplained and is recorded rather than smoothed over: **clip
 positions 1 and 2 returned the same object ids on all three decks**, while every
-position from 3 upward differed. Whether those two columns are shared, group-owned,
-or an artefact of this composition was not determined.
+position from 3 upward differed.~~ **Answered 2026-08-14 in §16.2:** they are
+`PersistentClips`, four clips stored outside any deck, which is also why the test
+above came back deck-independent.
 
 **What this does to the tripwire.** Counting decks still works and is still cheap,
 but `Christmas 25` already has three decks, so "more than one deck exists" fires
@@ -1056,8 +1063,11 @@ that is wrong in none of the three cases above.
 
 - **Everything about timecode.** Acquisition, loss, jumps, reacquisition, hold-last-frame, frame rates, offsets, and whether `transport.position` moves with LTC. That is D0 and it needs a generator and a cable.
 - **The show host.** Every timing number is from an arm64 laptop on loopback. The deployed Hackintosh, over the show LAN, will differ, and the platform may become Windows.
-- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise.
-- **Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).
+- **A controlled save-and-reload.** §12 answers the identifier question observationally, from six real composition files, and that is enough to build on. What it does not cover is the live transition: loading a different composition **without restarting Arena** is the disruption the owner says actually recurs (§10.3), there is no REST path to trigger it (§2.3), and what the API reports *during* that swap is unmeasured. Given §10.1's loading window on a restart, assuming the swap is atomic would be unwise. **Now doubly open:** §14 means the adapter no longer re-enumerates on a cadence, so this open item is also the reason a swap-without-restart leaves a stale resolution.
+- **Everything still in §14.2.** ~~Whether a targeted `by-id` read in a loop crashes Arena the way the full composition read does~~ is **closed (§14.3): it does not**, across 209,916 reads and 6.5 GB. What remains open is whether the crash reproduces on another composition, on another host or build, and what actually causes it.
+- **The `.avc` format's stability across Arena versions** (§15). Everything parsed there was read from files written by 7.23.2 and earlier, the format is undocumented, and 7.26 carries an API overhaul that may or may not touch it. `versionInfo` is in the file, so a mismatch is at least detectable.
+- **What `by-id` does during a deck switch** (§16.1). A stored clip id 404s while its deck is not selected, which is indistinguishable from the stale-reference case §6.4 defines. That needs a deck term before D-3 ships an action.
+- ~~**Why clip positions 1 and 2 are identical across all three decks** while every position from 3 upward differs (§9.4).~~ **Closed 2026-08-14 (§16.2): they are `PersistentClips`, stored outside any deck.**
 - **`smpteNquickselect` semantics.** The addresses exist at layer scope; what they select was not determined.
 - **The crossfader** as a sixth way to silence a layer that passes every readiness check (§8.1).
 - **Whether the `options` list can change at runtime**, which would make any cached enum stale. It varies per object; it was not observed changing on one object.
@@ -1067,3 +1077,566 @@ that is wrong in none of the three cases above.
 - **Whether the full-composition push can be suppressed.** No mechanism was found; absence of a mechanism was not proven.
 - **`targetType="4"`** in `osc.xml`. Meaning unknown.
 - **The Avenue/Arena split.** The served spec is titled "Arena & Avenue", so some paths may not exist on Avenue. Not relevant to this deployment and not tested.
+
+## 14. Added 2026-08-14, during the D-1 build: `GET /composition` crashes Arena **on the development laptop**
+
+> **READ THIS BEFORE READING ANY CRASH CONCLUSION BELOW. Added 2026-08-14 by the
+> owner, and it reframes this entire section.**
+>
+> **Every crash in §14 through §14.4 happened on the development laptop, which is
+> not the playout machine and is not a configuration the show ever runs.** §14.2
+> states this once as an open item and then the rest of the document states "`GET
+> /composition` crashes Arena 7.23.2" as though it were a fact about Arena. It is
+> not. It is a fact about Arena **on this machine**.
+>
+> Two things the owner supplied on 2026-08-14 that no measurement here accounted
+> for:
+>
+> - **The same composition ran on the real playout machine for over a month,
+>   untouched, without incident.** Every crash in this document occurred within
+>   hours on a different machine.
+> - **Arena is not properly supported on this laptop.** The owner's assessment is
+>   that this build is not really meant to run on this hardware and OS. The playout
+>   machine runs an older macOS and is a different class of host entirely.
+>
+> **What survives regardless of machine**, because it is about the API rather than
+> about stability: there are no collection endpoints (§2.3), `/composition` is a
+> 2.26 MB document (§4.1), the file carries all three decks plus canvas size plus
+> `versionInfo` where REST carries none of them (§15.1), and `by-id` is
+> deck-dependent for clips (§16.1). [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md)
+> rests on those, not on the crash, and is unaffected by this correction.
+>
+> **What does not survive** is any sentence in this document treating the crash as
+> a property of Arena 7.23.2 in general, or as a constraint the show host is known
+> to be under. Read every "crashes Arena" below as "crashed Arena on the dev
+> laptop", including in §14.4, whose conclusion that removing our reads did not
+> stop the crashes is a statement about the same unrepresentative host.
+>
+> **The general lesson, and this project has now paid for it twice in two days.**
+> §14.2 correctly listed "whether it reproduces on another host or build" as not
+> established, and then the document, the ADR, the build log and CLAUDE.md all went
+> on to describe the crash as settled fact. **Writing a limitation into an
+> open-items list does not stop the conclusion above it from being quoted without
+> it.** A caveat that only appears once, below the finding, will not survive being
+> summarised.
+
+**This was not found by the capture. It was found by building against the capture**,
+which is the same ordering lesson one step further on: a document written from a
+running system still does not say what happens when your own code reads it on a
+schedule.
+
+**Seven crashes, one signature.** All `EXC_BAD_ACCESS` / `SIGSEGV` on a background
+thread, all with byte-identical faulting-frame offsets across all seven reports
+(`Arena-2026-08-14-{144936,145928,154454,160226,160559,160811,161549}.ips`). Same
+host, same build, same composition as §Provenance.
+
+**The fourth was produced by `curl` alone, with no ShowMesh process running.** That
+is what rules ShowMesh out as the cause and makes this a fact about Arena 7.23.2
+rather than a defect in the adapter.
+
+Controls, each run to completion:
+
+| Run | Duration | Result |
+|---|---|---|
+| Idle, no client at all | 7 min | **survived** |
+| `GET /product` every 10 s | 30 polls / 5 min | **survived** |
+| One WebSocket held open, no REST read | 5 min, 3 messages | **survived** |
+| `GET /composition` every 30 s | ~4.5 min | **crashed after 9 reads** |
+| `GET /composition` back-to-back | 149 s | **crashed after 2,046 reads** |
+| **`GET /composition` twice, 30 s apart** | — | **crashed 26 s after the second read** |
+
+**It is neither a fixed read count nor a fixed elapsed time**, which is why every
+composition row carries both numbers: 2 reads, 9 reads and 2,046 reads all ended
+the same way. The mechanism is unknown, and "crashes Arena" is what was observed,
+not a diagnosis. Neither the 30-second run's crash nor the two-read run's occurred
+*during* a read.
+
+**The two-read row is the one that matters, and it was measured against the
+shipped D-1 mitigation.** That run was the bounded adapter doing exactly what it
+is designed to do — one resolve on connect and one inside the convergence window —
+and it crashed Arena anyway. **So the bound reduces exposure and does not
+eliminate the crash.** Nothing in D-1 makes this safe; it makes it rarer.
+
+### 14.1 Why this constrains the adapter rather than merely annoying it
+
+§2.3 established there are **no collection endpoints** — `/composition/layers`,
+`/composition/columns`, `/composition/decks` and `/composition/layergroups` all
+404. So `GET /composition` is the **only** way to enumerate the composition, and
+the object-id resolver cannot avoid calling it.
+
+What the adapter can do is stop calling it on a show-time cadence, and that is what
+D-1 does: one resolve on connect, plus a bounded convergence window after each
+connect to get past §10.1's load window, and nothing after that. The cost is stated
+rather than hidden — a composition swap **without** an Arena restart now leaves a
+stale resolution indefinitely. That was already §13's open item and is now
+deliberately deferred rather than solved with a call that crashes the target.
+
+The reads the collector actually depends on remain safe: `/product` polling and
+holding one WebSocket were both exercised above and were fine, so
+`resolume.reachable` is unaffected. **Do not over-generalise this to "reading
+Resolume is dangerous."**
+
+### 14.2 What is not established
+
+- Whether it reproduces on **another composition**. Only `Christmas 25` (252 clip
+  slots, 2.26 MB) was used, and payload size is the obvious suspect.
+- Whether it reproduces on **another host or build**. Everything here is the same
+  arm64 laptop as the rest of this document; the show host is a different machine
+  and may become Windows.
+- The mechanism, the frame symbols (the reports are unsymbolicated), and whether
+  Resolume already has a fix. The owner notes that 7.26's changelog carries
+  "#25086 REST-API Overhead on large compositions" alongside a broader API
+  overhaul, and that 7.26 arrives after Thanksgiving. **That is a guess and a late
+  one**: it reads as a performance item rather than a crash fix, and it lands
+  roughly six weeks *after* the Halloween show. Nothing in this project may be
+  designed on the assumption that #25086 is this.
+
+**This is an owner decision, not a build decision.** Resolume control is one of the
+three founding problems, it is on the day-0 critical path, and a video wall that
+segfaults mid-show is a worse failure than anything ShowMesh's own code can
+produce. It needs a vendor report and a decision about how much of Track D may
+depend on enumerating the composition at all.
+
+### 14.3 Targeted `by-id` reads are safe, and that is what makes the rest buildable
+
+The question §14.2 named as the one that most changes D-2's shape, answered the
+same day, from a freshly launched Arena that had never served a full composition
+read in that session:
+
+| Read | Count | Volume | Duration | Result |
+|---|---|---|---|---|
+| `GET /composition/clips/by-id/{id}` back-to-back | **127,128** | 1.45 GB | 5 min | **survived** |
+| `GET /composition/layers/by-id/{id}` back-to-back | **82,788** | 5.08 GB | 5 min | **survived** |
+
+209,916 reads, 6.5 GB, no crash and no new crash report. **The layer probe alone
+moved more bytes (5.08 GB) than the back-to-back full-composition run moved before
+it crashed (4.6 GB).** Stacked with the two-read crash, that rules out byte volume,
+request rate and total request count as the driver, and leaves the `/composition`
+endpoint itself.
+
+So the split is clean, and it is what §15 is built on: **enumerate from the file,
+observe by id.**
+
+### 14.4 Removing our composition reads did not stop Arena crashing
+
+**Recorded the same evening, because it corrects the conclusion a reader would
+otherwise draw from §14.3, and it is the more important half.**
+
+After the composition read was deleted from the adapter, two coordinator processes
+ran against Arena with **zero** composition reads, confirmed from their own logs.
+Arena crashed anyway, at 19:30:14, with the same faulting signature as the other
+nine. The watcher recorded the `1006` close and then `connection refused`, so the
+timeline is not in doubt.
+
+At the moment of that crash the only ShowMesh traffic was **`/product` every 10
+seconds and one held WebSocket** — the two things §14 lists as controls that
+survived. They survived 5 minutes each. This run was about ten.
+
+So the honest statement of what is known is narrower than §14.3 implies on its own:
+
+- `GET /composition` is **sufficient** to crash Arena. Two reads did it.
+- Removing it is **not sufficient** to prevent a crash.
+- The controls in §14 were too short to establish that `/product` polling and a
+  held WebSocket are safe over a show-length run, and they should not be cited as
+  though they were.
+
+**Nothing here weakens the case for ADR-032** — the file removes a call measured to
+kill Arena in two requests, and that is worth doing on its own. What it does weaken
+is any claim that ADR-032 makes Resolume *safe*. It does not.
+
+### 14.5 Owner decision 2026-08-14: the vendor report and the show-length run are both struck
+
+**This section previously ended by calling a vendor report "the load-bearing
+action" and a show-length crash-count run on the show host "a bench that has not
+been run", and asserted that nothing should depend on Resolume surviving an evening
+until it had. All three claims are withdrawn.**
+
+**The vendor report is struck because the owner cannot act on its answer.** Arena
+7.23.2 is a subscription-expired build. Upgrading requires renewing, and the owner
+does not renew until late November — after the Halloween show. A report filed
+against a version he cannot leave produces a fix he cannot install, on a timeline
+that is already past the date that matters. The ten `.ips` reports stay in the
+record in case that position changes.
+
+**The show-length run is struck because no decision hangs on its result.** Two
+crashes an evening or ten, the available build response is identical, because
+ShowMesh cannot patch Resolume. A measurement that cannot change what gets built is
+not evidence-gathering, it is a delay with a number attached.
+
+**The general lesson, and it is about this document rather than about Arena.**
+Writing "this bench has not been run" into a capture creates an obligation that
+reads as rigour and can be neither of those things. §14.4 did it twice in one
+paragraph. **Before recording something as a needed bench, name the decision its
+result would change.** If there isn't one, it is a curiosity, and curiosities do not
+belong on a critical path six weeks from a show.
+
+**What is being built instead**, and it is a build item rather than a measurement:
+ShowMesh notices Arena is gone, says so, and restores the layers that were playing
+once Arena is back — however it got back. §10.2 measured that Arena returns with
+nothing playing, so today a crash means a dark wall until a human walks to the
+render host and relaunches by hand. That does not stop the crash and must never be
+written as though it does.
+
+**Nothing automates relaunching the Arena process**, and a host-level watchdog was
+proposed and rejected on 2026-08-14. Its failure mode is relaunching Arena at a
+moment a human deliberately had it stopped, which trades a way to break a working
+Arena for a few seconds of recovery. **The operator owns the process; ShowMesh owns
+the show state.**
+
+## 14.6 What the crash actually is, from the crash reports themselves
+
+**Added 2026-08-14 from a symbol-level analysis of all ten `.ips` reports. This is
+the first mechanical account of the crash rather than a behavioural one, and it
+narrows §14.3's conclusion.**
+
+**All ten crashes are one signature, confirmed rather than assumed.** Identical
+exception (`EXC_BAD_ACCESS` / `SIGSEGV`, `KERN_INVALID_ADDRESS`, ESR `0x92000004`),
+identical 14-frame faulting stack byte for byte, and the same thread by creation
+order in every report. The last three, the ones taken with **zero** composition
+reads, are indistinguishable from the first seven. So §14.4's comparison is sound:
+it is the same bug with and without our reads, not two bugs conflated.
+
+**The faulting thread is Arena's own web API server.** It is a Boost.Asio io worker
+running `scheduler::run`, and the faulting frames sit in Boost.Beast HTTP
+response-serialisation code. The faulting instruction loads a pointer out of
+serializer state and dereferences it at `+0x30`; the loaded pointer is
+high-entropy heap garbage, different on every crash. The arithmetic two
+instructions later is Beast's `basic_fields::element` size calculation.
+
+**The crash is a use-after-free while serialising an HTTP response.** It is not in
+video, rendering, codecs, NDI, or the composition. Arena's own named
+`ResApi Task Thread` pool was idle in condition waits in all ten reports.
+
+**No resource exhaustion.** Launch-to-crash ranged from 36 seconds to 1 h 28 m,
+with thread count (83–88) and malloc total (2.6–2.8 GB) flat across that entire
+range. A 36-second crash and an 88-minute crash with identical footprints rule out
+a leak. This is a timing race whose probability scales with how often the
+vulnerable path runs.
+
+### 14.6.1 This narrows §14.3 rather than confirming it
+
+§14.3 concluded the discriminant is "the `/composition` endpoint itself". The
+mechanism suggests something slightly different and more useful: **the discriminant
+is how long the serializer holds live pointers per request, and how much
+connection-lifecycle churn surrounds it.** A 2.26 MB chunked response maximises
+both, which is why `/composition` crashes fastest. Small `by-id` reads back to back
+over hot keep-alive connections minimise both, which is why 209,916 of them
+survived. And it explains the record's own unexplained oddity, that two crashes
+happened *not during* a read, one of them 26 seconds after the last one: that is the
+shape of a deferred teardown completing against a dead session.
+
+**So "reading Resolume is dangerous" remains wrong, and "one endpoint is dangerous"
+is now also slightly wrong.** What is dangerous is a large response and a cold or
+churning connection.
+
+### 14.6.2 What ShowMesh already does right, and what remains suspect
+
+The adapter's HTTP client already holds idle connections
+(`MaxIdleConnsPerHost 2`, `IdleConnTimeout 90s`) and fully drains every response
+body before closing it, so a 10-second `/product` poll reuses one warm connection
+rather than opening a new one per request. **The obvious mitigation was already in
+place before the mechanism was known**, which is worth recording so a later session
+does not "fix" it by reverting to a fresh client per request.
+
+It crashed anyway on that traffic. Since REST is already minimal and warm, **the
+held WebSocket is the leading remaining suspect**: it is the one long-lived push
+path, it shares the same Beast/Asio server, and §5.3 measured that it pushes the
+entire composition unsolicited on connect regardless of what was subscribed. That
+is a large serialised response on exactly the code path that faults.
+
+**This is a hypothesis with a mechanism behind it, not a measurement.** It has not
+been tested, and per §14.5 no test of it is planned. What follows from it is a
+design posture rather than a conclusion: the WebSocket is runtime configuration
+(TRACK-D-D2-SPEC.md §3.3) and can be turned off without a rebuild.
+
+### 14.6.3 And all of it is still from the development laptop
+
+Everything in §14.6 explains the crashes **on the machine that produced them**,
+which the §14 preamble establishes is not the playout machine. A use-after-free
+race is exactly the kind of defect whose timing is host-dependent, so a machine
+running Arena in a configuration it was not built for is a plausible reason this
+laptop reproduces it in minutes while the real playout host ran the same
+composition for over a month untouched.
+
+## 15. The composition file as a configuration source
+
+**The owner's proposal, 2026-08-14, and it is the answer to §14 rather than a
+workaround.** `/composition` exists in the adapter for exactly one purpose:
+discovering the id map. That map is in the `.avc` file, which is plain XML on
+disk, so ShowMesh can read it at configuration time and never make the crashing
+call at runtime at all.
+
+The shape follows [ADR-027](../decisions/ADR-027-show-and-surface-model.md)'s
+xLights rule in a second vendor: **an authoring-time dependency, never a runtime
+one.** Nothing on a show host parses a `.avc` mid-show; the coordinator parses one
+when the operator uploads it, and stores the resulting id map as configuration.
+
+### 15.1 What the file actually contains, parsed from the operator's `Christmas 25.avc`
+
+407,344 bytes on disk against 2,258,982 over REST, because the file does not
+duplicate every layer inside its layergroup and does not fully populate empty clip
+slots.
+
+| Element | Carries |
+|---|---|
+| `Composition` | `uniqueId` (the installation constant, §12.3), `numDecks`, `numLayers`, `numColumns` |
+| `versionInfo` | the exact Arena that wrote it: `7.23.2 r51094` |
+| `CompositionInfo` | the real composition **name**, and the canvas **`width` 3000 / `height` 1440** |
+| `CompositionInfo/DeckInfo` × 3 | deck `id`, deck **name**, `closed` |
+| `Composition/Layer` × 18 | `uniqueId`, `layerIndex`, **`layerGroup`** |
+| `Composition/Group` × 3 | `uniqueId` |
+| `Composition/Deck/Column` | `uniqueId`, `columnIndex` |
+| `Composition/Deck/Clip` × 576 | `uniqueId`, `layerIndex`, `columnIndex` |
+| a non-empty clip's `Params` | `Name`, and **`TransportType`** |
+| a non-empty clip's `PreloadData/VideoFile` | the **source media path** |
+| `VideoTrack/Params` | per-clip `Width`/`Height` |
+
+Two of those are things REST does not expose at all: the **canvas size**, which
+Track B needs, and **`versionInfo`**, which makes "was this file written by the
+Arena that is running" a checkable question.
+
+And one is strictly more than REST offers: **the file carries all three decks'
+clip grids.** §9.4 established `/composition` returns only the selected deck's,
+with no way to read the others.
+
+### 15.2 The file matches the running composition, verified by id
+
+Checked against the live Arena using only `by-id` reads, with no full composition
+read in the session:
+
+```
+file's 18 layer ids resolving live                     18/18
+file's 30 non-empty Main-deck clip ids resolving live   30/30
+```
+
+`TransportType` being in the file is worth calling out separately: §8's SMPTE
+drift check needs to know which clips are *supposed* to be on timecode, and §11.3
+recorded that as depending on show configuration that does not exist yet. It is in
+the file the operator already has.
+
+### 15.3 The limit, and why the owner assessed it as small
+
+The file is the **last saved** state, and §10.2 measured that Arena never writes it
+on exit and discards in-session changes. So an operator who edits live and does not
+save leaves the file and the running composition divergent.
+
+The owner's assessment, 2026-08-14: once a composition is built, that is
+essentially it. Timing changes are either a source video file overwritten in place,
+which does not move any id, or trigger timing, which is ShowMesh's own
+configuration. The realistic failure is forgetting to re-upload while still
+building the show, and it is caught cheaply. **§15.2 is the check**: take the
+expected clip ids and resolve a sample by id. That is also the first formulation of
+§3.8's composition-identity problem that is both correct and cheap, since §12.3
+established the composition has no id in REST and the name is not an identifier.
+
+## 16. Corrections to §9.4, from the D-1 build
+
+Two, both found while verifying §15 and both changing what the adapter may assume.
+
+### 16.1 `by-id` is NOT immune to deck selection
+
+§9.4 concluded, from one test, that "**REST `by-id` is immune**" and that "a by-id
+reference does not need to know which deck is showing." **That is wrong.**
+
+Measured with `Main` selected, using clip ids taken from the file:
+
+```
+file's Main-deck non-empty clip ids resolving      30/30
+file's NON-selected-deck clip ids resolving         0/10   (all 404)
+```
+
+So a clip id resolves only while its own deck is selected. **Layers are genuinely
+deck-independent** and that half of §9.4 stands: all 18 layer ids resolve
+regardless.
+
+The consequence for the adapter is real: ShowMesh can hold configuration for every
+deck from the file, and can observe or act on clips of the **selected deck only**.
+A stored clip id for another deck returns `404`, which under §6.4's rule reads as a
+stale reference when it is nothing of the kind. **That rule needs a deck term
+before D-3 ships an action.**
+
+### 16.2 The "positions 1 and 2 identical across all three decks" mystery is `PersistentClips`
+
+§9.4 recorded, unexplained, that clip positions 1 and 2 returned the same object
+ids on every deck while every position from 3 upward differed, and §13 carried it
+as an open item. **Answered from the file**: `Composition/PersistentClips` holds
+four clips that live outside any deck.
+
+```
+layerIndex 0, columnIndex 0  1765224917762  Virtual Matrix
+layerIndex 3, columnIndex 0  1765224917409  Video Router
+layerIndex 0, columnIndex 1  1765396769079  Solid Color
+layerIndex 3, columnIndex 1  1765224915153  Solid Color
+```
+
+They resolve by id regardless of which deck is selected, which is why the §16.1
+test above had to be run with ordinary deck clips to see the 404s at all. They also
+close a second small discrepancy: 26 ordinary non-empty clips on `Main` plus these
+4 is the 30 non-empty this document reports from REST.
+
+**Both of the ids §1's OSC A/B test used are persistent clips.** That is why the
+one `by-id` check §9.4 ran came back deck-independent: it tested the exception and
+generalised from it. A single confirming observation of a rule proved the rule only
+for the case it sampled.
+
+## 17. Added 2026-08-14: Arena ships its own OpenAPI specification on disk, and this document should have been checked against it first
+
+**`/Applications/Resolume Arena/rest/docs/swagger.yaml`**, 216,828 bytes, OpenAPI
+3.0.1, titled "Arena & Avenue REST API", inside the installed application bundle.
+It is the vendor's own authoritative description of the exact build this project
+targets.
+
+**§2.1 recorded that the running app *serves* its OpenAPI spec and the built-in web
+UI links to it. Nobody opened the copy sitting on disk.** Everything in §2 through
+§8 was instead reconstructed by poking a running Arena, and seam D-3 went on to
+build write calls whose request bodies were labelled `SHOWMESH HYPOTHESIS, NOT
+MEASURED` in the source.
+
+**This is a lesson about method rather than about Resolume.** The project's standing
+ordering rule is "capture before you build", and it has paid twice: Step 8 against
+FPP, and Track D's own D-1. What neither instance asked was **whether the vendor had
+already written the document we were reconstructing.** A bench capture is the right
+tool for behaviour a vendor does not document, which for Resolume is a great deal:
+the crash, the load window, deck-dependent `by-id` resolution, `connect false` being
+a no-op, the confirmation latencies, and the fact that `connected` does not mean
+anything reached the wall. It is the wrong tool for request and response *shapes*,
+which the vendor states precisely and which we guessed at.
+
+**Check for a shipped machine-readable contract before capturing anything, and if
+one exists, treat the capture as covering behaviour the contract cannot express.**
+
+### 17.1 Two request shapes settled immediately, one of which was a guess in shipped code
+
+```
+POST /composition/clips/by-id/{clip-id}/connect
+  requestBody: application/json, schema: type: boolean
+```
+
+**A bare JSON boolean.** Seam D-3/A inferred exactly this from §2.6's prose and
+labelled it a hypothesis. It is now source-verified. The same shape applies to the
+column and layergroup-column `connect` operations.
+
+The swagger's own description also restates §6.3's finding in the vendor's words:
+*"This is analogous to whether the mouse is pressed down on the clip. If omitted,
+true and false are both sent, as if a short click was generated."*
+
+```
+PUT /parameter/by-id/{parameter-id}
+  requestBody: oneOf StringParameter | TextParameter | BooleanParameter
+             | IntegerParameter | ColorParameter | RangeParameter | ChoiceParameter
+```
+
+**A full parameter object, not a bare value and not `{"value": ...}`.** D-3/A sends
+`{"value": ...}`, which is schema-valid because **no property of any parameter
+schema is marked `required`**, but it was arrived at by guessing and the guess
+happened to land inside the contract. `BooleanParameter` carries `id`, `valuetype`
+(`"ParamBoolean"`), `value` and `view`; `RangeParameter` adds `min` and `max`.
+
+Note also that the path parameter is named `{parameter-id}` and typed
+`integer/format: int64`, and the object schemas are the same envelope types §4.3
+described from responses. The envelope is the request shape as well as the response
+shape.
+
+### 17.2 What this does and does not supersede
+
+**Superseded**: request bodies, response schemas, path spellings, path-parameter
+names and types, declared status codes, and the existence or absence of a path.
+Where this document and the swagger disagree on any of those, **the swagger wins**
+and this document is wrong.
+
+**Not superseded, and still only knowable by capture**: everything in §14 (the
+crash), §10.1 (the load window, since there is no `loading` field to document),
+§16.1 (deck-dependent `by-id` resolution), §6.3's `connect false` doing nothing,
+§7's confirmation latencies, §8.1's `connected` not meaning output, §5.3's
+subscription behaviour, and §12's identity findings. A specification states what an
+endpoint accepts. It does not state that reading one of them segfaults the
+application.
+
+### 17.3 What checking the code against the specification found
+
+Run 2026-08-14 against every request ShowMesh issues and every response it decodes.
+
+**A false confirmation on the darkening direction, and it is the headline.** **No
+schema anywhere in the specification carries a `required` list**, verified
+programmatically across the whole file. So `{"id": 123}` with no `value` key is a
+contract-legal `BooleanParameter`. Seam D-2 wrapped every parameter *envelope* in
+`Presence`, but the `value` **inside** the envelope is a bare Go field, so a
+value-less envelope decodes to `false` or `0`.
+
+The consequence is specific: `setLayerBypass` with `want == false` and
+`setLayerMaster` with `want == 0.0` would read their own desired value out of a
+response that never contained one, and report **`confirmed`**. Those are the
+blackout-adjacent values. `readiness.go` has the same exposure: a value-less
+`bypassed` reads as healthy.
+
+This is the project's recurring absent-key defect one level below the fix that
+shipped hours earlier, and it took a machine-readable contract to see it. **The
+lesson is that `Presence` was applied at the depth the *capture* could observe, and
+the capture could only observe leaves that were actually present.**
+
+**The composition-parameter ladder is answered, and the answer is that it does not
+exist.** There is **no `GET /composition/{parameter}` path** in the specification:
+no `/composition/bypassed`, no `/composition/master`, no `/composition/name`. The
+only `{parameter}`-addressed composition path is `POST /composition/{parameter}/reset`,
+a write. So TRACK-D-D2-SPEC.md §4's rung 1 hits paths the vendor does not document
+and the predicted live answer is rung 2. **It stays off permanently.**
+
+What the specification *does* document is `GET /parameter/by-id/{parameter-id}` for
+any parameter including composition-level ones. The obstacle is unchanged: acquiring
+a session-scoped parameter id without the forbidden full read. Left as an open item,
+because the only available source is the WebSocket connect-time dump, and using it
+would need §3.4's "no observed value is ever read out of a WebSocket message" rule
+narrowed rather than broken. That is an owner decision and nothing depends on it.
+
+**`solo` is a readable field on both `Layer` and `LayerGroup`, and the readiness
+conjunction does not evaluate it.** It appears in this document's own §8 table and
+was dropped when §8.1 named seven terms. Standard mixer semantics would have a solo
+anywhere silence every non-soloed layer, which would make a dark layer report ready.
+**The specification is silent on the semantics**, so this is an open item rather
+than a proven eighth term. It is cheap to be honest about, because a survey already
+reads every layer.
+
+The crossfader question stays open. `Layer.crossfadergroup` is confirmed readable
+and a composition-level `CrossFader` object with a `phase` range parameter exists,
+but the CrossFader is reachable only inside the forbidden full read or via a session
+parameter id, and the specification says nothing about whether it silences anything.
+
+**A bare `true` on connect is mouse-down without mouse-up.** The vendor's own words,
+on both the clip and column operations: *"This is analogous to whether the mouse is
+pressed down on the clip. If omitted, true and false are both send - as if a short
+click was generated."* So the documented complete gesture is **omitting the body**,
+not sending `true`. `Clip` also carries a `triggerstyle` choice parameter, and on a
+momentary trigger style a held mouse-down that never releases is plausibly different
+from a click. §6.3's finding that `false` alone does nothing is vendor-confirmed as
+mouse-up.
+
+**`412` is a documented status meaning "a precondition failed, e.g. the composition
+is locked, or still loading."** It is declared on deck `open`/`close` and
+`POST /composition/action`, none of which ShowMesh calls, and this API omits statuses
+freely. It is worth classifying anyway: §10.1 records that the load window has no
+`loading` field, and this is the vendor's nearest thing to one.
+
+**`{"value": ...}` on a parameter `PUT` matches two `oneOf` branches**, because
+`TextParameter.value` carries no type constraint, so a boolean satisfies both it and
+`BooleanParameter`. A strict `oneOf` validator rejects that, and a `400` is declared
+on the operation. Adding `"valuetype"` selects exactly one branch and costs nothing.
+Whether Arena's server is strict is not something a specification can answer.
+
+**Everything else checked out.** All seven actions map to real documented operations
+with the right method, path spelling, path-parameter name and type. Every read path
+in `client.go` is correct. Every declared status is handled. And three claims of this
+document are vendor-confirmed: §2.3's absent collection endpoints, absent
+`/composition/open` and absent output snapshot; §4.4's ambiguous `404`, in the
+vendor's own words; and §2.5's loud 404s.
+
+**One vendor sentence corroborates §16.1 and overclaims.** The `Deck` schema reads
+*"Only the layers and clips of the active deck can be retrieved and updated."* That
+independently corroborates deck-dependent clip resolution, which this document had
+from a single session's measurement. Taken literally it also predicts layers are
+deck-dependent, which was measured false at 18/18. **Measurement beats prose**, and
+this is recorded so nobody later "corrects" the layer finding to match the sentence.
+
+**And one specification defect, worth knowing when reconciling path counts.** The
+`selected`-layer variant of the active-clip path appears in the YAML **without its
+leading slash** (`composition/layers/selected/clips/active`), which is why the disk
+file parses to 152 paths against the 154 §2.3 counted from the served copy.

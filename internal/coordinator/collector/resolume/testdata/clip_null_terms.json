@@ -1,0 +1,10 @@
+{
+  "id": 1765396769101,
+  "name": null,
+  "connected": null,
+  "transport": {
+    "position": {"valuetype":"ParamRange","id":1786724970010,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":0.0},
+    "controls": null
+  },
+  "transporttype": null
+}

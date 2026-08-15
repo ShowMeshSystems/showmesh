@@ -1,0 +1,8 @@
+{
+  "id": 1765224917300,
+  "name": {"valuetype":"ParamString","id":1786724944345,"value":"Layer 1"},
+  "bypassed": {"valuetype":"ParamBoolean","id":1786724944353,"value":false},
+  "master": {"valuetype":"ParamRange","id":1786724944352,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":0.917},
+  "video": {"opacity": {"valuetype":"ParamRange","id":1786724944360,"min":0.0,"max":1.0,"in":0.0,"out":1.0,"value":1.0}},
+  "active_clip": {"id": 1765396769079}
+}

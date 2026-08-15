@@ -43,12 +43,17 @@ import { describe, expect, it } from 'vitest'
 // runtime string) with real operator copy — exactly the shape STEP-9-SPEC.md
 // section 13 warns about.
 //
+// `resolumecomp:` is a Go package name (pkg/resolumecomp's sentinel-error
+// prefix) that a rejected composition upload once rendered verbatim. The
+// server now translates it, so this alternative catches only a regression
+// that hardcodes it here; the runtime half is guarded server-side.
+//
 // forbiddenCopyPattern is unchanged from the pre-inversion version: a
 // repo path, a doc/spec file reference, an ADR or research-record
 // number, the word "section" followed by a digit, or a literal reference
 // to the OpenAPI spec file are all internal citations that must never
 // reach an operator.
-const forbiddenCopyPattern = /docs\/|\.md\b|ADR-\d+|RES-\d{3}|section\s+\d|api\/openapi\.yaml/i
+const forbiddenCopyPattern = /docs\/|\.md\b|ADR-\d+|RES-\d{3}|section\s+\d|api\/openapi\.yaml|resolumecomp:/i
 
 // Extended 2026-08-14 (this task's finding 3, second half) to include
 // src/app/: `app/session.ts` holds the scope-refusal copy that four of

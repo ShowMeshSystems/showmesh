@@ -29,7 +29,10 @@ import type {
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   Model,
+  ResolumeCompositionResponse,
+  ResolumeCompositionUploadResponse,
 } from './domain'
+import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
@@ -193,4 +196,18 @@ export function listMacroRuns(filter?: {
 
 export function getMacroRun(runId: string): Promise<SchemaMacroRunResponse> {
   return store.getMacroRun(runId)
+}
+
+// Track D seam D-2a (ADR-032): the Resolume composition upload surface.
+// Same thin pass-through pattern as the others above.
+
+export function getResolumeComposition(): Promise<ResolumeCompositionResponse> {
+  return store.getResolumeComposition()
+}
+
+export function uploadResolumeComposition(
+  file: File,
+  onProgress: (progress: UploadProgress) => void,
+): Promise<ResolumeCompositionUploadResponse> {
+  return store.uploadResolumeComposition(file, onProgress)
 }

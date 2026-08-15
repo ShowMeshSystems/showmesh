@@ -416,6 +416,40 @@ func TestObservationsInvalidResourceKind(t *testing.T) {
 	if m["type"] != ProblemTypeInvalidParameter {
 		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
 	}
+	// The error message enumerates the accepted values as a literal
+	// string (parseObservationFilter's own doc comment) — Track D seam
+	// D-1 review finding: this must actually name every accepted value,
+	// "resolume" included, or the message lies about what the endpoint
+	// accepts.
+	detail, _ := m["detail"].(string)
+	for _, want := range []string{"node", "fpp", "coordinator", "resolume"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail = %q, want it to name %q among the accepted resourceKind values", detail, want)
+		}
+	}
+}
+
+// TestObservationsAcceptsResolumeResourceKind is Track D seam D-1's own
+// regression test for the resourceKind vocabulary: resourceKind=resolume
+// must be accepted (200, not the 400 TestObservationsInvalidResourceKind
+// proves for an unrecognized value), even though buildTestAPI's fixtures
+// hold no resolume observations, so the response is an empty list rather
+// than "this endpoint does not exist" (handleObservations's own doc
+// comment: "no match is a 200 with an empty list, never a 404").
+func TestObservationsAcceptsResolumeResourceKind(t *testing.T) {
+	api := buildTestAPI(t)
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/observations?resourceKind=resolume", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	obs, ok := m["observations"].([]any)
+	if !ok {
+		t.Fatalf("observations field missing or not an array; body: %s", body)
+	}
+	if len(obs) != 0 {
+		t.Errorf("observations = %v, want empty (no resolume fixture is wired into buildTestAPI)", obs)
+	}
 }
 
 // --- Raw-JSON assertions the contract's standing rule requires (section 1

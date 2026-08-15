@@ -170,6 +170,47 @@ type Dependencies struct {
 	// *broker.Registry dependency, built and wired separately by
 	// coordinator wiring, never held here: this package never publishes.
 	IntegrationBrokers []config.IntegrationBroker
+	// ResolumeID is SHOWMESH_RESOLUME_ID ([config.Config.ResolumeID]),
+	// threaded through for the identical "this package does not read the
+	// environment or config package state on its own" reason
+	// [FPPEndpointsEnvVarSet] documents — set ONLY when the Resolume
+	// collector is actually enabled (the wiring caller's cfg.ResolumeURL
+	// != "" gate), and left as the empty string otherwise.
+	//
+	// That gating matters: [config.Config.ResolumeID] defaults to
+	// "resolume" even with the collector disabled (see that field's own
+	// doc comment), so this field must NOT simply mirror it
+	// unconditionally — a coordinator with no Resolume instance configured
+	// at all could still have an FPP endpoint literally named "resolume",
+	// and that is not a collision anything can actually hit, because no
+	// Resolume collector is ever constructed to collide with it. The empty
+	// string here means exactly what it means at startup
+	// (internal/coordinator's own boot-time re-check, gated identically):
+	// nothing to cross-check.
+	//
+	// Consumed by handlePutFPPEndpointsConfig (config.go) — a proposed
+	// endpoint list whose id equals this one is refused with 400, mirroring
+	// [FPPMQTTHostIDs]'s identical id-collision shape, against
+	// [config.ValidateResolumeIDAgainstFPPEndpoints], the SAME rule the
+	// coordinator's own startup enforces fatally for this id: a write
+	// accepted here that collides would otherwise report 200 now and
+	// refuse to boot on the very next restart. The zero value (empty
+	// string) is the same "nothing told this API otherwise" posture as
+	// every other unwired dependency in this struct, and is correct for
+	// tests and for any embedder that has not wired it in.
+	ResolumeID string
+
+	// ResolumeActions is Track D seam D-3/A's action engine
+	// (internal/coordinator/collector/resolume), reached only through
+	// [ResolumeActionDispatcher] — see that interface's own doc comment
+	// (resolumeaction_interfaces.go) for why this package declares its own
+	// consumer-side view rather than importing that package directly. A
+	// nil field is replaced by [noResolumeActionDispatcher]
+	// (resolumeaction.go): GET /resolume/actions reports an empty
+	// vocabulary and POST /resolume/actions refuses every action as
+	// unsupported, matching this struct's standing "an unwired dependency
+	// is not this API failing" posture.
+	ResolumeActions ResolumeActionDispatcher
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -216,6 +257,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Macros == nil {
 		d.Macros = noMacroRunner{}
+	}
+	if d.ResolumeActions == nil {
+		d.ResolumeActions = noResolumeActionDispatcher{}
 	}
 	return d
 }
@@ -792,6 +836,50 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/macros/{id}/runs", h.writeGuard(&scopeShowMacroRun, h.handleSubmitMacroRun))
 	mux.HandleFunc("GET /api/v1/macro-runs", h.readAnyGuard(showConfigReadScopes, h.handleListMacroRuns))
 	mux.HandleFunc("GET /api/v1/macro-runs/{runId}", h.readAnyGuard(showConfigReadScopes, h.handleGetMacroRun))
+	// GET/POST /api/v1/config/resolume/composition (Track D seam D-2a,
+	// ADR-032): the stored Resolume composition id map, sourced only from
+	// an operator-uploaded file — never from Resolume's own crashing
+	// GET /composition (ADR-032 decision 2). See resolumecomposition.go.
+	//
+	// GET is gated behind config:write via [handlers.requireScope],
+	// matching GET /config/fpp.endpoints exactly (config.go's own doc
+	// comment on that handler) rather than [handlers.readGuard]'s ordinary
+	// open-by-default posture. This is deliberate, not an oversight: a
+	// composition upload is this coordinator's record of a configured
+	// external show-control integration's own objects — exactly the class
+	// config.go argues for at length (the same class as GET /audit, not
+	// the telemetry ADR-024 decision 2's open-reads rule exists to
+	// protect) — and it would have been the kind of two-configuration-
+	// surfaces-disagree inconsistency found at 17:00 to gate it any other
+	// way. It also reuses fpp:read no longer applies here: ADR-024
+	// decision 4 fixes exactly four read scopes and defines no
+	// config:read, which is precisely why config.go reaches for
+	// config:write instead of inventing one — this route does the same,
+	// rather than borrowing fpp:read, a different vendor integration's
+	// scope, the way an earlier version of this route did.
+	//
+	// POST requires config:write via [handlers.writeGuard] — identical
+	// gating to PUT /config/fpp.endpoints — because uploading a
+	// composition file is exactly ADR-032 decision 1's "the operator
+	// uploads a composition file... stored as a configuration object with
+	// the existing revision and audit semantics", never its own invented
+	// scope.
+	mux.HandleFunc("GET /api/v1/config/resolume/composition", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeComposition))
+	mux.HandleFunc("POST /api/v1/config/resolume/composition", h.writeGuard(&scopeConfigWrite, h.handlePostResolumeCompositionUpload))
+
+	// GET/POST /api/v1/resolume/actions (Track D seam D-3/B): the seven-
+	// action Resolume vocabulary. GET is never gated by any scope — this
+	// is static capability metadata, identical for every coordinator
+	// running this software version, not a resource a credential controls
+	// visibility of (see handleListResolumeActions' own doc comment) — and
+	// is deliberately NOT the same posture as GET /config/resolume/
+	// composition above, which renders an operator's own uploaded show
+	// data. POST requires resolume:action via [handlers.writeGuard]: no
+	// state change here is reachable by GET, and a principal without the
+	// scope gets 403 with no HTTP request ever reaching Resolume — see
+	// resolumeaction.go.
+	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
+	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

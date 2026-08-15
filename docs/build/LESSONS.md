@@ -6,6 +6,62 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## A refusal is not a null action
+
+**Track D, seam D-3, three times in one diff.** A guard that cannot read its evidence refused the action. Applied to `launchClip` that is right: refusing a start costs only that the clip does not start. Applied to `blackout` it is the inversion this project has now caught four times. Three instances shipped together: a pre-dispatch baseline read that failed refused every action; an identity reading older than fifteen minutes refused every action, and because surveys are event-driven and [ADR-033](../decisions/ADR-033-show-mode.md) Show Mode closes the WebSocket, that refusal was permanent until something else happened to trigger a survey; and a coordinator sitting quietly overnight would have hit both.
+
+Each was written by someone applying "do not act on evidence you do not have" correctly. What the rule misses is that refusing is itself a decision about the show: it leaves the wall lit, and per [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7 a refusal fires no fallback, so the operator is worse off than if the coordinator had been switched off. The distinction that resolves it: **staleness is a fact about our own evidence pipeline, and an identity of `unknown` or `false` is a fact about the world.** The first must not refuse a stop. The second may refuse anything.
+
+**Rule:** before writing a guard, name what the refusal leaves running, and check whether the thing being refused is the operator's way of stopping it. "We could not confirm it was safe" and "we confirmed it was unsafe" are different findings and must not produce the same behaviour.
+
+## An exported bound is only a bound where every phase enforces it
+
+**Track D, seam D-3.** A constant was exported and documented as the upper bound on how long a dispatch could take, precisely so a caller could size an HTTP write deadline before knowing which action was about to run. The caller did exactly that. The constant bounded only the confirmation poll: the pre-dispatch baseline reads ran outside it, one in-flight confirmation check ran outside it, and two bookkeeping writes ran outside it. Measured at 2.256 seconds against a 1.1 second deadline on three layers, scaling linearly, so eighteen layers exceeded both the server's write deadline and the client's budget.
+
+This is the Step 7 client-timeout lesson one level up. There, two numbers on opposite sides of one contract were a single decision. Here there were **three** sides, and the middle one was sizing itself off a number the first one was not honouring, which no test on either pair could catch.
+
+**Rule:** a number is a bound only if the code that computes it is the code that enforces it, in every phase it claims to cover. If you export one for a caller to size against, write the test that measures the real end-to-end duration against it, not the test that compares two constants.
+
+## A decorative assertion can hide inside the fix for a decorative assertion
+
+**Track D, seam D-3.** A review found that two of criterion 1's three tests passed with the post-dispatch evidence fence removed, and the fix was to add the missing `ConfirmedAt.After(DispatchedAt)` assertion to both. Re-running the mutation showed one of them **still** passed: the fake's own delay had advanced the simulated clock enough that the assertion held whether or not the fence existed. It only became load-bearing after the delay was set to zero.
+
+**Rule:** run the mutation again after fixing a test that failed to catch one. The fix is a claim of the same kind as the original test's name, and it has the same failure mode.
+
+## The thing you resolve on a transport event is resolved before the thing exists
+
+**Track D, seam D-1.** The Resolume adapter re-resolves object and parameter ids from a fresh composition read every time its WebSocket connects, because parameter ids are minted at composition load and 0 of 14 survive a restart. Correct, and it fires at the wrong moment: the socket is accepted about 1.5 seconds after Arena launches, and the composition takes about 4.9 seconds to load. Caught live on a real restart — the resolver held `layer_count 3, column_count 9, deck "empty"`, which is Arena's default empty composition, and ninety seconds later Arena held the real 18-layer show while the resolver still held every id of a composition that no longer existed. Nothing corrected it, because Arena does not drop the socket when loading finishes.
+
+The bench capture had already measured that window and the specification had already named it the sharpest hazard in the step. Both framed it as a rule about **acting**: no command may be dispatched on reachability alone. Nobody wrote the rule for **resolving**, and a resolver keyed to a transport event is the same defect with no command in sight.
+
+**Rule:** when a cache, index, or resolver refreshes on a connect, ask what the peer is doing 1.5 seconds after it accepts a socket. A transport being ready is not the subject being ready, and the gap between them is where a well-formed, fresh, wrong answer gets stored and kept. Converging on the truth later is a different guarantee from knowing you were wrong, and only one of them is worth claiming.
+
+## Your own reads can be the thing that breaks the device
+
+**Track D, seam D-1.** `GET /api/v1/composition` crashes Arena 7.23.2 — four `SIGSEGV`s with byte-identical faulting frames. The fourth was produced by `curl` alone with no ShowMesh process running, which is what turned "our adapter is unstable" into "this call crashes Arena." Controls mattered as much as the result: 7 minutes idle, 30 `/product` polls over 5 minutes, and a WebSocket held open for 5 minutes all survived, so the finding is about one endpoint rather than about reading Resolume.
+
+Two things generalize. **A crash in the target looks exactly like a defect in your own new code**, and the only way to tell is to reproduce it without your code in the picture. **And the read you cannot avoid is the one worth costing**: the same API offers no collection endpoints, so this call is the only way to enumerate anything, which turned a bandwidth question into a design constraint.
+
+**The controls are what decided the design, not the crash.** Targeted `by-id` reads survived 209,916 requests and 6.5 GB over ten minutes, with the layer probe alone moving more bytes than the run that crashed. So the hazard was one endpoint rather than the API, which is the difference between "bound how often we enumerate" and ADR-032's "never enumerate over the API at all, the id map is in a file on disk." Bounding the call was the first answer and it was wrong: two reads crashed Arena, so a bound left a segfault on the show's critical path.
+
+**Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation, then run the controls. "Reading it is dangerous" and "this one endpoint is dangerous" build very different systems, and only the controls tell you which one you are in.
+
+**The sequel, recorded 2026-08-15: the controls were still not wide enough.** Every crash occurred on the development laptop, while the playout machine ran the same composition for a month without incident. "Which host" sat in the capture's open-items list and got quoted away. A control that varies your code is not a control that varies the environment.
+
+## A single confirming observation proves the rule only for the case it sampled
+
+**Track D.** The bench capture tested whether a Resolume clip id resolves regardless of which deck is selected. One request, one clip, correct answer, written up as "**REST `by-id` is immune**" and used as a load-bearing property of the addressing model.
+
+It is false. Measured against the same installation: 30 of 30 selected-deck clip ids resolved, and **0 of 10 non-selected-deck ids did.** The one clip the capture happened to test was a `PersistentClip`, one of exactly four in that composition that live outside any deck and therefore resolve always. The test sampled the exception and generalised it into the rule.
+
+Two things make this worth keeping. The wrong conclusion **left a second mystery unexplained in the same document**: the capture also recorded, as an open item, that clip positions 1 and 2 returned identical ids on all three decks. That was the same four persistent clips seen from the other side. Both entries sat there for a day, each holding the other's answer.
+
+And the consequence was not cosmetic. A stored clip id for an unselected deck returns `404`, which the adapter specification's rule reads as "the composition changed underneath us", so an action would have reported a stale reference and marked the composition unidentified because the operator switched decks.
+
+**Rule:** when one observation establishes a general property, ask what class the sample belonged to before writing it down as a rule. Confirming that nothing varies with X requires a case that would have varied.
+
+**Rule:** when a device misbehaves while your new code is attached, reproduce it with `curl` before you believe either explanation. Then run the controls, because "reading it is dangerous" and "this one endpoint is dangerous" lead to very different systems.
+
 ## A test environment that differs from the deployment environment reports success on exactly that difference
 
 **Step 4.** The Operator UI's client invoked `fetch` as `this.fetchImpl(...)`, so its receiver was the client instance. A browser's `fetch` is a WebIDL operation on `Window` and answers any other receiver with `Illegal invocation`; Node's does not check. The app could not make a single request in Chrome while 99 unit tests passed — including the ones driving a real `node:http` server with real SSE bytes. Three reviews and a build of the shipped image did not find it. Loading the page did, immediately.
@@ -101,7 +157,7 @@ So Step 8 made the capture a deliverable, taken before any command was named. It
 
 None of these is discoverable by reading, and each would have shipped as a defect.
 
-**Rule:** capture the vocabulary from the system, then write the plan. Where a command's effect is not observable through a signal already collected, it does not ship, and the exclusion is recorded with its reason rather than omitted.
+**Rule:** capture the vocabulary from the system, then write the plan. Where a command's effect is not observable through a signal already collected, it does not ship as a confirmed command: it may ship reporting unconfirmable with a stated reason, or with an operator-supplied observation contract, as Step 9's external MQTT step does under BUILD-PLAN's recorded exemption. What may never ship is a step that reports success it did not verify, and the exclusion or exemption is recorded with its reason rather than omitted.
 
 ## A distinction the operator must see cannot be tested by asserting text
 
@@ -245,6 +301,8 @@ Since schema v4 the observations key includes `source`, so that list legitimatel
 ## Review is where the value has landed
 
 The build workflow delegates review to a separate pass with the diff plus the named ADRs, instructed to hunt for constraint violations rather than style. It has caught defects unit tests could not: broker health exposed as a bare boolean against ADR-011, a Compose `depends_on` that reintroduced the broker dependency [ADR-008](../decisions/ADR-008-mqtt-control-plane.md) forbids, and a discover-ping responder that replied to an ephemeral source port and so could never have worked.
+
+And running it is where more has landed since. Step 6's three unreachable features, Step 7's 179-microsecond confirmation, Step 8's `nextPlaylistItem`, and Step 9's endpoint-removed-mid-run were each found by exercising the assembled system, not by review or tests. Review is cheap insurance on a diff; integration finds what the diff was wrong about. When they compete for time, integrate.
 
 ## Configuration mechanisms do what they do, not what you meant
 

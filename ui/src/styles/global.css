@@ -218,6 +218,18 @@ input {
   font-weight: 700;
 }
 
+/* ResolumeCompositionUpload.tsx: a 401/403 is a successful conversation
+   with a healthy coordinator (CLAUDE.md's standing rule, ADR-024 decision
+   7), never the same fact as a transport failure or a coordinator-side
+   error — .panel--error's red is reserved for the latter. This reuses the
+   warn (not bad) status tokens so a permissions state reads as distinct
+   at a glance, not merely in its text. */
+.panel--warning {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  border-color: var(--status-warn-fg);
+}
+
 .panel--error {
   background: var(--status-bad-bg);
   color: var(--status-bad-fg);

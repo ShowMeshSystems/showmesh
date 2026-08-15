@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md) · [Spike procedure](../bench/TRACK-B-NDI-SPIKE.md) · [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md)
 
-Status: B1 complete (2026-08-14, merged to `main` at `fa5107e`). B0 (the transport spike) has not run and remains the owner's bench work; B2 is not unblocked until it does. Specified 2026-08-13.
+Status: B1 complete (2026-08-14, merged to `main` at `fa5107e`). B0 (the transport spike) has not run and remains the owner's bench work; it gates B4 (NDI output), whose design its answer changes, not B2 (pipeline supervision) or B3 (the surface model and FSEQ extraction), which can and should be assembled against the real path now. Specified 2026-08-13.
 
 ## Goal
 

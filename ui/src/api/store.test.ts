@@ -2588,6 +2588,117 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
+// Track D seam D-2a (ADR-032): getResolumeComposition is a plain
+// ApiClient.getJson pass-through, same as getFPPEndpointsConfig above, so
+// it is proven the same way. uploadResolumeComposition is NOT — it
+// bypasses ApiClient entirely for XMLHttpRequest's real upload progress
+// (resolumeCompositionUpload.ts's own header comment) — this ApiStore
+// method's own job is only wiring `this.baseUrl` through correctly, since
+// resolumeCompositionUpload.test.ts already proves uploadFileWithProgress
+// itself sends real multipart bytes and classifies every response. The
+// upload test below needs `Access-Control-*` response headers for the
+// identical reason resolumeCompositionUpload.test.ts's own corsServer
+// does: this store's `getJson` goes through `fetch`, which node's
+// implementation does not CORS-gate (client.test.ts/store.test.ts's
+// existing pattern never needed this), but uploadResolumeComposition goes
+// through jsdom's real, CORS-enforcing XMLHttpRequest.
+describe('Resolume composition (Track D seam D-2a, ADR-032)', () => {
+  const compositionSummary = {
+    name: 'Christmas 25',
+    sourceFilename: 'Christmas 25.avc',
+    contentHash: 'sha256:abc',
+    sizeBytes: 1024,
+    writtenBy: { product: 'Arena', major: 7, minor: 23, micro: 2, revision: 0 },
+    canvas: { width: 1920, height: 1080 },
+    decks: [],
+    layerCount: 0,
+    layerGroupCount: 0,
+    columnCount: 0,
+    clipCount: 0,
+    persistentClipCount: 0,
+  }
+
+  it('getResolumeComposition() GETs the stored composition and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: '2026-08-14T00:00:00Z',
+        revision: 3,
+        activatedAt: '2026-08-14T00:00:00Z',
+        composition: compositionSummary,
+        decks: [],
+        layerGroups: [],
+        layers: [],
+        columns: [],
+        clips: [],
+        persistentClips: [],
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getResolumeComposition()
+
+    expect(gotPath).toBe('/config/resolume/composition')
+    expect(resp.composition.name).toBe('Christmas 25')
+    expect(resp.revision).toBe(3)
+  })
+
+  it('getResolumeComposition() rejects with a typed error on 404 (nothing uploaded yet)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 404, makeProblem({
+        type: 'https://showmesh.dev/problems/resource-not-found', status: 404,
+        detail: 'no Resolume composition has been uploaded yet; upload a composition file to create one',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.getResolumeComposition()).rejects.toMatchObject({ status: 404 })
+  })
+
+  it("uploadResolumeComposition() POSTs the file via this store's own baseUrl and returns the new revision", async () => {
+    let gotPath = ''
+    let gotBody = ''
+    const s = await startTestServer((req, res) => {
+      const origin = req.headers.origin ?? '*'
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Credentials', 'true')
+      res.setHeader('Access-Control-Expose-Headers', 'ShowMesh-API-Version, Retry-After')
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'Access-Control-Allow-Headers': 'Content-Type, ShowMesh-API-Version, Authorization',
+          'Access-Control-Allow-Methods': 'POST',
+        })
+        res.end()
+        return
+      }
+      gotPath = req.url ?? ''
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        gotBody = Buffer.concat(chunks).toString('latin1')
+        respondJson(res, 200, {
+          serverTime: '2026-08-14T01:00:00Z',
+          revision: 4,
+          activatedAt: '2026-08-14T01:00:00Z',
+          composition: compositionSummary,
+        })
+      })
+    })
+    openedServers.push(s)
+    const store = makeStore(s.baseUrl)
+    const progressCalls: { loaded: number; total: number | null }[] = []
+
+    const file = new File(['<Composition/>'], 'Christmas 25.avc', { type: 'application/octet-stream' })
+    const resp = await store.uploadResolumeComposition(file, (p) => progressCalls.push(p))
+
+    expect(gotPath).toBe('/config/resolume/composition')
+    expect(gotBody).toContain('name="file"')
+    expect(gotBody).toContain('Christmas 25.avc')
+    expect(resp.revision).toBe(4)
+  })
+})
+
 // CLAUDE.md DEFECT 2: before this block, runDiscovery/declareNode/
 // deleteNodeDeclaration had NO test asserting the actual HTTP method,
 // path, or request body — every one of the 331 tests already passing

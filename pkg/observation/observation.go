@@ -67,6 +67,11 @@ const (
 	ResourceNode        ResourceKind = "node"
 	ResourceFPP         ResourceKind = "fpp"
 	ResourceCoordinator ResourceKind = "coordinator"
+
+	// ResourceResolume identifies one Resolume Arena instance — a
+	// controlled device (ADR-016), not a ShowMesh node: no agent, no
+	// advertisement, no LWT. See internal/coordinator/collector/resolume.
+	ResourceResolume ResourceKind = "resolume"
 )
 
 // ResourceRef identifies the subject of an observation.

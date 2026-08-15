@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Composition name="Composition" uniqueId="1000000000098" numDecks="1" numLayers="1" numColumns="1">
+  <versionInfo name="Resolume Arena" majorVersion="7" minorVersion="23" microVersion="2" revision="51094"/>
+  <CompositionInfo name="Broken Show" description="" width="1920" height="1080">
+    <DeckInfo name="Deck One" id="2000000000901" closed="0"/>
+  </CompositionInfo>
+  <Layer name="Layer" uniqueId="3000000000901" layerIndex="0"/>
+  <Deck name="Deck" uniqueId="2000000000901" closed="0" numLayersWithContent="1" numColumnsWithContent="1" numLayers="1" numColumns="1" deckIndex="0">
+    <Column uniqueId="5000000000901" columnIndex="0"/>
+    <Clip name="Clip" uniqueId="6000000000901" layerIndex="not-a-number" columnIndex="0">
+      <PreloadData>
+        <VideoFile value="/media/example/broken.mov"/>
+      </PreloadData>
+      <Params name="Params">
+        <Param name="Name" T="STRING" default="Broken Clip" value="Broken Clip"/>
+        <ParamChoice name="TransportType" default="0" value="0" storeChoices="0"/>
+      </Params>
+    </Clip>
+  </Deck>
+</Composition>

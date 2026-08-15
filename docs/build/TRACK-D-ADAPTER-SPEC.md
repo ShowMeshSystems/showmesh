@@ -192,9 +192,20 @@ Measured across a restart: **object ids 14/14 identical, parameter ids 0/14
 identical.** Parameter ids are minted at composition load.
 
 So parameter ids live only in memory, only for the lifetime of one WebSocket
-connection, and are re-resolved from a fresh composition read every time the
-connection is established. A parameter id must not appear in SQLite, in a config
-revision, in an export bundle, or in an API payload.
+connection, and are re-resolved every time the connection is established. A
+parameter id must not appear in SQLite, in a config revision, in an export bundle,
+or in an API payload.
+
+**Corrected 2026-08-14 by [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md)
+decision 2.** This section previously said parameter ids are re-resolved "from a
+fresh composition read". That call is now forbidden on every runtime path without
+exception, so re-resolution is by `by-id` reads of the objects the stored id map
+already names. Nothing about the rule itself changes — the ids still die on every
+restart and still may never be persisted — only where their replacements come
+from. The cost is stated rather than hidden: a by-id re-resolve reads only the
+objects ShowMesh tracks, so a parameter on an object outside the stored map has no
+id and is not subscribable, which §11's "which clips does ShowMesh track?" now
+also decides.
 
 **A subscription to a dead parameter id does not error. It goes quiet.** Nothing
 distinguishes it from a parameter that has not changed, which is precisely the
@@ -305,7 +316,8 @@ safe once the first two are real.
 
 | Seam | Contents |
 |---|---|
-| **D-1** | The Resolume REST client, the WebSocket change signal, the object-id resolver, and the reachability observation. No composition semantics. |
+| **D-1** | The Resolume REST client, the WebSocket change signal, the object-id resolver, and the reachability observation. No composition semantics. **Built 2026-08-14 — see §4.1.** |
+| **D-2a** | **Added 2026-08-14 by [ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md).** The composition-file parser, the stored id map, the upload API, `showmeshctl` coverage, and the Operator UI upload control. **This is where the id map comes from now** — see §4.2. |
 | **D-2** | Observations (§5), including layer readiness (§3.7) and composition identity (§3.8), on the dashboard with provenance and freshness. |
 | **D-3** | The action vocabulary (§6) with confirmation (§3.4, §3.5). |
 | **D-4** | `showmeshctl` coverage and the Operator UI controls. |
@@ -315,6 +327,74 @@ Placement follows the existing shape: the collector goes in
 source-neutral interface; observations use `pkg/observation` unchanged. **Nothing
 new is invented at the observation layer** — if Resolume needs a concept
 `pkg/observation` does not have, that is a finding to report before building it.
+
+### 4.1 What D-1 shipped, and the two things running it changed
+
+Built 2026-08-14 and verified against the operator's running Arena 7.23.2 rather
+than against the test suite. `internal/coordinator/collector/resolume` holds the
+REST client, the WebSocket watcher, the object-id resolver and its lifetime owner,
+and a collector emitting exactly two signals: `resolume.reachable` and
+`resolume.product`. Everything else in §5 is D-2 and was deliberately not built.
+
+One addition to `pkg/observation`, reported before building it as this section
+requires: a `ResourceResolume` kind. That is a value in an existing closed
+vocabulary, not a new concept, and no State, Quality or Health member was added.
+
+**Two things the build changed in this specification, both found by running it.**
+
+**A one-shot resolve on a transport event lands inside §7.2's load window and
+stays there.** Measured live: an Arena restart, the WebSocket accepted at t≈1.5 s,
+and the resolver held `layer_count 3, column_count 9, deck "empty"` — Arena's
+default empty composition, exactly what §7.2 predicts. Ninety seconds later Arena
+held the real show and the resolver still held every object id and parameter id of
+a composition that no longer existed. §7.2 warned that no *action* may be
+dispatched on reachability alone; it did not say what the *resolver* does, and the
+answer is that a resolve triggered by a transport event fires before the
+composition exists. D-1 therefore re-resolves on change within a bounded window
+after each connect, which makes the resolver **converge**. It does not make it
+*know* it was wrong — that is §3.8, and it is still D-2.
+
+**`GET /composition` crashes Arena 7.23.2**, seven times, one of them from `curl`
+with no ShowMesh process running. `/product` polling and holding a WebSocket were
+each exercised as controls and were fine. Recorded in full in the capture's §14,
+including what is not established. Since §2.3 leaves the full composition read as
+the only way to enumerate anything, this reshaped the track rather than merely
+bounding it. See §4.2.
+
+### 4.2 The id map comes from the composition file, not the API (ADR-032)
+
+**Decided by the owner 2026-08-14 and recorded as
+[ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md).**
+Seam D-1 bounded `/composition` to a connect plus a 120-second window. **That was
+the wrong answer**: two reads crashed Arena, so a bound leaves a segfault on the
+day-0 critical path for one of the three founding problems.
+
+What decided the fix was the control. **Targeted `by-id` reads are safe** —
+209,916 requests and 6.5 GB over ten minutes with no crash, the layer probe alone
+moving more bytes than the run that crashed. So the hazard is one endpoint, not
+the API, and the only thing `/composition` was ever needed for is discovering the
+id map.
+
+That map is in the `.avc` file, which is plain XML holding every clip, layer,
+group, column and deck id with names, positions, source media paths and
+`TransportType`. Verified against the live Arena by id alone: 18/18 layer ids and
+30/30 non-empty selected-deck clip ids resolve. So:
+
+- the operator uploads a composition file, ShowMesh parses it, and the id map is
+  stored as configuration with the ordinary revision and audit semantics;
+- **no runtime path calls `GET /composition` at all**, and D-1's convergence
+  window is removed rather than tuned;
+- live state is read `by-id`, and `/product` remains the reachability probe;
+- §3.8's composition identity check becomes cheap: resolve a sample of the stored
+  clip ids.
+
+**Two clauses of this specification are narrowed by ADR-032 and must be read
+through it.** §3.3 and §6.4 both treat a `404` on a stored id as a stale reference
+announcing itself. Measured: **a clip id resolves only while its own deck is
+selected**, 30/30 against 0/10, so a `404` can equally mean the operator switched
+decks. Every stored clip reference carries its deck, and that case reports a deck
+mismatch naming the deck, never a stale reference and never an identity failure.
+Layer ids are genuinely deck-independent and §3.3 stands for them unchanged.
 
 ## 5. Observations
 
@@ -391,12 +471,53 @@ It returns **204 and does nothing**. It is mouse-up, not disconnect. Measured. T
 disconnect operations are `clear` and `disconnect-all`, and they are the only ones
 in §6.
 
-### 6.4 A `404` on a stored id is a composition change, not a failed command
+### 6.4 A `404` on a stored id is a composition change *or a deck mismatch*, and the two are different outcomes
 
-It aborts the action as `failed` with the reason stated as a stale reference, and
-it triggers a fresh full composition read to re-resolve everything (§3.6), and it
-sets `resolume.composition.identified` to false. It does **not** retry, and it does
-**not** fall back to a positional path.
+**Rewritten 2026-08-14. The previous version of this section was wrong twice**, and
+both errors were the kind that reads as obviously correct: it treated every `404`
+as a stale reference, and it prescribed a remedy —
+"triggers a fresh full composition read" — that
+[ADR-032](../decisions/ADR-032-resolume-composition-configuration-from-file.md)
+decision 2 now forbids on every runtime path. A rule whose remedy is the call
+measured to crash Arena in two requests is worse than no rule.
+
+A `404` is never a retry and is never a fallback to a positional path. Beyond
+that, what it means depends on what was addressed.
+
+**A layer, column, group or deck id.** Layer ids are deck-independent (§16.1 of
+the capture, 18/18 regardless of selection), so a `404` here is a genuine stale
+reference. The action aborts as `failed` with the reason stated as a stale
+reference, and `resolume.composition.identified` goes to false. Re-resolution
+requires a fresh composition **upload**, which is an operator action, not
+something the adapter can perform for itself. That is the accepted cost of
+ADR-032, and the observation must say so rather than leaving the operator to infer
+that ShowMesh will fix it.
+
+**A clip id.** Measured: **a clip id resolves only while its own deck is
+selected**, 30/30 selected against 0/10 non-selected, all 404. So a `404` on a
+clip cannot distinguish "this clip was replaced" from "this clip's deck is not
+showing", and the naive reading manufactures an identity failure out of an
+operator pressing a deck button.
+
+Every stored clip reference carries its deck (ADR-032 decision 6), so the adapter
+can tell them apart before it guesses:
+
+- the clip's deck is **not** the selected deck → outcome is a **deck mismatch,
+  naming the expected deck and the selected one**. Never a stale reference, never
+  an identity failure, and `resolume.composition.identified` is **not** touched.
+  Whether the adapter may select the deck itself is `selectDeck`'s decision and a
+  macro author's, never an implicit side effect of another action.
+- the clip's deck **is** the selected deck → a genuine stale reference, handled as
+  the layer case above.
+- the clip is a **`PersistentClip`** → it lives outside any deck and resolves
+  regardless of selection, so a `404` is a genuine stale reference with no deck
+  term to consider.
+
+**The deck reading is itself evidence and is fenced like any other.** `selected`
+is read from state that can be stale, so the adapter states which reading it
+decided on and when. Deciding "deck mismatch" off a pre-dispatch reading of
+`selected` that the operator has since changed is Step 7's confirmation defect
+wearing a third disguise.
 
 ## 7. Two behaviours that must be built for, not discovered
 
@@ -496,9 +617,16 @@ suite. Track D's own criteria are marked with which are in scope here.
    deadline is derived and not constant.
 5. **Arena is restarted while the adapter is connected**, and the adapter neither
    reports the show as present during the load window nor dispatches an action into
-   it. It re-resolves parameter ids and resumes without a coordinator restart.
+   it. It re-resolves parameter ids by id, from the stored map, and resumes without
+   a coordinator restart — and without a single `GET /composition` (§3.6, ADR-032
+   decision 2).
 6. **A stored clip id that no longer exists produces a stated stale reference**, not
-   a retry and not a positional fallback.
+   a retry and not a positional fallback. **Its paired negative criterion is the one
+   that matters**: a stored clip id belonging to a deck that is not selected
+   produces a **deck mismatch naming both decks**, leaves
+   `resolume.composition.identified` untouched, and does not select the deck for
+   itself (§6.4). The two cases are demonstrated against the same running Arena,
+   because a build that only demonstrates the first cannot tell them apart.
 7. Resolume state appears in the Operator UI with provenance and freshness, and
    `showmeshctl` can drive every §6 action, per
    [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md).

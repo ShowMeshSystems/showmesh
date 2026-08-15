@@ -62,6 +62,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRun(rest, stdout, stderr, clock)
 	case "action":
 		return cmdAction(rest, stdout, stderr, clock)
+	case "resolume":
+		return cmdResolume(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -129,6 +131,16 @@ Commands:
   run list [--macro <id>] [--state]   list macro runs, most recent first
   action list                         enumerate show.action objects
   action show <id>                    show one action's full definition
+  resolume composition upload <path>   parse and store a Resolume composition file (write)
+  resolume composition show            show the stored composition (requires config:write)
+  resolume action list                 show the Resolume action vocabulary this coordinator supports
+  resolume action launch-clip <id>            launch (connect) a clip and confirm by evidence (write)
+  resolume action clear-layer <id>            clear (disconnect) a layer and confirm by evidence (write)
+  resolume action launch-column <id>          launch (connect) a column and confirm by evidence (write)
+  resolume action select-deck <id>            select a deck and confirm by evidence (write)
+  resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
+  resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
+  resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
@@ -219,7 +231,7 @@ Exit codes:
      least one produced no confirming evidence (an MQTT step that
      declares no expected response reports this on every correct run, by
      design). Never conflated with exit 6, which means the request itself
-     failed; distinct from exit 12 below, which is a run that did NOT
+     failed; distinct from exit 15 below, which is a run that did NOT
      complete
   10 conflict (409: the request was valid, but this coordinator's current
      state makes it unsafe or meaningless to act on right now — a
@@ -230,7 +242,22 @@ Exit codes:
      same macro already has a run in flight; see stderr for the specific
      reason and remedy. Distinct from exit 6: the coordinator is healthy
      and answered correctly, it declined on purpose)
-  11 still watching (Step 9: "macro run --follow"/"run show --follow"
+  11 action unconfirmable (a "resolume action <verb>" subcommand only:
+     the action was dispatched, but its own effect could not be told
+     apart from its state before dispatch, so the coordinator cannot say
+     whether it did anything — never conflated with exit 0, which means
+     the effect WAS observed, or exit 9, which means a deadline expired
+     with no evidence either way)
+  12 action failed (a "resolume action <verb>" subcommand only: dispatch
+     was attempted and the attempt itself failed — distinct from exit 6,
+     which means this program's own request to the coordinator failed;
+     here the coordinator answered normally and reported, honestly, that
+     its own attempt to reach Resolume did not work)
+  13 action refused (a "resolume action <verb>" subcommand only: the
+     coordinator answered "refused" — no HTTP request ever reached
+     Resolume, see stderr for why. Distinct from exit 10: this is not an
+     idempotency-key conflict, and minting a fresh key will not help)
+  14 still watching (Step 9: "macro run --follow"/"run show --follow"
      stopped watching because its --idle-timeout elapsed with no run
      update at all — never because a total duration was exceeded. This is
      NOT a reported failure: the request itself succeeded and the run may
@@ -238,9 +265,9 @@ Exit codes:
      "showmeshctl run show <runId>". It is still a NON-ZERO exit, though:
      a shell "&&" chain, or a script running under "set -e", treats this
      exactly like any other failure and stops there — a caller that wants
-     to keep going after "still watching" must check for 11 explicitly
+     to keep going after "still watching" must check for 14 explicitly
      rather than relying on "&&"/"set -e" alone)
-  12 macro run aborted (Step 9: a macro run reached its terminal state
+  15 macro run aborted (Step 9: a macro run reached its terminal state
      with completed=false — a step failed and the remainder was not
      dispatched, or a step's target was removed mid-run; see stderr/the
      run's own "reason" for which step and why. Distinct from exit 9,

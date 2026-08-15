@@ -192,7 +192,7 @@ func cmdMacroRun(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "never a total one: it keeps watching for as long as the run keeps")
 		_, _ = fmt.Fprintln(stderr, "answering, however many minutes that takes, and only stops watching after")
 		_, _ = fmt.Fprintln(stderr, "--idle-timeout passes with no update at all. On an idle timeout this exits")
-		_, _ = fmt.Fprintln(stderr, "cleanly (exit 11) stating the run may still be in progress — never as a")
+		_, _ = fmt.Fprintln(stderr, "cleanly (exit 14) stating the run may still be in progress — never as a")
 		_, _ = fmt.Fprintln(stderr, "reported failure, because it is not one.")
 		fs.PrintDefaults()
 	}

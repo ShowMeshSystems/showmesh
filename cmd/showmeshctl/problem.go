@@ -3,10 +3,9 @@ package main
 import "fmt"
 
 // problem is an RFC 9457 application/problem+json document, per contract
-// §6.6. showmeshctl reads title and detail from this, not from the status
-// code alone: the status code alone cannot distinguish "unsupported API
-// version" from "invalid parameter" from "resource not found", and the
-// problem document exists specifically so a client does not have to guess.
+// §6.6: the status code alone cannot distinguish "unsupported API version"
+// from "invalid parameter" from "resource not found", so this CLI reads
+// Title/Detail rather than guessing from Status alone.
 type problem struct {
 	Type              string `json:"type"`
 	Title             string `json:"title"`
@@ -15,93 +14,50 @@ type problem struct {
 	SupportedVersions []int  `json:"supportedVersions,omitempty"`
 }
 
-// Problem type URIs named in contract §6.6. Matched by exact string, not by
-// path suffix: the contract pins these as the stable identifier of the
-// error class, and matching on anything looser would let a coordinator's
-// unrelated 404 (a typo'd path, a proxy's own error page) get misread as
-// "resource not found" when it isn't RFC 9457 at all.
+// Problem type URIs named in contract §6.6, matched by exact string, not
+// path suffix: a coordinator's unrelated 404 (a typo'd path, a proxy's own
+// error page) must never be misread as one of these classes.
 const (
 	problemUnsupportedAPIVersion = "https://showmesh.dev/problems/unsupported-api-version"
 	problemResourceNotFound      = "https://showmesh.dev/problems/resource-not-found"
 	problemInvalidParameter      = "https://showmesh.dev/problems/invalid-parameter"
 	problemUnauthorized          = "https://showmesh.dev/problems/unauthorized"
 
-	// The four ADR-024 additions (internal/coordinator/api/problem.go's
-	// exact same four constants; matched by exact string, not by path
-	// suffix, for the same "do not misread an unrelated 404" reason the
-	// original four are).
-
-	// problemForbidden is decision 4's 403: authenticated, but missing a
-	// scope. Distinct from problemUnauthorized (401, no valid credential
-	// at all) so this CLI can send an operator to "ask for a scope" rather
-	// than "check your token" — see exitForbidden and decodeProblemError.
+	// problemForbidden: authenticated, but missing a scope. Distinct from
+	// problemUnauthorized (no valid credential at all) so this CLI can
+	// send an operator to "ask for a scope" rather than "check your token".
 	problemForbidden = "https://showmesh.dev/problems/forbidden"
-	// problemCSRFRejected is decision 6's same-origin rule for a
-	// cookie-authenticated write. showmeshctl never presents a cookie
-	// (see cmd_session.go's doc comment), so this CLI cannot itself
-	// trigger it, but it is still classified explicitly rather than
-	// falling through to a generic 403 handler, in case a future command
-	// ever does add cookie support.
+	// problemCSRFRejected: the same-origin rule for a cookie-authenticated
+	// write. showmeshctl never presents a cookie, so this cannot trigger
+	// it today, but is classified explicitly rather than left to a
+	// generic 403 handler in case a future command adds cookie support.
 	problemCSRFRejected = "https://showmesh.dev/problems/csrf-rejected"
-	// problemTooManyRequests is decision 8's login concurrency-bound
-	// rejection, carrying a Retry-After response header this client
-	// surfaces explicitly (decodeProblemError) rather than leaving an
-	// operator to guess how long to wait.
+	// problemTooManyRequests: the login concurrency bound was exceeded;
+	// its Retry-After header is surfaced explicitly rather than left for
+	// the operator to guess.
 	problemTooManyRequests = "https://showmesh.dev/problems/too-many-requests"
-	// problemCredentialInURL is decision 1's URL rule: a request whose
-	// query string carried the token prefix. showmeshctl never puts a
-	// token in a query string (see client.go's applyHeaders, the only
-	// place this program ever attaches a credential), so this should be
-	// unreachable in practice; classified anyway so a defect that ever
-	// did put one there is reported as a usage bug in this CLI rather than
-	// an opaque server error.
+	// problemCredentialInURL: a request whose query string carried the
+	// token prefix. showmeshctl never does this itself (see client.go's
+	// applyHeaders), but is classified anyway so a defect that does is
+	// reported as a usage bug in this CLI, not an opaque server error.
 	problemCredentialInURL = "https://showmesh.dev/problems/credential-in-url"
 
-	// problemConflict is Step 8's own addition: internal/coordinator/api's
-	// ProblemTypeConflict, a 409 meaning "the request itself is valid, but
-	// this coordinator's current state makes it unsafe or meaningless to
-	// act on right now" — every "fpp start-playlist" ifBusy=refuse guard
-	// where a DIFFERENT playlist is confirmed playing, and a replayed
-	// idempotency key reused against a different action/target/params,
-	// share this one type (internal/coordinator/api/problem.go's own
-	// comment on fppEndpointsEnvVarSetProblem: "all three [now several]
-	// are the identical RFC 9457 shape... detail is what tells them
-	// apart"). Step 8 review defect: this had no case below and fell to
-	// exitAPIError (6, "the coordinator returned some other error"),
-	// which a script cannot distinguish from an actual coordinator
-	// malfunction — see exitConflict.
+	// problemConflict: the request is valid, but this coordinator's
+	// current state makes it unsafe or meaningless to act on right now —
+	// a different playlist confirmed playing under ifBusy=refuse, or a
+	// replayed idempotency key reused against different action/target/params.
 	problemConflict = "https://showmesh.dev/problems/conflict"
 
-	// problemFPPStartPlaylistEvidenceNotCurrent is a task-2b addition to
-	// internal/coordinator/api/problem.go: "fpp start-playlist" ifBusy
-	// =refuse's OTHER 409 — the coordinator could not tell what is
-	// playing, rather than confirming a DIFFERENT playlist is playing —
-	// used to share [problemConflict]'s own type, distinguishable only by
-	// an Operator UI matching a substring of `detail` (this program never
-	// did that; it always just prints `detail` verbatim). Mapped to the
-	// SAME [exitConflict] as [problemConflict]: both name a deliberate
-	// refusal an operator can retry, and main.go's own --help text for
-	// exit 10 already covers "the evidence needed to decide that is not
-	// current" as one of conflict's causes, so this needs no new exit
-	// code, only an explicit case below rather than falling through to
-	// the (also-correct, but implicit) 409 status fallback.
+	// problemFPPStartPlaylistEvidenceNotCurrent: "fpp start-playlist"
+	// ifBusy=refuse's OTHER 409 — the coordinator could not tell what is
+	// playing, rather than confirming a different playlist is. Shares
+	// exitConflict with problemConflict: both are a deliberate, retryable
+	// refusal, with the specific remedy in stderr.
 	problemFPPStartPlaylistEvidenceNotCurrent = "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current"
 
-	// problemFPPStartPlaylistBusy is Step 8 review finding 8's "finish the
-	// split" fix: fppStartPlaylistBusyProblem ("fpp start-playlist"
-	// ifBusy=refuse's guard refusing because a DIFFERENT playlist IS
-	// confirmed playing) used to share [problemConflict]'s own type too —
-	// the split that gave [problemFPPStartPlaylistEvidenceNotCurrent] its
-	// own type left this sibling case behind, still indistinguishable from
-	// an idempotency-key conflict except by `detail` prose (this program
-	// never parses that; an Operator UI reviewing findings did). Mapped to
-	// the SAME [exitConflict] for the identical reason
-	// problemFPPStartPlaylistEvidenceNotCurrent is: this CLI prints
-	// `detail` verbatim rather than branching UI-style on the remedy, so
-	// one exit code covers every "deliberate, retryable refusal" 409 —
-	// this constant and case exist so the mapping is explicit rather than
-	// silently relying on the (also-correct) 409 status fallback, matching
-	// this file's own established pattern for every 409 type above.
+	// problemFPPStartPlaylistBusy: the sibling case — a DIFFERENT
+	// playlist IS confirmed playing under ifBusy=refuse. Same exitConflict
+	// mapping, for the same reason.
 	problemFPPStartPlaylistBusy = "https://showmesh.dev/problems/fpp-start-playlist-busy"
 
 	// The three Step 9 additions below are internal/coordinator/macro/problems.go's
@@ -131,17 +87,13 @@ const (
 	problemMacroRunIdempotencyRevisionConflict = "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict"
 )
 
-// Exit codes. Documented in --help (see usage.go) so a script wrapping this
-// tool can branch on $? instead of scraping stderr, per task spec §3
-// ("Exit codes are meaningful").
+// Exit codes, documented in --help (usage.go) so a script wrapping this
+// tool can branch on $? instead of scraping stderr.
 //
-// exitForbidden and exitRateLimited are ADR-024 additions, deliberately
-// distinct from exitUnauthorized: conflating "no valid credential" (401),
-// "authenticated but missing a scope" (403), and "rate limited, retry
-// later" (429) into one exit code would send an operator's retry script or
-// runbook to the wrong branch — the task's own framing for why this
-// distinction matters ("conflating them sends an operator to the wrong
-// place").
+// exitForbidden and exitRateLimited are deliberately distinct from
+// exitUnauthorized: conflating "no valid credential" (401), "missing a
+// scope" (403), and "rate limited" (429) into one code would send a retry
+// script to the wrong branch.
 const (
 	exitOK                  = 0
 	exitUsage               = 1
@@ -153,60 +105,72 @@ const (
 	exitForbidden           = 7
 	exitRateLimited         = 8
 
-	// exitCommandUnconfirmed is Step 7 seam C's own addition: "fpp
-	// stop-playlist" completed a full, successful HTTP round trip (the
-	// coordinator answered 200 with a real command result), but that
-	// result's own outcome was "unconfirmed" — ADR-003, ADR-020: a `200`
-	// is never conflated with the command actually having taken effect.
-	// Distinct from exitAPIError (6, the coordinator itself failed or
-	// returned something this program could not even parse): a script
-	// checking $? needs to tell "the request failed" apart from "the
-	// request succeeded and told you, honestly, that the command's effect
-	// was not confirmed."
+	// exitCommandUnconfirmed: an "fpp <verb>" write subcommand completed a
+	// successful HTTP round trip, but its own result was "unconfirmed" —
+	// ADR-003: a 200 is never conflated with the command having taken
+	// effect. Distinct from exitAPIError (6): that means the REQUEST
+	// itself failed; this means it succeeded and said so honestly.
 	exitCommandUnconfirmed = 9
 
-	// exitConflict is Step 8's own addition: a 409 carrying
-	// [problemConflict] — a deliberate refusal because this coordinator's
-	// current state makes the request unsafe or meaningless right now (a
-	// different playlist is playing and ifBusy=refuse, the evidence
-	// needed to evaluate that guard is not current, or an idempotency key
-	// was reused against a different action/target/params). Before this
-	// exit code existed, exitCodeForProblem had no case for it and no 409
-	// in its status fallback, so it fell to exitAPIError (6) — "the
-	// coordinator returned some other error" — which a script cannot
-	// distinguish from an actual coordinator malfunction. This is a
-	// DIFFERENT fact: the coordinator is healthy and answered correctly,
-	// and the operator's own remedy is in stderr (e.g. "retry with
-	// --if-busy=replace").
+	// exitConflict: a 409 — this coordinator's current state makes the
+	// request unsafe or meaningless right now (a different playlist
+	// playing under ifBusy=refuse, stale evidence, or a replayed
+	// idempotency key against different params). Distinct from
+	// exitAPIError: the coordinator is healthy and declined on purpose,
+	// with its own remedy in stderr.
 	exitConflict = 10
 
-	// exitFollowStillWatching is Step 9's own addition: "macro run --follow"
-	// and "run show --follow" stopped watching because the idle window
-	// elapsed with no run event and no successful poll — never because a
-	// total duration was exceeded (STEP-9-SPEC.md section 9: "a total
-	// timeout is forbidden: it reintroduces exactly the client/server
-	// timeout inversion Step 7 shipped as a defect"). This is a clean,
-	// non-error exit distinct from every code above: the request itself
-	// never failed, and the run itself may well still be in progress or
-	// may already have finished — this program genuinely does not know,
-	// and says so rather than guessing either way. A script can tell "I
-	// stopped watching" (this code) apart from "the run is done" (exitOK
-	// or exitCommandUnconfirmed or exitMacroRunAborted below, all only
-	// ever returned once a run has actually reached a terminal state).
-	exitFollowStillWatching = 11
+	// exitActionUnconfirmable: a "resolume action <verb>" subcommand
+	// dispatched successfully, but its effect could not be told apart
+	// from its pre-dispatch state (ADR-029: unconfirmable, never success).
+	// Distinct from exitCommandUnconfirmed (a deadline expired with no
+	// evidence either way) and from exitOK (this is deliberately not
+	// treated as success).
+	exitActionUnconfirmable = 11
 
-	// exitMacroRunAborted is Step 9's own addition: a macro run reached its
-	// terminal state with completed=false (STEP-9-SPEC.md section 2.3) —
-	// a step failed and the remainder was not dispatched, or a step's
-	// target evaporated mid-run (section 5.6). Distinct from
-	// exitCommandUnconfirmed (9), which this program still uses for
-	// completed=true, confirmed=false (STEP-9-SPEC.md section 2.3's OTHER
-	// combination: every step dispatched and none aborted, but at least
-	// one produced no confirming evidence) — conflating the two would lose
-	// exactly the distinction section 2.3 says the UI (and, by the same
-	// argument, this CLI) must keep legible: "a run that completed without
-	// confirmation must not render the same as" a run that aborted.
-	exitMacroRunAborted = 12
+	// exitActionFailed: a "resolume action <verb>" subcommand dispatched,
+	// and the attempt itself failed (a transport error to Resolume, or an
+	// unexpected response). Distinct from exitAPIError: the coordinator
+	// answered normally and reported that ITS OWN attempt failed.
+	exitActionFailed = 12
+
+	// exitActionRefused: a "resolume action <verb>" subcommand answered
+	// "refused" — a 200 whose body says no request ever reached Resolume
+	// (e.g. a clip's deck was not selected, or identity was not
+	// confirmed). Distinct from exitConflict: not an idempotency-key
+	// conflict, so a fresh key will not help; the remedy is in stderr.
+	exitActionRefused = 13
+
+	// exitFollowStillWatching: "macro run --follow" and "run show --follow"
+	// stopped watching because the idle window elapsed with no run event
+	// and no successful poll — never because a total duration was exceeded
+	// (STEP-9-SPEC.md section 9: "a total timeout is forbidden: it
+	// reintroduces exactly the client/server timeout inversion Step 7
+	// shipped as a defect"). The request itself never failed, and the run
+	// may still be in progress or may already have finished; this program
+	// does not know and says so rather than guessing. A script can tell "I
+	// stopped watching" (this code) apart from "the run is done" (exitOK,
+	// exitCommandUnconfirmed, or exitMacroRunAborted below, all only ever
+	// returned once a run has reached a terminal state).
+	//
+	// Numbered 14 rather than 11: this and exitMacroRunAborted were issued
+	// as 11 and 12 on the step-9-wave-3 branch while the three action codes
+	// above were issued with the same numbers on main. Renumbered here on
+	// the merge, 2026-08-15. Nothing outside this repository had consumed
+	// either set: origin/main topped out at exit 10.
+	exitFollowStillWatching = 14
+
+	// exitMacroRunAborted: a macro run reached its terminal state with
+	// completed=false (STEP-9-SPEC.md section 2.3) — a step failed and the
+	// remainder was not dispatched, or a step's target evaporated mid-run
+	// (section 5.6). Distinct from exitCommandUnconfirmed (9), which this
+	// program still uses for completed=true, confirmed=false (section
+	// 2.3's OTHER combination: every step dispatched and none aborted, but
+	// at least one produced no confirming evidence) — conflating the two
+	// would lose exactly the distinction section 2.3 says the UI, and by
+	// the same argument this CLI, must keep legible: "a run that completed
+	// without confirmation must not render the same as" a run that aborted.
+	exitMacroRunAborted = 15
 )
 
 // cliError carries an exit code alongside a human-readable message, so

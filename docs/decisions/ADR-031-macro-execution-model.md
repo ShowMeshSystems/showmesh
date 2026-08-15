@@ -52,7 +52,7 @@ ADR-029 decision 4 already established that a step which always reports success 
 
 On startup, a run left in flight is finished as not completed, with a reason, and its remaining steps are not dispatched.
 
-The show has moved on and ShowMesh does not know how. Resuming would mean a coordinator that restarted at 03:00 dispatching the second half of a show-start macro at 03:00. This is the same shape as the existing startup sweep for unresolved commands, which resolves them rather than retrying them, and the same instinct as [ADR-011](ADR-011-context-aware-health.md)'s rule that stale evidence is `unknown` rather than healthy: **when the system cannot know, it must not act as though it does.**
+The show has moved on and ShowMesh does not know how. Resuming would mean a coordinator that restarted at 03:00 dispatching the second half of a show-start macro at 03:00. This is the same shape as the existing startup sweep for unresolved commands, which resolves them rather than retrying them, and the same instinct as [ADR-011](ADR-011-context-aware-observability.md)'s rule that stale evidence is `unknown` rather than healthy: **when the system cannot know, it must not act as though it does.**
 
 ### 5. The audit exemption applies per step, and it is declared on the action
 

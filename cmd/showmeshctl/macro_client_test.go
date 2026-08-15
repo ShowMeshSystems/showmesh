@@ -43,7 +43,7 @@ func TestExitCodeForMacroRunAborted(t *testing.T) {
 // completed=false is checked BEFORE confirmed, matching STEP-9-SPEC.md
 // section 2.3's own table ("failed" sets completed false; confirmed is
 // whatever it had earned by then, and can be either value at abort time) —
-// an aborted run must always report as aborted (exit 12), never silently
+// an aborted run must always report as aborted (exit 15), never silently
 // downgraded to "just unconfirmed" (exit 9) because confirmed also
 // happened to be false.
 func TestExitCodeForMacroRunAbortedTakesPrecedenceOverConfirmed(t *testing.T) {

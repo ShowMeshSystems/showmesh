@@ -27,6 +27,9 @@ export type {
   NodeDeclaration,
   NodeEvidence,
   PrincipalSummary,
+  ResolumeCompositionResponse,
+  ResolumeCompositionSummary,
+  ResolumeCompositionUploadResponse,
   ResourceRef,
   SessionInfo,
   SessionResponse,
@@ -86,7 +89,16 @@ export {
   submitMacroRun,
   listMacroRuns,
   getMacroRun,
+  getResolumeComposition,
+  uploadResolumeComposition,
 } from './useModel'
+
+// Track D seam D-2a: the progress shape [uploadResolumeComposition]'s
+// callback reports — a type-only export, unlike everything above, since
+// no runtime value of this shape is ever constructed inside src/api
+// itself (the component that calls uploadResolumeComposition builds and
+// reads it).
+export type { UploadProgress } from './resolumeCompositionUpload'
 
 // A pure, side-effect-free read of whether a break-glass token is
 // currently stored (token.ts) — exported so SessionPanel.tsx can decide

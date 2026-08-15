@@ -47,8 +47,10 @@ const NAV_GROUPS: Array<{
   },
   {
     heading: 'Configure',
+    // /config holds both the FPP endpoints and the Resolume composition
+    // upload (ADR-032 decision 8), so the label names both.
     items: [
-      { to: '/config', label: 'FPP endpoints', end: false },
+      { to: '/config', label: 'FPP & Resolume', end: false },
       { to: '/actions', label: 'Show actions', end: false },
     ],
   },

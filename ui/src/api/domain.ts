@@ -104,6 +104,13 @@ export type MacroRunsListResponse = components['schemas']['MacroRunsListResponse
 export type MacroPriorFailureRequest = components['schemas']['MacroPriorFailureRequest']
 export type CreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
 export type MacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
+// Track D seam D-2a (ADR-032): the Resolume composition upload surface's
+// shapes, aliased for the identical reason as every type above. Not part
+// of `Model` — this data is not a resource ADR-020's change stream
+// models, matching FPPEndpointsConfigResponse's own reasoning just above.
+export type ResolumeCompositionSummary = components['schemas']['ResolumeCompositionSummary']
+export type ResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
+export type ResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
 
 /**
  * One recorded event, as held in the model. Identical to the wire

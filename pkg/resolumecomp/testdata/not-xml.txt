@@ -1,0 +1,1 @@
+this is a plain text file, not a Resolume composition, and has no angle brackets at all

@@ -57,6 +57,7 @@
  * instance itself (ADR-023's own scoping of that field).
  */
 import { ApiClient, FPP_COMMAND_REQUEST_TIMEOUT_MS, type FetchLike } from './client'
+import { uploadFileWithProgress, type UploadProgress } from './resolumeCompositionUpload'
 import { computeBackoffMs, DEFAULT_BACKOFF, type BackoffConfig } from './backoff'
 import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
 import {
@@ -104,6 +105,9 @@ type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse'
 type SchemaCreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
 type SchemaMacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
 type SchemaMacroRunSummary = components['schemas']['MacroRunSummary']
+// Track D seam D-2a (ADR-032).
+type SchemaResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
+type SchemaResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -193,6 +197,14 @@ type Listener = () => void
 
 export class ApiStore {
   private readonly client: ApiClient
+  // Duplicated from the value handed to `ApiClient`'s own constructor
+  // rather than read back off `client`, which exposes no getter for it
+  // (it is otherwise a purely internal transport detail). Needed here
+  // ONLY for [uploadResolumeComposition] below, which bypasses `ApiClient`
+  // entirely (`XMLHttpRequest`, not `fetch` — see
+  // resolumeCompositionUpload.ts's own header comment for why) and so has
+  // no other way to learn where "same origin, under /api/v1" actually is.
+  private readonly baseUrl: string
   private readonly now: () => number
   private readonly backoffConfig: BackoffConfig
   private readonly streamIdleTimeoutMs: number
@@ -222,12 +234,8 @@ export class ApiStore {
 
   constructor(options: ApiStoreOptions = {}) {
     this.clock = options.clock ?? SYSTEM_CLOCK
-    this.client = new ApiClient(
-      options.baseUrl ?? '/api/v1',
-      options.fetchImpl,
-      options.requestTimeoutMs,
-      this.clock,
-    )
+    this.baseUrl = options.baseUrl ?? '/api/v1'
+    this.client = new ApiClient(this.baseUrl, options.fetchImpl, options.requestTimeoutMs, this.clock)
     this.now = options.now ?? (() => Date.now())
     this.backoffConfig = options.backoff ?? DEFAULT_BACKOFF
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS
@@ -491,6 +499,67 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/fpp.endpoints/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track D seam D-2a (ADR-032): the Resolume composition upload
+  // surface ------------------------------------------------------------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as Step 7 seam A's fpp.endpoints methods just above,
+  // for the identical reason: this data is not part of the SSE
+  // snapshot/delta stream (ADR-032 stores it as a configuration object,
+  // not a resource ADR-020's change stream models), so there is nothing
+  // here for `wakeReadLoop()` to do.
+
+  /**
+   * `GET /api/v1/config/resolume/composition` (ADR-032 decision 1: the
+   * stored id map — decks, layer groups, layers, columns, clips, and
+   * persistent clips — every ShowMesh reference to a Resolume object
+   * resolves through). Throws (404) when nothing has been uploaded yet,
+   * exactly like [getFPPEndpointsConfig]'s own "nothing configured"
+   * case — the coordinator deliberately uses the same status and shape
+   * for both (api/openapi.yaml's own description of this route).
+   */
+  async getResolumeComposition(): Promise<SchemaResolumeCompositionResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeCompositionResponse>(
+        '/config/resolume/composition',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/config/resolume/composition`, `multipart/form-data`
+   * (ADR-032 decisions 7 and 8). `onProgress` is called with REAL byte
+   * counts as `XMLHttpRequest.upload`'s own `progress` events arrive —
+   * see resolumeCompositionUpload.ts's header comment for why this one
+   * call bypasses `ApiClient`/`fetch` entirely. Replaces whatever
+   * composition was stored before, in one transaction with its audit
+   * entry (ADR-024 decision 11); a rejected file (400/413) persists
+   * nothing at all, and the caller (ResolumeCompositionUpload.tsx) must
+   * not render the new composition until this promise resolves — ADR-030:
+   * "a partial upload registers nothing."
+   */
+  async uploadResolumeComposition(
+    file: File,
+    onProgress: (progress: UploadProgress) => void,
+  ): Promise<SchemaResolumeCompositionUploadResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await uploadFileWithProgress<SchemaResolumeCompositionUploadResponse>(
+        this.baseUrl,
+        '/config/resolume/composition',
+        file,
+        onProgress,
         controller.signal,
       )
     } finally {
