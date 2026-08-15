@@ -49,28 +49,45 @@ func TestEncodeShowMacroPayloadRoundTrips(t *testing.T) {
 	if verr != nil {
 		t.Fatalf("re-decode: %+v", verr)
 	}
-	if p2.Steps[0].OnFailure != ShowMacroOnFailureAbort || p2.Steps[0].OnUnconfirmed != ShowMacroOnUnconfirmedContinue {
+	if p2.Steps[0].OnFailure != ShowMacroOnFailureContinue || p2.Steps[0].OnUnconfirmed != ShowMacroOnUnconfirmedContinue {
 		t.Fatalf("resolved defaults did not round trip: %+v", p2.Steps[0])
 	}
 }
 
 // TestDecodeShowMacroPayloadOnFailureDefault is one of the wave2-builder-a.md
 // brief's six required break-and-confirm tests.
+//
+// The expected value REVERSED 2026-08-14 with the owner decision that a
+// macro run always runs every step (see ShowMacroOnFailureDefault's own
+// doc comment). The test is kept rather than deleted because the property
+// it guards is unchanged: a step that says nothing about failure gets a
+// documented, deliberate default, never whatever the decoder's zero value
+// happens to be.
 func TestDecodeShowMacroPayloadOnFailureDefault(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
 	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
-	if p.Steps[0].OnFailure != ShowMacroOnFailureAbort {
-		t.Fatalf("expected onFailure to default to %q, got %q", ShowMacroOnFailureAbort, p.Steps[0].OnFailure)
+	if p.Steps[0].OnFailure != ShowMacroOnFailureContinue {
+		t.Fatalf("expected onFailure to default to %q, got %q", ShowMacroOnFailureContinue, p.Steps[0].OnFailure)
 	}
 }
 
 // TestDecodeShowMacroPayloadOnUnconfirmedDefault is one of the six required
-// break-and-confirm tests, and it is the single most consequential
-// assertion in this file: ADR-031 decision 2's whole point is that this
-// default is NOT the same as onFailure's.
+// break-and-confirm tests.
+//
+// Rewritten 2026-08-14. It used to assert that onUnconfirmed's default
+// DIFFERS from onFailure's, on the reasoning that sharing a default value
+// would mean the two axes had been collapsed into one. Both defaults are
+// now "continue" (owner decision: a run always runs every step), so that
+// assertion would now fail on correct code while proving nothing.
+//
+// The property worth guarding was never "the two values differ", it was
+// "the two fields are independent". So this now proves independence
+// directly, by setting each one explicitly and checking the other does
+// not move. That version would have caught the collapse the old
+// assertion was aimed at, and it still catches it today.
 func TestDecodeShowMacroPayloadOnUnconfirmedDefault(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
 	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
@@ -80,11 +97,27 @@ func TestDecodeShowMacroPayloadOnUnconfirmedDefault(t *testing.T) {
 	if p.Steps[0].OnUnconfirmed != ShowMacroOnUnconfirmedContinue {
 		t.Fatalf("expected onUnconfirmed to default to %q, got %q", ShowMacroOnUnconfirmedContinue, p.Steps[0].OnUnconfirmed)
 	}
-	if p.Steps[0].OnUnconfirmed == p.Steps[0].OnFailure {
-		// Only true when OnFailure's default is also "continue", which it
-		// must never be — this assertion fails loudly if a future edit
-		// makes the two axes share one default value.
-		t.Fatalf("onUnconfirmed and onFailure resolved to the same default (%q) — the two policy axes must have independent defaults", p.Steps[0].OnFailure)
+	// Independence, proved by moving one axis at a time.
+	onlyFailure, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onFailure": "abort"`)), alwaysResolves)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if onlyFailure.Steps[0].OnFailure != ShowMacroOnFailureAbort {
+		t.Fatalf("explicit onFailure did not take: %q", onlyFailure.Steps[0].OnFailure)
+	}
+	if onlyFailure.Steps[0].OnUnconfirmed != ShowMacroOnUnconfirmedContinue {
+		t.Fatalf("setting onFailure moved onUnconfirmed to %q; the two policy axes must be independent", onlyFailure.Steps[0].OnUnconfirmed)
+	}
+
+	onlyUnconfirmed, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onUnconfirmed": "abort"`)), alwaysResolves)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if onlyUnconfirmed.Steps[0].OnUnconfirmed != ShowMacroOnUnconfirmedAbort {
+		t.Fatalf("explicit onUnconfirmed did not take: %q", onlyUnconfirmed.Steps[0].OnUnconfirmed)
+	}
+	if onlyUnconfirmed.Steps[0].OnFailure != ShowMacroOnFailureContinue {
+		t.Fatalf("setting onUnconfirmed moved onFailure to %q; the two policy axes must be independent", onlyUnconfirmed.Steps[0].OnFailure)
 	}
 }
 
@@ -130,8 +163,8 @@ func TestDecodeShowMacroPayloadOnFailureAbsentVsNullVsEmpty(t *testing.T) {
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
-		if p.Steps[0].OnFailure != ShowMacroOnFailureAbort {
-			t.Fatalf("expected default %q, got %q", ShowMacroOnFailureAbort, p.Steps[0].OnFailure)
+		if p.Steps[0].OnFailure != ShowMacroOnFailureContinue {
+			t.Fatalf("expected default %q, got %q", ShowMacroOnFailureContinue, p.Steps[0].OnFailure)
 		}
 	})
 	t.Run("null-errors", func(t *testing.T) {

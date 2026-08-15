@@ -174,3 +174,58 @@ func authTestDeps(svc identity.Service) Dependencies {
 		Identity: svc,
 	}
 }
+
+// TestSameOriginCSRFOKTwoSignals pins the corrected ADR-024 decision 6
+// predicate (auth.go, 2026-08-14): Sec-Fetch-Site decides when the browser
+// sent it, and Origin's HOST decides when it did not.
+//
+// This exists because the Step 9 wave 3 acceptance run found the original
+// one-signal predicate locked every plain-HTTP LAN origin out of the
+// browser session path, which is the origin the operator's phone uses.
+// Chrome sends no Sec-Fetch-* header at all to an origin it does not
+// consider potentially trustworthy, so on http://<lan-ip> the ONLY signal
+// that arrives is Origin.
+//
+// The cases that matter are the ones where the two signals disagree, so
+// they are here explicitly: a present-but-cross-site Sec-Fetch-Site must
+// still lose even when Origin matches (the strongest signal wins and is
+// not second-guessed), and neither signal present must still refuse (this
+// stays fail-closed).
+func TestSameOriginCSRFOKTwoSignals(t *testing.T) {
+	const host = "192.168.1.50:8080"
+
+	tests := []struct {
+		name         string
+		secFetchSite string
+		origin       string
+		want         bool
+	}{
+		{name: "sec-fetch-site same-origin, no origin header", secFetchSite: "same-origin", want: true},
+		{name: "sec-fetch-site cross-site beats a matching origin", secFetchSite: "cross-site", origin: "http://" + host},
+		{name: "sec-fetch-site none beats a matching origin", secFetchSite: "none", origin: "http://" + host},
+		{name: "origin alone, matching host", origin: "http://" + host, want: true},
+		{name: "origin alone, matching host over https", origin: "https://" + host, want: true},
+		{name: "origin alone, different host", origin: "http://evil.example"},
+		{name: "origin alone, same host different port", origin: "http://192.168.1.50:9090"},
+		{name: "origin alone, host differing only in case", origin: "http://192.168.1.50:8080", want: true},
+		{name: "origin null", origin: "null"},
+		{name: "origin unparseable", origin: "://nonsense"},
+		{name: "neither signal present"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/session", nil)
+			req.Host = host
+			if tc.secFetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tc.secFetchSite)
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if got := sameOriginCSRFOK(req); got != tc.want {
+				t.Fatalf("sameOriginCSRFOK = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

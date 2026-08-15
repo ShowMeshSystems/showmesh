@@ -42,6 +42,12 @@ func (e *Executor) dispatchFPPStep(ctx context.Context, run store.MacroRunRecord
 		IdempotencyKey:    stepIdempotencyKey(run.ID, step.StepIndex),
 		Issuer:            issuer,
 		RequestedRevision: store.FormatMacroRunRequestedRevision(run.MacroObjectID, run.MacroRevision),
+
+		// OWNER DECISION, 2026-08-14: a macro run never withholds a command
+		// because the audit store is down, whatever this step's safety
+		// class. See [api.FPPCommandInput.NeverWithholdOnAuditFailure] for
+		// the decision and its wording.
+		NeverWithholdOnAuditFailure: true,
 	}
 
 	// Dispatch first, unconditionally — see this function's own doc

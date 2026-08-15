@@ -151,23 +151,34 @@ const DefaultNudgeMinInterval = 2 * time.Second
 //
 // A zero-value Runner is not usable; construct one with NewRunner.
 type Runner struct {
-	sink    Sink
-	logger  *slog.Logger
-	entries []entry
+	sink   Sink
+	logger *slog.Logger
 
 	nudgeMinInterval time.Duration
 	now              func() time.Time
 
-	// mu guards nudgeChans and lastNudgeAt below — the only Runner state
-	// [Nudge] touches, and the only Runner state ever written after Run
-	// has started (entries itself is only ever appended by Add, which must
-	// be called before Run — see Add's own doc comment). Nudge can be
-	// called concurrently with itself, from any number of goroutines
-	// (concurrent command dispatches), which entries' own single-threaded
-	// construction never has to tolerate.
+	// mu guards every map below, plus running/runCtx. It used to guard
+	// only the two nudge maps, because entries was append-only and Add
+	// was documented as "must be called before Run". That restriction was
+	// lifted 2026-08-14 so the FPP endpoint list can be reconciled while
+	// the coordinator is up: a removed endpoint must stop being polled and
+	// an added one must start, without a restart. See [Runner.Remove].
 	mu          sync.Mutex
+	entries     map[string]*runningEntry
 	nudgeChans  map[string]chan struct{}
 	lastNudgeAt map[string]time.Time
+	running     bool
+	runCtx      context.Context
+	wg          sync.WaitGroup
+}
+
+// runningEntry is one registered collector plus the handle that stops its
+// poll loop. cancel is nil until the loop is actually started, which is
+// either inside [Runner.Add] (when Run is already going) or inside
+// [Runner.Run] (for everything registered before it).
+type runningEntry struct {
+	entry
+	cancel context.CancelFunc
 }
 
 // RunnerOption configures optional [Runner] behavior not every caller needs
@@ -196,6 +207,7 @@ func NewRunner(sink Sink, logger *slog.Logger, opts ...RunnerOption) *Runner {
 		logger:           logger,
 		nudgeMinInterval: DefaultNudgeMinInterval,
 		now:              time.Now,
+		entries:          make(map[string]*runningEntry),
 		nudgeChans:       make(map[string]chan struct{}),
 		lastNudgeAt:      make(map[string]time.Time),
 	}
@@ -205,21 +217,104 @@ func NewRunner(sink Sink, logger *slog.Logger, opts ...RunnerOption) *Runner {
 	return r
 }
 
-// Add registers a Collector to be polled every interval once Run starts.
-// Add must be called before Run; adding a collector after Run has started
-// has no effect on that Run call (Run snapshots the registered collectors
-// once, at entry, rather than supporting a dynamic registry this package
-// has no current need for). interval must be positive; Add panics
-// otherwise, the same way e.g. time.NewTicker does — a zero or negative
-// poll interval is a programming error to catch at wiring time, not a
-// runtime condition to handle gracefully.
+// Add registers a Collector to be polled every interval, and starts
+// polling it immediately if [Runner.Run] is already going.
+//
+// CHANGED 2026-08-14: Add used to be documented as "must be called before
+// Run", and adding afterwards silently did nothing because Run snapshotted
+// the registry once at entry. That was fine while the set of FPP endpoints
+// could only change by restarting the process. It stopped being fine when
+// an operator editing fpp.endpoints started expecting the change to take
+// effect: an endpoint added through the API would have been dispatchable
+// while nothing polled it, so every command against it would have been
+// dispatched and then failed to confirm.
+//
+// Adding a collector whose ID() is already registered replaces nothing and
+// is ignored, so a reconcile loop can call Add for the full desired set on
+// every pass without restarting healthy collectors.
+//
+// interval must be positive; Add panics otherwise, the same way e.g.
+// time.NewTicker does — a zero or negative poll interval is a programming
+// error to catch at wiring time, not a runtime condition to handle
+// gracefully.
 func (r *Runner) Add(c Collector, interval time.Duration) {
 	if interval <= 0 {
 		panic("collector: Add: interval must be positive")
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	id := c.ID()
+	if _, exists := r.entries[id]; exists {
+		return
+	}
+
 	ch := make(chan struct{}, 1)
-	r.entries = append(r.entries, entry{collector: c, interval: interval, nudge: ch})
-	r.nudgeChans[c.ID()] = ch
+	re := &runningEntry{entry: entry{collector: c, interval: interval, nudge: ch}}
+	r.entries[id] = re
+	r.nudgeChans[id] = ch
+
+	if r.running {
+		r.startLocked(re)
+	}
+}
+
+// Remove stops polling the collector registered under id and forgets it,
+// returning whether there was one. A removed collector's in-flight Poll
+// call is cancelled through its own context, and its observations are
+// never delivered after cancellation (see [Runner.loop]).
+//
+// Remove deliberately does NOT delete anything the collector has already
+// written to the store. An endpoint that stops being polled leaves its
+// last observations behind, ageing out of `current` on their own, which is
+// the ADR-011 posture this project has now decided in four subsystems:
+// absence of evidence is not evidence of absence, and a reader must see
+// stale evidence go unknown rather than see it vanish.
+func (r *Runner) Remove(id string) bool {
+	r.mu.Lock()
+	re, ok := r.entries[id]
+	if ok {
+		delete(r.entries, id)
+		delete(r.nudgeChans, id)
+		delete(r.lastNudgeAt, id)
+	}
+	r.mu.Unlock()
+
+	if !ok {
+		return false
+	}
+	if re.cancel != nil {
+		re.cancel()
+	}
+	return true
+}
+
+// IDs returns the registered collector ids, so a reconcile loop can
+// compare what is running against what is configured without keeping its
+// own shadow copy of this registry.
+func (r *Runner) IDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	ids := make([]string, 0, len(r.entries))
+	for id := range r.entries {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// startLocked launches re's poll loop under its own cancellable child of
+// the Run context. Caller must hold r.mu.
+func (r *Runner) startLocked(re *runningEntry) {
+	ctx, cancel := context.WithCancel(r.runCtx)
+	re.cancel = cancel
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer cancel()
+		r.loop(ctx, re.entry)
+	}()
 }
 
 // Nudge requests an out-of-band poll of the collector registered under id,
@@ -288,15 +383,26 @@ func (r *Runner) Nudge(id string) bool {
 // gets an accurate answer: nothing is left running in the background after
 // Run returns.
 func (r *Runner) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	for _, e := range r.entries {
-		wg.Add(1)
-		go func(e entry) {
-			defer wg.Done()
-			r.loop(ctx, e)
-		}(e)
+	r.mu.Lock()
+	r.running = true
+	r.runCtx = ctx
+	for _, re := range r.entries {
+		r.startLocked(re)
 	}
-	wg.Wait()
+	r.mu.Unlock()
+
+	<-ctx.Done()
+
+	// Every loop exits on its own ctx (a child of this one), so this waits
+	// out both the collectors registered before Run and any added while it
+	// was going. Run still returns only once nothing is left running in the
+	// background, which is the property its doc comment promises and which
+	// a goroutine-count assertion in a test depends on.
+	r.wg.Wait()
+
+	r.mu.Lock()
+	r.running = false
+	r.mu.Unlock()
 }
 
 // loop drives one collector: poll immediately, then wait interval (or

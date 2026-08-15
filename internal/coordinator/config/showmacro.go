@@ -15,12 +15,29 @@ import (
 const ShowMacroMaxSteps = 32
 
 // The two values of show.macro.steps[].onFailure, and its default.
-// ADR-031 decision 2 / STEP-9-SPEC.md section 2.2: a failed step stops the
-// run unless the step says otherwise.
+//
+// DEFAULT REVERSED 2026-08-14, OWNER DECISION, superseding ADR-031
+// decision 2 / STEP-9-SPEC.md section 2.2's "a failed step stops the run
+// unless the step says otherwise". The owner's rule: "the run needs to
+// always RUN all steps, no matter what. If something doesn't confirm, or
+// we can't record it, that doesn't matter. it should still send the
+// command. we cannot risk the show because a logging or audit system is
+// down, that's not how show critical infrastructure works."
+//
+// The abort default was never an owner decision; it was written into the
+// specification and inherited from there. What it bought was a run that
+// stopped early so an operator could see one clean failure instead of a
+// cascade. What it cost is that ONE failed step suppressed every later
+// step, including the blackout at the end of the sequence, which is the
+// opposite of what a show wants from a control system.
+//
+// "abort" survives as an EXPLICIT per-step choice, because an operator
+// writing it into a macro is making that call themselves, which is a
+// different thing from ShowMesh making it for them by default.
 const (
 	ShowMacroOnFailureAbort    = "abort"
 	ShowMacroOnFailureContinue = "continue"
-	ShowMacroOnFailureDefault  = ShowMacroOnFailureAbort
+	ShowMacroOnFailureDefault  = ShowMacroOnFailureContinue
 )
 
 var showMacroOnFailureValues = map[string]bool{

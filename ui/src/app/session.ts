@@ -186,15 +186,21 @@ export function evaluateAnyScope(
 
 export function describeApiError(err: unknown): string {
   if (err instanceof CSRFRejectedError) {
-    // ADR-024 decision 6 / this task's item 4: a same-origin browser
-    // write missing Sec-Fetch-Site means the browser never sent that
-    // header at all, which decision 6 names as Safari older than 16.4 —
-    // this is a browser-capability fact, not a permissions failure or a
-    // bug in this page, and must read as neither.
+    // ADR-024 decision 6, corrected 2026-08-14. The previous text named
+    // "Safari older than 16.4" as the cause, and the Step 9 wave 3
+    // acceptance run proved that wrong in the deployment this project
+    // actually has: the coordinator now accepts an Origin header when the
+    // browser sends no Sec-Fetch-Site, so reaching this branch no longer
+    // means an old browser. It means neither signal arrived, which in
+    // practice is a proxy rewriting the Host header so the origin the
+    // browser used and the host the coordinator was addressed as no
+    // longer agree. Naming a browser version here sent an operator to
+    // update Chrome 151 over a reverse-proxy misconfiguration.
     return (
-      'This browser did not send a security header this action requires ' +
-      '(Sec-Fetch-Site), which usually means Safari older than 16.4. ' +
-      'Update this browser, or use the "Use a token instead" option below.'
+      'This page and the coordinator disagree about which host you are on, ' +
+      'so the sign-in was refused as a cross-site request. This is usually a ' +
+      'proxy in front of ShowMesh rewriting the Host header. Check that, or ' +
+      'use the "Use a token instead" option below.'
     )
   }
   if (err instanceof TooManyRequestsError) {

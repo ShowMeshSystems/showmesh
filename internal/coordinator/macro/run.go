@@ -94,12 +94,22 @@ func (e *Executor) executeRun(ctx context.Context, rm resolvedMacro, run store.M
 			}
 		case outcomeFailed:
 			confirmed = false
+			// completed is false because a STEP FAILED, not because the run
+			// stopped. Those were the same condition while a failure
+			// aborted by default; they stopped being the same on
+			// 2026-08-14, when the owner made continue the default (see
+			// config.ShowMacroOnFailureDefault). Leaving completed keyed on
+			// abort would have made a run whose first step failed and whose
+			// remaining steps succeeded report completed: true, which is
+			// the "reports success regardless" failure ADR-029 names by
+			// hand as worse than no report at all: the operator stops
+			// reading it.
+			completed = false
 			if reason == "" {
 				reason = fmt.Sprintf("step %q (index %d) failed: %s", step.StepID, i, res.outcomeReason)
 			}
-			if stepDef.OnFailure != config.ShowMacroOnFailureContinue {
+			if stepDef.OnFailure == config.ShowMacroOnFailureAbort {
 				abort = true
-				completed = false
 			}
 		}
 

@@ -127,6 +127,26 @@ type FPPCommandInput struct {
 	// rather than a structured type this package would have to guess the
 	// shape of.
 	RequestedRevision string
+
+	// NeverWithholdOnAuditFailure disables the ADR-024 decision 11
+	// fail-closed branch for THIS dispatch: when the audit store cannot be
+	// written, the command is dispatched anyway with degraded attribution
+	// rather than refused, whatever its safety class.
+	//
+	// OWNER DECISION, 2026-08-14. Set by Step 9's macro executor on every
+	// step it dispatches, and by nothing else. The rule in the owner's own
+	// words: "the run needs to always RUN all steps, no matter what. If
+	// something doesn't confirm, or we can't record it, that doesn't
+	// matter. it should still send the command. we cannot risk the show
+	// because a logging or audit system is down, that's not how show
+	// critical infrastructure works."
+	//
+	// Decision 11's closed list of three exempt actions (blackout, stop,
+	// power-off) survives for the ordinary single-command HTTP path, where
+	// an operator is present, sees the 503, and can retry deliberately.
+	// It does not survive inside a macro run, where nobody is watching and
+	// a refused step is a hole in a show.
+	NeverWithholdOnAuditFailure bool
 }
 
 // FPPCommandOutcome is the result of dispatching one FPP primitive through
@@ -634,9 +654,12 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		outcome, problem := h.resolveFPPCommandReplay(ctx, now, in.Issuer, dup.Existing, in.InstanceID, env.Action, paramsJSON)
 		return outcome, problem, nil
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if primitive.SafetyClass != fppSafetyClassExempt {
+		if primitive.SafetyClass != fppSafetyClassExempt && !in.NeverWithholdOnAuditFailure {
 			// Fail closed: the transaction above already rolled back in
 			// full, so nothing is re-inserted and nothing is dispatched.
+			// See [FPPCommandInput.NeverWithholdOnAuditFailure] for the one
+			// caller that turns this branch off and the owner decision
+			// behind it.
 			p := fppCommandAuditUnavailableProblem(primitive.WireAction, auditErr)
 			return FPPCommandOutcome{}, &p, nil
 		}
@@ -656,7 +679,13 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		}
 		_ = rec
 		h.setFPPCommandDesiredStateNonTx(ctx, primitive, env, now, in.Params)
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		degradedReason := degradedAttributionReasonSafetyClassExemption
+		if primitive.SafetyClass != fppSafetyClassExempt {
+			// Reached only via NeverWithholdOnAuditFailure: this step's own
+			// safety class would have failed closed on its own.
+			degradedReason = degradedAttributionReasonMacroRunNeverWithheld
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		return FPPCommandOutcome{}, nil, &fppCommandInternalError{"insert fpp command", auditErr}

@@ -29,13 +29,17 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-021](ADR-021-read-api-authentication-posture.md) | Read API ships optional shared-secret auth and no authorization | Superseded by ADR-024 (rules 3, 4 and CORS carried forward) |
 | [ADR-022](ADR-022-operator-ui-serves-the-api-same-origin.md) | Operator UI serves the API same-origin and never holds a credential | Accepted (decision 4 superseded by ADR-024) |
 | [ADR-023](ADR-023-change-stream-observation-deltas.md) | Change stream carries observation deltas, opt-in per connection | Accepted |
-| [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted |
+| [ADR-024](ADR-024-identity-authorization-and-audit.md) | Identity, authorization, and audit for the write surface | Accepted (decision 6 amended 2026-08-14: Origin fallback; decision 11 narrowed by ADR-033) |
 | [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
 | [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
 | [ADR-027](ADR-027-show-and-surface-model.md) | Show and surface model; xLights owns authoring, ShowMesh owns configuration | Accepted |
 | [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted |
 | [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted |
 | [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
+| [ADR-031](ADR-031-macro-execution-model.md) | The macro execution model | Accepted (decision 2's default superseded by ADR-033) |
+| [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
+| [ADR-033](ADR-033-a-run-always-runs-every-step.md) | A run always runs every step | Accepted (supersedes ADR-031 decision 2's default; narrows ADR-024 decision 11) |
+| [ADR-034](ADR-034-dispatch-configuration-applies-without-a-restart.md) | Configuration that governs dispatch applies without a restart | Accepted |
 
 ## Record template
 

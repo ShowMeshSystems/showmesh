@@ -18,8 +18,8 @@ func TestNormalizeStepPoliciesFillsEmptyWithDocumentedDefaults(t *testing.T) {
 		t.Fatalf("normalizeStepPolicies() error = %v, want nil", err)
 	}
 	for _, st := range steps {
-		if st.OnFailure != config.ShowMacroOnFailureAbort {
-			t.Errorf("step %q OnFailure = %q, want %q: a failed step aborts the remainder by default", st.ID, st.OnFailure, config.ShowMacroOnFailureAbort)
+		if st.OnFailure != config.ShowMacroOnFailureContinue {
+			t.Errorf("step %q OnFailure = %q, want %q: a run always runs every step (owner decision 2026-08-14)", st.ID, st.OnFailure, config.ShowMacroOnFailureContinue)
 		}
 		if st.OnUnconfirmed != config.ShowMacroOnUnconfirmedContinue {
 			t.Errorf("step %q OnUnconfirmed = %q, want %q: a monitoring gap must never stop a show", st.ID, st.OnUnconfirmed, config.ShowMacroOnUnconfirmedContinue)

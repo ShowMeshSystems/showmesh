@@ -462,6 +462,18 @@ const (
 	// distinction, landing on the "you cannot see" side this time, which
 	// is never acceptable per that record's own reasoning.
 	degradedAttributionReasonPostDispatch = "the event this entry records already happened and cannot be un-recorded; refusing to answer would only deny the operator the record of it (ADR-024: \"you cannot see\", never acceptable), not protect them from anything"
+
+	// degradedAttributionReasonMacroRunNeverWithheld is
+	// [handlers.dispatchFPPCommand]'s pre-dispatch fallback when the caller
+	// set [FPPCommandInput.NeverWithholdOnAuditFailure] — Step 9's macro
+	// executor, and nothing else. Deliberately its own string rather than
+	// reusing the safety-class one: the safety class of the step that
+	// reaches this branch is usually NOT exempt (that is the entire point),
+	// so reporting decision 11's exemption here would be the same
+	// conflation the two constants above already exist to prevent, and
+	// would make an audit record claim a justification that does not
+	// apply to it.
+	degradedAttributionReasonMacroRunNeverWithheld = "this dispatch belongs to a macro run, which never withholds a command for an audit failure (owner decision 2026-08-14, superseding ADR-024 decision 11's fail-closed default inside a run)"
 )
 
 // writeBestEffortAuditBounded is [handlers.writeBestEffortAudit] with its

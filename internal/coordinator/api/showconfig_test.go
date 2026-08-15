@@ -520,7 +520,12 @@ func TestPutShowMacroPersistsResolvedPolicyDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConfigRevision: %v", err)
 	}
-	if !containsSubstring(rev.PayloadJSON, `"onFailure":"abort"`) {
+	// "continue" since 2026-08-14 (owner decision: a run always runs every
+	// step). The assertion is on the RESOLVED value being present at all,
+	// not on which value it is: the defect this test exists to catch is a
+	// payload stored with the field absent, so a later default change
+	// silently rewrites the meaning of macros already on disk.
+	if !containsSubstring(rev.PayloadJSON, `"onFailure":"continue"`) {
 		t.Errorf("stored payload does not carry the resolved onFailure default; payload: %s", rev.PayloadJSON)
 	}
 	if !containsSubstring(rev.PayloadJSON, `"onUnconfirmed":"continue"`) {

@@ -202,6 +202,14 @@ func Run() int {
 		return 1
 	}
 
+	// fppEndpoints resolves the ACTIVE fpp.endpoints revision on demand
+	// rather than handing every consumer the list read at startup. See
+	// internal/coordinator/fppendpoints.go's own file comment for the
+	// measurement that made this necessary and the owner decision behind
+	// it; the short version is that a removed endpoint used to keep
+	// receiving commands until someone restarted this process.
+	fppEndpoints := newFPPEndpointSource(st, logger)
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -219,7 +227,7 @@ func Run() int {
 		// -> offline by staleness alone with nothing recording it to event
 		// history. See that type's doc comment for the full reasoning.
 		Nodes:        livenessObservingNodeLister{inv: inv},
-		FPP:          fppInstanceLister{st: st, endpoints: cfg.FPPEndpoints},
+		FPP:          fppInstanceLister{st: st, endpoints: fppEndpoints},
 		Observations: storeObservationLister{st: st},
 		Events:       storeEventReader{st: st},
 		// Step 5 (contract section 5.4): both FPP collector sources must be
@@ -231,7 +239,7 @@ func Run() int {
 		// registered below, so this line and that one can never disagree
 		// about whether FPP MQTT collection is enabled.
 		Collectors: multiCollectorStatusLister{
-			fppCollectorStatusLister{endpoints: cfg.FPPEndpoints},
+			fppCollectorStatusLister{endpoints: fppEndpoints},
 			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
 		},
 		// Identity is ADR-024's own dependency: wiring it in is what makes
@@ -420,6 +428,18 @@ func Run() int {
 		}
 		fppRunner.Add(fppCollector, fpp.DefaultPollInterval)
 	}
+
+	// Keep that set matching the configuration while this process runs, so
+	// an operator adding or removing an endpoint through the API does not
+	// have to restart the coordinator for it to take effect. The listers
+	// above already resolve the endpoint list live, which is what stops a
+	// removed endpoint receiving commands; this is the other half, which
+	// stops it being polled and starts polling a newly added one. Neither
+	// half is correct alone — see internal/coordinator/fppendpoints.go.
+	newFPPCollector := func(id, url string) (collector.Collector, error) {
+		return fpp.New(id, url, fpp.Options{HTTPClient: fppHTTPClient})
+	}
+	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, logger)
 
 	// Seam B's FPP MQTT collector (internal/coordinator/collector/fppmqtt),
 	// contract section 5.4: constructed and registered only when its broker

@@ -432,8 +432,14 @@ func TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated(t *testing.T) {
 		t.Fatalf("PUT: status = %d; body: %s", resp.StatusCode, body)
 	}
 	m := decodeMap(t, body)
-	if m["restartRequired"] != true {
-		t.Errorf("PUT response restartRequired = %v, want true", m["restartRequired"])
+	// false since 2026-08-14: this configuration is applied without a
+	// restart. The assertion kept its shape rather than being deleted
+	// because what it guards is unchanged and is the reason the field
+	// exists: the response STATES what the operator has to do next, rather
+	// than leaving them to find out by watching commands go to a host they
+	// removed.
+	if m["restartRequired"] != false {
+		t.Errorf("PUT response restartRequired = %v, want false", m["restartRequired"])
 	}
 	if reason, _ := m["restartRequiredReason"].(string); reason == "" {
 		t.Errorf("PUT response restartRequiredReason is empty, want a stated reason")
@@ -445,8 +451,11 @@ func TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated(t *testing.T) {
 		t.Fatalf("GET: status = %d; body: %s", resp2.StatusCode, body2)
 	}
 	m2 := decodeMap(t, body2)
-	if m2["restartRequired"] != true {
-		t.Errorf("GET response restartRequired = %v, want true", m2["restartRequired"])
+	if m2["restartRequired"] != false {
+		t.Errorf("GET response restartRequired = %v, want false", m2["restartRequired"])
+	}
+	if reason, _ := m2["restartRequiredReason"].(string); reason == "" {
+		t.Errorf("GET response restartRequiredReason is empty, want a stated reason")
 	}
 }
 

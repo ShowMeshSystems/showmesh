@@ -277,13 +277,23 @@ func storeEventToAPI(rec store.EventRecord) api.EventRecord {
 // linger in the API from stale rows — see contract section 4's
 // not_collected case.
 type fppInstanceLister struct {
-	st        *store.Store
-	endpoints []config.FPPEndpoint
+	st *store.Store
+
+	// endpoints is resolved LIVE, per call, rather than captured at
+	// startup. It used to be a plain []config.FPPEndpoint field, and the
+	// consequence of that is recorded in fppendpoints.go's own file
+	// comment: an endpoint removed through the API kept receiving
+	// commands until someone restarted the coordinator.
+	endpoints fppEndpointProvider
 }
 
 func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstanceView, error) {
-	views := make([]api.FPPInstanceView, 0, len(l.endpoints))
-	for _, ep := range l.endpoints {
+	var endpoints []config.FPPEndpoint
+	if l.endpoints != nil {
+		endpoints = l.endpoints.Current(ctx)
+	}
+	views := make([]api.FPPInstanceView, 0, len(endpoints))
+	for _, ep := range endpoints {
 		obs, err := l.st.ListObservations(ctx, store.ObservationFilter{
 			ResourceKind: observation.ResourceFPP,
 			ResourceID:   ep.ID,
@@ -474,14 +484,24 @@ func fppLastPollError(obs []observation.Observation) *string {
 // [api.CollectorRunState]'s doc comment for why that is a normal, expected
 // value even alongside every instance reading collection_failed.
 type fppCollectorStatusLister struct {
-	endpoints []config.FPPEndpoint
+	// Live per call, for the same reason as fppInstanceLister.endpoints:
+	// after an operator removes the last endpoint this must start saying
+	// "nothing is configured" without waiting for a restart, or the
+	// snapshot claims a collector is running against a fleet that is no
+	// longer configured.
+	endpoints fppEndpointProvider
 }
 
 const fppCollectorSourceID = "fpp-rest"
 
-func (l fppCollectorStatusLister) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
-	if len(l.endpoints) == 0 {
-		reason := "no FPP endpoints configured (SHOWMESH_FPP_ENDPOINTS is unset)"
+func (l fppCollectorStatusLister) CollectorStatuses(ctx context.Context) ([]api.CollectorState, error) {
+	// A nil provider is the zero value of this struct and has always meant
+	// "nothing configured". Keeping that true costs one comparison and
+	// avoids turning a wiring mistake into a panic inside a snapshot read,
+	// which is the one code path ADR-024 constraint 23 says must keep
+	// working when everything else is broken.
+	if l.endpoints == nil || len(l.endpoints.Current(ctx)) == 0 {
+		reason := "no FPP endpoints are configured"
 		return []api.CollectorState{{ID: fppCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: fppCollectorSourceID, State: string(api.CollectorRunning)}}, nil

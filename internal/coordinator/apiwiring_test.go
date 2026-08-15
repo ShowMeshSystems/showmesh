@@ -180,7 +180,7 @@ func TestLivenessObservingNodeListerRecordsStalenessOnlyTransition(t *testing.T)
 func TestFPPInstanceListerSynthesizesNotYetPolledObservations(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
-	lister := fppInstanceLister{st: st, endpoints: []config.FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}}}
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{{ID: "player-01", URL: "http://10.0.1.20"}}}
 
 	views, err := lister.ListInstances(ctx)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestFPPSignalsExcludesDynamicSignalFamilies(t *testing.T) {
 func TestFPPInstanceListerUsesRealObservationsWhenPresent(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
-	lister := fppInstanceLister{st: st, endpoints: []config.FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}}}
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{{ID: "player-01", URL: "http://10.0.1.20"}}}
 
 	pollAt := time.Now()
 	res := observation.ResourceRef{Kind: observation.ResourceFPP, ID: "player-01"}
@@ -292,7 +292,7 @@ func TestFPPCollectorStatusListerHasStableID(t *testing.T) {
 		t.Errorf("Reason = nil, want a non-null reason naming why nothing is configured")
 	}
 
-	many := fppCollectorStatusLister{endpoints: []config.FPPEndpoint{{ID: "a", URL: "http://a"}, {ID: "b", URL: "http://b"}}}
+	many := fppCollectorStatusLister{endpoints: fixedFPPEndpoints{{ID: "a", URL: "http://a"}, {ID: "b", URL: "http://b"}}}
 	states, err = many.CollectorStatuses(context.Background())
 	if err != nil {
 		t.Fatalf("collector statuses (two endpoints): %v", err)
@@ -364,7 +364,7 @@ func TestFPPMQTTCollectorStatusListerReflectsConfigured(t *testing.T) {
 // the other's entry.
 func TestMultiCollectorStatusListerConcatenatesBothSources(t *testing.T) {
 	lister := multiCollectorStatusLister{
-		fppCollectorStatusLister{endpoints: []config.FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}}},
+		fppCollectorStatusLister{endpoints: fixedFPPEndpoints{{ID: "player-01", URL: "http://10.0.1.20"}}},
 		fppMQTTCollectorStatusLister{configured: true},
 	}
 
@@ -634,3 +634,14 @@ func countPortRows(obs []observation.Observation) int {
 	}
 	return n
 }
+
+// fixedFPPEndpoints is a fppEndpointProvider that always answers with the
+// same list. It exists because fppInstanceLister and
+// fppCollectorStatusLister stopped holding a []config.FPPEndpoint on
+// 2026-08-14 and started resolving the active revision per call (see
+// fppendpoints.go): these tests are about what the LISTER does with a
+// given endpoint list, not about how the list is resolved, so they supply
+// one directly rather than staging config revisions in the store.
+type fixedFPPEndpoints []config.FPPEndpoint
+
+func (f fixedFPPEndpoints) Current(context.Context) []config.FPPEndpoint { return f }

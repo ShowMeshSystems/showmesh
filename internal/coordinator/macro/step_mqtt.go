@@ -58,9 +58,6 @@ func (e *Executor) dispatchMQTTStep(ctx context.Context, run store.MacroRunRecor
 		}
 	}
 
-	safetyClass := api.FPPCommandDecision11Class(action.Payload.SafetyClass)
-	exempt := api.FPPCommandDecision11Exempt(safetyClass)
-
 	now := e.now()
 	stepKey := stepIdempotencyKey(run.ID, step.StepIndex)
 	dispatchEntry := identity.AuditEntry{
@@ -77,19 +74,20 @@ func (e *Executor) dispatchMQTTStep(ctx context.Context, run store.MacroRunRecor
 		Params:         map[string]any{"runId": run.ID, "stepId": step.StepID, "stepIndex": step.StepIndex},
 	}
 
+	// OWNER DECISION, 2026-08-14: a macro run never withholds a command
+	// because the audit store is down, whatever this step's safety class.
+	// This branch used to refuse any step whose class was not one of
+	// ADR-024 decision 11's three, which meant an unwritable audit_log
+	// could punch a hole in a running show. Attribution is downgraded and
+	// said out loud instead: the step publishes, carries
+	// AttributionDegraded onto the run, and logs the cause. See
+	// [api.FPPCommandInput.NeverWithholdOnAuditFailure] for the FPP half of
+	// the same rule and the owner's own wording of it.
 	attrDegraded := false
 	if auditErr := e.identity.WriteAudit(ctx, dispatchEntry); auditErr != nil {
-		if !exempt {
-			return stepResult{
-				outcome:       outcomeFailed,
-				outcomeState:  mqttStateAuditUnavailable,
-				outcomeReason: "this step was refused because it could not be durably recorded and its safety class does not exempt it from that rule",
-				resolvedAt:    ptrTime(e.now()),
-			}
-		}
 		attrDegraded = true
-		e.logWarn("mqtt step dispatched with degraded attribution: audit store unwritable and this step's safety class is exempt",
-			"runId", run.ID, "stepId", step.StepID, "cause", errString(auditErr))
+		e.logWarn("mqtt step dispatched with degraded attribution: audit store unwritable, and a macro run never withholds a command for that",
+			"runId", run.ID, "stepId", step.StepID, "safetyClass", action.Payload.SafetyClass, "cause", errString(auditErr))
 	}
 
 	dispatchedAt := e.now()

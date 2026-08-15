@@ -120,9 +120,15 @@ describe('evaluateScope', () => {
 })
 
 describe('describeApiError', () => {
-  it('explains a CSRFRejectedError as a browser-capability fact, not a bug or a permissions failure', () => {
-    const text = describeApiError(new CSRFRejectedError('missing Sec-Fetch-Site'))
-    expect(text).toMatch(/16\.4|Safari/i)
+  it('explains a CSRFRejectedError as an origin/host disagreement, not a bug or a permissions failure', () => {
+    const text = describeApiError(new CSRFRejectedError('neither Sec-Fetch-Site nor a matching Origin'))
+    // The coordinator now accepts an Origin header when the browser sends
+    // no Sec-Fetch-Site (auth.go, 2026-08-14), so reaching this branch no
+    // longer means an old browser, and the text must not say it does:
+    // naming a browser version here sent an operator to update Chrome 151
+    // over a reverse-proxy misconfiguration.
+    expect(text).not.toMatch(/Safari|16\.4/i)
+    expect(text).toMatch(/host/i) // the cause an operator can actually act on
     expect(text).toMatch(/token/i) // must point at the break-glass workaround
   })
 

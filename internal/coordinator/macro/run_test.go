@@ -112,8 +112,17 @@ func TestOnUnconfirmedAbortDoesAbort(t *testing.T) {
 	}
 }
 
-// TestFailedStepAbortsByDefault is acceptance criterion 2.
-func TestFailedStepAbortsByDefault(t *testing.T) {
+// TestFailedStepDoesNotAbortByDefault is acceptance criterion 2, REVERSED
+// 2026-08-14 by owner decision: a macro run always runs every step, and a
+// failure is recorded rather than allowed to suppress the rest of the
+// sequence. See config.ShowMacroOnFailureDefault's own doc comment.
+//
+// The property this test still guards is the one that mattered all along
+// and is now MORE important, not less: the difference between a step that
+// was tried and failed and a step that was never attempted must stay
+// visible. Nothing reads "skipped" here any more, because nothing is
+// skipped; step 2 dispatches on its own merits after step 1 failed.
+func TestFailedStepDoesNotAbortByDefault(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	dispatch := &fakeDispatcher{dispatchFn: func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
 		p := invalidParameterProblem("refused for test")
@@ -127,17 +136,23 @@ func TestFailedStepAbortsByDefault(t *testing.T) {
 
 	run := submitAndWait(t, e, api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "k1", Trigger: "api", Issuer: testIssuer()})
 
+	// completed stays false: the run did not do what it was asked to do,
+	// and saying otherwise because it reached the end would be the
+	// "reports success regardless" failure ADR-029 names by hand.
 	if run.Run.Completed == nil || *run.Run.Completed {
 		t.Fatalf("Completed = %v, want false", run.Run.Completed)
+	}
+	if run.Run.Reason == "" {
+		t.Fatal("Reason is empty; a run that failed a step must name it")
 	}
 	if run.Steps[0].Outcome != outcomeFailed {
 		t.Fatalf("step 1 outcome = %q, want %q", run.Steps[0].Outcome, outcomeFailed)
 	}
-	if run.Steps[1].Outcome != outcomeSkipped {
-		t.Fatalf("step 2 outcome = %q, want %q (never attempted)", run.Steps[1].Outcome, outcomeSkipped)
+	if run.Steps[1].Outcome == outcomeSkipped {
+		t.Fatalf("step 2 outcome = %q; a failed step must no longer suppress the steps after it", run.Steps[1].Outcome)
 	}
-	if dispatch.callCount() != 1 {
-		t.Fatalf("dispatch called %d times, want 1", dispatch.callCount())
+	if dispatch.callCount() != 2 {
+		t.Fatalf("dispatch called %d times, want 2 (every step runs)", dispatch.callCount())
 	}
 }
 
@@ -168,8 +183,12 @@ func TestOnFailureContinueDoesNotAbort(t *testing.T) {
 
 	run := submitAndWait(t, e, api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "k1", Trigger: "api", Issuer: testIssuer()})
 
-	if run.Run.Completed == nil || !*run.Run.Completed {
-		t.Fatalf("Completed = %v, want true (onFailure:continue must not abort)", run.Run.Completed)
+	// completed is false because a step FAILED, which is independent of
+	// whether the run continued past it: onFailure decides the sequence,
+	// completed reports the outcome. Before 2026-08-14 these were the same
+	// flag, which is why this assertion used to read "want true".
+	if run.Run.Completed == nil || *run.Run.Completed {
+		t.Fatalf("Completed = %v, want false (a failed step is not a completed run, even when the run continues)", run.Run.Completed)
 	}
 	if run.Run.Confirmed == nil || *run.Run.Confirmed {
 		t.Fatalf("Confirmed = %v, want false (a failed step must still mark the run not confirmed)", run.Run.Confirmed)

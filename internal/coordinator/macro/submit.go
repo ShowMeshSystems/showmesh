@@ -44,8 +44,6 @@ func (e *Executor) SubmitRun(ctx context.Context, req api.MacroSubmitRequest) (a
 	}
 
 	steps := buildStepRecords(rm)
-	classes := stepSafetyClasses(steps)
-	allExempt := api.FPPCommandAllStepsExempt(classes...)
 
 	runID := e.newID()
 	now := e.now()
@@ -105,15 +103,34 @@ func (e *Executor) SubmitRun(ctx context.Context, req api.MacroSubmitRequest) (a
 		return e.conflictResult(ctx, auditErr)
 
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !allExempt {
-			p := api.FPPCommandAuditUnavailableProblem(rm.ObjectID, auditErr)
-			return api.MacroRunResult{}, &p, nil
-		}
-		// STEP-9-SPEC.md section 2.5: every step exempt, audit store
-		// unwritable — proceed, degraded, exactly as
-		// dispatchFPPCommand's own fppSafetyClassExempt branch redoes its
-		// insert through the plain, non-transactional store methods
-		// rather than leaving nothing created.
+		// OWNER DECISION, 2026-08-14, and it replaces STEP-9-SPEC.md
+		// section 2.5's submission gate outright: a macro run never
+		// withholds a command because the audit store is down. In the
+		// owner's words, "we cannot risk the show because a logging or
+		// audit system is down, that's not how show critical
+		// infrastructure works."
+		//
+		// What was here before, and why it was wrong for this system: the
+		// run proceeded only if EVERY step was one of ADR-024 decision
+		// 11's three exempt safety classes, and was refused 503 outright
+		// otherwise. That is fail-closed reasoning applied to the wrong
+		// failure direction, which is the exact error ADR-024 was written
+		// to correct and which this project has now made four times. A
+		// [stop, start] macro was refused in its entirety, so the STOP did
+		// not run, on a coordinator that was healthy in every respect
+		// except its ability to write a log line. The acceptance run
+		// measured that against a real unwritable audit_log.
+		//
+		// Attribution is not abandoned, it is DOWNGRADED and said out
+		// loud: the run carries AttributionDegraded, every step inherits
+		// it, both clients render it, and the warning below names the
+		// cause. The operator loses the audit trail for this run, which is
+		// the cost of the decision, and keeps the show.
+		//
+		// Fail-closed is unchanged where it holds the right actor
+		// accountable and costs no show: config:write and principal:write
+		// (ADR-024 decision 11) still refuse, because nothing in a running
+		// show depends on rewriting configuration mid-show.
 		run.AttributionDegraded = true
 		r, s, cErr := e.store.CreateMacroRun(ctx, run, steps)
 		if cErr != nil {

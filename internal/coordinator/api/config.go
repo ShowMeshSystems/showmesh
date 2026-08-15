@@ -417,17 +417,26 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 	}, endpoints))
 }
 
-// restartRequiredReason is A4's stated fact, carried on every
-// FPPEndpointsConfigResponse rather than left for the operator to
-// discover: "a configuration change here does not hot-reload the
-// collector — RES-008 section 10 records restart-required as today's true
-// and stable answer for every configuration change, not specific to this
-// kind." It is a package-level constant, not computed per response,
-// because it is unconditionally true for every response this endpoint
-// produces today; a future config kind that DOES hot-reload would need its
-// own reason, not a change to this one.
-const restartRequiredReason = "this coordinator does not hot-reload configuration; the FPP collector polls the endpoint list " +
-	"it read at startup, so this change takes effect the next time the coordinator restarts, not immediately"
+// restartRequiredReason WAS A4's stated fact, and stopped being a fact on
+// 2026-08-14.
+//
+// The original text told an operator that "this change takes effect the
+// next time the coordinator restarts, not immediately". That was true and
+// it was the defect: the Step 9 wave 3 acceptance run measured an endpoint
+// removed through this endpoint still receiving commands, and confirming
+// them, because dispatch resolved against a list captured at process
+// start. The owner's decision was to follow the specification instead of
+// documenting the gap ("it shouldn't blindly be sending commands and only
+// having the info needed to fix the problem in the response or log"), so
+// the endpoint list is now resolved live and the collector set is
+// reconciled while the process runs — internal/coordinator/fppendpoints.go.
+//
+// The field itself stays on the wire rather than being removed, because
+// ADR-020 makes this contract additive-only within a major version and a
+// client reading it must keep compiling. It now reports honestly that
+// nothing is pending.
+const restartRequiredReason = "this change is already in effect: command dispatch resolves the endpoint list per request, " +
+	"and the collector set follows this configuration within about ten seconds. No restart is needed."
 
 // mapFPPEndpointsConfigResponse renders one fpp.endpoints revision plus its
 // owning object's bookkeeping onto the wire. CreatedByPrincipalID/
@@ -450,7 +459,7 @@ func mapFPPEndpointsConfigResponse(now time.Time, rev store.ConfigRevisionRecord
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
-		RestartRequired:        true,
+		RestartRequired:        false,
 		RestartRequiredReason:  restartRequiredReason,
 	}
 }

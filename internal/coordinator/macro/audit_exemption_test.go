@@ -30,11 +30,19 @@ import (
 // integration, and this test is what proves it rather than merely
 // asserting it against a fake.
 //
-// A run of [exempt-mqtt-stop, non-exempt-mqtt-start] with the audit store
-// unwritable from before dispatch: the stop step still publishes
-// (degraded attribution), the start step is refused before it ever
-// publishes, and the run aborts with a reason naming the audit store.
-func TestPerStepAuditExemptionMQTT(t *testing.T) {
+// REVERSED 2026-08-14 by owner decision: a macro run never withholds a
+// command because the audit store is down, whatever a step's safety class.
+// This test used to assert that the non-exempt start step was refused
+// before it published and that the run aborted; that is exactly the
+// behaviour the owner removed, on the grounds that a show control system
+// cannot drop commands because a logging system is down.
+//
+// The run is still [exempt-mqtt-stop, non-exempt-mqtt-start] with the
+// audit store unwritable from before dispatch, and the step classes are
+// still deliberately different, because that is what proves the safety
+// class is no longer what decides: BOTH publish, and both carry degraded
+// attribution.
+func TestMacroRunNeverWithholdsAnMQTTStepForAnAuditFailure(t *testing.T) {
 	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
 
 	var published []string
@@ -65,9 +73,8 @@ func TestPerStepAuditExemptionMQTT(t *testing.T) {
 		t.Fatalf("resolveMacro: %v", err)
 	}
 	steps := buildStepRecords(rm)
-	classes := stepSafetyClasses(steps)
-	if api.FPPCommandAllStepsExempt(classes...) {
-		t.Fatalf("test setup error: this run must NOT be all-exempt, or it would be refused at submission rather than reaching the mid-run rule this test exercises")
+	if steps[0].SafetyClass == steps[1].SafetyClass {
+		t.Fatalf("test setup error: the two steps must carry DIFFERENT safety classes, or this test cannot show that the class no longer decides; got %q for both", steps[0].SafetyClass)
 	}
 	run, createdSteps, err := e.store.CreateMacroRun(ctx, storeRunRecord("mqtt-exempt-run", "m1", rm.Revision), steps)
 	if err != nil {
@@ -84,20 +91,20 @@ func TestPerStepAuditExemptionMQTT(t *testing.T) {
 		t.Fatalf("get run: %v", err)
 	}
 
-	if got.Run.Completed == nil || *got.Run.Completed {
-		t.Fatalf("Completed = %v, want false (the start step must have been refused and aborted the run)", got.Run.Completed)
-	}
-	if got.Run.Reason == "" {
-		t.Fatalf("Reason is empty; must name the audit store")
-	}
 	if !got.Steps[0].AttributionDegraded {
-		t.Fatalf("stop step (exempt) AttributionDegraded = false, want true — it should still have published, degraded")
+		t.Fatal("stop step AttributionDegraded = false, want true: it published without a durable audit entry")
 	}
-	if got.Steps[1].Outcome != outcomeFailed {
-		t.Fatalf("start step (not exempt) outcome = %q, want %q", got.Steps[1].Outcome, outcomeFailed)
+	if !got.Steps[1].AttributionDegraded {
+		t.Fatal("start step AttributionDegraded = false, want true: it published without a durable audit entry, and its safety class no longer changes that")
 	}
-	if len(published) != 1 {
-		t.Fatalf("published to %d topics, want exactly 1 (the exempt stop step only; the start step must never publish)", len(published))
+	if !got.Run.AttributionDegraded {
+		t.Fatal("run AttributionDegraded = false, want true: a degraded step must raise it onto the run the operator actually reads")
+	}
+	if got.Steps[1].Outcome == outcomeFailed {
+		t.Fatalf("start step outcome = %q; a non-exempt step must no longer be refused for an audit failure", got.Steps[1].Outcome)
+	}
+	if len(published) != 2 {
+		t.Fatalf("published to %d topics, want 2: every step of a run publishes, whatever its safety class", len(published))
 	}
 }
 

@@ -241,7 +241,7 @@ func csrfProblem() v1.Problem {
 		// ADR-024 decision 6: a cookie-authenticated write must come from
 		// the same origin. A bearer-token request carries no ambient
 		// cookie for a cross-site page to ride, so it is exempt.
-		Detail: "A cookie-authenticated write must come from the same origin (Sec-Fetch-Site: same-origin). A bearer-token request is exempt from this check.",
+		Detail: "A cookie-authenticated write must come from the same origin. This request carried neither Sec-Fetch-Site: same-origin nor an Origin header naming the host it was addressed as. A bearer-token request is exempt from this check.",
 	}
 }
 
@@ -269,7 +269,7 @@ func loginCSRFProblem() v1.Problem {
 		// to signing in itself: no bearer exemption here, unlike
 		// [csrfProblem], because signing in has no pre-existing credential
 		// yet that could be bearer-shaped in the first place.
-		Detail: "Signing in must come from the same origin (Sec-Fetch-Site: same-origin) — there is no bearer-token exemption for this request.",
+		Detail: "Signing in must come from the same origin. This request carried neither Sec-Fetch-Site: same-origin nor an Origin header naming the host it was addressed as. There is no bearer-token exemption for this request.",
 	}
 }
 

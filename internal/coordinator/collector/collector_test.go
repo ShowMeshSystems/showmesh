@@ -490,3 +490,96 @@ func TestRunnerNudgeReturnsImmediatelyWhileCollectorPollIsInFlight(t *testing.T)
 	cancel()
 	<-done
 }
+
+// TestRunnerAddAfterRunStartsPolling covers the half of the 2026-08-14
+// dynamic-registry change that a naive reading would call the easy one and
+// that is actually the dangerous one to get wrong.
+//
+// Add used to be documented as "must be called before Run", and adding
+// afterwards silently did nothing. Silently is the problem: nothing
+// errored, nothing logged, and the endpoint appeared in the API while no
+// poll ever happened, so every command dispatched to it would confirm
+// nothing and read as broken hardware rather than as configuration that
+// had not landed.
+func TestRunnerAddAfterRunStartsPolling(t *testing.T) {
+	early := &countingCollector{id: "early"}
+	late := &countingCollector{id: "late"}
+	r := NewRunner(&fakeSink{}, testLogger())
+	r.Add(early, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+
+	waitForCalls(t, early, 1)
+
+	r.Add(late, time.Hour)
+	waitForCalls(t, late, 1)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of cancellation; a collector added after Run must still be waited for")
+	}
+}
+
+// TestRunnerRemoveStopsPollingAndNudging proves the other half: a removed
+// collector stops being polled, and stops being a valid nudge target,
+// while its neighbours are undisturbed.
+//
+// The neighbour assertion is the point. Reconciliation calls Remove for
+// one endpoint while the rest of the fleet is mid-show, so "removing one
+// collector quietly disturbed the others" is exactly the defect worth a
+// test rather than a code comment.
+func TestRunnerRemoveStopsPollingAndNudging(t *testing.T) {
+	doomed := &countingCollector{id: "doomed"}
+	survivor := &countingCollector{id: "survivor"}
+	r := NewRunner(&fakeSink{}, testLogger(), WithNudgeMinInterval(0))
+	r.Add(doomed, 5*time.Millisecond)
+	r.Add(survivor, 5*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+
+	waitForCalls(t, doomed, 2)
+	waitForCalls(t, survivor, 2)
+
+	if !r.Remove("doomed") {
+		t.Fatal("Remove(\"doomed\") = false, want true: it was registered")
+	}
+	if r.Remove("doomed") {
+		t.Fatal("Remove(\"doomed\") = true on the second call, want false: it is already gone")
+	}
+	if r.Nudge("doomed") {
+		t.Fatal("Nudge(\"doomed\") = true after removal, want false: a removed collector is not a nudge target")
+	}
+
+	// Let the poll loop notice cancellation, then hold the count still.
+	time.Sleep(50 * time.Millisecond)
+	stopped := doomed.calls.Load()
+	time.Sleep(80 * time.Millisecond) // many poll intervals
+	if got := doomed.calls.Load(); got != stopped {
+		t.Fatalf("removed collector polled %d more times after Remove returned", got-stopped)
+	}
+
+	// The neighbour is untouched: still polling, still nudgeable.
+	waitForCalls(t, survivor, stopped+2)
+	if !r.Nudge("survivor") {
+		t.Fatal("Nudge(\"survivor\") = false; removing one collector must not disturb another")
+	}
+
+	ids := r.IDs()
+	if len(ids) != 1 || ids[0] != "survivor" {
+		t.Fatalf("IDs() = %v, want exactly [survivor]", ids)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of cancellation")
+	}
+}

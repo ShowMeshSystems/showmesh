@@ -349,7 +349,7 @@ export interface paths {
         };
         /**
          * The active fpp.endpoints configuration (Step 7 seam A, RES-008 D1)
-         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be persisted, in which case a configuration IS in effect and `GET /fpp` lists it. A client must not read this `404` as "this coordinator is collecting from nothing". `restartRequired` is always `true`: this coordinator does not hot-reload configuration, so a change here takes effect on the coordinator's next restart, never immediately — see `restartRequiredReason`.
+         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be persisted, in which case a configuration IS in effect and `GET /fpp` lists it. A client must not read this `404` as "this coordinator is collecting from nothing". `restartRequired` is always `false` as of 2026-08-14: command dispatch resolves the endpoint list per request and the collector set is reconciled while the process runs, so a change here is in effect immediately for dispatch and within about ten seconds for polling. The field remains on the wire, rather than being removed, because this contract is additive-only within a major version; see `restartRequiredReason`.
          */
         get: operations["getFPPEndpointsConfig"];
         /**
@@ -476,7 +476,7 @@ export interface paths {
         get: operations["getShowMacro"];
         /**
          * Write a new show.macro revision (Step 9)
-         * @description Requires `config:write` (admin only). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `abort`) / `onUnconfirmed` (default `continue`). `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload — including description and onFailure/onUnconfirmed resolved to their defaults — never the raw request body.
+         * @description Requires `config:write` (admin only). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload — including description and onFailure/onUnconfirmed resolved to their defaults — never the raw request body.
          */
         put: operations["putShowMacro"];
         post?: never;
@@ -1018,7 +1018,7 @@ export interface components {
         ConfigFPPEndpointsPayload: {
             endpoints: components["schemas"]["ConfigFPPEndpoint"][];
         };
-        /** @description The body of GET and PUT /config/fpp.endpoints. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always true; restartRequiredReason states why (this coordinator does not hot-reload configuration). */
+        /** @description The body of GET and PUT /config/fpp.endpoints. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false since 2026-08-14 (this configuration is applied without a restart); restartRequiredReason says so in words. The field is retained rather than removed because this contract is additive-only within a major version. */
         FPPEndpointsConfigResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -1033,7 +1033,7 @@ export interface components {
             /** @enum {string} */
             source: "api" | "env_migration";
             /** @constant */
-            restartRequired: true;
+            restartRequired: false;
             restartRequiredReason: string;
         };
         /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
@@ -1243,7 +1243,7 @@ export interface components {
             onUnconfirmed: "continue" | "abort";
             localFallback: components["schemas"]["ConfigShowMacroLocalFallback"];
         };
-        /** @description The WRITE shape of one element of PUT /config/show.macro/{id}'s `steps`. Identical to ConfigShowMacroStep except that onFailure and onUnconfirmed are not required: an absent key takes its documented default (onFailure `abort`, onUnconfirmed `continue`), while a present `null` on either is rejected as invalid. These are the only two keys in this payload where an absent key carries meaning. The response to a successful write is always the resolved ConfigShowMacroStep shape, never this one. */
+        /** @description The WRITE shape of one element of PUT /config/show.macro/{id}'s `steps`. Identical to ConfigShowMacroStep except that onFailure and onUnconfirmed are not required: an absent key takes its documented default (both `continue`), while a present `null` on either is rejected as invalid. These are the only two keys in this payload where an absent key carries meaning. The response to a successful write is always the resolved ConfigShowMacroStep shape, never this one. */
         ConfigShowMacroStepWrite: {
             id: string;
             action: string;
@@ -1473,7 +1473,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `Sec-Fetch-Site: same-origin` was missing (owner decision, 2026-08-12: strict — the identical predicate `CSRFRejected` already applies to every other write, since there is deliberately one CSRF rule in this codebase, not two). Unlike `CSRFRejected`, there is no bearer exemption for this operation: it is unauthenticated by construction, so there is no pre-existing credential that could BE bearer-shaped in the first place. A `curl` login must pass the header explicitly, and a browser sending no `Sec-Fetch-Site` at all (Safari before 16.4) cannot use this endpoint — its path is the bearer-paste break-glass affordance (ADR-024 decision 5), unchanged. */
+        /** @description Neither same-origin signal was present: no `Sec-Fetch-Site: same-origin`, and no `Origin` header naming the host this request was addressed as (owner decision, 2026-08-12: strict; two-signal correction 2026-08-14 — the identical predicate `CSRFRejected` already applies to every other write, since there is deliberately one CSRF rule in this codebase, not two). Unlike `CSRFRejected`, there is no bearer exemption for this operation: it is unauthenticated by construction, so there is no pre-existing credential that could BE bearer-shaped in the first place. A `curl` login must pass one of the two headers explicitly. A browser reaching this response is no longer evidence of an old browser: it means the origin the browser used and the host this coordinator was addressed as disagree, which in practice is a proxy rewriting `Host`. The bearer-paste break-glass affordance (ADR-024 decision 5) remains the fallback path either way. */
         LoginCSRFRejected: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

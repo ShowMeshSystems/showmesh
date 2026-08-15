@@ -103,7 +103,7 @@ describe('MacroDetail (new macro authoring)', () => {
     expect(putShowMacro).toHaveBeenCalledWith(
       'begin-set',
       expect.objectContaining({
-        steps: [expect.objectContaining({ onFailure: 'abort', onUnconfirmed: 'continue' })],
+        steps: [expect.objectContaining({ onFailure: 'continue', onUnconfirmed: 'continue' })],
       }),
     )
   })

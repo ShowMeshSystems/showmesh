@@ -64,8 +64,8 @@ func TestFPPTransportFailureIsFailedNotUnconfirmed(t *testing.T) {
 	if got.Run.Completed == nil || *got.Run.Completed {
 		t.Errorf("run Completed = %v, want false: nothing was dispatched, so \"every step dispatched\" is false", got.Run.Completed)
 	}
-	if got.Steps[1].Outcome != outcomeSkipped {
-		t.Errorf("step 1 outcome = %q, want %q: a failed step aborts the remainder by default", got.Steps[1].Outcome, outcomeSkipped)
+	if got.Steps[1].Outcome == outcomeSkipped {
+		t.Errorf("step 1 outcome = %q: a failed step must no longer suppress the steps after it (owner decision 2026-08-14)", got.Steps[1].Outcome)
 	}
 }
 

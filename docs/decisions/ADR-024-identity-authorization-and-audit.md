@@ -391,6 +391,56 @@ real and it is named here: `Sec-Fetch-Site` requires Safari 16.4 or later, so a
 sufficiently old iOS device cannot use cookie-authenticated writes at all and
 must use the bearer-paste path from decision 5.
 
+**AMENDED 2026-08-14: there is now an `Origin` fallback, and the two
+paragraphs above were wrong in one fact and right in the other.**
+
+The cost estimate was wrong, and the error was not small. `Sec-Fetch-*` is
+not merely a browser-version feature: **Chrome sends no `Sec-Fetch-*` header
+at all to an origin it does not consider potentially trustworthy**, which
+means every plain-HTTP address that is not `localhost`. Measured on one
+machine, one browser, one page, the same `POST`, with only the origin
+differing:
+
+```
+http://192.168.x.x:18099  ->  Origin present, no Sec-Fetch-* at all
+http://localhost:18099    ->  Origin present, Sec-Fetch-Site: same-origin
+```
+
+ShowMesh terminates no TLS (ADR-022), so the practical effect was that the
+browser session path worked on `localhost` and nowhere else. The operator
+reaches the Operator UI from a phone on the show LAN, which is the whole
+point of the responsive layout, and the refusal they got told them to
+update Safari while they were running current Chrome. This was found by
+signing in during Step 9's acceptance run, not by any test.
+
+**So: `Sec-Fetch-Site` decides when the browser sent it, and `Origin`'s
+host decides when it did not. A request carrying neither is still
+refused.** Both headers are set by the browser and neither is settable by
+page script, so a cross-site attacker can forge neither; the fallback
+restores deployments Chrome's own rule had silently excluded rather than
+loosening the check for the ones it already covered.
+
+**The reasoning against the fallback was right about the mechanism, and
+that part is kept.** Comparing `Origin` needs the coordinator's own
+browser-facing origin, and the only honest source for it is `Host`. The
+prohibition on trusting `X-Forwarded-*` is unchanged and is what the
+comparison deliberately does not use. The predicted proxy failure was also
+real, and arrived within minutes of the fallback landing: `ui/nginx.conf`
+forwarded `Host $host`, which strips the port, so a browser on
+`http://<ip>:18081` reached a coordinator that believed its host was
+`<ip>`, and every sign-in was refused over a port mismatch. **The fix was
+to stop the proxy rewriting `Host` (`$http_host`), not to start trusting a
+forwarded header** — which is also what ADR-022 decision 3 asks for
+independently, since removing the proxy must change nothing except the
+origin.
+
+Two further details, both chosen deliberately: the comparison is **host
+only, never scheme**, because a cross-site origin differs in host by
+definition while requiring scheme equality would break the TLS-terminating
+proxy this record itself invites; and `Origin: null`, which a sandboxed
+iframe or a `file://` document sends, carries no host and therefore never
+matches.
+
 **Login and bootstrap carry the same requirement, decided 2026-08-12 and
 amended in.** This record originally left `POST /api/v1/session` uncovered,
 which the section below on what implementation proved wrong records as an

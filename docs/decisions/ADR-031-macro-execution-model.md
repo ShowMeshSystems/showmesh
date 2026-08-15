@@ -23,6 +23,8 @@ This is forced rather than chosen. Step 7 shipped a server holding an unconfirme
 
 ### 2. A failed step aborts the remainder. An unconfirmed step does not
 
+> **SUPERSEDED IN PART, 2026-08-14, by [ADR-033](ADR-033-a-run-always-runs-every-step.md).** The `onFailure` default is now `continue`, not `abort`: a run always runs every step, and a failure is recorded rather than allowed to suppress the sequence. Everything below about the two axes being *independent*, about `unconfirmed` never stopping a show, and about no automatic compensation, stands unchanged and is if anything strengthened. What ADR-033 removes is only this section's choice of which direction the failure axis defaults to, on the grounds that a show control system must not drop commands it was asked to send. `abort` remains available as an explicit per-step choice.
+
 A step that **fails** stops the run, and the run records which step stopped it. A step that resolves **unconfirmed** does not stop the run; it marks the run not confirmed, naming the step. Each behaviour is overridable per step, and each default is the safe direction for its own axis.
 
 **The draft said "fails, or resolves unconfirmed within its deadline", and collapsing those two was wrong.** `failed` means something answered and it was not what the operator declared. `unconfirmed` means evidence was expected and did not arrive. The first is a statement about the show; the second is a statement about ShowMesh's own evidence pipeline. Treating the second as failure is absence of evidence read as evidence of absence, which this project has decided correctly in four other subsystems and got wrong here at the only point that consumes the distinction.

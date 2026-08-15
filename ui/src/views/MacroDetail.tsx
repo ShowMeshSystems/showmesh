@@ -64,7 +64,12 @@ function newStepForm(): StepForm {
   return {
     id: '',
     action: '',
-    onFailure: 'abort',
+    // 'continue' since 2026-08-14 (owner decision: a macro run always runs
+    // every step). This mirrors the server's own resolved default, which is
+    // the only correct value here: a create form that pre-selects something
+    // else silently authors macros that behave differently from ones
+    // written through showmeshctl or curl.
+    onFailure: 'continue',
     onUnconfirmed: 'continue',
     localFallbackClass: 'coordinator-required',
     localFallbackReason: '',

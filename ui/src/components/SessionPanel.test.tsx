@@ -166,6 +166,10 @@ describe('SessionPanel', () => {
     renderPanel(makeModel({ session: signedIn() }))
 
     await user.click(screen.getByRole('button', { name: /Sign out/ }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Safari|16\.4/i)
+    // Asserts the panel surfaces describeApiError's CSRF text at all, keyed
+    // on the cause that text now names (a host disagreement) rather than on
+    // the browser version it used to name — see session.test.ts for why
+    // that changed.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/host/i)
   })
 })

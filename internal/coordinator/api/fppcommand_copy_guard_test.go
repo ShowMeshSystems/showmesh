@@ -98,6 +98,14 @@ type copyGuardExemption struct {
 var copyGuardExemptions = []copyGuardExemption{
 	{"fppcommand_handler.go", `"ADR-024 decision 11's blackout/stop/power-off safety class exemption (pre-dispatch write)"`},
 	{"fppcommand_handler.go", `"the event this entry records already happened and cannot be un-recorded; refusing to answer would only deny the operator the record of it (ADR-024: \"you cannot see\", never acceptable), not protect them from anything"`},
+	// Third entry, added 2026-08-14 with the owner decision that a macro
+	// run never withholds a command for an audit failure. Same disposition
+	// as the two above, verified the same way: it is fed only into
+	// [handlers.reportDegradedAttribution], which writes to this process's
+	// own stderr and reaches no client, and it names the superseded
+	// decision deliberately so whoever reads that log line can find what
+	// made this branch reachable.
+	{"fppcommand_handler.go", `"this dispatch belongs to a macro run, which never withholds a command for an audit failure (owner decision 2026-08-14, superseding ADR-024 decision 11's fail-closed default inside a run)"`},
 }
 
 func copyGuardExemptionSet() map[copyGuardExemption]bool {

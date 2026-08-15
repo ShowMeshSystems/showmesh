@@ -245,30 +245,45 @@ func TestSubmitRunIdempotencyRunsBeforeOverlapGuard(t *testing.T) {
 	e.wg.Wait()
 }
 
-func TestSubmitRunAuditUnavailableAtSubmissionRefusesNonExemptRun(t *testing.T) {
+// TestSubmitRunAuditUnavailableAtSubmissionProceedsForANonExemptRun is the
+// REVERSED form of a test that used to assert the opposite, and the
+// reversal is an owner decision (2026-08-14): a macro run never withholds a
+// command because the audit store is down, whatever its steps' safety
+// classes.
+//
+// The test it replaces asserted a 503 and an empty store. That behaviour
+// was measured against a real unwritable audit_log during the Step 9 wave 3
+// acceptance run, on a [stop, start] macro, and what it actually did was
+// refuse the STOP because the macro also contained a start. Fail-closed
+// protects an operator from an unaccountable actor; here it protected
+// nobody and cost the show its stop.
+//
+// startPlaylist is deliberately still the step under test, because it is
+// NOT one of ADR-024 decision 11's three exempt classes: if the exemption
+// were still what decided this, this test would fail.
+func TestSubmitRunAuditUnavailableAtSubmissionProceedsForANonExemptRun(t *testing.T) {
 	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
 	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
 
-	// startPlaylist is NOT one of ADR-024 decision 11's exempt safety
-	// classes.
 	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", config.ShowSafetyClassNone, map[string]any{"playlist": "Main"}))
 	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
 
 	installFailAuditTrigger(t, storeDir)
 
-	_, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+	result, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
 		MacroObjectID: "m1", IdempotencyKey: "key-1", Trigger: "api", Issuer: testIssuer(),
 	})
 	if err != nil {
 		t.Fatalf("unexpected internal error: %v", err)
 	}
-	if problem == nil || problem.Status != 503 {
-		t.Fatalf("expected a 503 problem when the audit store is unwritable and the run is not all-exempt, got %+v", problem)
+	if problem != nil {
+		t.Fatalf("expected the run to proceed degraded, got problem=%+v", problem)
 	}
-
-	// And nothing was persisted: the transaction rolled back in full.
-	if _, err := e.store.FindRunningMacroRun(context.Background(), "m1"); err == nil {
-		t.Fatalf("a run row was persisted despite the 503 refusal")
+	// Degraded attribution is the cost, and it must be recorded rather
+	// than silently swallowed: a run nobody can attribute is still a run
+	// the operator has to be told about.
+	if !result.Run.AttributionDegraded {
+		t.Fatal("run proceeded with an unwritable audit store but did not record AttributionDegraded")
 	}
 	e.wg.Wait()
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -547,8 +548,69 @@ func (h *handlers) writeGuard(scope *identity.Scope, next http.HandlerFunc) http
 // second, hand-copied comparison that could silently drift out of sync
 // with this one. There is deliberately one CSRF rule in this codebase, not
 // two.
+// TWO SIGNALS, NOT ONE, corrected 2026-08-14 after the Step 9 wave 3
+// acceptance run measured what the original cost. The predicate used to be
+// Sec-Fetch-Site == "same-origin" and nothing else, and the doc comment
+// below names Safari before 16.4 as the only browser that sends no
+// Sec-Fetch-Site. That is false, and the false part is the deployment this
+// project actually has: Chrome sends no Sec-Fetch-* header at all to an
+// origin it does not consider potentially trustworthy, which means every
+// plain-HTTP LAN address. Measured on one machine, one browser, one page,
+// the same POST, with only the origin differing:
+//
+//	http://192.168.x.x:18099  ->  Origin present, no Sec-Fetch-* at all
+//	http://localhost:18099    ->  Origin present, Sec-Fetch-Site: same-origin
+//
+// ShowMesh terminates no TLS (ADR-022), so before this correction the
+// browser session path worked on localhost and nowhere else, while the
+// operator reaches the Operator UI from a phone on the show LAN. The
+// refusal also blamed the wrong thing, telling an operator on Chrome 151
+// to update Safari.
+//
+// So: Sec-Fetch-Site decides when the browser sent it, and Origin decides
+// when it did not. Both are set by the browser and neither is settable by
+// page script, so a cross-site attacker can forge neither; the fallback
+// restores the deployments Chrome's trustworthy-origin rule had silently
+// excluded rather than loosening the check for the ones already covered. A
+// request carrying NEITHER header is still refused, which is what keeps
+// this fail-closed.
 func sameOriginCSRFOK(r *http.Request) bool {
-	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		return site == "same-origin"
+	}
+	return originHostMatchesRequest(r)
+}
+
+// originHostMatchesRequest reports whether r's Origin header names the same
+// host r was addressed as. See [sameOriginCSRFOK] for why this is the
+// fallback signal.
+//
+// The comparison is HOST ONLY, never scheme. A cross-site origin differs in
+// host by definition, so host equality is what carries the CSRF property,
+// while requiring scheme equality would break the one deployment this
+// correction exists to serve: a TLS-terminating reverse proxy in front of a
+// coordinator that speaks plain HTTP, where the browser's own origin is
+// https and nothing inside ShowMesh is.
+//
+// r.Host is the browser's own Host header, which survives the ADR-022
+// proxy: ui/nginx.conf forwards it verbatim (proxy_set_header Host $host)
+// so the coordinator sees the origin the browser used rather than the
+// proxy's upstream name. A proxy that rewrites Host breaks this comparison,
+// and breaking it fails CLOSED (the request is refused), never open.
+//
+// "Origin: null" (a sandboxed iframe, a file:// document) carries no host
+// and so can never match, which is the correct outcome rather than an
+// accident of the parse.
+func originHostMatchesRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // loginCSRFGuard wraps next with S0-2's login CSRF rule for
