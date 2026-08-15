@@ -188,6 +188,17 @@ type Layer struct {
 	ID    string `json:"id"`
 	Index int    `json:"index"`
 
+	// Name is the layer's display name, read from the nested
+	// Param[@name='Name'] inside the layer's own Params block — never
+	// from the <Layer> element's own name attribute, which is always the
+	// literal string "Layer" (ADR-037 decision 7; identical trap and
+	// identical fix to [Clip.Name]). Empty when the layer has no such
+	// Param at all: measured 5 of 18 layers in the operator's own
+	// composition, and this package does not invent a value for those —
+	// a generated positional label is a display concern for a caller
+	// that wants an operator-facing name, not a fact this parser reports.
+	Name string `json:"name"`
+
 	// LayerGroupIndex is the layer's own layerGroup attribute, taken
 	// as-is from the file. It is nil, not zero, when the composition has
 	// no layer groups at all: the file omits the layerGroup attribute
@@ -365,11 +376,14 @@ func ParseWithLimit(r io.Reader, maxBytes int64) (*Composition, error) {
 // name attribute, and on every one of them the value is the literal
 // string "Deck", "Layer", or "Clip" — never the operator's own name for
 // that object. The real names live elsewhere: deck names in
-// CompositionInfo/DeckInfo joined by id, and clip names in a nested
-// Param[@name='Name']. Layers have no separate real name at all in this
-// file; only their index and group membership are recorded. None of the
-// raw structs below capture these literal name attributes, specifically
-// so that nothing downstream can be tempted to read one.
+// CompositionInfo/DeckInfo joined by id, and layer and clip names in a
+// nested Param[@name='Name'] inside that element's own Params block
+// (ADR-037 decision 7 added layers to this rule; clip names were already
+// read this way). A layer's Params block is optional — 5 of 18 layers in
+// the operator's own composition had none — so a layer's Name is simply
+// empty in that case, not an error. None of the raw structs below capture
+// the literal name attributes, specifically so that nothing downstream
+// can be tempted to read one.
 
 type rawComposition struct {
 	CompositionInfo *rawCompositionInfo `xml:"CompositionInfo"`
@@ -401,10 +415,17 @@ type rawDeckInfo struct {
 	Closed string `xml:"closed,attr"`
 }
 
+// rawLayer declares ONLY the elements a layer's own Name lives in — no
+// field here can match anything nested deeper (e.g. inside a clip or an
+// effect the real Layer element may also carry): encoding/xml only
+// descends into elements a struct field names, so an undeclared child is
+// skipped whole, never searched. That is what keeps [layerName] attributed
+// to the layer itself rather than to something the layer merely contains.
 type rawLayer struct {
-	ID         string  `xml:"uniqueId,attr"`
-	Index      *string `xml:"layerIndex,attr"`
-	LayerGroup *string `xml:"layerGroup,attr"`
+	ID         string           `xml:"uniqueId,attr"`
+	Index      *string          `xml:"layerIndex,attr"`
+	LayerGroup *string          `xml:"layerGroup,attr"`
+	Params     []rawParamsBlock `xml:"Params"`
 }
 
 type rawGroup struct {
@@ -548,6 +569,7 @@ func transform(raw *rawComposition) (*Composition, error) {
 		c.Layers = append(c.Layers, Layer{
 			ID:              l.ID,
 			Index:           idx,
+			Name:            layerName(l.Params),
 			LayerGroupIndex: groupIdx,
 		})
 	}
@@ -661,6 +683,27 @@ func transformVersionInfo(vi *rawVersionInfo) WrittenBy {
 		Micro:    micro,
 		Revision: revision,
 	}
+}
+
+// layerName reads a layer's display name out of its own Params blocks —
+// the identical Param[@name='Name'] shape [populateClipContent] reads a
+// clip's Name from. Only the block whose own name attribute is "Params"
+// is searched (a layer, like a clip, may carry more than one Params
+// block), and a layer with no such block, or no such Param inside it,
+// returns "" rather than an invented value — see [Layer.Name]'s own doc
+// comment for why that is correct rather than an omission.
+func layerName(blocks []rawParamsBlock) string {
+	for _, block := range blocks {
+		if block.Name != "Params" {
+			continue
+		}
+		for _, p := range block.Params {
+			if p.Name == "Name" {
+				return p.Value
+			}
+		}
+	}
+	return ""
 }
 
 // populateClipContent fills in the parts of clip that come from a clip's

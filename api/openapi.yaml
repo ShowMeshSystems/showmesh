@@ -3145,8 +3145,12 @@ components:
         as-is from the uploaded composition file — NOT validated to be
         within [0, layerGroups.length). A client that wants an actual
         layerGroups element must bounds-check this value itself before
-        indexing with it.
-      required: [id, index]
+        indexing with it. name is never blank (ADR-037 decisions 4 and 7):
+        it is the operator's own value from the composition file when one
+        exists, or a generated positional label ("Layer <n>") when it does
+        not, and nameGenerated says which — a blank cell is never sent in
+        its place.
+      required: [id, index, name, nameGenerated]
       properties:
         id:
           type: string
@@ -3154,6 +3158,10 @@ components:
           type: integer
         layerGroupIndex:
           type: integer
+        name:
+          type: string
+        nameGenerated:
+          type: boolean
     ResolumeCompositionColumn:
       type: object
       description: One column position within one deck.

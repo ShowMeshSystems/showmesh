@@ -143,6 +143,57 @@ func TestParse_ClipNameComesFromNestedParamNotAttribute(t *testing.T) {
 	}
 }
 
+// TestParse_LayerNameComesFromNestedParamNotAttribute is ADR-037 decision
+// 7's own claim, the layer half of the identical trap
+// TestParse_ClipNameComesFromNestedParamNotAttribute covers for clips: a
+// layer whose <Layer> name attribute is the literal string "Layer" but
+// whose own Params block carries a nested Param[@name='Name'] must be
+// named from that param, not the attribute, and a decoy Params block named
+// "Dashboard" on the same layer must be ignored. This fails if the name is
+// dropped (Layers[0].Name comes back "").
+func TestParse_LayerNameComesFromNestedParamNotAttribute(t *testing.T) {
+	c := mustParseTestdata(t, "complete.avc")
+
+	if len(c.Layers) < 1 {
+		t.Fatalf("len(Layers) = %d, want at least 1", len(c.Layers))
+	}
+	if got, want := c.Layers[0].Name, "Peak Only"; got != want {
+		t.Errorf("Layers[0].Name = %q, want %q (the nested Param[@name='Name'] inside the layer's own \"Params\" block, not the \"Dashboard\" decoy or the element's own name=\"Layer\" attribute)", got, want)
+	}
+}
+
+// TestParse_LayerWithNoNameParamIsEmptyNotInvented is the "5 of 18 layers
+// have no Name param at all" case measured against the operator's real
+// composition: a layer with no Params block whatsoever must decode to an
+// empty Name, never a placeholder invented at parse time — inventing a
+// display label is a presentation decision for a caller, not a fact this
+// parser reports (see [Layer.Name]'s own doc comment). This fails if an
+// unnamed layer renders as anything other than "".
+func TestParse_LayerWithNoNameParamIsEmptyNotInvented(t *testing.T) {
+	c := mustParseTestdata(t, "complete.avc")
+
+	if len(c.Layers) < 2 {
+		t.Fatalf("len(Layers) = %d, want at least 2", len(c.Layers))
+	}
+	if got := c.Layers[1].Name; got != "" {
+		t.Errorf("Layers[1].Name = %q, want \"\" (this layer has no Params block in the fixture)", got)
+	}
+}
+
+// TestParse_LayerNameTrailingSpaceIsPreserved is the "Peak + Under "
+// measurement from ADR-037: an operator-typed name is not an identifier
+// and this package must never trim it, silently or otherwise.
+func TestParse_LayerNameTrailingSpaceIsPreserved(t *testing.T) {
+	c := mustParseTestdata(t, "complete.avc")
+
+	if len(c.Layers) < 3 {
+		t.Fatalf("len(Layers) = %d, want at least 3", len(c.Layers))
+	}
+	if got, want := c.Layers[2].Name, "Peak + Under "; got != want {
+		t.Errorf("Layers[2].Name = %q, want %q (trailing space must survive verbatim)", got, want)
+	}
+}
+
 // TestParse_EmptyClipSlotsExcluded is claim 3: an empty clip slot (a <Clip>
 // element with no children) must not appear in the model, and the count
 // arithmetic must hold: complete.avc has 4 <Clip> elements across both

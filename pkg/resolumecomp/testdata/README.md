@@ -36,7 +36,10 @@ an old assumption pass.
 
 - `complete.avc` — a small two-deck composition exercising deck name
   joining, the clip-name trap (attribute name is the literal `"Clip"`,
-  the real name is in a nested param), empty clip slot exclusion, group
+  the real name is in a nested param), the identical layer-name trap
+  (ADR-037 decision 7: layer 1 is named via its own Params block, layer 2
+  has no Params block at all, and layer 3's name carries a trailing space
+  that must survive unwrapped), empty clip slot exclusion, group
   membership including a layer with no group at all, duplicate `Column`
   elements sharing one `columnIndex`, and two persistent clips.
 - `not-xml.txt` — not XML at all.

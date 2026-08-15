@@ -1,6 +1,6 @@
 # ADR-037: A Resolume Reference Is a Name, Not an Object Id
 
-Status: Accepted (owner decision, 2026-08-15). Not yet implemented.
+Status: Accepted (owner decision, 2026-08-15). **Decision 7 implemented 2026-08-15**; decisions 1 through 6 and 8 are not.
 
 Related: [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) (macros invoke
 logical actions, never protocol commands),
@@ -37,8 +37,12 @@ From `Christmas 25.avc`, the operator's real show, 18 layers and 36 clips:
 
 - **Layers carry user-assigned names, and ShowMesh currently drops them.** The `<Layer>`
   element's own `name` attribute is the generic string `"Layer"` on all 18. The real name
-  lives in a nested `<Param name="Name" T="STRING" value="...">`, which is the identical
-  shape the parser **already reads for decks**. 13 of 18 layers have one: `Peak Only`,
+  lives in a nested `<Param name="Name" T="STRING" value="...">`. **Corrected 2026-08-15
+  during implementation:** an earlier draft of this record said that was the shape the
+  parser already reads deck names from. It is not. Deck names are joined from
+  `CompositionInfo/DeckInfo` by id, a different mechanism entirely; the shape that really
+  is identical is the one used for **clip** names, a `Param[@name='Name']` inside the
+  element's own `Params` block. 13 of 18 layers have one: `Peak Only`,
   `All Front Windows`, `Whole House 1`, `Whole House 2`, `Whole Front`, `Bedroom Window`,
   `Center Window`, `Small Front Windows`, `Below PeakMessage Spaces`, `Peak + Under `,
   `Side`, `Front`. **5 have no name at all.**
@@ -77,8 +81,9 @@ already caught once.
 skipped and never resolved to a neighbour. "The clip named X is not in the current
 composition" is the message; the remedy is to re-bind or re-upload.
 
-**7. The parser must read layer names**, from the same `<Param name="Name">` shape it
-already reads deck names from, and the API and CLI must show them. This is the smallest
+**7. The parser must read layer names**, from the same `Param[@name='Name']`-inside-its-own-`Params`
+shape it already reads **clip** names from (not the deck mechanism, see Context), and the
+API and CLI must show them. This is the smallest
 piece of the work and it delivers most of the day-one value, because it turns eighteen
 integers into a list an operator recognises.
 

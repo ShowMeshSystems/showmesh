@@ -922,10 +922,24 @@ type ResolumeCompositionLayerGroup struct {
 // for why this package does not bounds-check it: a caller that needs an
 // actual [ResolumeCompositionLayerGroup] must check the index against
 // [ResolumeCompositionResponse.LayerGroups] itself before indexing.
+//
+// Name and NameGenerated are ADR-037 decision 7 and decision 4: Name is
+// never blank, so a client never has to special-case an empty string, but
+// a blank cell is not the same claim as an operator's own name, which is
+// why NameGenerated exists as a separate, explicit field rather than a
+// convention like an empty string or a magic prefix. When the composition
+// file carried a Name param for this layer, Name is that value verbatim
+// and NameGenerated is false. When it did not (measured 5 of 18 layers in
+// the operator's own composition), Name is a positional label
+// ("Layer <index+1>") this coordinator invented and NameGenerated is
+// true — an absent value stated with a reason, never rendered as an
+// empty cell (CLAUDE.md's standing rule).
 type ResolumeCompositionLayer struct {
 	ID              string `json:"id"`
 	Index           int    `json:"index"`
 	LayerGroupIndex *int   `json:"layerGroupIndex,omitempty"`
+	Name            string `json:"name"`
+	NameGenerated   bool   `json:"nameGenerated"`
 }
 
 // ResolumeCompositionColumn is one element of

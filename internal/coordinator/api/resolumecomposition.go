@@ -596,7 +596,14 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 
 	layers := make([]v1.ResolumeCompositionLayer, 0, len(c.Layers))
 	for _, l := range c.Layers {
-		layers = append(layers, v1.ResolumeCompositionLayer{ID: l.ID, Index: l.Index, LayerGroupIndex: l.LayerGroupIndex})
+		name, generated := resolumeLayerDisplayName(l)
+		layers = append(layers, v1.ResolumeCompositionLayer{
+			ID:              l.ID,
+			Index:           l.Index,
+			LayerGroupIndex: l.LayerGroupIndex,
+			Name:            name,
+			NameGenerated:   generated,
+		})
 	}
 
 	columns := make([]v1.ResolumeCompositionColumn, 0, len(c.Columns))
@@ -626,6 +633,23 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 		Clips:           clips,
 		PersistentClips: persistentClips,
 	}
+}
+
+// resolumeLayerDisplayName is ADR-037 decision 7 (the parser must read
+// layer names and the API must show them) plus decision 4 (an unnamed
+// object gets a stable generated label, visibly generated rather than
+// passed off as authored). l.Name is the operator's own value, verbatim,
+// when the uploaded file carried a Name param for this layer. When it did
+// not — measured 5 of 18 layers in the operator's own composition — this
+// invents a positional label from the layer's 0-based Index rather than
+// ever sending an empty string: CLAUDE.md's standing rule is that absent
+// evidence is stated, never omitted, because a blank cell reads as fine.
+// generated tells a client which case it got.
+func resolumeLayerDisplayName(l resolumecomp.Layer) (name string, generated bool) {
+	if l.Name != "" {
+		return l.Name, false
+	}
+	return fmt.Sprintf("Layer %d", l.Index+1), true
 }
 
 // mapResolumeCompositionClip renders one [resolumecomp.Clip] onto the

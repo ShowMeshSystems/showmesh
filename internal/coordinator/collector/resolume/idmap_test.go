@@ -195,6 +195,30 @@ func TestBuildTrackedCompositionLayerGroupMembership(t *testing.T) {
 	}
 }
 
+// TestBuildTrackedCompositionLayerName is ADR-037 decision 7's own claim
+// carried through to the bridge type: complete.avc's first layer is named
+// "Peak Only" via its own Params block, its second layer has no Params
+// block at all, and [TrackedLayer.Name] must reflect exactly that — not
+// drop the name, and not invent one for the unnamed layer.
+func TestBuildTrackedCompositionLayerName(t *testing.T) {
+	comp := parseTestComposition(t)
+	tc, err := BuildTrackedComposition(comp)
+	if err != nil {
+		t.Fatalf("BuildTrackedComposition: %v", err)
+	}
+
+	layers := tc.Layers()
+	if len(layers) != 3 {
+		t.Fatalf("Layers() len = %d, want 3", len(layers))
+	}
+	if layers[0].Name != "Peak Only" {
+		t.Errorf("layers[0].Name = %q, want %q", layers[0].Name, "Peak Only")
+	}
+	if layers[1].Name != "" {
+		t.Errorf("layers[1].Name = %q, want \"\" (no Params block in the fixture)", layers[1].Name)
+	}
+}
+
 func TestBuildTrackedCompositionNilComposition(t *testing.T) {
 	tc, err := BuildTrackedComposition(nil)
 	if err == nil {

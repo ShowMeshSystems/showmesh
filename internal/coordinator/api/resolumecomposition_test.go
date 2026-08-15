@@ -709,6 +709,55 @@ func TestResolumeCompositionGetAfterUploadReturnsClipsWithDecks(t *testing.T) {
 	}
 }
 
+// TestResolumeCompositionGetLayersCarryNamesOrAGeneratedLabel is ADR-037
+// decision 7 (the parser reads layer names and the API shows them) and
+// decision 4 (an unnamed layer gets a stable generated label, marked as
+// generated, never a blank cell). complete.avc's first layer is named
+// "Peak Only" via its own Params block; its second layer has no Params
+// block at all and must come back with a non-blank, clearly-generated
+// name instead. This fails if a layer's name is dropped on the way to the
+// wire, and it fails if the unnamed layer renders as an empty string.
+func TestResolumeCompositionGetLayersCarryNamesOrAGeneratedLabel(t *testing.T) {
+	api, headers := resolumeCompositionAdminAPI(t)
+
+	content := mustReadResolumeCompositionTestdata(t, "complete.avc")
+	uploadResp, uploadBody := doResolumeCompositionUpload(t, api.Handler, "show.avc", content, headers)
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("upload status = %d, want 200; body: %s", uploadResp.StatusCode, uploadBody)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/resolume/composition", headers)
+	m := decodeMap(t, getBody)
+
+	layers, ok := m["layers"].([]any)
+	if !ok || len(layers) != 3 {
+		t.Fatalf("layers = %v, want 3", m["layers"])
+	}
+
+	first, ok := layers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("layers[0] is not an object: %v", layers[0])
+	}
+	if name, _ := first["name"].(string); name != "Peak Only" {
+		t.Errorf("layers[0].name = %v, want %q (the operator's own name must survive to the wire)", first["name"], "Peak Only")
+	}
+	if generated, _ := first["nameGenerated"].(bool); generated {
+		t.Errorf("layers[0].nameGenerated = %v, want false (this layer has an authored name)", first["nameGenerated"])
+	}
+
+	second, ok := layers[1].(map[string]any)
+	if !ok {
+		t.Fatalf("layers[1] is not an object: %v", layers[1])
+	}
+	name, hasName := second["name"].(string)
+	if !hasName || name == "" {
+		t.Errorf("layers[1].name = %v, want a non-blank generated label (this layer has no Params block in the fixture)", second["name"])
+	}
+	if generated, _ := second["nameGenerated"].(bool); !generated {
+		t.Errorf("layers[1].nameGenerated = %v, want true (this layer's name was invented, not authored)", second["nameGenerated"])
+	}
+}
+
 // --- 7: a second upload creates a second revision rather than mutating
 // the first. ---
 

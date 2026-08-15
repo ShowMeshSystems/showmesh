@@ -100,6 +100,15 @@ type TrackedColumn struct {
 type TrackedLayer struct {
 	ID ObjectID
 
+	// Name is the layer's own display name (ADR-037 decision 7), read
+	// from resolumecomp.Layer.Name exactly as parsed: empty when the
+	// layer's own composition file entry carried no Name param at all.
+	// This package invents no positional label for that case — that is a
+	// display decision for a caller rendering an operator-facing surface
+	// (see internal/coordinator/api's composition mapper), not a fact
+	// about the composition itself.
+	Name string
+
 	// LayerGroupID is the id of the layer group this layer belongs to, or
 	// nil when the composition has no layer groups at all, or when the
 	// layer's own layerGroup index (as the file states it) does not
@@ -481,7 +490,7 @@ func BuildTrackedComposition(comp *resolumecomp.Composition) (*TrackedCompositio
 			// invent a group that is not there.
 		}
 
-		layers = append(layers, TrackedLayer{ID: id, LayerGroupID: groupID})
+		layers = append(layers, TrackedLayer{ID: id, Name: l.Name, LayerGroupID: groupID})
 		layerIndexToID[l.Index] = id
 	}
 

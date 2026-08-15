@@ -983,11 +983,13 @@ export interface components {
             id: string;
             index: number;
         };
-        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. When present, it is the layer's own layerGroup value taken as-is from the uploaded composition file — NOT validated to be within [0, layerGroups.length). A client that wants an actual layerGroups element must bounds-check this value itself before indexing with it. */
+        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. When present, it is the layer's own layerGroup value taken as-is from the uploaded composition file — NOT validated to be within [0, layerGroups.length). A client that wants an actual layerGroups element must bounds-check this value itself before indexing with it. name is never blank (ADR-037 decisions 4 and 7): it is the operator's own value from the composition file when one exists, or a generated positional label ("Layer <n>") when it does not, and nameGenerated says which — a blank cell is never sent in its place. */
         ResolumeCompositionLayer: {
             id: string;
             index: number;
             layerGroupIndex?: number;
+            name: string;
+            nameGenerated: boolean;
         };
         /** @description One column position within one deck. */
         ResolumeCompositionColumn: {

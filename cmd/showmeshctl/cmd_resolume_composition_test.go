@@ -220,15 +220,16 @@ func TestCmdResolumeCompositionShowNothingStored(t *testing.T) {
 // testResolumeCompositionResponse is shaped EXACTLY like the coordinator's
 // real wire type (v1.ResolumeCompositionResponse,
 // internal/coordinator/api/v1/types.go) — review finding A's own fix.
-// layerGroups is {id, index}, layers is {id, index, layerGroupIndex}, and
-// columns is {id, deckId, index}: none of the three carry a "name" on the
-// wire at all (there is no name for a layer group or a column anywhere in
-// the .avc format, and a layer's own real name does not exist in the file
-// either — only its index and group membership do, per
-// pkg/resolumecomp.Layer's own doc comment). An earlier version of this
-// fixture invented a "name" field for all three, which is exactly the
-// defect this fixture exists to catch: it silently agreed with the CLI's
-// own wrong types instead of the server's real contract.
+// layerGroups is {id, index} and columns is {id, deckId, index}: neither
+// carries a "name" on the wire at all — there is no name for a layer
+// group or a column anywhere in the .avc format. An earlier version of
+// this fixture invented a "name" field for all three (including layers),
+// which is exactly the defect this fixture exists to catch: it silently
+// agreed with the CLI's own wrong types instead of the server's real
+// contract. layers now genuinely does carry {id, index, layerGroupIndex,
+// name, nameGenerated} (ADR-037 decision 7): layer-1 has an operator-
+// authored name, layer-2 has none in the source file and so carries a
+// coordinator-generated one with nameGenerated:true.
 //
 // layer-2 has NO layerGroupIndex (the composition-has-no-groups-for-this-
 // layer case, omitted rather than sent as null) and clip-2/clip-p1 omit
@@ -254,7 +255,7 @@ const testResolumeCompositionResponse = `{
 	},
 	"decks": [{"id": "deck-a", "name": "Main", "closed": false, "clipCount": 2}, {"id": "deck-b", "name": "Halloween", "closed": true, "clipCount": 1}],
 	"layerGroups": [{"id": "lg-1", "index": 0}],
-	"layers": [{"id": "layer-1", "index": 0, "layerGroupIndex": 0}, {"id": "layer-2", "index": 1}],
+	"layers": [{"id": "layer-1", "index": 0, "layerGroupIndex": 0, "name": "Peak Only", "nameGenerated": false}, {"id": "layer-2", "index": 1, "name": "Layer 2", "nameGenerated": true}],
 	"columns": [{"id": "col-1", "deckId": "deck-a", "index": 1}, {"id": "col-2", "deckId": "deck-b", "index": 1}],
 	"clips": [
 		{"id": "clip-1", "deckId": "deck-a", "layerIndex": 1, "columnIndex": 1, "name": "Snow", "transportTypeIndex": 0, "sourcePath": "/media/snow.mp4", "width": 1920, "height": 1080},
@@ -343,6 +344,16 @@ func TestCmdResolumeCompositionShowJSONEmitsRawDocument(t *testing.T) {
 	}
 	if got.Layers[1].Index != 1 || got.Layers[1].LayerGroupIndex != nil {
 		t.Errorf("layers[1] = %+v, want index:1 layerGroupIndex:nil (omitted on the wire)", got.Layers[1])
+	}
+
+	// ADR-037 decision 7: an authored layer name must decode intact, and
+	// decision 4's generated label must decode with its NameGenerated
+	// flag set — this fails if either is dropped.
+	if got.Layers[0].Name != "Peak Only" || got.Layers[0].NameGenerated {
+		t.Errorf("layers[0] = %+v, want name:\"Peak Only\" nameGenerated:false", got.Layers[0])
+	}
+	if got.Layers[1].Name != "Layer 2" || !got.Layers[1].NameGenerated {
+		t.Errorf("layers[1] = %+v, want name:\"Layer 2\" nameGenerated:true", got.Layers[1])
 	}
 	if len(got.Columns) != 2 {
 		t.Fatalf("len(columns) = %d, want 2", len(got.Columns))
@@ -595,6 +606,39 @@ func TestCmdResolumeCompositionShowGroupsClipsByDeck(t *testing.T) {
 	// silently folded into a deck's clip list.
 	if countdownIdx < pumpkinIdx {
 		t.Errorf("clip-p1 (persistent) appeared before clip-3 (a deck's clip); persistent clips must never be mixed into a deck's own list; stdout=%s", out)
+	}
+}
+
+// TestCmdResolumeCompositionShowPrintsLayerNames is ADR-037 decisions 4
+// and 7's own text-table test: the layers table must carry a NAME column,
+// an authored name must print verbatim, and an unnamed layer's
+// coordinator-generated label must be visibly marked as generated rather
+// than printed as if the operator had typed it. This fails if the name is
+// dropped from the table, and it fails if the generated label renders
+// indistinguishably from an authored one.
+func TestCmdResolumeCompositionShowPrintsLayerNames(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testResolumeCompositionResponse)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolume([]string{"composition", "show", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+
+	if !strings.Contains(out, "NAME") {
+		t.Errorf("stdout has no NAME column header in the layers table; stdout=%s", out)
+	}
+	if !strings.Contains(out, "Peak Only") {
+		t.Errorf("stdout does not contain the authored layer name %q; stdout=%s", "Peak Only", out)
+	}
+	if !strings.Contains(out, "Layer 2 (generated)") {
+		t.Errorf("stdout does not contain the generated layer label marked as generated; stdout=%s", out)
 	}
 }
 

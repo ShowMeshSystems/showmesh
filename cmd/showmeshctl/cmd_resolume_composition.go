@@ -139,10 +139,14 @@ type resolumeLayerGroup struct {
 // reference.
 //
 // Review finding A: an earlier version declared {id, name} — the same
-// invented-field mistake as [resolumeLayerGroup]. The server sends
-// {id, index, layerGroupIndex}, and layerGroupIndex is exactly half of
-// the "structural id map" ADR-032 decision 1 exists to store: which group
-// a layer belongs to. LayerGroupIndex is a pointer, matching the server's
+// invented-field mistake as [resolumeLayerGroup]. That was wrong at the
+// time (a layer's own name attribute is a literal "Layer", never the
+// operator's), but ADR-037 decision 7 made "name" real: the server now
+// reads a layer's actual name from the composition file's own nested
+// Param and sends it here as "name", never blank — see Name and
+// NameGenerated below. layerGroupIndex is exactly half of the
+// "structural id map" ADR-032 decision 1 exists to store: which group a
+// layer belongs to. LayerGroupIndex is a pointer, matching the server's
 // own [omitempty] rule (internal/coordinator/api/v1/types.go's
 // ResolumeCompositionLayer): absent, not sent as null, when the
 // composition has no layer groups at all.
@@ -150,6 +154,15 @@ type resolumeLayer struct {
 	ID              string `json:"id"`
 	Index           int    `json:"index"`
 	LayerGroupIndex *int   `json:"layerGroupIndex,omitempty"`
+
+	// Name is the layer's own display name: the operator's own value
+	// when the composition file carried one, or a coordinator-generated
+	// positional label ("Layer <n>") when it did not (ADR-037 decisions 4
+	// and 7). Always present and never blank — NameGenerated says which
+	// case this is, so this program can mark a generated label as such
+	// rather than passing it off as something the operator typed.
+	Name          string `json:"name"`
+	NameGenerated bool   `json:"nameGenerated"`
 }
 
 // resolumeColumn is one element of the stored id map's columns.
@@ -752,9 +765,9 @@ func printResolumeCompositionIDMap(w io.Writer, resp resolumeCompositionResponse
 		_, _ = fmt.Fprintln(w, "  (none)")
 	} else {
 		tw := newTabWriter(w)
-		_, _ = fmt.Fprintln(tw, "  ID\tINDEX\tLAYER GROUP INDEX")
+		_, _ = fmt.Fprintln(tw, "  ID\tNAME\tINDEX\tLAYER GROUP INDEX")
 		for _, l := range resp.Layers {
-			_, _ = fmt.Fprintf(tw, "  %s\t%d\t%s\n", l.ID, l.Index, formatIntPtr(l.LayerGroupIndex))
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%d\t%s\n", l.ID, formatResolumeLayerName(l), l.Index, formatIntPtr(l.LayerGroupIndex))
 		}
 		_ = tw.Flush()
 	}
@@ -770,6 +783,18 @@ func printResolumeCompositionIDMap(w io.Writer, resp resolumeCompositionResponse
 		}
 		_ = tw.Flush()
 	}
+}
+
+// formatResolumeLayerName renders a layer's name for the text table,
+// marking a coordinator-generated label as generated (ADR-037 decision 4)
+// rather than letting it look like something the operator typed — the
+// server's own l.Name is never blank, so this never has to fall back to a
+// placeholder of its own.
+func formatResolumeLayerName(l resolumeLayer) string {
+	if l.NameGenerated {
+		return l.Name + " (generated)"
+	}
+	return l.Name
 }
 
 // formatIntPtr renders an optional integer field for a text table: the
