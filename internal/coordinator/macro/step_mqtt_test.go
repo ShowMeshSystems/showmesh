@@ -77,9 +77,9 @@ func TestResolveMQTTPayloadMatch(t *testing.T) {
 
 // TestExpectKindNoneNeverConfirms is acceptance criterion 5: an
 // expect.kind:none step reports unconfirmable, on every run, and never
-// confirmed. This is the required break-test 5 (see nudge_test.go's
-// sibling break-tests for the others recorded in this builder's report):
-// broken by making publishAndAwait return outcomeConfirmed for
+// confirmed. This is the required break-test 5 (see this builder's own
+// report for the sibling break-tests): broken by making publishAndAwait
+// return outcomeConfirmed for
 // MQTTExpectKindNone instead of outcomeUnconfirmable, which made this
 // test fail as expected before being reverted.
 func TestExpectKindNoneNeverConfirms(t *testing.T) {

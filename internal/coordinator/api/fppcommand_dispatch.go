@@ -477,61 +477,6 @@ func fppCommandAuditRunParams(runID string) map[string]any {
 	return map[string]any{"runId": runID}
 }
 
-// FPPPollNudgeWindower is optionally implemented by an [FPPPollNudger] that
-// can also report, deterministically, when its next accepted
-// [FPPPollNudger.NudgePoll] for one instance ID would land — see
-// [internal/coordinator/collector.Runner.NextNudgeAt], the production
-// implementation. Declared here, not in interfaces.go (this wave's other
-// two builders' files touch neither this file nor interfaces.go, but
-// interfaces.go is not one of the fppcommand_*.go files this task's own
-// brief scopes to, so it stays untouched): adding a method to
-// [FPPPollNudger] itself would be a breaking change to every existing
-// implementation of that interface, including [noFPPPollNudger] and every
-// test double already built against it — exactly the kind of behavior
-// change this refactor's own hard constraint forbids doing incidentally.
-// [FPPCommandDispatcher.NextNudgeAt] below checks for this OPTIONAL
-// capability via a type assertion instead.
-type FPPPollNudgeWindower interface {
-	NextNudgeAt(instanceID string) (time.Time, bool)
-}
-
-// NextNudgeAt reports when a nudge for instanceID would next be accepted,
-// per [FPPPollNudgeWindower] — Step 9's macro executor's own defense
-// against STEP-9-SPEC.md section 6.3's starvation trap: a same-instance
-// step dispatched inside the collector's post-nudge rate-limit window gets
-// no nudge and falls back to the collector's ordinary ~15s poll cadence,
-// which can outrun that step's own confirmation deadline and report
-// "unconfirmed" for a command that worked.
-//
-// This must NEVER be used to delay dispatch, and STEP-9-SPEC.md section
-// 6.3 (corrected 2026-08-14) replaces an earlier version of this section
-// that said otherwise. Holding a step back until the limiter window has
-// passed means delaying a show-affecting dispatch, potentially a stop,
-// potentially a blackout, by up to 2s per step so that its own telemetry
-// arrives sooner. That is monitoring impairing control, the exact
-// inversion of the rule the limiter's own doc comment cites as its reason
-// for existing. The executor dispatches every step immediately, with no
-// exception for this window, and uses the value this method returns only
-// to schedule its own confirmation read: when to look, never when to act.
-//
-// ok is false when the wired [Dependencies.Nudger] does not implement
-// [FPPPollNudgeWindower], including [noFPPPollNudger] and any test double
-// built only against [FPPPollNudger] itself, or when instanceID names a
-// collector [internal/coordinator/collector.Runner.Add] was never called
-// for. Neither is an error: the caller has no information to act on
-// either way and must fall back to its own judgement for scheduling the
-// confirmation read (its own fixed wait, say), exactly like a
-// [FPPPollNudger.NudgePoll] call that returns false. This method does not
-// itself call NudgePoll and does not change the limiter's own state or
-// policy: a purely read-only query, added additively.
-func (d *FPPCommandDispatcher) NextNudgeAt(instanceID string) (t time.Time, ok bool) {
-	w, ok := d.h.deps.Nudger.(FPPPollNudgeWindower)
-	if !ok {
-		return time.Time{}, false
-	}
-	return w.NextNudgeAt(instanceID)
-}
-
 // dispatchFPPCommand is the ONE dispatch/confirm/audit core both
 // [handlers.handleFPPCommand] (the wire adapter, fppcommand_handler.go)
 // and [FPPCommandDispatcher.Dispatch] (this file) call. It reproduces that

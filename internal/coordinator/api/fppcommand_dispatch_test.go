@@ -21,8 +21,8 @@ import (
 // [handlers.dispatchFPPCommand] is the SAME code either way, so re-running
 // every one of those scenarios a second time here would only prove Go
 // functions are deterministic. What is new here, and untested until this
-// file, is the exported surface itself: [FPPCommandDispatcher.Dispatch],
-// [FPPCommandSafetyClassForAction], and [FPPCommandDispatcher.NextNudgeAt].
+// file, is the exported surface itself: [FPPCommandDispatcher.Dispatch] and
+// [FPPCommandSafetyClassForAction].
 
 // TestFPPCommandDispatcherMatchesHTTPPathForSuccess dispatches the
 // identical stopPlaylist command twice against one fake bench fppd — once
@@ -209,97 +209,6 @@ func TestFPPCommandSafetyClassForAction(t *testing.T) {
 		})
 	}
 }
-
-// fppPollNudgeWindowerFake implements both [FPPPollNudger] and
-// [FPPPollNudgeWindower] — a test double for a wired Nudger that DOES
-// support the deterministic nudge-window query, matching what
-// [internal/coordinator/collector.Runner] provides in production (see
-// that type's own NextNudgeAt).
-type fppPollNudgeWindowerFake struct {
-	next     map[string]time.Time
-	knownIDs map[string]bool
-}
-
-func (f *fppPollNudgeWindowerFake) NudgePoll(string) bool { return false }
-
-func (f *fppPollNudgeWindowerFake) NextNudgeAt(instanceID string) (time.Time, bool) {
-	if !f.knownIDs[instanceID] {
-		return time.Time{}, false
-	}
-	return f.next[instanceID], true
-}
-
-// TestFPPCommandDispatcherNextNudgeAt proves the additive nudge-window
-// query: it is available when the wired Nudger implements
-// [FPPPollNudgeWindower] (reporting exactly what that Nudger reports), and
-// reports ok=false — never a fabricated time — when it does not
-// ([noFPPPollNudger], [Dependencies]' own zero-value default, and any
-// plain [FPPPollNudger] test double that implements NudgePoll alone).
-func TestFPPCommandDispatcherNextNudgeAt(t *testing.T) {
-	t.Run("nudger supports the window query", func(t *testing.T) {
-		want := testNow.Add(1500 * time.Millisecond)
-		nudger := &fppPollNudgeWindowerFake{
-			next:     map[string]time.Time{"bench-fpp": want},
-			knownIDs: map[string]bool{"bench-fpp": true},
-		}
-		setup := newFPPCommandTestSetup(t, fixedClock(testNow))
-		deps := setup.deps()
-		deps.Nudger = nudger
-		dispatcher := NewFPPCommandDispatcher(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
-
-		got, ok := dispatcher.NextNudgeAt("bench-fpp")
-		if !ok {
-			t.Fatal("ok = false, want true — the wired Nudger implements FPPPollNudgeWindower")
-		}
-		if !got.Equal(want) {
-			t.Errorf("NextNudgeAt = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("unknown instance id reports ok=false", func(t *testing.T) {
-		nudger := &fppPollNudgeWindowerFake{next: map[string]time.Time{}, knownIDs: map[string]bool{}}
-		setup := newFPPCommandTestSetup(t, fixedClock(testNow))
-		deps := setup.deps()
-		deps.Nudger = nudger
-		dispatcher := NewFPPCommandDispatcher(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
-
-		if _, ok := dispatcher.NextNudgeAt("no-such-instance"); ok {
-			t.Error("ok = true for an instance id never registered with the Nudger, want false")
-		}
-	})
-
-	t.Run("default unwired Nudger reports ok=false, never a fabricated time", func(t *testing.T) {
-		setup := newFPPCommandTestSetup(t, fixedClock(testNow))
-		// deps().Nudger is left nil -> Dependencies.withDefaults() installs
-		// noFPPPollNudger, which does not implement FPPPollNudgeWindower.
-		dispatcher := NewFPPCommandDispatcher(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
-
-		got, ok := dispatcher.NextNudgeAt("bench-fpp")
-		if ok {
-			t.Errorf("ok = true with no FPPPollNudgeWindower wired in, want false (got %v)", got)
-		}
-	})
-
-	t.Run("a plain FPPPollNudger without the window capability reports ok=false", func(t *testing.T) {
-		setup := newFPPCommandTestSetup(t, fixedClock(testNow))
-		deps := setup.deps()
-		deps.Nudger = plainNudgerFake{}
-		dispatcher := NewFPPCommandDispatcher(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
-
-		if _, ok := dispatcher.NextNudgeAt("bench-fpp"); ok {
-			t.Error("ok = true for a Nudger that only implements FPPPollNudger, want false")
-		}
-	})
-}
-
-// plainNudgerFake implements ONLY [FPPPollNudger] — deliberately NOT
-// [FPPPollNudgeWindower] — proving [FPPCommandDispatcher.NextNudgeAt]'s
-// type assertion degrades cleanly for a Nudger built before this
-// capability existed (every pre-Step-9 test double in this package is
-// exactly this shape).
-type plainNudgerFake struct{}
-
-func (plainNudgerFake) NudgePoll(string) bool { return true }
 
 // TestFPPCommandDispatcherThreadsRequestedRevisionAndRunID proves
 // [FPPCommandInput.RequestedRevision] reaches the dispatched command's own

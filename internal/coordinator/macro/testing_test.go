@@ -177,9 +177,6 @@ type fakeDispatcher struct {
 	calls []api.FPPCommandInput
 
 	dispatchFn func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error)
-
-	nextNudgeAt time.Time
-	nextNudgeOK bool
 }
 
 func (f *fakeDispatcher) Dispatch(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
@@ -195,10 +192,6 @@ func (f *fakeDispatcher) Dispatch(ctx context.Context, in api.FPPCommandInput) (
 		Outcome: "confirmed", OutcomeState: "current", OutcomeReason: "test evidence confirmed",
 		DispatchedAt: ptrTime(now), ResolvedAt: ptrTime(now),
 	}, nil, nil
-}
-
-func (f *fakeDispatcher) NextNudgeAt(instanceID string) (time.Time, bool) {
-	return f.nextNudgeAt, f.nextNudgeOK
 }
 
 func (f *fakeDispatcher) callCount() int {

@@ -47,7 +47,6 @@ import (
 // precedent).
 type fppDispatcher interface {
 	Dispatch(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error)
-	NextNudgeAt(instanceID string) (time.Time, bool)
 }
 
 // mqttRegistry is this package's own minimal view of [broker.Registry]:

@@ -114,14 +114,30 @@ type entry struct {
 // DefaultNudgeMinInterval is [Runner]'s default minimum spacing between two
 // accepted [Runner.Nudge] calls for the same collector id. SHOWMESH
 // HYPOTHESIS, NOT MEASURED — RES-009 (failure-mode testing) owns real
-// evidence; this exists only to keep a burst of dispatched commands (or,
-// once Step 9 ships, a macro's own sequence of primitives) from turning
-// into a poll storm against one live FPP host, per OBSERVABILITY section
-// 5's "monitoring cannot impair show devices." Chosen short enough that
-// back-to-back commands touching DIFFERENT instances are each still
-// nudged (Nudge is keyed per id, not global), and long enough that two
-// commands touching the SAME instance within one confirmation wait cannot
-// each demand their own out-of-band poll.
+// evidence; this exists only to keep a burst of dispatched commands,
+// including a macro's own sequence of primitives against one instance,
+// from turning into a poll storm against one live FPP host, per
+// OBSERVABILITY section 5's "monitoring cannot impair show devices."
+// Chosen short enough that back-to-back commands touching DIFFERENT
+// instances are each still nudged (Nudge is keyed per id, not global), and
+// long enough that two commands touching the SAME instance within one
+// confirmation wait cannot each demand their own out-of-band poll.
+//
+// A step whose nudge lands inside this window falls back to the
+// collector's ordinary poll cadence, which was once flagged as a risk of
+// outrunning a command's own confirmation deadline. That has now been
+// measured, not just reasoned about: a four-step macro against one bench
+// host produced the expected alternating pattern, roughly half a second
+// for steps whose nudge landed and 14.542s/15.004s for the two that fell
+// back to ordinary polling, against a 20s confirmation deadline — a
+// worst-case margin of about five seconds, with nothing reported
+// unconfirmed. A reservation query that would have let a caller predict
+// this window and schedule its own confirmation read around it was built
+// against that risk and never wired to any consumer; it was removed on
+// this measurement, not on taste. If the margin ever tightens — a slower
+// host, a longer poll cadence, or a third collector source sharing this
+// instance — the identified remedy is a re-nudge inside the caller's
+// existing confirmation tick, not reviving a reservation.
 const DefaultNudgeMinInterval = 2 * time.Second
 
 // Runner owns the lifecycle of a set of Collectors: it polls each on its
@@ -254,59 +270,6 @@ func (r *Runner) Nudge(id string) bool {
 		// yet — coalesce rather than block or accumulate a second one.
 		return false
 	}
-}
-
-// NextNudgeAt reports the earliest time a [Runner.Nudge] call for id would
-// be ACCEPTED rather than suppressed by the per-id rate limit
-// (nudgeMinInterval) — the deterministic query Step 9's macro executor
-// needs (BUILD-PLAN's STEP-9-SPEC.md section 6.3): a macro dispatching a
-// second step at the same FPP instance inside Nudge's own rate-limit
-// window gets no nudge for that step and silently falls back to the
-// collector's ordinary ~15s poll cadence, which can outrun a command's own
-// confirmation deadline. Calling Nudge itself and reading its bool return
-// cannot answer "when would it next be accepted", only "was it accepted
-// just now".
-//
-// This is NOT a signal to delay dispatch. STEP-9-SPEC.md section 6.3
-// (corrected 2026-08-14) is explicit that waiting for this window before
-// dispatching delays a show-affecting command, potentially a stop,
-// potentially a blackout, so that its own telemetry arrives sooner, which
-// is monitoring impairing control and inverts the reason this limiter
-// exists in the first place. The executor dispatches every step
-// immediately and uses the returned time only to schedule when it reads
-// for confirmation, never to decide when to act.
-//
-// ok is false when id is not registered at all (no [Add] call named it —
-// the identical "unknown id" case [Nudge] itself reports via its own false
-// return), matching this method's sibling exactly. When ok is true and id
-// has never been nudged, the returned time is the zero [time.Time], which
-// every real comparison (`time.Now().Before(next)`) already treats as
-// "in the past" — i.e. a nudge is acceptable right now, with no special
-// case needed at the call site. This method does NOT report whether a
-// nudge is currently PENDING (the buffered-channel coalescing case in
-// [Nudge]'s own doc comment) — that state is transient, self-clearing
-// within one Poll cycle, and already harmless for a second caller (Nudge
-// simply returns false and the collector polls anyway); NextNudgeAt exists
-// for the rate-limit window specifically, the one that actually starves a
-// macro step.
-//
-// Reads the same nudgeMinInterval and lastNudgeAt state [Nudge] itself
-// reads, under the same mutex, and changes neither — purely additive, and
-// safe to call concurrently with [Nudge] and with itself, from any
-// goroutine, at any time (including before [Run] starts, exactly like
-// [Nudge]).
-func (r *Runner) NextNudgeAt(id string) (t time.Time, ok bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, known := r.nudgeChans[id]; !known {
-		return time.Time{}, false
-	}
-	last, seen := r.lastNudgeAt[id]
-	if !seen {
-		return time.Time{}, true
-	}
-	return last.Add(r.nudgeMinInterval), true
 }
 
 // Run polls every registered collector on its own cadence until ctx is
