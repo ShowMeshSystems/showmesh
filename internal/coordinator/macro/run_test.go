@@ -8,6 +8,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -271,5 +272,203 @@ func TestReconcileFinishesStrandedRunsNotCompleted(t *testing.T) {
 	// A second Reconcile call is a no-op, not an error.
 	if err := e.Reconcile(context.Background()); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
+	}
+}
+
+// TestReconcileDoesNotRecordADispatchedStepAsSkipped is this task's own
+// required break-test: a real coordinator was SIGKILLed partway through a
+// four-step macro. Step 0 had already resolved before the kill. Step 1 had
+// DISPATCHED — its command reached FPP and changed the volume to 42 — but
+// the process died before the dispatch call returned, so
+// macro_run_steps.dispatched_at/command_id for step 1 were never written.
+// Steps 2 and 3 never started at all.
+//
+// This reproduces that shape directly against the store (bypassing
+// SubmitRun/executeRun, exactly like TestReconcileFinishesStrandedRunsNotCompleted
+// above): a "running" run with all-pending steps, plus a commands row
+// inserted and resolved under step 1's own deterministic idempotency key —
+// api.ReconcileStrandedFPPCommands' own job, simulated here since this
+// package does not import that function — to stand in for "the command-side
+// reconciler already ran and found this command stranded."
+//
+// Before the fix, Reconcile blanket-marked every unresolved step "skipped",
+// including step 1, discarding the fact that it had dispatched and erasing
+// its command_id. After the fix, step 1 must read resolved with its
+// command's own recorded outcome, never skipped.
+func TestReconcileDoesNotRecordADispatchedStepAsSkipped(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putAction(t, st, "a2", fppAction("fpp-main", "setVolume", "none", map[string]any{"volume": int64(42)}))
+	putAction(t, st, "a3", fppAction("fpp-main", "pausePlaylist", "none", map[string]any{}))
+	putAction(t, st, "a4", fppAction("fpp-main", "resumePlaylist", "none", map[string]any{}))
+	putMacro(t, st, "m1", testMacroPayload(
+		testStep("s1", "a1"), testStep("s2", "a2"), testStep("s3", "a3"), testStep("s4", "a4"),
+	))
+
+	rm, err := e.resolveMacro(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("resolveMacro: %v", err)
+	}
+	steps := buildStepRecords(rm)
+	run, _, err := e.store.CreateMacroRun(context.Background(), storeRunRecord("stranded-dispatched", "m1", rm.Revision), steps)
+	if err != nil {
+		t.Fatalf("create stranded run: %v", err)
+	}
+
+	// Step 0 (s1) resolved normally before the kill.
+	state := stepStateResolved
+	outcome := outcomeConfirmed
+	outcomeState := "current"
+	outcomeReason := "confirmed before the restart"
+	resolvedAt := time.Now()
+	if err := st.UpdateMacroRunStepOutcome(context.Background(), run.ID, 0, store.MacroRunStepOutcomeUpdate{
+		State: &state, DispatchedAt: &resolvedAt, ResolvedAt: &resolvedAt,
+		Outcome: &outcome, OutcomeState: &outcomeState, OutcomeReason: &outcomeReason,
+	}); err != nil {
+		t.Fatalf("resolve step 0: %v", err)
+	}
+
+	// Step 1 (s2, setVolume) DISPATCHED — its command reached FPP — but
+	// never resolved before the kill, and macro_run_steps was never
+	// touched for it: it is still exactly as CreateMacroRun left it
+	// (state=pending, dispatched_at=NULL, command_id=NULL).
+	cmdID := "cmd-stranded-1"
+	cmdKey := stepIdempotencyKey(run.ID, 1)
+	dispatchedAt := time.Now().Add(-10 * time.Second)
+	cmdResolvedAt := time.Now().Add(-5 * time.Second)
+	if _, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: cmdID, IdempotencyKey: cmdKey, Action: "fpp.set_volume", TargetKind: "fpp", TargetID: "fpp-main",
+		ParamsJSON: `{"volume":42}`, IssuerPrincipalID: "p1", IssuerPrincipalName: "tester", State: "dispatched",
+	}); err != nil {
+		t.Fatalf("insert stranded command: %v", err)
+	}
+	// Simulate api.ReconcileStrandedFPPCommands having already resolved
+	// this command — the real reason text it writes, verbatim, since the
+	// fix must propagate it rather than replace it.
+	cmdOutcomeReason := "resolved by startup reconciliation, not by this command's own original request (see this coordinator's " +
+		"own log for why: a restart or an abandoned connection left it dispatched but never resolved): no fpp.volume reading has " +
+		"arrived since this command was dispatched; the most recent evidence predates dispatch, it cannot confirm this command"
+	resultJSON := `{"outcome":"unconfirmed"}`
+	cmdOutcomeState := "unknown_age"
+	resolvedState := "resolved"
+	if err := st.UpdateCommandOutcome(context.Background(), cmdID, store.CommandOutcomeUpdate{
+		DispatchedAt: &dispatchedAt, ResolvedAt: &cmdResolvedAt, State: &resolvedState,
+		ResultJSON: &resultJSON, OutcomeState: &cmdOutcomeState, OutcomeReason: &cmdOutcomeReason,
+	}); err != nil {
+		t.Fatalf("resolve stranded command: %v", err)
+	}
+
+	// Steps 2 and 3 (s3, s4) never started at all: left exactly as
+	// CreateMacroRun wrote them.
+
+	if err := e.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	_, gotSteps, err := e.store.GetMacroRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get reconciled run: %v", err)
+	}
+
+	s1 := gotSteps[1]
+	if s1.State == stepStateSkipped || s1.Outcome == outcomeSkipped {
+		t.Fatalf("step 1 (which DISPATCHED — its command changed FPP's volume to 42) was recorded as skipped: %+v", s1)
+	}
+	if s1.CommandID == nil || *s1.CommandID != cmdID {
+		t.Fatalf("step 1 CommandID = %v, want %q — the dispatched command must not be discarded", s1.CommandID, cmdID)
+	}
+	if s1.DispatchedAt == nil {
+		t.Fatalf("step 1 DispatchedAt is nil, want the command's own dispatch time — this step DID dispatch")
+	}
+	if s1.Outcome != outcomeUnconfirmed {
+		t.Fatalf("step 1 Outcome = %q, want %q (the command's own resolved outcome)", s1.Outcome, outcomeUnconfirmed)
+	}
+	if s1.OutcomeReason == "" || s1.OutcomeReason == "the coordinator restarted before this step was dispatched or resolved" {
+		t.Fatalf("step 1 OutcomeReason = %q, must reflect the command's own outcome, not the generic never-dispatched reason", s1.OutcomeReason)
+	}
+
+	// Steps 2 and 3 genuinely never dispatched (no command row exists for
+	// either), so they must still read skipped.
+	for _, idx := range []int{2, 3} {
+		s := gotSteps[idx]
+		if s.Outcome != outcomeSkipped {
+			t.Fatalf("step %d Outcome = %q, want %q (no command row exists for it)", idx, s.Outcome, outcomeSkipped)
+		}
+	}
+}
+
+// TestReconcileMQTTStepMidFlightIsNotSkipped is this task's MQTT
+// requirement: an MQTT step has no commands-table row the way an FPP step
+// does, so the one durable trace a dispatch-in-progress step leaves behind
+// is its own DISPATCH audit entry (step_mqtt.go's dispatchMQTTStep writes
+// it before ever calling Publish). A step with that entry present dispatched
+// — this coordinator cannot tell whether the publish itself reached the
+// broker or a response arrived before the crash, so it must read
+// unconfirmed with a reason saying exactly that, never "skipped". A step
+// with no such entry genuinely never started and must still read skipped.
+func TestReconcileMQTTStepMidFlightIsNotSkipped(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	expect := config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindBoolean}
+	putAction(t, st, "a1", mqttAction("home-automation", "none", expect))
+	putAction(t, st, "a2", mqttAction("home-automation", "none", expect))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1"), testStep("s2", "a2")))
+
+	rm, err := e.resolveMacro(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("resolveMacro: %v", err)
+	}
+	steps := buildStepRecords(rm)
+	run, _, err := e.store.CreateMacroRun(context.Background(), storeRunRecord("stranded-mqtt", "m1", rm.Revision), steps)
+	if err != nil {
+		t.Fatalf("create stranded run: %v", err)
+	}
+
+	// Step 0's dispatch began before the kill: its own DISPATCH audit
+	// entry was written (mirroring dispatchMQTTStep's own write, step_mqtt.go),
+	// but nothing else about it — whether Publish ever ran, whether a
+	// response arrived — was ever recorded, because the process died
+	// before dispatchMQTTStep returned and macro_run_steps was never
+	// touched for it.
+	key := stepIdempotencyKey(run.ID, 0)
+	if err := svc.WriteAudit(context.Background(), identity.AuditEntry{
+		Timestamp: time.Now(), PrincipalID: "p1", PrincipalName: "tester",
+		Action: "mqtt.publish", Target: "home-automation:test/publish", IdempotencyKey: key,
+		Kind: identity.AuditDispatch,
+	}); err != nil {
+		t.Fatalf("write dispatch audit entry: %v", err)
+	}
+
+	// Step 1 never started: no audit entry under its own key.
+
+	if err := e.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	_, gotSteps, err := e.store.GetMacroRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get reconciled run: %v", err)
+	}
+
+	s0 := gotSteps[0]
+	if s0.Outcome == outcomeSkipped {
+		t.Fatalf("step 0 (whose dispatch audit entry proves it started) was recorded as skipped: %+v", s0)
+	}
+	if s0.DispatchedAt == nil {
+		t.Fatalf("step 0 DispatchedAt is nil, want the audit entry's own recorded time")
+	}
+	if s0.Outcome != outcomeUnconfirmed {
+		t.Fatalf("step 0 Outcome = %q, want %q", s0.Outcome, outcomeUnconfirmed)
+	}
+	if s0.OutcomeReason == "" || s0.OutcomeReason == "the coordinator restarted before this step was dispatched or resolved" {
+		t.Fatalf("step 0 OutcomeReason = %q, must state the genuine uncertainty, not the generic never-dispatched reason", s0.OutcomeReason)
+	}
+
+	s1 := gotSteps[1]
+	if s1.Outcome != outcomeSkipped {
+		t.Fatalf("step 1 Outcome = %q, want %q (no dispatch audit entry exists for it)", s1.Outcome, outcomeSkipped)
 	}
 }

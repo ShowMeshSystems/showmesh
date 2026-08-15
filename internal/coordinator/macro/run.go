@@ -199,8 +199,13 @@ func (e *Executor) skipRemaining(ctx context.Context, runID string, rest []store
 // called once at coordinator startup, before the server begins listening,
 // alongside [api.ReconcileStrandedFPPCommands]. Every run left "running"
 // from a prior process is finished completed:false with a reason naming
-// the restart; its remaining unresolved steps are marked resolved (never
-// dispatched, never retried) rather than left permanently blank.
+// the restart; its remaining unresolved steps are resolved rather than
+// left permanently blank — never retried, but also never assumed to have
+// been "never dispatched": [resolveStrandedStep] (reconcile_step.go)
+// checks each one's own durable evidence (an FPP step's commands row, an
+// MQTT step's dispatch audit entry) before deciding, so a step that
+// genuinely reached FPP or a broker before the crash is recorded as
+// dispatched, not skipped.
 //
 // This never starts a goroutine and never touches [Executor.wg]: a
 // reconciled run is not resumed, so there is nothing to execute in the
@@ -212,18 +217,11 @@ func (e *Executor) Reconcile(ctx context.Context) error {
 	}
 
 	now := e.now()
-	const restartReason = "the coordinator restarted while this run was in progress; its remaining steps were not dispatched"
+	const restartReason = "the coordinator restarted while this run was in progress; some remaining steps may not have dispatched"
+	const neverDispatchedReason = "the coordinator restarted before this step was dispatched or resolved"
 
 	var firstErr error
 	for _, run := range running {
-		// Confirmed is not simply false here: [store.Store.FinishMacroRun]'s
-		// own doc comment requires it be "set to whatever had already
-		// been earned by the steps that resolved before the
-		// interruption" — a run stopped after three genuinely confirmed
-		// steps is not the same fact as one stopped after an unconfirmed
-		// one, even though both are completed:false. Read BEFORE
-		// resolving the unresolved steps below, so "already resolved"
-		// means what it says.
 		_, steps, err := e.store.GetMacroRun(ctx, run.ID)
 		if err != nil {
 			e.logError("macro reconcile: failed to read run steps", "runId", run.ID, "error", err)
@@ -232,6 +230,51 @@ func (e *Executor) Reconcile(ctx context.Context) error {
 			}
 			continue
 		}
+
+		// Resolve every step this run left unresolved — not by blanket
+		// marking them all "skipped" (the defect this loop used to have:
+		// a step that had actually dispatched before the crash, an FPP
+		// command that reached the hardware or an MQTT publish that
+		// reached the broker, got recorded as though it had never been
+		// attempted). resolveStrandedStep (reconcile_step.go) decides,
+		// per step and per integration, whether this coordinator's own
+		// durable records show the step reached its dispatch seam before
+		// the prior process stopped existing, and if so, records what
+		// that seam's own evidence says — never "skipped" for a step that
+		// dispatched, regardless of whether it ever resolved.
+		stepErr := false
+		for _, st := range steps {
+			if st.ResolvedAt != nil {
+				continue // already resolved before the crash; untouched
+			}
+			if err := e.resolveStrandedStep(ctx, run.ID, st, now, neverDispatchedReason); err != nil {
+				e.logError("macro reconcile: failed to resolve a stranded step", "runId", run.ID, "stepIndex", st.StepIndex, "error", err)
+				stepErr = true
+				break
+			}
+		}
+		if stepErr {
+			// Leave this run "running": a step-level failure here means
+			// this coordinator could not determine what actually
+			// happened to at least one step, which is exactly the case
+			// where finishing the run anyway (with whatever the OTHER
+			// steps say) risks the same "recorded skipped for a step
+			// that dispatched" defect this loop exists to close. The
+			// next restart's Reconcile call will retry this run from
+			// scratch.
+			if firstErr == nil {
+				firstErr = fmt.Errorf("macro: reconcile: resolve stranded steps for run %q: a step could not be resolved", run.ID)
+			}
+			continue
+		}
+
+		// Re-read: confirmedSoFar must reflect what THIS reconciliation
+		// just recorded above (a recovered step may itself have resolved
+		// confirmed, or unconfirmed with its own evidence-backed reason),
+		// not the pre-recovery snapshot, which — before a step's own
+		// dispatch is recovered — cannot tell "dispatched" apart from
+		// "never touched."
+		//
 		// A run is confirmed only if every step actually produced
 		// post-dispatch evidence, so an interrupted run whose steps
 		// never resolved is not confirmed. It is not "confirmed
@@ -246,21 +289,20 @@ func (e *Executor) Reconcile(ctx context.Context) error {
 		// the surfaces to render the two booleans distinctly, which
 		// makes that reading actively misleading rather than merely
 		// wrong.
+		_, steps, err = e.store.GetMacroRun(ctx, run.ID)
+		if err != nil {
+			e.logError("macro reconcile: failed to re-read run steps after resolving them", "runId", run.ID, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		confirmedSoFar := len(steps) > 0
 		for _, st := range steps {
 			if st.ResolvedAt == nil || st.Outcome != outcomeConfirmed {
 				confirmedSoFar = false
 				break
 			}
-		}
-
-		if _, err := e.store.ResolveUnresolvedMacroRunSteps(ctx, run.ID, now, stepStateSkipped, outcomeSkipped, stepStateSkipped,
-			"the coordinator restarted before this step was dispatched or resolved"); err != nil {
-			e.logError("macro reconcile: failed to resolve unresolved steps", "runId", run.ID, "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
 		}
 
 		if err := e.store.FinishMacroRun(ctx, run.ID, store.MacroRunFinishUpdate{

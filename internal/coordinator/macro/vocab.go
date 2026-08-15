@@ -55,6 +55,18 @@ const (
 	mqttStateTransportError      = "transport_error"
 	mqttStateAuditUnavailable    = "audit_unavailable"
 	mqttStatePublishFailed       = "publish_failed"
+
+	// mqttStateRestartInterrupted is produced ONLY by the startup
+	// reconciler (run.go's Reconcile, via reconcile_step.go), never by
+	// ordinary dispatch (step_mqtt.go). It marks the one case an MQTT step
+	// has no commands-table row to fall back on for: a dispatch audit
+	// entry exists for this step's own idempotency key (so this
+	// coordinator DID begin dispatching it before the prior process
+	// stopped existing), but nothing records whether the publish itself
+	// reached the broker or a response arrived before the crash. Neither
+	// "confirmed" nor "skipped" is honest here — see reconcile_step.go's
+	// own doc comment.
+	mqttStateRestartInterrupted = "restart_interrupted"
 )
 
 // mqttResponseQoS is the QoS this package subscribes at when waiting for

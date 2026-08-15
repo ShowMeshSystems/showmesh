@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -217,6 +218,46 @@ const (
 	DefaultAuditPageSize = 100
 	MaxAuditPageSize     = 500
 )
+
+// AuditKindDispatch mirrors identity.AuditKind's "dispatch" member by
+// value. This package cannot import internal/coordinator/identity to reuse
+// that constant directly — identity already imports store (identity/audit.go
+// is the one place the two types meet) — so, exactly like
+// [MacroRunStepRecord]'s own "not validated by this package" columns, the
+// wire value is duplicated here rather than shared. Used by
+// [Store.FindAuditDispatchEntry].
+const AuditKindDispatch = "dispatch"
+
+// FindAuditDispatchEntry returns the earliest "dispatch"-kind audit_log row
+// recorded under idempotencyKey, and true — or a zero [AuditRecord] and
+// false if none exists (never an error for "not found"; a real lookup
+// failure is returned as err).
+//
+// This exists for the macro startup reconciler (internal/coordinator/macro,
+// ADR-031 decision 4): an MQTT-integration step has no commands-table row
+// the way an FPP step does, so a dispatch audit entry — written before the
+// publish attempt, by [identity.Service.WriteAudit] — is the only durable
+// evidence this coordinator ever records that a given step's dispatch
+// began before a prior process stopped existing. Its presence does not
+// prove the publish itself reached the broker (a crash can land between
+// the audit write and the call to publish), only that the coordinator
+// started that step; the reconciler states that distinction honestly
+// rather than treating the entry's presence as confirmation.
+func (s *Store) FindAuditDispatchEntry(ctx context.Context, idempotencyKey string) (AuditRecord, bool, error) {
+	guardNotInTx(ctx, "Store.FindAuditDispatchEntry")
+	row := s.db.QueryRowContext(ctx, `
+		SELECT`+auditColumns+`
+		FROM audit_log WHERE idempotency_key = ? AND kind = ? ORDER BY id ASC LIMIT 1
+	`, idempotencyKey, AuditKindDispatch)
+	rec, err := scanAudit(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AuditRecord{}, false, nil
+	}
+	if err != nil {
+		return AuditRecord{}, false, fmt.Errorf("store: find audit dispatch entry: %w", err)
+	}
+	return rec, true, nil
+}
 
 // ListAuditEntries returns audit entries with id > since, ordered
 // ascending, capped at limit (limit <= 0 defaults to
