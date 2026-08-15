@@ -801,6 +801,31 @@ func ValidateFPPEndpoints(endpoints []FPPEndpoint) error {
 	return validateFPPEndpoints(endpoints)
 }
 
+// reservedCollectorIDs are ids the coordinator registers on the shared
+// collector.Runner for collectors that are not FPP endpoints.
+//
+// An endpoint may not claim one, and the failure without this check is
+// silent rather than loud: collector.Runner.Add returns early on an id it
+// already holds, so the endpoint is accepted, logged as started, and never
+// polled, while removing it later calls Runner.Remove on that id and stops
+// the collector that really owns it. Startup ordering does not save this
+// either, because fpp.endpoints is a configuration surface that changes
+// while the process runs.
+//
+// Held as literals rather than imported from the collector packages so
+// this rule runs at config-load time and on the API write path without
+// this package depending on either; TestReservedCollectorIDsMatchTheReal
+// Registrations (internal/coordinator) is what keeps the two in step.
+//
+// SHOWMESH_RESOLUME_ID is deliberately NOT here: it is operator-settable
+// and is cross-checked against the endpoint list by
+// [ValidateResolumeIDAgainstFPPEndpoints] only when a Resolume instance is
+// actually configured, so an endpoint named "resolume" stays legal on a
+// coordinator that has no Resolume.
+var reservedCollectorIDs = map[string]bool{
+	"fpp-mqtt": true, // internal/coordinator/collector/fppmqtt's Collector.ID
+}
+
 // validateFPPEndpoints enforces the semantic rules a structural
 // parseFPPEndpoints pair must additionally satisfy: a valid node-ID-syntax
 // id (contract section 7), a URL with an http/https scheme and a host, no
@@ -814,6 +839,10 @@ func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 	for _, ep := range endpoints {
 		if err := mqttproto.ValidateNodeID(ep.ID); err != nil {
 			return fmt.Errorf("%s: instance id %q: %w", envFPPEndpoints, ep.ID, err)
+		}
+		if reservedCollectorIDs[ep.ID] {
+			return fmt.Errorf("%s: instance id %q is reserved for one of this coordinator's own collectors and cannot name an FPP endpoint; rename the endpoint",
+				envFPPEndpoints, ep.ID)
 		}
 		if seen[ep.ID] {
 			return fmt.Errorf("%s: duplicate instance id %q", envFPPEndpoints, ep.ID)

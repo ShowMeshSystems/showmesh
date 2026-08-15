@@ -155,11 +155,19 @@ const fppCollectorReconcileInterval = 10 * time.Second
 // than as no change, because "same id, different host" is exactly the
 // case an id-only comparison would sail past while every subsequent poll
 // went to the old host.
+// Only ids this loop has itself put in `live` are ever removed, so a
+// collector another subsystem registered on the same Runner (the FPP MQTT
+// collector, the Resolume collector) is never touched here.
+//
+// interval is a parameter rather than a direct read of
+// [fppCollectorReconcileInterval] so a test can drive a pass without
+// waiting ten seconds for one.
 func reconcileFPPCollectors(
 	ctx context.Context,
 	runner *collector.Runner,
 	source fppEndpointProvider,
 	newCollector func(id, url string) (collector.Collector, error),
+	interval time.Duration,
 	logger *slog.Logger,
 ) {
 	live := map[string]string{} // id -> url currently being polled
@@ -170,7 +178,7 @@ func reconcileFPPCollectors(
 		live[ep.ID] = ep.URL
 	}
 
-	ticker := time.NewTicker(fppCollectorReconcileInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

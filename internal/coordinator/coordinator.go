@@ -596,7 +596,7 @@ func Run() int {
 	newFPPCollector := func(id, url string) (collector.Collector, error) {
 		return fpp.New(id, url, fpp.Options{HTTPClient: fppHTTPClient})
 	}
-	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, logger)
+	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, fppCollectorReconcileInterval, logger)
 
 	// Seam B's FPP MQTT collector (internal/coordinator/collector/fppmqtt),
 	// contract section 5.4: constructed and registered only when its broker
