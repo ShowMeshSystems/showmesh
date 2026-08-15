@@ -90,6 +90,69 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
+# --- Seed the playlists the primitive-command suite starts by name -------
+#
+# fpp_command_primitives_test.go starts two playlists by name,
+# "showmesh-test" and "showmesh-bench-3item", neither of which anything in
+# this repo creates: both were written by hand into this container's media
+# volume during the Step 8 capture, so this developer's long-lived
+# container has always had them while a fresh container (every CI run
+# since 2026-08-14) does not, and every startPlaylist-dependent case fails
+# there with fpp.status idle instead of playing. Both playlists are
+# pause-only main-playlist items, so they need no media file underneath
+# them. Seeded idempotently: a file already present is left untouched, so
+# this warm local container's own copies (and any hand-edits made to them)
+# are never overwritten and the block is a no-op on every re-run here.
+# Skipped entirely when SHOWMESH_TEST_FPP_URL was set by the caller, for
+# the same reason the export a few lines down is conditional: a set
+# SHOWMESH_TEST_FPP_URL means an operator pointed this script at something
+# other than our own bench container, and this script never writes to
+# that.
+if [ -z "${SHOWMESH_TEST_FPP_URL:-}" ]; then
+  seed_playlist() {
+    local name="$1" json="$2" path="/home/fpp/media/playlists/${1}.json"
+    if docker exec "$CONTAINER_NAME" test -f "$path"; then
+      return 0
+    fi
+    echo "test-integration-fpp: seeding playlist ${name}.json (absent in $CONTAINER_NAME)"
+    docker exec "$CONTAINER_NAME" mkdir -p /home/fpp/media/playlists
+    docker exec -i "$CONTAINER_NAME" sh -c "cat > '$path'" <<EOF
+$json
+EOF
+  }
+
+  seed_playlist "showmesh-test" '{
+    "name": "showmesh-test",
+    "leadIn": [],
+    "mainPlaylist": [
+        {"type": "pause", "duration": 120, "enabled": 1}
+    ],
+    "leadOut": [],
+    "playlistInfo": {"leadIn_items": 0, "leadIn_duration": 0, "mainPlaylist_items": 1, "mainPlaylist_duration": 120, "leadOut_items": 0, "leadOut_duration": 0, "total_items": 1, "total_duration": 120},
+    "repeat": 0,
+    "loopCount": 0,
+    "empty": false,
+    "desc": "showmesh bench test playlist",
+    "version": 4
+}'
+
+  seed_playlist "showmesh-bench-3item" '{
+    "name": "showmesh-bench-3item",
+    "desc": "Step 8 capture: 3 pause items",
+    "version": 4,
+    "repeat": 0,
+    "loopCount": 0,
+    "leadIn": [],
+    "leadOut": [],
+    "mainPlaylist": [
+        {"type": "pause", "duration": 60, "enabled": 1},
+        {"type": "pause", "duration": 60, "enabled": 1},
+        {"type": "pause", "duration": 60, "enabled": 1}
+    ],
+    "playlistInfo": {"leadIn_items": 0, "leadIn_duration": 0, "mainPlaylist_items": 3, "mainPlaylist_duration": 180, "leadOut_items": 0, "leadOut_duration": 0, "total_items": 3, "total_duration": 180}
+}'
+fi
+
 echo "test-integration-fpp: running against $FPP_URL (container $CONTAINER_NAME)"
 # Only exported when the caller actually overrode it: the Go suite's
 # destructive container-recreate test (integration_test.go) treats a SET
@@ -204,7 +267,12 @@ fi
 # command vocabulary (docs/bench/fpp-command-vocabulary.md section 4).
 # Named explicitly here for the identical reason the seven above already
 # are.
-FPP_RUN_PATTERN='^(TestFPPSuccessPathThroughRealCoordinator|TestFPPCommandAgainstRealCoordinatorAndBenchFPP|TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline|TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict|TestRemainingFPPPrimitivesConfirmAgainstBenchFPP|TestStopPlaylistGracefullyConfirmsWhileShowStillRunning|TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms|TestUnconfirmedFPPCommandReportsStatedReasonNeverSuccessful|TestStartAndStopPlaylistConfirmOnlyOnPostDispatchEvidenceTimed|TestIfBusyRefusesReplacesAndAllowsSamePlaylist|TestFPPCommandParamsAbsentNullEmptyDistinctionEndToEnd|TestCollectorReadOnlyPostureUnchangedByCommandSurface)$'
+#
+# Step 9's macro_run_submit_timeout_test.go is fppd-dependent too and is
+# named here because this script is the only harness that supplies an
+# fppd: left out, the workflow's path filter would trigger a run that
+# never executes the file that triggered it.
+FPP_RUN_PATTERN='^(TestFPPSuccessPathThroughRealCoordinator|TestFPPCommandAgainstRealCoordinatorAndBenchFPP|TestCLIStopPlaylistTimeoutSurvivesServerConfirmDeadline|TestFPPCommandReplayOnParameterizedCommandDispatchesNothingAuditsAsReplayAndRefusesParamConflict|TestRemainingFPPPrimitivesConfirmAgainstBenchFPP|TestStopPlaylistGracefullyConfirmsWhileShowStillRunning|TestNextPlaylistItemAtLastItemEndsPlaylistAndConfirms|TestUnconfirmedFPPCommandReportsStatedReasonNeverSuccessful|TestStartAndStopPlaylistConfirmOnlyOnPostDispatchEvidenceTimed|TestIfBusyRefusesReplacesAndAllowsSamePlaylist|TestFPPCommandParamsAbsentNullEmptyDistinctionEndToEnd|TestCollectorReadOnlyPostureUnchangedByCommandSurface|TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency)$'
 
 # Step 8's own additions each make at least one real, unshrunk wait against
 # the bench fppd's actual behavior (a confirmation deadline running to its

@@ -26,6 +26,9 @@ on:
       - "bench/fpp-multisync/**"
       - "scripts/test-integration-fpp.sh"
       - "test/integration/fpp_e2e_test.go"
+      - "test/integration/fpp_command_primitives_test.go"
+      - "test/integration/fpp_command_test.go"
+      - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
   pull_request:
     paths:
@@ -36,6 +39,9 @@ on:
       - "bench/fpp-multisync/**"
       - "scripts/test-integration-fpp.sh"
       - "test/integration/fpp_e2e_test.go"
+      - "test/integration/fpp_command_primitives_test.go"
+      - "test/integration/fpp_command_test.go"
+      - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
   schedule:
     # 05:00 UTC nightly, offset from no other scheduled job in this repo
