@@ -6,6 +6,14 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## A branch that is never pushed is never linted
+
+**Step 9's close-out.** The `step-9-wave-3` branch ran every local gate before merging: `gofmt`, `go vet`, `go test -race`, the UI suite, the FPP integration suite. All green, honestly reported, and the claim was believed. But `golangci-lint` runs only in CI, and the branch was never pushed, so the one gate that would have failed was the one gate the branch never met: the merge landed on `main` with 63 lint findings, and CI had already been red since the day before on Track D's own findings, so the new ones arrived invisibly behind the old ones.
+
+Two halves generalize. A branch's "all gates green" silently excludes every gate that only exists somewhere the branch has not been. And a red gate on `main` is not background noise; it hides every new failure merged in behind it, because red-plus-more is still just red.
+
+**Rule:** before claiming a branch passes the gates, enumerate the gates that run only elsewhere (CI-only linters, scheduled suites) and either run them locally or state that they were not run. And treat a red gate on `main` as an outage to fix, not a condition to work around, for exactly as long as it takes to make new failures visible again.
+
 ## A refusal is not a null action
 
 **Track D, seam D-3, three times in one diff.** A guard that cannot read its evidence refused the action. Applied to `launchClip` that is right: refusing a start costs only that the clip does not start. Applied to `blackout` it is the inversion this project has now caught four times. Three instances shipped together: a pre-dispatch baseline read that failed refused every action; an identity reading older than fifteen minutes refused every action, and because surveys are event-driven and [ADR-033](../decisions/ADR-033-show-mode.md) Show Mode closes the WebSocket, that refusal was permanent until something else happened to trigger a survey; and a coordinator sitting quietly overnight would have hit both.
@@ -77,6 +85,10 @@ Verified by loading the real UI over the machine's LAN address in Chrome and rea
 **The corollary, found while writing the regression test:** `delete globalThis.crypto.randomUUID` does **not** remove it, because Node defines it on `Crypto.prototype` rather than as an own property, so `delete` on the instance silently no-ops. The first version of the test passed without ever exercising the fallback. A test double that fails to take effect is a test that passes for the wrong reason, and it is invisible unless you assert the fallback actually ran.
 
 **Rule:** before shipping a browser API, check whether it is gated on a secure context, and check what the deployment's real origin is. When you mock a built-in to prove a fallback, assert that the fallback ran, not merely that the call returned something.
+
+**Step 9's close-out found the inverse case: state the test environment has, rather than a capability it lacks.** `make test-integration-fpp` was green locally and red in CI from the day the Step 8 primitives suite landed. The difference was two playlists, `showmesh-test` and `showmesh-bench-3item`, created by hand in the local bench container during the Step 8 capture and seeded by nothing in the repository, so every `startPlaylist`-dependent test passed on the one machine that had them and failed on every fresh runner. The build log first recorded the red suite as "container state, not chased", which reads as warm-up luck; it was a permanently red gate, and the project's most load-bearing integration proof rested on fixture state exactly one machine possessed. The fix seeds the playlists idempotently in the harness that starts the container.
+
+**Rule:** when a suite depends on state inside a long-lived test container, the harness that starts the container seeds that state. A fixture made by hand exists on exactly one machine, and a green run against it is a claim about that machine, not about the code.
 
 ## A test can report success while never having run at all
 

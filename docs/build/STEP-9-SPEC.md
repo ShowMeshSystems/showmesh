@@ -302,6 +302,8 @@ Writes require `config:write` and are audited in the same transaction as the rev
 
 **Write-time validation does not close the in-flight case and this specification does not pretend it does.** An operator can `PUT` `fpp.endpoints` removing `fpp-main` while a run sits at step 2 of 5. §6.1 pins the macro and action revisions; `fpp.endpoints` is a different configuration object with no pin. So step 3 dispatches against an instance that no longer exists.
 
+> **SUPERSEDED IN PART, 2026-08-14, by [ADR-035](../decisions/ADR-035-a-run-always-runs-every-step.md).** The paragraph below ends by stating the old `onFailure` default and endorsing it. Under ADR-035 the default is `continue`: the step resolves `failed` exactly as described, and the later steps still dispatch, with the run reporting `completed: false` and naming this step. An author who wants a fleet-shape change to stop the sequence declares `onFailure: abort` on the step, which is the explicit per-step choice ADR-035 preserved. The `failed`-not-`skipped` distinction is unchanged.
+
 **That resolves `failed`**, with a reason naming the instance and saying it was removed during the run. It is not `skipped`: something was declared, it is gone, and the operator needs to know the difference between a step that was deliberately passed over and a step whose target evaporated. Under §2.2's default that aborts the run, which is correct here, because continuing a show-start sequence against a fleet that changed shape mid-run is the case where stopping loudly is right.
 
 `show` references stay unvalidated for existence, per §5.2, because the Show object is Track E's and does not exist yet.
