@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-08-14
 
-Related: [ADR-004](ADR-004-primitives-macros-local-fallback.md) (reduced local fallback),
+Related: [ADR-004](ADR-004-layered-commands-and-fallback.md) (reduced local fallback),
 [ADR-011](ADR-011-context-aware-observability.md) (lifecycle context changes alert meaning),
 [ADR-016](ADR-016-controlled-devices-and-control-providers.md) (controlled devices hold no fallback),
 [ADR-024](ADR-024-identity-authorization-and-audit.md) (writes need a principal; degradation must not cost control),

@@ -9,47 +9,23 @@ import (
 	"net/http"
 )
 
-// This file is Track D seam D-3's own extension of [Client]: the seven
-// write calls TRACK-D-D3-SPEC.md §2's table names, plus the one additional
-// targeted GET (Column) that table's launchColumn confirming predicate
-// needs and D-2 never had a reason to read. It lives in its own file,
-// deliberately never edited into client.go, so client.go's own claim ("no
-// method that can send Resolume a POST, PUT, or DELETE") stays a true
-// statement about that file specifically — see this package's own doc
-// comment for the package-level version of that claim, corrected for D-3.
+// D-3's extension of [Client]: the write calls TRACK-D-D3-SPEC.md §2's table
+// names, plus the one targeted GET (Column) launchColumn's confirming
+// predicate needs. Kept out of client.go so that file's own claim — no method
+// there can send a POST, PUT or DELETE — stays true of that file.
 //
-// Every write method below issues exactly the one call its own name
-// promises. None of them, and nothing else in this file, builds the string
-// "/composition" — guardfullcomposition_test.go's own AST guard scans every
-// non-test .go file in this package's directory, this one included, and
-// still passes.
-//
-// # The wire shapes here are settled by specification, not by measurement
-//
-// Arena's own OpenAPI specification (docs/bench/resolume-control-surface.md
-// section 17) states the REQUEST SHAPE for every call in this file —
-// method, path, and body schema — precisely, which supersedes this
-// package's own earlier guesswork (a bare boolean for connect turned out
-// right; `{"value": ...}` for a parameter PUT turned out schema-legal but
-// ambiguous — see [parameterPutBody]'s own doc comment). A specification
-// cannot say whether Arena's own server enforces that schema strictly (a
-// `oneOf` violation returning 400 is DECLARED, not measured), and it says
-// nothing about which of several schema-legal bodies produces which
-// observable effect on the wall — that remains this package's own bench
-// capture's job. Two specific changes below are spec-conformant but NOT
-// re-verified against a live Arena, and each says so at its own site:
-// omitting a connect body entirely ([Client.ConnectClip]'s own doc
-// comment) and adding "valuetype" to a parameter PUT ([parameterPutBody]'s
-// own doc comment).
+// Every wire shape below comes from Arena's own OpenAPI specification
+// (docs/bench/resolume-control-surface.md section 17), which states method,
+// path and body schema but cannot say whether Arena's server enforces that
+// schema strictly, nor which of several schema-legal bodies produces which
+// effect on the wall. Two changes here are spec-conformant but NOT re-verified
+// against a live Arena, and each says so at its own site: omitting a connect
+// body ([Client.ConnectClip]) and adding "valuetype" to a parameter PUT
+// ([parameterPutBody]).
 
-// maxActionResponseBytes bounds a write dispatch's own response body — a
-// 204 or a short plain-text error (capture §2.5), never anywhere near
-// maxByIDResponseBytes' size. A write response is never evidence
-// (TRACK-D-D3-SPEC.md §3.2), so nothing here has any use for a large body;
-// this bound exists only so a misbehaving or compromised Resolume streaming
-// an unbounded body on one of these endpoints cannot exhaust coordinator
-// memory, the identical reasoning maxProductResponseBytes states for
-// itself.
+// maxActionResponseBytes bounds a write dispatch's response body: a 204 or a
+// short plain-text error, never large. Exists so a misbehaving Resolume
+// streaming an unbounded body cannot exhaust coordinator memory.
 const maxActionResponseBytes = 4 << 10 // 4 KiB
 
 // --- connect: no body constant here, deliberately ---------------------------
@@ -94,15 +70,11 @@ type parameterPutBody struct {
 	Value     any    `json:"value"`
 }
 
-// Column is `GET /composition/columns/by-id/{id}`'s targeted decode — Track
-// D seam D-3's own addition, needed for launchColumn's confirming predicate
-// ("column connected == Connected", TRACK-D-D3-SPEC.md §2). Connected here
-// is a column's OWN three-state value (Empty|Disconnected|Connected,
-// capture §4.3) — a DIFFERENT option set than a clip's five-state
-// connected — decoded through the identical [ParamStateField] type
-// deliberately, since both are ParamState leaves on the wire, but this
-// package never compares one against the other's Value without also
-// checking Options: see composition.go's own [ParamState] doc comment.
+// Column is `GET /composition/columns/by-id/{id}`'s targeted decode.
+// Connected is a column's OWN three-state value (Empty|Disconnected|
+// Connected, capture §4.3) — a different option set from a clip's five-state
+// connected, decoded through the same [ParamStateField] because both are
+// ParamState leaves on the wire.
 type Column struct {
 	ID        ObjectID         `json:"id"`
 	Connected ParamStateField  `json:"connected"`
@@ -116,11 +88,7 @@ func (c *Client) Column(ctx context.Context, id ObjectID) (Column, error) {
 }
 
 // ConnectClip performs POST /composition/clips/by-id/{id}/connect with NO
-// body — see this file's own "connect: no body constant here" section
-// above for why an omitted body, never a literal `true` and never
-// `false`, is what this method sends. Arena's own specification: "If
-// omitted, true and false are both sent — as if a short click was
-// generated" — the vendor's own documented complete click gesture.
+// body — see the "connect: no body constant here" section above for why.
 func (c *Client) ConnectClip(ctx context.Context, id ObjectID) error {
 	return c.doWrite(ctx, http.MethodPost, "/composition/clips/by-id/"+id.String()+"/connect", nil)
 }
@@ -154,12 +122,9 @@ func (c *Client) SelectDeck(ctx context.Context, id ObjectID) error {
 }
 
 // SetParameterBool performs PUT /parameter/by-id/{id} with body
-// {"value": value} — setLayerBypass's own dispatch call. id is a LIVE,
-// session-scoped [ParameterID] the caller must have just read (never a
-// persisted one — see this package's own doc comment on the parameter-id
-// lifecycle rule; ParameterID.MarshalJSON's refusal to marshal is what
-// makes storing one impossible, not a convention this method has to
-// enforce separately).
+// {"valuetype": "ParamBoolean", "value": value} — setLayerBypass's dispatch
+// call. id is a LIVE, session-scoped [ParameterID] the caller must have just
+// read, never a persisted one. See [parameterPutBody] on valuetype.
 func (c *Client) SetParameterBool(ctx context.Context, id ParameterID, value bool) error {
 	body, err := json.Marshal(parameterPutBody{Valuetype: "ParamBoolean", Value: value})
 	if err != nil {
@@ -180,17 +145,11 @@ func (c *Client) SetParameterRange(ctx context.Context, id ParameterID, value fl
 	return c.doWrite(ctx, http.MethodPut, "/parameter/by-id/"+id.String(), body)
 }
 
-// doWrite issues one bounded POST or PUT against c.baseURL+apiPrefix+path,
-// following [getByID]'s own shape: any non-2xx status becomes a
-// [StatusError] (capture §2.5: Resolume's own errors are plain text and
-// fail loudly, unlike FPP), and a 2xx response's body — up to
-// [maxActionResponseBytes] — is discarded unread, because
-// TRACK-D-D3-SPEC.md §3.2 is explicit that a write response, 2xx or
-// otherwise, is never evidence of anything: "a 204 is an acknowledgement,
-// never evidence." Nothing in this package's confirmation logic
-// (action_dispatch.go) is permitted to look at this method's return value
-// for anything beyond "did the request itself succeed or fail" — never as a
-// signal that the requested change actually happened.
+// doWrite issues one bounded POST or PUT against c.baseURL+apiPrefix+path.
+// A non-2xx becomes a [StatusError]; a 2xx body is discarded unread, because
+// a write response is never evidence of anything (§3.2: "a 204 is an
+// acknowledgement, never evidence"). Nothing in action_dispatch.go may read
+// this return value as more than "did the request itself succeed or fail".
 func (c *Client) doWrite(ctx context.Context, method, path string, body []byte) error {
 	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()

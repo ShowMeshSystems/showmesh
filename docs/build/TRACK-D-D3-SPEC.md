@@ -1,6 +1,12 @@
 # Track D seam D-3: the Resolume action vocabulary
 
-Status: specified 2026-08-14. Not built.
+Status: specified 2026-08-14. **Built 2026-08-15, reviewed the same day, and amended by
+what the review found.** Four sections below carry a dated amendment: §3.4's deck term now
+costs one by-id read rather than zero requests, §3.6's identity gate does not refuse an
+exempt action for a stale reading, §4.2's baseline failure does not refuse an exempt
+action, and §4.3's confirmation is a backed-off poll rather than a single read. Unit-test
+evidence only; nothing here has run against the real Arena. See
+[the live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md).
 
 Bound by: [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md),
 [ADR-003](../decisions/ADR-003-desired-and-observed-state.md),
@@ -98,6 +104,22 @@ who wanted that can write two steps.
 the refusal rested on and when. Deciding "deck mismatch" from a reading the operator
 has since changed is Step 7's confirmation defect wearing a third disguise.
 
+> **Amended 2026-08-15 by the review, and it changes acceptance criterion 3.** As first
+> built, the deck term read `selected` off the cached survey snapshot with no age check
+> at all. Surveys are event-driven only, and under [ADR-033](../decisions/ADR-033-show-mode.md)
+> Show Mode the WebSocket is closed, so on a stable Arena that snapshot freezes
+> indefinitely: a 40-minute-old reading would refuse a clip on a deck the operator
+> selected in Arena's own UI half an hour ago, which is verbatim the disguise this
+> section names. An age fence was the obvious fix and it is the wrong one, because any
+> threshold either refuses legitimate actions or trusts stale ones.
+>
+> **The deck term now rests on a targeted `by-id` read of the clip's own deck, taken at
+> decision time**, and the refusal states that read's timestamp. One small read answers
+> the question directly and removes the tuning problem. So criterion 3's "issuing no HTTP
+> request to Resolume at all" becomes **exactly one `by-id` deck read, no clip read, and
+> no write.** Nothing is dispatched and no write reaches Resolume, which is what that
+> criterion was protecting.
+
 ### 3.5 `launchClip` on an already-playing clip cannot be confirmed, and says so
 
 The observable is already at the desired value before dispatch, so post-dispatch
@@ -124,6 +146,24 @@ of it. There is no `loading` field.
 refused with the reason stated. D-2 already computes identity; D-3 consumes it and
 does not recompute it.
 
+> **Amended 2026-08-15.** The identity reading needs the same freshness fence the deck
+> term needed, and unlike the deck term it cannot be re-read cheaply: the identity check
+> runs inside the collector's own survey, roughly 24 to 36 requests, and this section is
+> explicit that D-3 consumes identity rather than recomputing it. So identity carries an
+> **age fence set to `DefaultSurveyValidFor`**, deliberately the same 15 minutes at which
+> the dashboard renders that reading stale, so an action refuses exactly when the operator
+> can see why. A stale reading also asks for a fresh survey, so the refusal is one attempt
+> rather than a permanent state.
+>
+> **An exempt action is not refused for a stale reading.** Staleness is a fact about
+> ShowMesh's own evidence pipeline, and refusing a stop for want of ShowMesh's own
+> evidence is the fail-closed inversion [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md)
+> decision 11 already settled for the audit write. Without this carve-out, a coordinator
+> whose WebSocket has been closed for fifteen minutes refuses `blackout`, and a refusal
+> fires no fallback (decision 7), so the operator is worse off than during a coordinator
+> outage. An identity of `unknown` or `false` is a fact about the composition rather than
+> about our pipeline, so it still refuses every action including the exempt ones.
+
 ## 4. Confirmation, which is where Step 8's defects lived
 
 ### 4.1 Evidence must post-date dispatch, and the fence is on collection time
@@ -148,6 +188,22 @@ predicate could already be true beforehand, the action is `unconfirmable` (§3.5
 not `confirmed`. If the baseline cannot be read, the action does not silently
 proceed to a confirmation that cannot mean anything; it reports why.
 
+> **Amended 2026-08-15, and this is an owner-reversible decision rather than a defect
+> fix.** "Reports why" was implemented as a refusal for every action, which is right for a
+> start and wrong for a stop. Refusing `blackout` because a *read* failed is the same
+> fail-closed inversion ADR-024 decision 11 settled for the audit write, and CLAUDE.md's
+> constraint 24 says blackout is never refused for want of bookkeeping.
+>
+> **A not-exempt action still refuses**, because refusing a start costs only that the
+> start does not happen. **An exempt action (`blackout`, `clearLayer`) dispatches anyway
+> and reports `unconfirmable` with the reason**, and runs no confirmation poll, since
+> without a baseline the poll could not mean anything and would cost requests. Blackout's
+> confirming predicate is absolute (every tracked layer reports no active clip) rather
+> than a delta, so the baseline feeds only the already-satisfied test.
+>
+> The whole baseline phase is also now bounded by one budget rather than only a
+> per-request timeout: see §4.5.
+
 ### 4.3 Confirmation is a targeted read, not a poll cycle
 
 D-2's rule holds: continuous traffic is one `GET /product` per interval. Confirmation
@@ -157,6 +213,52 @@ by layer count and happens once per blackout.
 
 Do not add a signal to the poll loop to make confirmation easier. There is a test
 that fails the build if steady-state traffic grows.
+
+> **Amended 2026-08-15: "1 to 3 by-id reads at the moment of the action" was never
+> achievable, and the first build was 100 times over its own comment.** Confirmation
+> cannot be a single read, because the evidence arrives when the transition finishes and
+> that is up to seconds later; it has to be a poll. As first built the poll ran at a flat
+> 50 ms, so `launchClip` issued about 41 reads across its 2 s deadline and `blackout` at
+> 18 layers could reach the low thousands, each layer read being roughly 62 KB on the
+> operator's composition. The constant's own doc comment claimed "tens, not thousands".
+> Arena's crash is a use-after-free in its own HTTP response serialiser sensitive to
+> connection churn, so understating this seam's footprint is the wrong direction to be
+> wrong in.
+>
+> **The poll now starts at 25 ms and doubles to a 500 ms cap.** A single-object action
+> went from 41 reads to 9 across the same deadline, and a test fails the build if it
+> exceeds 12. Blackout at 18 layers is 7 attempts at a 1.5 s derived deadline and 26 at
+> the 11 s unknown-transition fallback. The read set per attempt is unchanged; what
+> changed is how often it repeats.
+
+### 4.5 One budget bounds the whole dispatch, not just the confirmation
+
+**Added 2026-08-15.** As first built, `MaxActionConfirmDeadline` was documented as the
+upper bound on how long `Dispatch` could take, and the API sized its HTTP write deadline
+from it. It was not that bound. The pre-dispatch baseline phase ran outside it, bounded
+only per request, so `blackout` at 18 layers could spend 90 seconds before dispatch was
+even attempted; the confirmation loop tested its deadline only *between* attempts, so one
+in-flight blackout check could add another 90; and the two post-dispatch bookkeeping
+writes spent up to 20 more. Measured on a real clock at 3 layers, a 1.1 s derived deadline
+returned at 2.256 s, an overrun that scales linearly in layer count.
+
+That is Step 7's two-timeouts defect, in the file that cites Step 7's two-timeouts defect,
+and it lands hardest on `blackout`, the one action ADR-024 decision 11 insists must get
+through.
+
+So the bound is now composed and every phase enforces its own share:
+
+| Term | Value | Bounds |
+|---|---|---|
+| `MaxBaselinePhaseBudget` | 5 s | the whole baseline phase, checked before each read, not one read within it |
+| `MaxWritePhaseBudget` | 5 s | the dispatch write |
+| `MaxActionConfirmDeadline` | 30 s | the confirmation poll, clamped to the window |
+| **`MaxDispatchDuration`** | **40 s, the sum** | `Dispatch` end to end, held on the dispatcher's own clock so a fake clock can drive it |
+
+The server's HTTP write deadline is sized from `MaxDispatchDuration` plus its own
+bookkeeping budget plus a margin, and the CLI's floor from that. **Two timeouts on
+opposite sides of one contract are a single decision**, and there are now three sides:
+the dispatcher, the handler, and the client.
 
 ### 4.4 One resolver, one authority
 
@@ -243,8 +345,9 @@ unreachable by both shipped clients.
 2. **A clip launch against an already-playing clip reports `unconfirmable` with a
    reason, not `confirmed`.**
 3. **A clip action whose deck is not selected is refused before dispatch**, naming
-   both decks, leaving `resolume.composition.identified` untouched, and issuing no
-   HTTP request to Resolume at all.
+   both decks, leaving `resolume.composition.identified` untouched, and issuing
+   ~~no HTTP request to Resolume at all~~ **exactly one `by-id` deck read and no
+   write** (amended 2026-08-15, see §3.4).
 4. A `clearLayer` on a layer with a 2.5 s transition confirms, and the same action
    with the transition at 0.1 s confirms faster, **demonstrating the deadline is
    derived rather than constant**.
@@ -261,6 +364,12 @@ unreachable by both shipped clients.
 11. `showmeshctl` can drive every action in §2, and its timeout is derived from the
     server's deadline.
 12. **No `GET /composition` on any path.** The AST guard still passes.
+13. **Added 2026-08-15.** No positional addressing and no OSC, both enforced by AST and
+    import guards rather than by the doc comment that previously stated them. The D-1
+    review flagged the gap; writes are what made it worth closing.
+14. **Added 2026-08-15.** `Dispatch` returns within `MaxDispatchDuration` for every
+    action including `blackout` against every tracked layer, with a test that fails if
+    any phase's budget check is removed.
 
 ## 8. What D-3 does not do
 
@@ -271,3 +380,31 @@ unreachable by both shipped clients.
   does not become a second scheduler, and it does not become one for Resolume
   either.
 - **Nothing verified against real hardware.** Unit-test evidence only, as with D-2.
+  [The live-verification checklist](../bench/TRACK-D-LIVE-VERIFICATION.md) is what would
+  change that, and it has not been run.
+
+## 9. One open question, for the owner
+
+**Added 2026-08-15. Both reviewers reached it independently and it is not settled.**
+
+§2 says every action takes a ShowMesh reference resolving through the stored id map, and
+that no operator-facing surface ever contains a raw object id. As built, `ActionParams`
+holds `ObjectID`, which is the numeric Resolume id parsed out of the `.avc`, and the wire
+contract passes that number as a string while describing it as "the ShowMesh reference
+this action resolves through the stored composition id map". Resolving a raw Resolume id
+against a map keyed on raw Resolume ids is not an indirection.
+
+The consequence is the one [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md)
+exists to prevent: re-authoring the composition changes ids, and every stored binding
+starts silently refusing.
+
+Two honest readings, and the difference is real work:
+
+- **D-3 scoped "reference" to mean "the id out of the uploaded file."** Then nobody
+  recorded that scoping, and the OpenAPI text should stop describing an indirection it
+  does not have.
+- **The reference layer is missing** and belongs with the Show object in D-4 or
+  [Track E](TRACK-E-show-authoring-and-assets.md), with D-3's contract written so adding
+  it later is additive.
+
+Nothing was changed in the code pending that decision.

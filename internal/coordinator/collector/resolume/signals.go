@@ -6,14 +6,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// SignalReachable and SignalProduct were D-1's only two signals. Track D
-// seam D-2/C adds the rest of TRACK-D-D2-SPEC.md §5's table below —
-// composition identity, deck count/selected deck, layer readiness, active
-// clip, per-clip connected/transporttype, and composition name (defect 2,
-// 2026-08-15: now permanently StateUnsupported — see
-// [compositionLevelUnavailableReason]). Poll's own doc comment in collector.go still governs
-// which of these ever appear on the steady-state liveness timer: these two
-// (the "resolume-rest" source), and only these two.
+// SignalReachable and SignalProduct are the only two signals the steady-state
+// liveness timer ever produces (the "resolume-rest" source) — see
+// [Collector.Poll]. Everything below them is survey-only.
 const (
 	// SignalReachable is transport-level ONLY — see [Collector.Poll]'s
 	// doc comment for what that does and does not mean.
@@ -23,52 +18,36 @@ const (
 	SignalProduct observation.SignalID = "resolume.product"
 )
 
-// The survey-only signals below (TRACK-D-D2-SPEC.md §3.1: produced only by
-// an explicit refresh or a confirmed reconnect, never by the liveness
-// timer) are delivered under a DIFFERENT [observation.Observation].Source
-// than SignalReachable/SignalProduct — see collector.go's surveySourceName
-// doc comment for why that separation is load-bearing, not cosmetic: it is
-// what stops an ordinary liveness poll's complete=true delivery from
-// pruning every survey-derived row out of the store on its very next tick.
+// The survey-only signals below carry a DIFFERENT [observation.Observation].Source
+// than the two above — see collector.go's surveySourceName: that separation is
+// what stops an ordinary liveness poll's complete=true delivery from pruning
+// every survey-derived row out of the store on its next tick.
 const (
-	// SignalCompositionName is display-only and explicitly not an identity
-	// (TRACK-D-D2-SPEC.md §3.8). Permanently StateUnsupported (defect 2,
-	// 2026-08-15): no path this package may use can read it, and it is
-	// never backfilled from the uploaded composition file — see
-	// [Collector.compositionNameObservation].
+	// SignalCompositionName is display-only and explicitly not an identity.
+	// Permanently StateUnsupported: no path this package may use can read
+	// it, and it is never backfilled from the uploaded composition file.
 	SignalCompositionName observation.SignalID = "resolume.composition.name"
 
-	// SignalCompositionIdentified is §6's identity check result, rendered
-	// as a descriptive string ("identified", "not_identified: ...",
-	// "unknown: ...") rather than a bool — see collector.go's own
-	// formatIdentity for why a bare bool cannot carry §6's required detail
-	// through pkg/observation's existing Value/Absence shape.
+	// SignalCompositionIdentified is §6's identity check result, a
+	// descriptive string rather than a bool — a bare bool cannot carry §6's
+	// required detail through pkg/observation's Value/Absence shape.
 	SignalCompositionIdentified observation.SignalID = "resolume.composition.identified"
 
-	// SignalCompositionDecks is the COUNT of tracked decks that resolved
-	// on the most recent survey — see collector.go's own doc comment on
-	// why this can only ever be a lower bound on decks actually present in
-	// Resolume (D-2 never enumerates decks; it only re-reads the ones the
-	// uploaded composition file already named).
+	// SignalCompositionDecks is the COUNT of tracked decks that resolved on
+	// the most recent survey — a lower bound on decks actually present, since
+	// D-2 only ever re-reads the ones the uploaded file named.
 	SignalCompositionDecks observation.SignalID = "resolume.composition.decks"
 
-	// SignalCompositionSelectedDeck is NOT in TRACK-D-D2-SPEC.md §5's
-	// table as its own row — that table's resolume.composition.decks row
-	// says "int... plus the selected deck's name and id", which cannot fit
-	// alongside an int64 count in one [observation.Observation].Value (see
-	// pkg/observation.Observation's own doc comment: Value is exactly one
-	// of bool/string/int64/float64). This signal is where that second half
-	// of the same table row actually lives; see this task's own report for
-	// why it was split out rather than silently dropped.
+	// SignalCompositionSelectedDeck carries the second half of §5's
+	// resolume.composition.decks row ("plus the selected deck's name and
+	// id"), which cannot share one [observation.Observation].Value with an
+	// int64 count.
 	SignalCompositionSelectedDeck observation.SignalID = "resolume.composition.selected_deck"
 )
 
-// LayerReadySignal, LayerActiveClipSignal, ClipConnectedSignal, and
-// ClipTransportTypeSignal build the per-object signal ids §5's table
-// describes as "resolume.layer.<id>.ready" and its siblings. A function
-// rather than a naked fmt.Sprintf at every call site is what keeps the
-// exact id shape in one place — collector.go never formats one of these by
-// hand.
+// These four build §5's per-object signal ids ("resolume.layer.<id>.ready"
+// and siblings). Functions rather than a naked fmt.Sprintf at every call site
+// keep the exact id shape in one place.
 func LayerReadySignal(id ObjectID) observation.SignalID {
 	return observation.SignalID(fmt.Sprintf("resolume.layer.%s.ready", id))
 }
@@ -85,14 +64,9 @@ func ClipTransportTypeSignal(id ObjectID) observation.SignalID {
 	return observation.SignalID(fmt.Sprintf("resolume.clip.%s.transporttype", id))
 }
 
-// staticSignals is every signal ID this package declares that does NOT
-// carry a variable object id — validated once at init, mirroring D-1's own
-// original list. The four per-object signal functions above are validated
-// per-call instead (collector.go does so once per survey, on first use of
-// each), since [observation.ValidateSignalID]'s rule (lowercase ASCII
-// letters/digits/underscores per dot-segment) accepts any base-10
-// [ObjectID] and this package has no fixed set of object ids to enumerate
-// here.
+// staticSignals is every signal ID this package declares that does NOT carry
+// a variable object id, validated once at init. The four per-object functions
+// above are validated per-call instead, in collector.go.
 var staticSignals = []observation.SignalID{
 	SignalReachable,
 	SignalProduct,
@@ -102,11 +76,8 @@ var staticSignals = []observation.SignalID{
 	SignalCompositionSelectedDeck,
 }
 
-// init runs [observation.ValidateSignalID] over every static signal
-// constant this package declares, so a malformed signal ID fails at
-// package load rather than at the first poll — the same discipline
-// internal/coordinator/collector/fpp's own init applies to its larger
-// signal vocabulary.
+// init validates every static signal constant so a malformed signal ID fails
+// at package load rather than at the first poll.
 func init() {
 	for _, sig := range staticSignals {
 		if err := observation.ValidateSignalID(sig); err != nil {

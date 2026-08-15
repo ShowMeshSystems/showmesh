@@ -18,6 +18,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file is Track D seam D-3/B: the HTTP surface over TRACK-D-D3-SPEC.md
@@ -75,28 +76,45 @@ const (
 // to be large.
 const maxResolumeActionRequestBodyBytes = 4 << 10 // 4 KiB
 
-// resolumeActionDBWriteTimeout mirrors dbWriteTimeout's identical
-// reasoning (fppcommand_handler.go): each individual piece of post-dispatch
-// bookkeeping gets its own short, independent deadline once it is no
-// longer tied to the client's own request context.
-const resolumeActionDBWriteTimeout = 10 * time.Second
+// resolumeActionBookkeepingBudget bounds each individual piece of
+// post-dispatch bookkeeping THIS handler does once
+// [ResolumeActionDispatcher.Dispatch] has already returned (the
+// commands-row outcome update, the outcome audit entry) — the same
+// property dbWriteTimeout (fppcommand_handler.go) protects for FPP, named
+// and sized independently here rather than reusing that constant: Review
+// fix 4 (2026-08-15) rebuilds [resolumeActionHTTPWriteDeadline] from ITS
+// OWN complete list of terms, and a deadline that has to reach into
+// another file's unrelated constant to state its own worst case is exactly
+// the kind of arithmetic that drifts apart unnoticed. 5s is generous for a
+// single local SQLite write — this endpoint spends it twice (see
+// [resolumeActionHTTPWriteDeadline]).
+const resolumeActionBookkeepingBudget = 5 * time.Second
 
-// resolumeActionMaxConfirmDeadline bounds this endpoint's own HTTP write
-// deadline (set before the request body is even read, so before this
-// coordinator knows which action — and therefore which of D-3/A's own
-// derived deadlines — is about to run).
-//
-// This is no longer an independently asserted guess: it MUST equal
-// resolume.MaxActionConfirmDeadline (internal/coordinator/collector/resolume,
-// action.go), the real, structurally-enforced upper bound D-3/A's own
-// deadline model clamps every derived deadline to — see that constant's own
-// doc comment for why a clamp, not a larger constant, is the correct answer
-// to TRACK-D-D3-SPEC.md section 3.3's deadlines being DERIVED per action
-// from a layer's own live, operator-configured transition duration, an
-// input with no registry-known bound the way every FPP primitive's own
-// ConfirmDeadline function has ([fppMaxConfirmDeadline] reads that function
-// directly because it can; that shape does not exist for a value read off
-// live Resolume state).
+// resolumeActionWriteDeadlineMargin is headroom [resolumeActionHTTPWriteDeadline]
+// carries on top of its own known worst-case work, never zero: a deadline
+// computed with no slack over its own inputs is indistinguishable from one
+// that merely happens to be large enough, which is exactly the defect two
+// independent review passes found in this endpoint's PREVIOUS write
+// deadline (docs/private/HANDOFF-d3-review-fixes.md) — an unrelated
+// 30-second literal added to a 30-second confirm clamp that covered
+// neither the pre-dispatch baseline phase nor a poll loop that only checks
+// its own deadline BETWEEN iterations.
+const resolumeActionWriteDeadlineMargin = 5 * time.Second
+
+// resolumeActionMaxDispatchDuration bounds [ResolumeActionDispatcher.Dispatch]
+// itself, end to end — the pre-dispatch baseline phase, the write, and
+// confirmation — and is handed to Dispatch as an actual context deadline
+// (see this file's own call site), not merely consulted here as an upper
+// bound to build a write deadline from. It MUST equal
+// resolume.MaxDispatchDuration (internal/coordinator/collector/resolume,
+// action.go): that constant's own doc comment is explicit that an EARLIER
+// revision of this file exported resolume.MaxActionConfirmDeadline (the
+// confirm-poll clamp alone, 30s) as its bound, which review fix 4 found was
+// false — the confirm clamp never covered the baseline phase (unbounded
+// per layer, 18 layers x 5s request timeout is 90s before dispatch is even
+// attempted) or the write phase, and Dispatch itself ran on a context with
+// no deadline at all (context.WithoutCancel(ctx), correct for surviving a
+// client abort, wrong for being bounded).
 //
 // This package deliberately does not import
 // internal/coordinator/collector/resolume in production code (the same
@@ -104,18 +122,27 @@ const resolumeActionDBWriteTimeout = 10 * time.Second
 // dispatcher interface itself, and the same "duplicate the literal, name
 // the coupling" judgment apiwiring.go's own fppMQTTCollectorSourceID etc.
 // already make throughout this codebase) — so this constant stays a
-// literal, but it is no longer a coincidence: TestResolumeActionMaxConfirmDeadlineEqualsRegistryMax
+// literal, but it is no longer a coincidence: TestResolumeActionMaxDispatchDurationEqualsRegistryMax
 // (resolumeaction_test.go, a test file, which CAN import the producer
 // package without creating a production dependency) fails the build the
-// moment this value and resolume.MaxActionConfirmDeadline disagree.
-//
-// cmd/showmeshctl's own minResolumeActionClientTimeout
-// (cmd_resolume_action.go) is reconciled against THIS value the same way —
-// see TestResolumeActionMaxConfirmDeadlineFitsWithinCLIClientBudget below
-// for why that boundary stays two independently chosen literals rather than
-// one shared constant (that program does not import this package, and its
-// own importgraph_test.go forbids the reverse).
-const resolumeActionMaxConfirmDeadline = 30 * time.Second
+// moment this value and resolume.MaxDispatchDuration disagree.
+const resolumeActionMaxDispatchDuration = 40 * time.Second
+
+// resolumeActionHTTPWriteDeadline bounds this endpoint's own HTTP write
+// deadline (set before the request body is even read, so before this
+// coordinator knows which action is about to run) — rebuilt from its real
+// terms (Review fix 4, 2026-08-15) rather than an independently asserted
+// guess: [resolumeActionMaxDispatchDuration] for Dispatch itself, TWO
+// rounds of [resolumeActionBookkeepingBudget] for the commands-row update
+// and the outcome audit entry this handler performs AFTER Dispatch
+// returns (both previously spent outside every existing bound), plus
+// [resolumeActionWriteDeadlineMargin]. cmd/showmeshctl's own
+// minResolumeActionClientTimeout (cmd_resolume_action.go) is reconciled
+// against THIS value — see TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget
+// below for why that boundary stays two independently chosen literals
+// rather than one shared constant (that program does not import this
+// package, and its own importgraph_test.go forbids the reverse).
+const resolumeActionHTTPWriteDeadline = resolumeActionMaxDispatchDuration + 2*resolumeActionBookkeepingBudget + resolumeActionWriteDeadlineMargin
 
 // ProblemTypeResolumeActionRefusedAuditUnavailable is this seam's own
 // ADR-024 decision 11 fail-closed refusal — the Resolume-action sibling of
@@ -177,6 +204,32 @@ func resolumeActionReplayParamsConflictProblem(existingID, action, existingParam
 	}
 }
 
+// resolumeActionRequestBodyTooLargeProblem reuses
+// [ProblemTypeResolumeCompositionTooLarge]'s wire value ("payload-too-large",
+// resolumecomposition.go) rather than minting a second 413 class: unlike
+// the busy/evidence-not-current split (problem.go), where two 409s needed
+// different types because their REMEDIES differ, every "too large" refusal
+// in this API has the identical remedy ("shrink the request"), so one
+// generic type serves every producer of it.
+//
+// Review fix 5 (2026-08-15): before this, a body over
+// maxResolumeActionRequestBodyBytes was silently truncated by the
+// LimitReader and the resulting truncated-JSON parse failure was reported
+// as "request body must be a JSON object matching ..." — a size refusal
+// disguised as a syntax error, whose stated remedy (fix your JSON) does
+// not fix anything.
+func resolumeActionRequestBodyTooLargeProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeResolumeCompositionTooLarge,
+		Title:  "Payload too large",
+		Status: http.StatusRequestEntityTooLarge,
+		Detail: fmt.Sprintf(
+			"the request body exceeds this endpoint's %d byte limit; an action name, an idempotency key, and at "+
+				"most two short parameters never legitimately need more",
+			maxResolumeActionRequestBodyBytes),
+	}
+}
+
 // resolumeActionResultPayload is what this handler stores in
 // store.CommandRecord.ResultJSON — the Resolume-action sibling of
 // commandResultPayload (fppcommand_handler.go), narrowed to what this seam
@@ -186,6 +239,37 @@ func resolumeActionReplayParamsConflictProblem(existingID, action, existingParam
 // one to this package — see that method's own doc comment).
 type resolumeActionResultPayload struct {
 	Outcome string `json:"outcome,omitempty"`
+}
+
+// resolumeActionEvidenceState maps outcome to pkg/observation's
+// evidence-state vocabulary, for the two fields this handler populates
+// that are documented as carrying THAT vocabulary and not this endpoint's
+// own five-word outcome — store.CommandRecord.OutcomeState (commands.go:
+// "OutcomeState uses pkg/observation's state vocabulary") and
+// identity.AuditEntry.OutcomeState (identity/types.go: "OutcomeState uses
+// ADR-020's evidence-state vocabulary (observation.State)"). Review fix 3
+// (2026-08-15): before this, both fields were set directly from the
+// Resolume outcome word itself (e.g. "confirmed", "refused"), which is not
+// a member of that vocabulary at all — an audit reader filtering on
+// evidence states would silently drop or misread every Resolume entry.
+//
+// [ResolumeActionResult] carries no per-observation freshness signal the
+// way FPPCommandResult.outcomeState does (fppcommand_evidence.go's
+// resolveConfirmationEvidence reads a real [observation.Observation] and
+// reports the state IT was decided from) — D-3/A's own Dispatch returns a
+// five-word outcome plus a reason, nothing finer. TRACK-D-D3-SPEC.md
+// section 4.1 makes "confirmed" the one outcome this package can state
+// honestly anyway: confirming evidence read strictly after dispatch is, by
+// that section's own definition, current. Every other outcome leaves the
+// field genuinely absent rather than filling it with a plausible-looking
+// guess — ADR-020 requires absence be STATED, which this endpoint's own
+// always-non-empty outcomeReason already does for every one of these
+// cases, not that every field be forced to hold a value it cannot back.
+func resolumeActionEvidenceState(outcome ResolumeActionOutcome) string {
+	if outcome == ResolumeOutcomeConfirmed {
+		return string(observation.StateCurrent)
+	}
+	return ""
 }
 
 // noResolumeActionDispatcher is [Dependencies.ResolumeActions]'s nil-safe
@@ -420,11 +504,30 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	// connection open past net/http.Server's own WriteTimeout while
 	// [ResolumeActionDispatcher.Dispatch] runs out its own confirmation
 	// wait.
-	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(resolumeActionMaxConfirmDeadline + 30*time.Second))
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(resolumeActionHTTPWriteDeadline))
+
+	// Read the whole (bounded) body BEFORE decoding it (Review fix 5,
+	// 2026-08-15): the previous version handed json.Decoder a
+	// io.LimitReader(..., maxResolumeActionRequestBodyBytes+1) directly, so
+	// an oversized body was silently truncated at the limit and the
+	// resulting truncated-JSON parse failure was reported as an "invalid
+	// parameter" syntax error — a size refusal wearing the wrong problem
+	// type, whose stated remedy (fix your JSON) fixes nothing. Reading
+	// first makes the two conditions distinguishable: len(bodyBytes) >
+	// maxResolumeActionRequestBodyBytes is a size refusal; anything else
+	// that fails to unmarshal is a genuine syntax error.
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxResolumeActionRequestBodyBytes+1))
+	if err != nil {
+		h.writeInternalError(w, now, "read resolume action request body", err)
+		return
+	}
+	if len(bodyBytes) > maxResolumeActionRequestBodyBytes {
+		writeProblem(w, h.logger, now, resolumeActionRequestBodyTooLargeProblem())
+		return
+	}
 
 	var top map[string]json.RawMessage
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxResolumeActionRequestBodyBytes+1))
-	if err := dec.Decode(&top); err != nil {
+	if err := json.Unmarshal(bodyBytes, &top); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(
 			`request body must be a JSON object matching {"action":string,"idempotencyKey":string,"params":object?}`))
 		return
@@ -566,10 +669,16 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	// --- Dispatch — outside any transaction and on a detached context, so
 	// an abandoned client cannot abort an in-flight dispatch or its
 	// bookkeeping (matching dispatchFPPCommand's identical bgCtx cutover,
-	// fppcommand_dispatch.go). ---
-
+	// fppcommand_dispatch.go). Review fix 4 (2026-08-15): bgCtx alone
+	// carries no deadline of any kind (correct for surviving a client
+	// abort, wrong for being bounded) — dispatchCtx adds
+	// [resolumeActionMaxDispatchDuration] as an actual timeout on top,
+	// WITHOUT losing the WithoutCancel detachment, so a stalled Dispatch
+	// call can no longer run unbounded.
 	bgCtx := context.WithoutCancel(ctx)
-	result, dispatchErr := h.deps.ResolumeActions.Dispatch(bgCtx, action, normalizedParams, now)
+	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, resolumeActionMaxDispatchDuration)
+	defer dispatchCancel()
+	result, dispatchErr := h.deps.ResolumeActions.Dispatch(dispatchCtx, action, normalizedParams, now)
 	if dispatchErr != nil {
 		h.writeInternalError(w, now, "dispatch resolume action", dispatchErr)
 		return
@@ -578,11 +687,17 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	resolvedAt := h.now()
 	resolvedState := "resolved"
 	outcomeStr := string(result.Outcome)
+	// evidenceState carries pkg/observation's vocabulary, NOT outcomeStr —
+	// see [resolumeActionEvidenceState]'s own doc comment (Review fix 3,
+	// 2026-08-15): store.CommandRecord.OutcomeState and
+	// identity.AuditEntry.OutcomeState are both documented as that
+	// vocabulary, not this endpoint's own five-word outcome.
+	evidenceState := resolumeActionEvidenceState(result.Outcome)
 	finalResult, _ := json.Marshal(resolumeActionResultPayload{Outcome: outcomeStr})
 	finalResultStr := string(finalResult)
 	if err := h.updateResolumeActionOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
 		DispatchedAt: result.DispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
-		OutcomeState: &outcomeStr, OutcomeReason: &result.Reason,
+		OutcomeState: &evidenceState, OutcomeReason: &result.Reason,
 	}); err != nil {
 		h.logWarn("failed to record resolume action outcome", "commandId", cmdID, "error", err)
 	}
@@ -593,13 +708,17 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	// (fppcommand_handler.go) for why this one is never refused: by this
 	// point the action has already been dispatched, or the attempt already
 	// made, and refusing to record it would only deny the operator the
-	// record of it (ADR-024: "you cannot see," never acceptable).
-	outcomeDegraded := h.writeBestEffortAuditBounded(bgCtx, resolvedAt, degradedAttributionReasonPostDispatch, identity.AuditEntry{
+	// record of it (ADR-024: "you cannot see," never acceptable). Bounded
+	// by this seam's own [resolumeActionBookkeepingBudget], not FPP's
+	// shared dbWriteTimeout — see [resolumeActionHTTPWriteDeadline]'s own
+	// doc comment for why this seam names and bounds its own post-dispatch
+	// bookkeeping rather than borrowing another file's constant.
+	outcomeDegraded := h.writeResolumeActionAuditBounded(bgCtx, resolvedAt, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: resolvedAt, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: auditAction, Target: resolumeActionTargetID, IdempotencyKey: idempotencyKey,
 		Kind: identity.AuditOutcome, CommandID: cmdID,
-		Outcome: outcomeStr, OutcomeState: outcomeStr, OutcomeReason: result.Reason,
+		Outcome: outcomeStr, OutcomeState: evidenceState, OutcomeReason: result.Reason,
 	})
 
 	jsonWrite(w, v1.ResolumeActionResponse{
@@ -620,6 +739,19 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 // (fppcommand_dispatch.go), narrowed to this seam's own fixed target (no
 // per-instance dimension to also check — see [resolumeActionTargetID]'s
 // own doc comment).
+//
+// existing.ResultJSON (and therefore payload.Outcome) may be "" in the
+// identical narrow, accepted race resolveFPPCommandReplay's own doc
+// comment names: a row this coordinator has recorded but not yet
+// resolved. That is a real, honest value (ADR-020), not a bug — see
+// ResolumeActionResult.outcome's own description (api/openapi.yaml) for
+// why the wire enum accepts it. Review fix 1 (2026-08-15) is what keeps
+// this race distinguishable from PERMANENT blankness: before it,
+// ReconcileStrandedFPPCommands (fppcommand_reconcile.go) skipped every row
+// whose TargetKind was not "fpp", so a Resolume row a prior process left
+// unresolved replayed "" forever. ReconcileStrandedResolumeActions
+// (resolumeaction_reconcile.go) closes that gap the same way
+// ReconcileStrandedFPPCommands closes it for FPP.
 func (h *handlers) resolveResolumeActionReplay(ctx context.Context, now time.Time, ac authContext, existing store.CommandRecord, requestedAction, requestedAuditAction, requestedParamsJSON string) (v1.ResolumeActionResult, *v1.Problem) {
 	if existing.Action != requestedAuditAction {
 		p := resolumeActionReplayConflictProblem(existing.ID, existing.Action, requestedAction)
@@ -661,10 +793,25 @@ func (h *handlers) resolveResolumeActionReplay(ctx context.Context, now time.Tim
 
 // updateResolumeActionOutcomeBounded wraps
 // h.deps.Commands.UpdateCommandOutcome with its own
-// resolumeActionDBWriteTimeout, mirroring updateCommandOutcomeBounded's
-// identical reasoning (fppcommand_handler.go).
+// resolumeActionBookkeepingBudget, mirroring updateCommandOutcomeBounded's
+// identical reasoning (fppcommand_handler.go) — one of the two writes
+// [resolumeActionHTTPWriteDeadline] names and bounds by that constant.
 func (h *handlers) updateResolumeActionOutcomeBounded(parent context.Context, id string, upd store.CommandOutcomeUpdate) error {
-	ctx, cancel := context.WithTimeout(parent, resolumeActionDBWriteTimeout)
+	ctx, cancel := context.WithTimeout(parent, resolumeActionBookkeepingBudget)
 	defer cancel()
 	return h.deps.Commands.UpdateCommandOutcome(ctx, id, upd)
+}
+
+// writeResolumeActionAuditBounded is [handlers.writeBestEffortAudit] with
+// this seam's own resolumeActionBookkeepingBudget applied to parent — the
+// Resolume-action sibling of writeBestEffortAuditBounded
+// (fppcommand_handler.go), deliberately NOT that shared helper: this seam
+// bounds its own post-dispatch bookkeeping by a constant it names itself
+// (see [resolumeActionHTTPWriteDeadline]'s own doc comment), rather than
+// borrowing dbWriteTimeout, an FPP-owned constant this file has no reason
+// to reach into.
+func (h *handlers) writeResolumeActionAuditBounded(parent context.Context, now time.Time, reason string, entry identity.AuditEntry) (degraded bool) {
+	ctx, cancel := context.WithTimeout(parent, resolumeActionBookkeepingBudget)
+	defer cancel()
+	return h.writeBestEffortAudit(ctx, now, reason, entry)
 }

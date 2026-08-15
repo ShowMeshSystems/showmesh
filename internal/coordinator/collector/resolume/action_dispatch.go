@@ -6,51 +6,24 @@ import (
 	"time"
 )
 
-// This file holds the seven actions' own resolve/baseline/dispatch/confirm
-// logic — action.go's Dispatch routes to exactly one of the methods below
-// per call. Every method follows the identical shape, in the identical
-// order, per TRACK-D-D3-SPEC.md:
-//
-//  1. The composition-identity gate (§3.6) — [identityGateRefusal], off
-//     [Collector.LastSurveySnapshot] alone, zero HTTP requests.
-//  2. Resolve the target id against the stored composition
-//     ([CompositionStore]) — an id this composition does not contain is
-//     refused, zero HTTP requests for that check itself.
-//  3. Only for launchClip: the deck refusal (§3.4) — [deckRefusal], again
-//     off the cached snapshot alone, zero HTTP requests.
-//  4. The pre-dispatch baseline read (§4.2) — ALWAYS at least one by-id GET.
-//     A read failure here refuses the command outright: "the action does
-//     not silently proceed to a confirmation that cannot mean anything."
-//  5. If the baseline ALREADY satisfies the action's own confirming
-//     predicate (§3.5, §4.2), the write is still dispatched (harmless — the
-//     operator's own click), but the outcome is [ActionUnconfirmable]
-//     immediately, with no confirmation poll: no signal here can prove this
-//     dispatch caused anything, so nothing is spent trying.
-//  6. The write request itself. A definite negative response (non-2xx, or a
-//     transport failure) becomes [ActionFailed] straight away — dispatch
-//     never silently "succeeds" on an error.
-//  7. Otherwise, [ActionDispatcher.pollUntilConfirmedOrDeadline] against a
-//     DERIVED deadline (§3.3): a fixed budget for launchClip/launchColumn/
-//     selectDeck/setLayerBypass/setLayerMaster, and the affected layer(s)'
-//     own transition.duration + margin for clearLayer/blackout.
-//
-// Every confirmation check function passed to step 7 re-reads Resolume
-// through the SAME by-id [Client] methods D-2 uses (readClip/readLayer/
-// readColumn/readDeck below), checks [evidenceIsPostDispatch] before
-// trusting anything it read, and states a non-empty reason on every branch,
-// confirmed included — mirroring fppcommand_evidence.go's own "state the
-// confirming evidence even on success" rule (Step 8 review Finding 6).
+// The seven actions' own resolve/baseline/dispatch/confirm logic. Every
+// method below runs the same steps in the same order, per TRACK-D-D3-SPEC.md:
+// the composition-identity gate (§3.6), resolve the target against the stored
+// composition, the deck refusal for a deck clip (§3.4), the pre-dispatch
+// baseline (§4.2), the write, and — unless the baseline already satisfied the
+// confirming predicate — a confirmation poll against a derived deadline
+// (§3.3). Each confirmation check re-reads through the same by-id [Client]
+// methods D-2 uses, applies [evidenceIsPostDispatch] before trusting anything
+// it read, and states a non-empty reason on every branch, confirmed included.
 
 // --- Timestamped by-id reads -----------------------------------------------
 //
 // Every confirmation read in this package goes through one of these four
-// functions, never a bespoke second implementation — TRACK-D-D3-SPEC.md
-// §4.4's own "one resolver, one authority" rule, restated for D-3: the
-// timestamp returned alongside each value is [ActionDispatcher.now] read
-// immediately after the underlying [Client] call returns successfully, so
-// it can only ever be LATER than the true moment Resolume answered — never
-// earlier, which is the safe direction for a fence that must never credit
-// a read with having happened before it did.
+// functions, never a second implementation (§4.4, "one resolver, one
+// authority"). The timestamp is [ActionDispatcher.now] read immediately after
+// the [Client] call returns, so it can only ever be LATER than the moment
+// Resolume answered — the safe direction for a fence that must never credit a
+// read with having happened before it did.
 
 func (d *ActionDispatcher) readClip(ctx context.Context, id ObjectID) (Clip, time.Time, error) {
 	clip, err := d.collector.client.Clip(ctx, id)
@@ -86,17 +59,12 @@ func (d *ActionDispatcher) readDeck(ctx context.Context, id ObjectID) (Deck, tim
 
 // --- Confirming-predicate primitives ---------------------------------------
 //
-// Each of these tests exactly one leaf, per TRACK-D-D3-SPEC.md §2's own
-// table, and every one refuses to treat an unreadable leaf as satisfying
-// (or refuting) anything — an absent or unresolved Presence returns false
-// from every "is satisfied" predicate below, never true, matching this
-// package's own "absent evidence is stated, never treated as a value"
-// discipline.
+// Each tests exactly one leaf of §2's table. An absent or unresolved Presence
+// returns false from every predicate here, never true.
 
 // clipIsConnected implements §2's clip half of launchClip's predicate:
-// connected in {Connected, Connected & previewing} — never reduced to a
-// bool comparison against a single string, per composition.go's own
-// [ParamState] doc comment.
+// connected in {Connected, Connected & previewing}, never reduced to a
+// comparison against one string.
 func clipIsConnected(c Clip) bool {
 	v, ok := c.Connected.String()
 	if !ok {
@@ -117,29 +85,23 @@ func clipConnectedValue(c Clip) string {
 	return "unknown"
 }
 
-// layerActiveClipIs implements launchClip's layer half: the owning layer's
-// active_clip.id == id.
+// layerActiveClipIs implements launchClip's layer half: active_clip.id == id.
 func layerActiveClipIs(l Layer, id ObjectID) bool {
 	return l.ActiveClip.Presence == PresencePresent && l.ActiveClip.Clip != nil && l.ActiveClip.Clip.ID == id
 }
 
-// layerActiveClipAbsent implements clearLayer's and blackout's own
-// predicate: the layer's active_clip reported ABSENT. Presence ==
-// PresenceNull specifically — capture §4.4's own measured shape for
-// "nothing is playing on this layer" (an explicit JSON null, matching
-// [activeClipNoneValue]'s own reasoning in collector.go), never
-// PresenceAbsent, which means the key was missing from the response
-// entirely and is "we don't know," not "we know it's empty." Confirming a
-// clear on an unreadable field would be the identical mistake toInt64's own
-// doc comment (fppcommand_evidence.go) warns against for a different type.
+// layerActiveClipAbsent implements clearLayer's and blackout's predicate: the
+// layer's active_clip reported ABSENT. PresenceNull specifically — capture
+// §4.4's measured shape for "nothing is playing on this layer" is an explicit
+// JSON null. Never PresenceAbsent, which means the key was missing from the
+// response entirely: that is "we don't know", not "we know it's empty".
 func layerActiveClipAbsent(l Layer) bool {
 	return l.ActiveClip.Presence == PresenceNull
 }
 
 // columnIsConnected implements launchColumn's predicate: connected ==
-// Connected — a column's own three-state value (Empty|Disconnected|
-// Connected), distinct from a clip's five-state one; see [Column]'s own doc
-// comment.
+// Connected — a column's three-state value, distinct from a clip's five-state
+// one.
 func columnIsConnected(c Column) bool {
 	v, ok := c.Connected.String()
 	return ok && v == "Connected"
@@ -158,8 +120,7 @@ func deckIsSelected(dk Deck) bool {
 	return ok && v
 }
 
-// floatsNearlyEqual is setLayerMaster's own comparison — see
-// [layerMasterEpsilon]'s doc comment for why an exact == is not used.
+// floatsNearlyEqual is setLayerMaster's comparison — see [layerMasterEpsilon].
 func floatsNearlyEqual(a, b, epsilon float64) bool {
 	diff := a - b
 	if diff < 0 {
@@ -168,14 +129,10 @@ func floatsNearlyEqual(a, b, epsilon float64) bool {
 	return diff <= epsilon
 }
 
-// deriveClearDeadline implements §3.3's clearLayer row: layer's own
-// transition.duration + [DefaultActionConfirmMargin], or
-// [DefaultActionConfirmDeadlineUnknownTransition] when that leaf could not
-// be read — never a silent zero. The transition.duration case is passed
-// through [clampActionConfirmDeadline]: that value is live, operator-set
-// state this package cannot bound in advance — see
-// [MaxActionConfirmDeadline]'s own doc comment for why a clamp, not a
-// larger constant, is the correct fix.
+// deriveClearDeadline implements §3.3's clearLayer row: the layer's own
+// transition.duration plus [DefaultActionConfirmMargin], clamped, or
+// [DefaultActionConfirmDeadlineUnknownTransition] when that leaf could not be
+// read — never a silent zero.
 func deriveClearDeadline(l Layer) time.Duration {
 	if v, ok := l.TransitionDuration().Float(); ok {
 		return clampActionConfirmDeadline(time.Duration(v*float64(time.Second)) + DefaultActionConfirmMargin)
@@ -183,23 +140,14 @@ func deriveClearDeadline(l Layer) time.Duration {
 	return DefaultActionConfirmDeadlineUnknownTransition
 }
 
-func firstNonNilErr(errs ...error) error {
-	for _, e := range errs {
-		if e != nil {
-			return e
-		}
-	}
-	return nil
-}
-
 // --- launchClip -------------------------------------------------------------
 
-func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionLaunchClip
 	clipID := params.ClipID
 
 	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, snap); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -228,25 +176,36 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, params Action
 		return refusedOutcome(name, fmt.Sprintf("the uploaded composition does not identify which layer owns clip %s, so its launch cannot be confirmed", clipID))
 	}
 
-	// §3.4: the deck refusal applies to a deck clip only — a persistent
-	// clip carries no deck term (ADR-032 decision 6).
+	baseline := w.beginBaseline(ctx)
+	defer baseline.close()
+
+	// §3.4's deck term, from one by-id read of the clip's own deck at decision
+	// time. A persistent clip carries no deck term (ADR-032 decision 6).
 	if !persistent {
-		if reason, refuse := deckRefusal(tc, deckID, snap); refuse {
+		var deck Deck
+		var deckAt time.Time
+		if !baseline.read(func(bctx context.Context) (err error) { deck, deckAt, err = d.readDeck(bctx, deckID); return }) {
+			return refusedOutcome(name, fmt.Sprintf("could not read whether this clip's deck is selected: %s", baseline.failure()))
+		}
+		if reason, refuse := deckSelectionRefusal(tc, deckID, deck, deckAt, snap); refuse {
 			return refusedOutcome(name, reason)
 		}
 	}
 
-	baseClip, _, errClip := d.readClip(ctx, clipID)
-	baseLayer, _, errLayer := d.readLayer(ctx, layerID)
-	if errClip != nil || errLayer != nil {
-		return refusedOutcome(name, fmt.Sprintf(
-			"could not read a pre-dispatch baseline for this clip: %s", ClassifyError(firstNonNilErr(errClip, errLayer))))
+	var baseClip Clip
+	var baseLayer Layer
+	baseline.read(func(bctx context.Context) (err error) { baseClip, _, err = d.readClip(bctx, clipID); return })
+	baseline.read(func(bctx context.Context) (err error) { baseLayer, _, err = d.readLayer(bctx, layerID); return })
+	if why := baseline.failure(); why != "" {
+		return d.baselineFailureOutcome(ctx, w, name, why, func(c context.Context) error { return d.collector.client.ConnectClip(c, clipID) })
 	}
 	alreadySatisfied := clipIsConnected(baseClip) && layerActiveClipIs(baseLayer, clipID)
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.ConnectClip(ctx, clipID); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching the clip launch failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "the clip launch", func(c context.Context) error {
+		return d.collector.client.ConnectClip(c, clipID)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -254,12 +213,15 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, params Action
 			"this clip was already playing before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, DefaultActionConfirmDeadline, func() (bool, time.Time, string) {
-		clip, clipAt, err := d.readClip(ctx, clipID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+		clip, clipAt, err := d.readClip(s.ctx, clipID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the clip's confirming evidence failed: %s", ClassifyError(err))
 		}
-		layer, layerAt, err := d.readLayer(ctx, layerID)
+		if s.expired() {
+			return false, time.Time{}, "the confirming reads did not finish before the deadline"
+		}
+		layer, layerAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
 		}
@@ -282,12 +244,11 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, params Action
 
 // --- clearLayer ---------------------------------------------------------
 
-func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionClearLayer
 	layerID := params.LayerID
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -299,16 +260,21 @@ func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, params Action
 		return refusedOutcome(name, fmt.Sprintf("layer id %s is not part of the uploaded composition", layerID))
 	}
 
-	baseLayer, _, err := d.readLayer(ctx, layerID)
-	if err != nil {
-		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this layer: %s", ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	var baseLayer Layer
+	baseline.read(func(bctx context.Context) (err error) { baseLayer, _, err = d.readLayer(bctx, layerID); return })
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return d.baselineFailureOutcome(ctx, w, name, why, func(c context.Context) error { return d.collector.client.ClearLayer(c, layerID) })
 	}
 	alreadySatisfied := layerActiveClipAbsent(baseLayer)
 	deadline := deriveClearDeadline(baseLayer)
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.ClearLayer(ctx, layerID); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching the layer clear failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "the layer clear", func(c context.Context) error {
+		return d.collector.client.ClearLayer(c, layerID)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -316,8 +282,8 @@ func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, params Action
 			"this layer already reported no active clip before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, deadline, func() (bool, time.Time, string) {
-		layer, readAt, err := d.readLayer(ctx, layerID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, deadline, func(s confirmScope) (bool, time.Time, string) {
+		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
 		}
@@ -333,11 +299,10 @@ func (d *ActionDispatcher) dispatchClearLayer(ctx context.Context, params Action
 
 // --- blackout -------------------------------------------------------------
 
-func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, _ ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, w dispatchWindow) ActionOutcome {
 	name := ActionBlackout
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -350,22 +315,23 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, _ ActionParams)
 		return refusedOutcome(name, "the uploaded composition has no tracked layers to blackout")
 	}
 
-	baselines := make([]Layer, len(layers))
-	for i, l := range layers {
-		layer, _, err := d.readLayer(ctx, l.ID)
-		if err != nil {
-			return refusedOutcome(name, fmt.Sprintf(
-				"could not read a pre-dispatch baseline for every tracked layer (layer %s: %s), so blackout was not dispatched",
-				l.ID, ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	baselines := make([]Layer, 0, len(layers))
+	for _, l := range layers {
+		var layer Layer
+		if !baseline.read(func(bctx context.Context) (err error) { layer, _, err = d.readLayer(bctx, l.ID); return }) {
+			break
 		}
-		baselines[i] = layer
+		baselines = append(baselines, layer)
+	}
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return d.baselineFailureOutcome(ctx, w, name, why, d.collector.client.DisconnectAll)
 	}
 
-	// §3.3: blackout's own deadline is the MAX transition.duration over
-	// the AFFECTED layers only — a layer already showing no active clip
-	// contributes nothing to the wait, matching the capture's own
-	// reasoning ("a blackout across 18 layers is bounded by the slowest of
-	// them" — the slowest of the ones actually fading out).
+	// §3.3: blackout's deadline is the MAX transition.duration over the
+	// AFFECTED layers only — a layer already showing no active clip
+	// contributes nothing to the wait.
 	var maxTransition time.Duration
 	haveTransition := false
 	affectedCount := 0
@@ -383,17 +349,13 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, _ ActionParams)
 	}
 	deadline := DefaultActionConfirmDeadlineUnknownTransition
 	if haveTransition {
-		// clampActionConfirmDeadline: see deriveClearDeadline's identical
-		// call and [MaxActionConfirmDeadline]'s own doc comment — the same
-		// live, operator-set transition.duration input, here maximized
-		// across every affected layer instead of read from one.
 		deadline = clampActionConfirmDeadline(maxTransition + DefaultActionConfirmMargin)
 	}
 	alreadySatisfied := affectedCount == 0
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.DisconnectAll(ctx); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching blackout failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "blackout", d.collector.client.DisconnectAll)
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -401,10 +363,13 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, _ ActionParams)
 			"every tracked layer already reported no active clip before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, deadline, func() (bool, time.Time, string) {
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, deadline, func(s confirmScope) (bool, time.Time, string) {
 		var latest time.Time
 		for _, l := range layers {
-			layer, readAt, err := d.readLayer(ctx, l.ID)
+			if s.expired() {
+				return false, time.Time{}, fmt.Sprintf("the confirming read of every tracked layer did not finish before the deadline (stopped at layer %s)", l.ID)
+			}
+			layer, readAt, err := d.readLayer(s.ctx, l.ID)
 			if err != nil {
 				return false, time.Time{}, fmt.Sprintf("reading layer %s's confirming evidence failed: %s", l.ID, ClassifyError(err))
 			}
@@ -424,12 +389,11 @@ func (d *ActionDispatcher) dispatchBlackout(ctx context.Context, _ ActionParams)
 
 // --- launchColumn -----------------------------------------------------------
 
-func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionLaunchColumn
 	columnID := params.ColumnID
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -441,15 +405,20 @@ func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, params Acti
 		return refusedOutcome(name, fmt.Sprintf("column id %s is not part of the uploaded composition", columnID))
 	}
 
-	baseColumn, _, err := d.readColumn(ctx, columnID)
-	if err != nil {
-		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this column: %s", ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	var baseColumn Column
+	baseline.read(func(bctx context.Context) (err error) { baseColumn, _, err = d.readColumn(bctx, columnID); return })
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return d.baselineFailureOutcome(ctx, w, name, why, func(c context.Context) error { return d.collector.client.ConnectColumn(c, columnID) })
 	}
 	alreadySatisfied := columnIsConnected(baseColumn)
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.ConnectColumn(ctx, columnID); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching the column launch failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "the column launch", func(c context.Context) error {
+		return d.collector.client.ConnectColumn(c, columnID)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -457,8 +426,8 @@ func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, params Acti
 			"this column was already connected before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, DefaultActionConfirmDeadline, func() (bool, time.Time, string) {
-		column, readAt, err := d.readColumn(ctx, columnID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+		column, readAt, err := d.readColumn(s.ctx, columnID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the column's confirming evidence failed: %s", ClassifyError(err))
 		}
@@ -474,12 +443,11 @@ func (d *ActionDispatcher) dispatchLaunchColumn(ctx context.Context, params Acti
 
 // --- selectDeck -------------------------------------------------------------
 
-func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionSelectDeck
 	deckID := params.DeckID
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -491,15 +459,20 @@ func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, params Action
 		return refusedOutcome(name, fmt.Sprintf("deck id %s is not part of the uploaded composition", deckID))
 	}
 
-	baseDeck, _, err := d.readDeck(ctx, deckID)
-	if err != nil {
-		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this deck: %s", ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	var baseDeck Deck
+	baseline.read(func(bctx context.Context) (err error) { baseDeck, _, err = d.readDeck(bctx, deckID); return })
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return d.baselineFailureOutcome(ctx, w, name, why, func(c context.Context) error { return d.collector.client.SelectDeck(c, deckID) })
 	}
 	alreadySatisfied := deckIsSelected(baseDeck)
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.SelectDeck(ctx, deckID); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching deck selection failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "deck selection", func(c context.Context) error {
+		return d.collector.client.SelectDeck(c, deckID)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -507,8 +480,8 @@ func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, params Action
 			"this deck was already selected before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, DefaultActionConfirmDeadline, func() (bool, time.Time, string) {
-		deck, readAt, err := d.readDeck(ctx, deckID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+		deck, readAt, err := d.readDeck(s.ctx, deckID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the deck's confirming evidence failed: %s", ClassifyError(err))
 		}
@@ -524,13 +497,12 @@ func (d *ActionDispatcher) dispatchSelectDeck(ctx context.Context, params Action
 
 // --- setLayerBypass -----------------------------------------------------
 
-func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionSetLayerBypass
 	layerID := params.LayerID
 	want := params.Bypassed
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -542,21 +514,21 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, params Ac
 		return refusedOutcome(name, fmt.Sprintf("layer id %s is not part of the uploaded composition", layerID))
 	}
 
-	baseLayer, _, err := d.readLayer(ctx, layerID)
-	if err != nil {
-		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this layer: %s", ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	var baseLayer Layer
+	baseline.read(func(bctx context.Context) (err error) { baseLayer, _, err = d.readLayer(bctx, layerID); return })
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this layer: %s", why))
 	}
-	// The live, session-scoped ParameterID this dispatch PUTs to comes
-	// from THIS SAME baseline read — never persisted, never re-derived a
-	// second way (this package's own doc comment on the parameter-id
-	// lifecycle rule). The id lives on the envelope regardless of whether
-	// its own "value" key is present, so this check is deliberately against
-	// Presence/Param, not [ParamBooleanField.Bool] — but the CURRENT value
-	// (alreadySatisfied, just below) MUST go through Bool(), never a bare
-	// .Param.Value read: a value-less envelope is contract-legal (capture
-	// §17.3) and its Go zero value is false, which is setLayerBypass's own
-	// darkening-direction value — reading it unguarded here would make an
-	// unreadable baseline masquerade as "already off."
+
+	// The live, session-scoped ParameterID this dispatch PUTs to comes from
+	// this same baseline read. The id lives on the envelope whether or not its
+	// "value" key is present, so this check is against Presence/Param — but
+	// the CURRENT value must go through Bool(), never a bare .Param.Value
+	// read: a value-less envelope is contract-legal (capture §17.3) and its Go
+	// zero value is false, setLayerBypass's own darkening direction, so an
+	// unguarded read would make an unreadable baseline look like "already off".
 	if baseLayer.Bypassed.Presence != PresencePresent || baseLayer.Bypassed.Param == nil {
 		return refusedOutcome(name,
 			"this layer's bypass parameter could not be read, so its current session-scoped parameter id is not known and this command cannot be dispatched")
@@ -569,9 +541,11 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, params Ac
 	}
 	alreadySatisfied := currentBypassed == want
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.SetParameterBool(ctx, parameterID, want); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching the bypass change failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "the bypass change", func(c context.Context) error {
+		return d.collector.client.SetParameterBool(c, parameterID, want)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -579,18 +553,16 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, params Ac
 			"this layer's bypass already equalled the requested value (%t) before this command was dispatched, so evidence collected afterward cannot be attributed to it", want))
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, DefaultActionConfirmDeadline, func() (bool, time.Time, string) {
-		layer, readAt, err := d.readLayer(ctx, layerID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
 		}
 		if !evidenceIsPostDispatch(readAt, dispatchedAt) {
 			return false, time.Time{}, "confirming evidence has not yet been re-read since dispatch"
 		}
-		// [ParamBooleanField.Bool] is the whole fix here: a value-less
-		// envelope (ok=false) must NEVER be read as HeldTrue/false=want and
-		// reported confirmed — see this function's own top comment and
-		// CLAUDE.md's defect-1 write-up ("the blackout-adjacent values").
+		// A value-less envelope (ok=false) must never read as false==want and
+		// report confirmed — see the baseline check above.
 		bypassed, ok := layer.Bypassed.Bool()
 		if !ok {
 			return false, time.Time{}, "the layer's bypass value could not be read"
@@ -604,13 +576,12 @@ func (d *ActionDispatcher) dispatchSetLayerBypass(ctx context.Context, params Ac
 
 // --- setLayerMaster -----------------------------------------------------
 
-func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, params ActionParams) ActionOutcome {
+func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, w dispatchWindow, params ActionParams) ActionOutcome {
 	name := ActionSetLayerMaster
 	layerID := params.LayerID
 	want := params.Master
 
-	snap := d.collector.LastSurveySnapshot()
-	if reason, refuse := identityGateRefusal(snap); refuse {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
 		return refusedOutcome(name, reason)
 	}
 
@@ -622,14 +593,17 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, params Ac
 		return refusedOutcome(name, fmt.Sprintf("layer id %s is not part of the uploaded composition", layerID))
 	}
 
-	baseLayer, _, err := d.readLayer(ctx, layerID)
-	if err != nil {
-		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this layer: %s", ClassifyError(err)))
+	baseline := w.beginBaseline(ctx)
+	var baseLayer Layer
+	baseline.read(func(bctx context.Context) (err error) { baseLayer, _, err = d.readLayer(bctx, layerID); return })
+	baseline.close()
+	if why := baseline.failure(); why != "" {
+		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this layer: %s", why))
 	}
-	// See dispatchSetLayerBypass's identical comment: the id is read off
-	// the envelope directly, but the CURRENT value must go through Float(),
-	// never a bare .Param.Value — a value-less envelope's Go zero value is
-	// 0.0, setLayerMaster's own darkening-direction value.
+
+	// See dispatchSetLayerBypass: the id is read off the envelope directly,
+	// but the CURRENT value must go through Float() — a value-less envelope's
+	// Go zero value is 0.0, setLayerMaster's own darkening direction.
 	if baseLayer.Master.Presence != PresencePresent || baseLayer.Master.Param == nil {
 		return refusedOutcome(name,
 			"this layer's master parameter could not be read, so its current session-scoped parameter id is not known and this command cannot be dispatched")
@@ -641,16 +615,11 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, params Ac
 			"this layer's master parameter answered with no value, so its current state is not known and this command cannot be dispatched")
 	}
 
-	// Range validation against Arena's OWN declared bounds for this
-	// specific parameter (RangeParameter.min/max are readable fields —
-	// capture §17), never the [0, 1] this package's own bench capture
-	// happened to observe: a different layer, or a different Arena build,
-	// is not guaranteed to share that bound. Refused with a stated reason
-	// rather than clamped silently — a silent clamp would let an operator
-	// or macro author believe a value was set that never was. Skipped
-	// (never refused for this reason alone) when the bound itself could
-	// not be read: an unknown bound is not evidence the request is out of
-	// range.
+	// Range-validated against Arena's own declared bounds for this specific
+	// parameter, never the [0, 1] the bench capture happened to observe.
+	// Refused rather than clamped silently, and skipped entirely when the
+	// bound itself could not be read: an unknown declared bound is not
+	// evidence a request is out of range.
 	if min, max, ok := baseLayer.Master.Range(); ok && (want < min || want > max) {
 		return refusedOutcome(name, fmt.Sprintf(
 			"the requested master value %.6f is outside this layer's declared range [%.6f, %.6f]", want, min, max))
@@ -658,9 +627,11 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, params Ac
 
 	alreadySatisfied := floatsNearlyEqual(currentMaster, want, layerMasterEpsilon)
 
-	dispatchedAt := d.now()
-	if err := d.collector.client.SetParameterRange(ctx, parameterID, want); err != nil {
-		return failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching the master change failed: %s", ClassifyError(err)))
+	dispatchedAt, bad := d.writePhase(ctx, w, name, "the master change", func(c context.Context) error {
+		return d.collector.client.SetParameterRange(c, parameterID, want)
+	})
+	if bad != nil {
+		return *bad
 	}
 
 	if alreadySatisfied {
@@ -668,8 +639,8 @@ func (d *ActionDispatcher) dispatchSetLayerMaster(ctx context.Context, params Ac
 			"this layer's master already equalled the requested value (%.6f) before this command was dispatched, so evidence collected afterward cannot be attributed to it", want))
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, name, dispatchedAt, DefaultActionConfirmDeadline, func() (bool, time.Time, string) {
-		layer, readAt, err := d.readLayer(ctx, layerID)
+	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+		layer, readAt, err := d.readLayer(s.ctx, layerID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the layer's confirming evidence failed: %s", ClassifyError(err))
 		}

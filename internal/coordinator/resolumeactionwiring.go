@@ -42,6 +42,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
@@ -254,11 +255,43 @@ func (a *resolumeActionDispatcherAdapter) translateActionOutcome(outcome resolum
 
 	return api.ResolumeActionResult{
 		Outcome:      state,
-		Reason:       outcome.Reason,
+		Reason:       sanitizeResolumeActionReason(outcome.Action, outcome.Reason),
 		Dispatched:   dispatched,
 		DispatchedAt: dispatchedAt,
 		ResolvedAt:   &resolvedAt,
 	}, nil
+}
+
+// resolumeActionReasonURLMarker flags a reason string that leaked a URL —
+// which, for every endpoint this package's own Client calls, necessarily
+// carries BOTH Resolume's own host and a raw object id in its path
+// (ADR-029: neither may reach an operator-facing surface). Review fix 2
+// (2026-08-15), reproduced: a connection reset mid-response — the
+// documented signature of the Arena use-after-free this whole track is
+// engineered around (ADR-032, BUILD-LOG 2026-08-14) — has no entry in
+// ClassifyError's vocabulary (client.go), so it falls through to the bare
+// *url.Error text, whose own Error() method is ALWAYS
+// `"%s %q: %s", Op, URL, Err` (net/url), which is exactly this shape.
+const resolumeActionReasonURLMarker = "://"
+
+// sanitizeResolumeActionReason is this file's own last line of defense —
+// see this file's own top comment for why THIS package does the
+// translation rather than fixing resolume.ClassifyError itself (a
+// different, concurrently-built package this task does not own; that
+// package still needs a connection-reset vocabulary entry — see this
+// task's own report). A reason containing a URL is replaced WHOLESALE,
+// never patched in place: a URL can appear anywhere in an arbitrary error
+// string, and a partial redaction is an easy way to still leak a fragment
+// of the path, which is exactly where the raw object id lives.
+func sanitizeResolumeActionReason(action resolume.ActionName, reason string) string {
+	if !strings.Contains(reason, resolumeActionReasonURLMarker) {
+		return reason
+	}
+	return fmt.Sprintf(
+		"%s: the underlying Resolume request failed with a transport error this coordinator has no named "+
+			"classification for; the original error named a request URL, which never reaches an operator-facing "+
+			"surface (ADR-029)",
+		action)
 }
 
 // mapActionOutcomeState translates resolume.ActionOutcomeState (A's own

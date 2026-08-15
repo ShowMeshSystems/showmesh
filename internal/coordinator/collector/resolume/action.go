@@ -7,38 +7,14 @@ import (
 	"time"
 )
 
-// This file is Track D seam D-3's own deliverable: TRACK-D-D3-SPEC.md §2's
-// seven-action vocabulary — the first code in this package permitted to
-// change anything on the wall. It follows internal/coordinator/api's own
-// fppcommand_primitives.go/fppcommand_evidence.go precedent (Step 8) as
-// closely as this package's own shape allows: a small declarative registry
-// naming every action's safety class (§5.2), a shared dispatch/confirm
-// orchestration every action runs through rather than seven hand-rolled
-// copies of it, and a confirmation predicate that never trusts a dispatch
-// response as evidence (§3.2) and never skips the post-dispatch fence
-// (§4.1) or the pre-dispatch baseline (§4.2). action_dispatch.go holds the
-// seven actions' own resolve/baseline/confirm logic; action_client.go holds
-// the REST calls each one dispatches.
-//
-// # What this file deliberately does NOT do
-//
-// It never reads GET /composition, on any path — guardfullcomposition_test.go
-// (D-2's own AST guard) scans every non-test file in this directory,
-// including this one. It never recomputes composition identity or the
-// selected deck: both pre-dispatch guards below read
-// [Collector.LastSurveySnapshot], D-2's own cached result, and issue no
-// HTTP request of their own to answer either question (§3.4, §3.6). It
-// never reads a value out of the WebSocket — every confirmation read in
-// this package is a fresh `by-id` GET through the exact same [Client]
-// methods D-2 uses. And it never gates on Program Mode or Show Mode: ADR-033
-// decision 4 is that no mode may refuse, delay, or degrade any action here,
-// and this package reads no mode value at all.
+// TRACK-D-D3-SPEC.md §2's seven-action vocabulary: the registry, the
+// end-to-end dispatch window, the pre-dispatch guards, and the confirmation
+// poll. action_dispatch.go holds each action's own resolve/baseline/confirm
+// logic; action_client.go holds the REST calls it dispatches.
 
 // ActionName is one of TRACK-D-D3-SPEC.md §2's seven action names — the
-// ENTIRE vocabulary this package accepts. `POST /composition/action`
-// (undo/redo) and every `DELETE` are excluded outright, per that section's
-// own "no action not in this table," and there is no eighth constant here
-// to add without also updating that table.
+// entire vocabulary this package accepts. `POST /composition/action`
+// (undo/redo) and every `DELETE` are excluded outright.
 type ActionName string
 
 const (
@@ -51,70 +27,44 @@ const (
 	ActionSetLayerMaster ActionName = "setLayerMaster"
 )
 
-// ActionSafetyClass records, for one action, whether it is ADR-024 decision
-// 11's own named exemption (proceeds on an audit-write failure with
-// degraded attribution) or the default fail-closed rule (refused). Mirrors
-// internal/coordinator/api's own fppSafetyClass exactly, including the
-// reason its zero value is deliberately not a valid registry entry: a bare
-// bool defaults to false with no way to tell "explicitly decided not
-// exempt" from "nobody ever decided," which is how Step 8 inherited Step
-// 7's one-primitive exemption onto all eight primitives unreviewed before
-// that file's own review caught it. See [actionRegistry]'s own comment for
-// this package's membership decision and TRACK-D-D3-SPEC.md §5.2 for the
-// full reasoning, reproduced there and here rather than only in the spec:
-// exempting setLayerBypass/setLayerMaster to protect the silencing
-// direction would exempt the lighting direction with it, which is Step 8's
-// exact shipped defect (a doc comment claimed one member was exempt while
-// the code exempted all eight). The blackout path is [ActionBlackout], and
-// it alone (with [ActionClearLayer], a stop scoped to one layer) is
-// exempt — this package does NOT enforce that exemption itself
-// (there is no audit write in this package at all); it only declares it,
-// for D-3/B's handler to read and act on, the same division of labor
-// fppcommand_primitives.go has with fppcommand_handler.go.
+// ActionSafetyClass records whether an action is ADR-024 decision 11's named
+// exemption or the default fail-closed rule. A bare bool cannot distinguish
+// "explicitly decided not exempt" from "nobody ever decided", so this is a
+// three-valued enum whose zero value fails [TestEveryActionDeclaresASafetyClass].
+// This package declares the class; D-3/B's handler enforces it (there is no
+// audit write here at all).
 type ActionSafetyClass int
 
 const (
 	// ActionSafetyClassUndeclared is the zero value and is never a valid
-	// registry entry — see this type's own doc comment.
+	// registry entry.
 	ActionSafetyClassUndeclared ActionSafetyClass = iota
 
-	// ActionSafetyClassExempt: ADR-024 decision 11's blackout/stop/
-	// power-off class. [ActionBlackout] and [ActionClearLayer] only.
+	// ActionSafetyClassExempt: ADR-024 decision 11's blackout/stop/power-off
+	// class. [ActionBlackout] and [ActionClearLayer] only.
 	ActionSafetyClassExempt
 
-	// ActionSafetyClassNotExempt: fails closed on a pre-dispatch
-	// audit-write failure (D-3/B's own enforcement, not this package's).
-	// Every action other than blackout and clearLayer.
+	// ActionSafetyClassNotExempt: fails closed on a pre-dispatch audit-write
+	// failure. Every action other than blackout and clearLayer.
 	ActionSafetyClassNotExempt
 )
 
 // localFallbackClassCoordinatorRequired is every action's declared
-// [ActionDescriptor.LocalFallbackClass] (TRACK-D-D3-SPEC.md §5.3, ADR-016):
-// the Resolume adapter is coordinator-hosted, Resolume holds no fallback,
-// and the composition is reachable only through the coordinator's own
-// network path, so every action here is coordinator-required with no
-// exception. The vocabulary supplies this label so a macro author never has
-// to know it — this is the ONE value every [ActionDescriptor] in
-// [actionRegistry] carries.
+// [ActionDescriptor.LocalFallbackClass] (§5.3, ADR-016). No exceptions: the
+// adapter is coordinator-hosted and Resolume holds no fallback.
 const localFallbackClassCoordinatorRequired = "coordinator-required"
 
-// ActionDescriptor is one row of [actionRegistry]: the declarative metadata
-// D-3/B (and, later, a macro author) needs about an action WITHOUT
-// dispatching it — its safety class and its local-fallback class. It
-// carries no dispatch logic; see action_dispatch.go for that.
+// ActionDescriptor is one row of [actionRegistry]: the metadata D-3/B needs
+// about an action without dispatching it. It carries no dispatch logic.
 type ActionDescriptor struct {
 	Name               ActionName
 	SafetyClass        ActionSafetyClass
 	LocalFallbackClass string
 }
 
-// actionRegistry is TRACK-D-D3-SPEC.md §2's table in full, safety class per
-// §5.2's own reasoning (see [ActionSafetyClass]'s doc comment). Every entry
-// carries [localFallbackClassCoordinatorRequired] — §5.3 has no exceptions.
-// This slice, and only this slice, is what [ActionDispatcher.Actions] and
-// TestEveryActionDeclaresASafetyClass (action_test.go) walk; adding an
-// eighth action anywhere else in this package without adding it here is a
-// gap this package's own tests cannot see.
+// actionRegistry is TRACK-D-D3-SPEC.md §2's table in full, with §5.2's safety
+// classes. This slice, and only this slice, is what [ActionDispatcher.Actions]
+// and this package's registry tests walk.
 var actionRegistry = []ActionDescriptor{
 	{Name: ActionLaunchClip, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 	{Name: ActionClearLayer, SafetyClass: ActionSafetyClassExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
@@ -125,87 +75,70 @@ var actionRegistry = []ActionDescriptor{
 	{Name: ActionSetLayerMaster, SafetyClass: ActionSafetyClassNotExempt, LocalFallbackClass: localFallbackClassCoordinatorRequired},
 }
 
-// ActionOutcomeState is the five-way result TRACK-D-D3-SPEC.md's own
-// vocabulary requires throughout §3-§4: never collapsed to a bool, and
-// "confirmed" is never the default a caller falls back to when nothing else
-// fits.
+// actionSafetyClass returns name's declared class, or
+// [ActionSafetyClassUndeclared] for a name not in the registry.
+func actionSafetyClass(name ActionName) ActionSafetyClass {
+	for _, e := range actionRegistry {
+		if e.Name == name {
+			return e.SafetyClass
+		}
+	}
+	return ActionSafetyClassUndeclared
+}
+
+// ActionOutcomeState is the five-way result TRACK-D-D3-SPEC.md's §3-§4
+// vocabulary requires: never collapsed to a bool, and "confirmed" is never a
+// default a caller falls back to.
 type ActionOutcomeState string
 
 const (
-	// ActionConfirmed: post-dispatch evidence, collected after this
-	// command's own dispatch, positively matches the action's confirming
-	// predicate.
+	// ActionConfirmed: evidence collected strictly after this dispatch
+	// matches the action's confirming predicate.
 	ActionConfirmed ActionOutcomeState = "confirmed"
 
-	// ActionUnconfirmed: the action was dispatched, but no confirming
-	// evidence arrived before its deadline. Never "failed" — §3.3's own
-	// rule: a deadline expiring is a claim about ShowMesh's evidence
-	// pipeline, not about the show.
+	// ActionUnconfirmed: dispatched, but no confirming evidence arrived
+	// before the deadline. §3.3: a deadline expiring is a claim about
+	// ShowMesh's evidence pipeline, never about the show.
 	ActionUnconfirmed ActionOutcomeState = "unconfirmed"
 
-	// ActionUnconfirmable: the action was dispatched, but its confirming
-	// predicate already held true before dispatch (§3.5, §4.2), so no
-	// post-dispatch evidence could ever prove this dispatch caused
-	// anything. Never reported as ActionConfirmed.
+	// ActionUnconfirmable: dispatched, but no post-dispatch evidence could
+	// ever be attributed to it — the predicate already held, or no
+	// pre-dispatch baseline could be read (§3.5, §4.2).
 	ActionUnconfirmable ActionOutcomeState = "unconfirmable"
 
-	// ActionRefused: the action was NOT dispatched — a pre-dispatch guard
-	// (composition identity, a clip's deck, an id absent from the stored
-	// composition, or an unreadable pre-dispatch baseline) stopped it
-	// before any HTTP request reached Resolume for the guards that
-	// require zero requests (§3.4, §3.6), or before the WRITE request
-	// specifically for a baseline-read failure.
+	// ActionRefused: NOT dispatched. A pre-dispatch guard stopped it.
 	ActionRefused ActionOutcomeState = "refused"
 
-	// ActionFailed: Resolume's own response to the dispatch request
-	// itself was a definite negative — a non-2xx status or a transport
-	// failure — so there is positive evidence this action did not
-	// execute. A claim about the show, per §3.3's own distinction from
-	// ActionUnconfirmed.
+	// ActionFailed: Resolume's own response to the dispatch was a definite
+	// negative, so there is positive evidence this action did not execute.
 	ActionFailed ActionOutcomeState = "failed"
 )
 
-// ActionOutcome is [ActionDispatcher.Dispatch]'s result — the structured
-// verdict D-3/B renders to an operator or a macro caller. Reason is never
-// empty: every branch that constructs one states why, including a
-// confirmed outcome (mirroring fppcommand_evidence.go's own "state the
-// confirming evidence even on success" rule) so an operator reading
-// "confirmed" can see what evidence backs it, not just the word.
+// ActionOutcome is [ActionDispatcher.Dispatch]'s structured verdict. Reason
+// is never empty on any branch, confirmed included, so an operator reading
+// "confirmed" can see what evidence backs it.
 type ActionOutcome struct {
 	Action ActionName
 	State  ActionOutcomeState
 	Reason string
 
-	// DispatchedAt is the zero time.Time when State == ActionRefused (no
-	// dispatch occurred). Otherwise it is the instant this dispatcher
-	// issued the write request — the fence every confirmation read below
-	// is checked against (§4.1).
+	// DispatchedAt is the zero time.Time when State == ActionRefused.
+	// Otherwise it is the instant the write request was issued — the fence
+	// every confirmation read is checked against (§4.1).
 	DispatchedAt time.Time
 
-	// ConfirmedAt is meaningful only when State == ActionConfirmed: the
-	// instant the confirming evidence was actually read, always strictly
-	// after DispatchedAt (see evidenceIsPostDispatch).
+	// ConfirmedAt is meaningful only when State == ActionConfirmed, and is
+	// always strictly after DispatchedAt.
 	ConfirmedAt time.Time
 }
 
-// ActionParams is the typed parameter bag for one [ActionDispatcher.Dispatch]
-// call. Which fields matter depends on Action — see each action's own
-// doc comment in action_dispatch.go. Every id here is a "ShowMesh
-// reference": [ActionDispatcher.Dispatch] resolves it against the stored
-// composition ([CompositionStore]) before issuing any request, and an id
-// this composition does not contain is refused, never passed through to
-// Resolume verbatim (TRACK-D-D3-SPEC.md §2's own "no raw object id" rule).
-// Unlike fppcommand's map[string]any (that package decodes untrusted wire
-// JSON before it knows which primitive it is validating against), D-3/B
-// already knows which action it is building a call for by the time it
-// reaches this package, so there is no wire-decode step here to justify a
-// stringly-typed bag — a Go struct lets the compiler catch a caller passing
-// a clip id to blackout.
+// ActionParams is the typed parameter bag for one Dispatch call; which fields
+// matter depends on the action. Every id is resolved against the stored
+// composition before any request is issued, and an id this composition does
+// not contain is refused rather than passed through to Resolume.
 type ActionParams struct {
-	// ClipID: launchClip. The id of either a deck clip or a persistent
-	// clip in the stored composition — [ActionDispatcher.Dispatch] tries
-	// both, since a bare id does not itself say which kind it is (ADR-032
-	// decision 6).
+	// ClipID: launchClip. Either a deck clip or a persistent clip —
+	// Dispatch tries both, since a bare id does not say which it is.
 	ClipID ObjectID
 
 	// LayerID: clearLayer, setLayerBypass, setLayerMaster.
@@ -217,56 +150,39 @@ type ActionParams struct {
 	// DeckID: selectDeck.
 	DeckID ObjectID
 
-	// Bypassed: setLayerMaster's OWN sibling field, unused. The requested
-	// value for setLayerBypass.
+	// Bypassed: the requested value for setLayerBypass.
 	Bypassed bool
 
-	// Master: the requested continuous value for setLayerMaster. The
-	// bench capture observed [0, 1] on this layer's own RangeParameter,
-	// but that is one measured instance, not a contract — Arena's own
-	// specification declares min/max per parameter, and
-	// dispatchSetLayerMaster (action_dispatch.go) validates against THIS
-	// layer's own declared bound, read fresh off the pre-dispatch
-	// baseline, rather than assuming [0, 1] holds universally. D-3/B still
-	// owns wire-level shape validation (is this JSON a number at all),
-	// exactly as fppcommand_primitives.go's own ValidateParams owns FPP's
-	// equivalent (this package's Dispatch is the trusted-caller boundary,
-	// not the untrusted-wire one) — but the RANGE check is this
-	// package's own, because only this package has read Arena's own
-	// declared bound by the time Dispatch is called.
+	// Master: the requested value for setLayerMaster. Range-validated
+	// against THIS layer's own declared bound read off the pre-dispatch
+	// baseline, never against the [0, 1] the bench capture happened to see.
 	Master float64
 }
 
-// ActionDispatcherOptions configures an [ActionDispatcher]. Every field
-// left at its zero value is replaced by a documented default.
+// ActionDispatcherOptions configures an [ActionDispatcher]. Every field left
+// at its zero value is replaced by a documented default.
 type ActionDispatcherOptions struct {
-	// Now is the clock used for every dispatch/confirm timestamp in this
-	// package, including the post-dispatch fence (§4.1). nil (the default
-	// in production) means time.Now; tests inject a fake, and MUST pair it
-	// with a Sleep that advances the same fake clock — see Sleep's own doc
-	// comment.
+	// Now is the clock used for every timestamp and every budget check in
+	// this package, including the post-dispatch fence (§4.1). nil means
+	// time.Now; a test injecting a fake MUST pair it with Sleep.
 	Now func() time.Time
 
-	// Sleep is called between confirmation poll attempts. nil (the
-	// default in production) means time.Sleep. A test that injects a fake
-	// Now MUST inject a Sleep that advances it, or the poll loop below
-	// will wait out a real deadline using a clock that never proves it
-	// arrived (or, if Now is real but Sleep is stubbed to a no-op, the
-	// loop will spin — this package's own tests use a paired fake
-	// clock/sleep, never one without the other).
+	// Sleep is called between confirmation poll attempts. nil means
+	// time.Sleep. A test that injects a fake Now MUST inject a Sleep that
+	// advances the same fake clock, or the poll loop will wait out a real
+	// deadline using a clock that never proves it arrived (and if Now is
+	// real while Sleep is a no-op, the loop spins).
 	Sleep func(time.Duration)
 
-	// PollInterval bounds how often a confirmation re-reads Resolume
-	// while waiting for its deadline. See [DefaultActionConfirmPollInterval].
+	// PollInterval is the FIRST delay between confirmation re-reads; the
+	// interval grows from there. See [DefaultActionConfirmPollInterval].
 	PollInterval time.Duration
 }
 
-// ActionDispatcher dispatches one of [actionRegistry]'s seven actions
-// against one [Collector]'s underlying [Client] and [CompositionStore],
-// running the full resolve / pre-dispatch guard / dispatch / confirmation
-// lifecycle in one call. It is the seam D-3/B (internal/coordinator/api) is
-// built against — see [ActionDispatcher.Dispatch]'s own doc comment for the
-// stability contract that boundary relies on.
+// ActionDispatcher dispatches one of [actionRegistry]'s seven actions against
+// one [Collector]'s [Client] and [CompositionStore], running the whole
+// resolve / guard / dispatch / confirm lifecycle in one call. It is the seam
+// D-3/B (internal/coordinator/api) is built against.
 type ActionDispatcher struct {
 	collector    *Collector
 	now          func() time.Time
@@ -292,9 +208,8 @@ func NewActionDispatcher(collector *Collector, opts ActionDispatcherOptions) *Ac
 	return &ActionDispatcher{collector: collector, now: now, sleep: sleep, pollInterval: pollInterval}
 }
 
-// Actions returns [actionRegistry]'s seven entries, sorted by Name for a
-// deterministic listing (an API surface D-3/B builds a discovery endpoint
-// from should not depend on Go's own slice-literal order).
+// Actions returns [actionRegistry]'s entries, sorted by Name so a discovery
+// endpoint built from them does not depend on Go's slice-literal order.
 func (d *ActionDispatcher) Actions() []ActionDescriptor {
 	out := make([]ActionDescriptor, len(actionRegistry))
 	copy(out, actionRegistry)
@@ -302,196 +217,281 @@ func (d *ActionDispatcher) Actions() []ActionDescriptor {
 	return out
 }
 
-// Dispatch runs one action end to end: the universal composition-identity
-// gate (§3.6), the action's own resolve-against-the-stored-map step, its
-// own pre-dispatch guard (only launchClip has one today — the deck
-// refusal, §3.4), its pre-dispatch baseline capture (§4.2, every action),
-// the write request itself, and — unless the baseline already satisfied the
-// confirming predicate (§3.5, §4.2) — a bounded confirmation poll (§4.1,
-// §4.3) against the action's own DERIVED deadline (§3.3).
+// Dispatch runs one action end to end under a [MaxDispatchDuration] window:
+// the identity gate (§3.6), the resolve against the stored composition, the
+// deck refusal (§3.4), the pre-dispatch baseline (§4.2), the write, and a
+// bounded confirmation poll against a derived deadline (§3.3).
 //
-// The returned error is reserved for a caller mistake this package can
-// detect statically — an unrecognized name, today the only such case —
-// never for anything Resolume said or failed to say: a definite negative
-// from Resolume's own dispatch response is [ActionFailed], a timeout on
-// confirmation is [ActionUnconfirmed], and a guard refusal is
-// [ActionRefused] — all three are values in the returned [ActionOutcome],
-// not a Go error, because D-3/B needs a structured verdict to render to an
-// operator, not a bare error string standing in for one of five different
-// outcomes.
-//
-// This signature — an [ActionName], an [ActionParams], a returned
-// [ActionOutcome] plus error — is the stability contract D-3/B is built
-// against; see [ActionDescriptor] and [ActionOutcome] for the other two
-// halves of it.
+// The returned error is reserved for a caller mistake this package can detect
+// statically — an unrecognized name, today the only such case. Everything
+// Resolume said or failed to say is a state in the returned [ActionOutcome].
+// That signature is the stability contract D-3/B is built against.
 func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params ActionParams) (ActionOutcome, error) {
+	w := d.openWindow()
+	ctx, cancel := context.WithDeadline(ctx, w.endAt)
+	defer cancel()
+
 	switch name {
 	case ActionLaunchClip:
-		return d.dispatchLaunchClip(ctx, params), nil
+		return d.dispatchLaunchClip(ctx, w, params), nil
 	case ActionClearLayer:
-		return d.dispatchClearLayer(ctx, params), nil
+		return d.dispatchClearLayer(ctx, w, params), nil
 	case ActionBlackout:
-		return d.dispatchBlackout(ctx, params), nil
+		return d.dispatchBlackout(ctx, w), nil
 	case ActionLaunchColumn:
-		return d.dispatchLaunchColumn(ctx, params), nil
+		return d.dispatchLaunchColumn(ctx, w, params), nil
 	case ActionSelectDeck:
-		return d.dispatchSelectDeck(ctx, params), nil
+		return d.dispatchSelectDeck(ctx, w, params), nil
 	case ActionSetLayerBypass:
-		return d.dispatchSetLayerBypass(ctx, params), nil
+		return d.dispatchSetLayerBypass(ctx, w, params), nil
 	case ActionSetLayerMaster:
-		return d.dispatchSetLayerMaster(ctx, params), nil
+		return d.dispatchSetLayerMaster(ctx, w, params), nil
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}
 }
 
-// --- Deadline constants (§3.3) --------------------------------------------
+// --- Deadline and budget constants (§3.3) ---------------------------------
 //
-// Every one of these is a NAMED constant, never a literal at a call site —
-// §3.3's own rule, stated because a fixed deadline is wrong by 35x on the
-// capture's own measurement (connect: 4-64ms; disconnect: 75ms-4,068ms
-// depending on transition.duration).
+// Every one of these is a named constant, never a literal at a call site: a
+// fixed deadline is wrong by 35x on the capture's own measurement (connect
+// 4-64ms; disconnect 75ms-4,068ms depending on transition.duration).
 
 const (
-	// DefaultActionConfirmDeadline is a start/parameter action's own fixed
-	// budget (launchClip, launchColumn, selectDeck, setLayerBypass,
-	// setLayerMaster) — capture §7's own connect measurement (4-64ms) with
-	// generous headroom. SHOWMESH GUESS, NOT MEASURED for the exact
-	// number: only the ORDER of headroom above the measured range is
-	// justified by the capture, not this specific value.
+	// DefaultActionConfirmDeadline is a start/parameter action's fixed budget
+	// (launchClip, launchColumn, selectDeck, setLayerBypass, setLayerMaster).
+	// SHOWMESH GUESS, NOT MEASURED for the exact number: only the order of
+	// headroom above the measured 4-64ms connect is justified by the capture.
 	DefaultActionConfirmDeadline = 2 * time.Second
 
-	// DefaultActionConfirmMargin is added to a layer's own measured
-	// transition.duration for clearLayer and blackout. Capture §7.2
-	// measured 75-113ms of overshoot past the transition boundary in
-	// every run; this margin is roughly an order of magnitude above that
-	// measured overshoot, per the capture's own stated conclusion ("a 1s
-	// margin is an order of magnitude of headroom").
+	// DefaultActionConfirmMargin is added to a layer's measured
+	// transition.duration for clearLayer and blackout. Capture §7.2 measured
+	// 75-113ms of overshoot past the transition boundary in every run.
 	DefaultActionConfirmMargin = 1 * time.Second
 
-	// DefaultActionConfirmDeadlineUnknownTransition is clearLayer/blackout's
-	// own fallback ONLY when transition.duration itself could not be read
-	// for any affected layer — never a silent 0, which would collapse
-	// "unknown" into "instant" exactly the way CLAUDE.md's own "ma": null
-	// defect collapsed absence into zero. SHOWMESH GUESS, NOT MEASURED:
-	// chosen larger than the largest transition duration this capture
-	// measured (5.0s, observed at 4,068ms to confirm) plus
-	// [DefaultActionConfirmMargin], so an ordinary transition still has
-	// room to complete even when this seam cannot read how long it will
-	// take.
+	// DefaultActionConfirmDeadlineUnknownTransition is clearLayer's and
+	// blackout's fallback when transition.duration could not be read at all —
+	// never a silent 0, which would collapse "unknown" into "instant".
+	// SHOWMESH GUESS, NOT MEASURED: larger than the longest transition the
+	// capture measured (5.0s, confirming at 4,068ms) plus the margin.
 	DefaultActionConfirmDeadlineUnknownTransition = 10 * time.Second
 
-	// DefaultActionConfirmPollInterval bounds how often a confirmation
-	// re-reads Resolume while waiting for its own deadline. This is an
-	// IMPLEMENTATION choice, not a capture-derived number: nothing in
-	// TRACK-D-D3-SPEC.md or the bench capture measured a safe re-read
-	// cadence for a single action's own bounded confirmation window (as
-	// opposed to D-2's own steady-state /product cadence, which this
-	// package does not touch — see [DefaultActionConfirmPollInterval]'s
-	// own budget note below). SHOWMESH GUESS, NOT MEASURED: frequent
-	// enough to catch a 4-64ms connect within its own 2s budget without
-	// meaningful added latency, infrequent enough that even a full
-	// blackout confirmation window (worst case ~11s: the unknown-transition
-	// fallback above) issues on the order of tens, not thousands, of
-	// requests — a bounded, action-triggered burst, nothing like D-2's own
-	// continuous steady-state traffic, and negligible against capture
-	// §14.3's own measured 209,916 by-id reads in five minutes with no
-	// crash.
-	DefaultActionConfirmPollInterval = 50 * time.Millisecond
+	// DefaultActionConfirmPollInterval is the FIRST delay between
+	// confirmation re-reads. Each subsequent interval doubles, capped at
+	// [maxActionConfirmPollInterval], so a 4-64ms connect still confirms on
+	// the first or second attempt without the tail of a long deadline
+	// hammering Arena. SHOWMESH GUESS, NOT MEASURED.
+	DefaultActionConfirmPollInterval = 25 * time.Millisecond
 
-	// layerMasterEpsilon is setLayerMaster's own float-equality tolerance:
-	// a ParamRange round-trips through Resolume's own JSON encoding, and
-	// this package does not assume that encoding is exact to the last bit
-	// for a value ShowMesh itself just wrote. SHOWMESH GUESS, NOT
-	// MEASURED.
+	// maxActionConfirmPollInterval caps that growth. Real footprint at these
+	// two values, measured by TestConfirmationFootprintStaysBounded and by
+	// hand: a single-object action spends 8 attempts (9 reads including its
+	// baseline) across a full 2s budget, and blackout — which re-reads every
+	// tracked layer per attempt — at most 7 attempts (about 126 reads at 18
+	// layers) for a 1.5s derived deadline and 26 (about 470) at the
+	// unknown-transition fallback, less whenever the walk stops early on a
+	// layer that has not cleared. Not "1 to 3 reads", and not thousands.
+	maxActionConfirmPollInterval = 500 * time.Millisecond
+
+	// layerMasterEpsilon is setLayerMaster's own float-equality tolerance: a
+	// ParamRange round-trips through Resolume's own JSON encoding, and this
+	// package does not assume that encoding is exact to the last bit for a
+	// value ShowMesh itself just wrote. SHOWMESH GUESS, NOT MEASURED.
 	layerMasterEpsilon = 1e-6
 
-	// MaxActionConfirmDeadline is the single, exported upper bound on how
-	// long ANY call to [ActionDispatcher.Dispatch] will wait for confirming
-	// evidence before returning — the "registry maximum" a caller sizing an
-	// HTTP write deadline before it even knows which of the seven actions is
-	// about to run (internal/coordinator/api's own handleDispatchResolumeAction,
-	// which sets its write deadline before the request body is read) needs
-	// to be able to trust. [DefaultActionConfirmDeadline],
-	// [DefaultActionConfirmDeadlineUnknownTransition], and
-	// [DefaultActionConfirmMargin] together already bound every ACTION
-	// CLASS's deadline for the two cases this package can size in advance
-	// (a fixed-budget action; a clearLayer/blackout whose transition.duration
-	// could not be read at all) — but clearLayer and blackout's OTHER case,
-	// a layer whose transition.duration WAS read, derives its deadline from
-	// that value directly (§3.3), and transition.duration is live state this
-	// package reads off Resolume, not a value any registry here can bound in
-	// advance: an operator is free to configure a layer transition of any
-	// length in Arena's own UI. TRACK-D-D3-SPEC.md's request for this task
-	// names this directly: "the registry's maximum is itself a computed
-	// bound," and a computed bound over an genuinely unbounded input has no
-	// true maximum to compute.
-	//
-	// So this constant is not a value read OFF the deadline model — it is a
-	// clamp APPLIED to it, by [clampActionConfirmDeadline], everywhere
-	// action_dispatch.go derives a deadline from a live transition.duration
-	// (deriveClearDeadline, and dispatchBlackout's own per-layer maximum).
-	// That is what makes it true rather than optimistic: no deadline this
-	// package's own Dispatch computes can ever exceed it, because the code
-	// that computes one is the code that enforces it, in the same package,
-	// not a caller trusting a separately-asserted number. A layer transition
-	// configured longer than this bound still confirms correctly if it
-	// finishes in time; if it does not, the action reports [ActionUnconfirmed]
-	// with a stated reason at this bound rather than at the transition's own
-	// true (longer) length — never [ActionFailed] (§3.3's own rule: a
-	// deadline expiring is a claim about this package's own evidence
-	// pipeline, not about the show) and never an unbounded wait a caller's
-	// own write deadline cannot be sized against. This is an explicit,
-	// disclosed limitation, not a papered-over one: see this constant's own
-	// value below for the reasoning behind the specific number.
-	//
-	// SHOWMESH GUESS, NOT MEASURED for the exact value: chosen well above
-	// every other named constant in this block — 5x
-	// [DefaultActionConfirmDeadlineUnknownTransition], which was itself
-	// already chosen larger than the largest transition.duration this
-	// package's own capture ever measured (5.0s) — so an ordinary,
-	// real-world transition has ample room to finish inside it, while still
-	// being small enough that internal/coordinator/api's own HTTP write
-	// deadline (sized from this value plus its own round-trip margin) stays
-	// a bounded, human-scale number rather than an effectively unbounded
-	// one. internal/coordinator/api/resolumeaction.go's own
-	// resolumeActionMaxConfirmDeadline is checked against this exact value
-	// by a test that fails the build the moment the two disagree
-	// (resolumeaction_test.go); cmd/showmeshctl cannot import this package
-	// (its own import-graph test forbids it) and so keeps its own
-	// independently chosen, test-reconciled literal, the identical shape
-	// [command.MaxFPPCommandConfirmDeadline]'s own doc comment already
-	// defends for FPP's equivalent CLI/server boundary.
+	// MinActionConfirmDeadline floors a derived deadline.
+	// transition.duration is live operator-set state, and a negative one
+	// would otherwise produce a deadline already in the past: a confirmation
+	// window that never opens and reports unconfirmed without one read.
+	MinActionConfirmDeadline = DefaultActionConfirmMargin
+
+	// MaxActionConfirmDeadline clamps how long the confirmation poll waits.
+	// An operator can configure any transition length in Arena, so a deadline
+	// derived from one has no natural maximum. Exceeding it is
+	// [ActionUnconfirmed], never [ActionFailed]. SHOWMESH GUESS, NOT
+	// MEASURED; the longest transition the capture measured was 5.0s.
 	MaxActionConfirmDeadline = 30 * time.Second
+
+	// MaxBaselinePhaseBudget bounds the WHOLE pre-dispatch baseline phase,
+	// not one read within it. blackout reads a baseline for every tracked
+	// layer sequentially, so a per-request timeout alone leaves the phase
+	// unbounded in layer count.
+	MaxBaselinePhaseBudget = 5 * time.Second
+
+	// MaxWritePhaseBudget bounds the dispatch write itself.
+	MaxWritePhaseBudget = 5 * time.Second
+
+	// MaxDispatchDuration is the total wall clock [ActionDispatcher.Dispatch]
+	// may spend on any action. Dispatch enforces it as a window on its own
+	// clock, so a caller sizing an HTTP write deadline before it knows which
+	// action is about to run can size from this number.
+	//
+	// The bound is real only because every phase is separately bounded. An
+	// earlier revision exported MaxActionConfirmDeadline as this bound while
+	// the baseline phase and the in-flight confirmation check ran outside it,
+	// which made the exported number an underestimate by a factor that grew
+	// with layer count.
+	MaxDispatchDuration = MaxBaselinePhaseBudget + MaxWritePhaseBudget + MaxActionConfirmDeadline
+
+	// MaxIdentityEvidenceAge fences the cached composition-identity reading
+	// the §3.6 gate rests on. Equal to [DefaultSurveyValidFor] so an action
+	// refuses exactly when the dashboard renders that same reading stale.
+	// Surveys are event-driven (and under ADR-033 Show Mode the WebSocket
+	// that triggers one is closed), so a reading past this age also asks the
+	// collector for a fresh survey rather than only refusing.
+	MaxIdentityEvidenceAge = DefaultSurveyValidFor
 )
 
-// clampActionConfirmDeadline bounds d to [MaxActionConfirmDeadline], never
-// upward: a shorter, already-derived deadline (a fixed budget, or a short
-// transition) is returned unchanged, and only a deadline that would exceed
-// the clamp is shortened to it. See [MaxActionConfirmDeadline]'s own doc
-// comment for why this exists at all — deriveClearDeadline and
-// dispatchBlackout are this function's only two callers, both because both
-// derive a deadline from a layer's own live, operator-configured
-// transition.duration, the one input in this package's whole deadline model
-// with no registry-known bound.
+// clampActionConfirmDeadline bounds a derived deadline to
+// [MinActionConfirmDeadline, MaxActionConfirmDeadline]. Both ends matter: the
+// upper because transition.duration is unbounded operator state, the lower
+// because a negative one produces a deadline already in the past.
 func clampActionConfirmDeadline(d time.Duration) time.Duration {
 	if d > MaxActionConfirmDeadline {
 		return MaxActionConfirmDeadline
 	}
+	if d < MinActionConfirmDeadline {
+		return MinActionConfirmDeadline
+	}
 	return d
 }
 
-// evidenceIsPostDispatch is TRACK-D-D3-SPEC.md §4.1's own fence, made a
-// single named function so a test can mutate or remove it and observe every
-// confirmation predicate in action_dispatch.go start accepting pre-dispatch
-// evidence — the exact 179-microsecond defect CLAUDE.md records against
-// Step 7's own equivalent (fppcommand_evidence.go's [resolveConfirmationEvidence],
-// which checks o.CollectedAt.Before(notBefore) the same way). readAt must
-// be STRICTLY after dispatchedAt: a read collected in the same instant as
-// dispatch (possible with a coarse or stubbed clock) proves nothing about
-// what happened AFTER that instant.
-func evidenceIsPostDispatch(readAt, dispatchedAt time.Time) bool {
-	return readAt.After(dispatchedAt)
+// --- The dispatch window ---------------------------------------------------
+
+// dispatchWindow is one Dispatch call's [MaxDispatchDuration] bound, held on
+// [ActionDispatcher.now]'s clock rather than only as a context deadline: a
+// context timer runs on real time, so a loop that must stop when the budget
+// is gone has to test the same clock the tests drive.
+type dispatchWindow struct {
+	d     *ActionDispatcher
+	endAt time.Time
+}
+
+func (d *ActionDispatcher) openWindow() dispatchWindow {
+	return dispatchWindow{d: d, endAt: d.now().Add(MaxDispatchDuration)}
+}
+
+// phase returns a context for one phase's requests plus the instant that
+// phase must end, bounded by the smaller of budget and what is left of the
+// whole window.
+func (w dispatchWindow) phase(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, time.Time) {
+	now := w.d.now()
+	if rem := w.endAt.Sub(now); rem < budget {
+		budget = rem
+	}
+	if budget < 0 {
+		budget = 0
+	}
+	pctx, cancel := context.WithTimeout(ctx, budget)
+	return pctx, cancel, now.Add(budget)
+}
+
+// expired reports whether at has passed on this dispatcher's clock.
+func (d *ActionDispatcher) expired(at time.Time) bool {
+	return !d.now().Before(at)
+}
+
+// --- The pre-dispatch baseline phase (§4.2) --------------------------------
+
+// baselineReader runs one action's pre-dispatch reads under a single shared
+// [MaxBaselinePhaseBudget]. A read is skipped rather than attempted once the
+// budget is gone, so the phase is bounded in the number of objects an action
+// reads and not only per request.
+type baselineReader struct {
+	d      *ActionDispatcher
+	ctx    context.Context
+	cancel context.CancelFunc
+	endAt  time.Time
+	err    error
+	spent  bool
+}
+
+func (w dispatchWindow) beginBaseline(ctx context.Context) *baselineReader {
+	bctx, cancel, endAt := w.phase(ctx, MaxBaselinePhaseBudget)
+	return &baselineReader{d: w.d, ctx: bctx, cancel: cancel, endAt: endAt}
+}
+
+// read performs one baseline read, reporting whether it ran and succeeded.
+func (b *baselineReader) read(fn func(context.Context) error) bool {
+	if b.err != nil || b.spent {
+		return false
+	}
+	if b.d.expired(b.endAt) {
+		b.spent = true
+		return false
+	}
+	if err := fn(b.ctx); err != nil {
+		b.err = err
+		return false
+	}
+	return true
+}
+
+func (b *baselineReader) close() { b.cancel() }
+
+// failure states why the baseline phase did not complete, or "" when it did.
+func (b *baselineReader) failure() string {
+	switch {
+	case b.spent:
+		return fmt.Sprintf("the pre-dispatch reads did not finish within their %s budget", MaxBaselinePhaseBudget)
+	case b.err != nil:
+		return ClassifyError(b.err)
+	default:
+		return ""
+	}
+}
+
+// baselineFailureOutcome applies the rule for an action whose pre-dispatch
+// baseline could not be read. A not-exempt action refuses: refusing a start
+// costs only that it does not start. An exempt action (blackout, clearLayer)
+// dispatches anyway and reports unconfirmable, because refusing a stop for
+// want of a pre-dispatch READ is the fail-closed inversion ADR-024 decision
+// 11 already settled for the audit write; blackout's confirming predicate is
+// absolute, not a delta, so the baseline is needed only for the
+// already-satisfied test. No confirmation poll runs either way — without a
+// baseline it could not mean anything, and it costs requests.
+func (d *ActionDispatcher) baselineFailureOutcome(ctx context.Context, w dispatchWindow, name ActionName, why string, write func(context.Context) error) ActionOutcome {
+	if actionSafetyClass(name) != ActionSafetyClassExempt {
+		return refusedOutcome(name, fmt.Sprintf("could not read a pre-dispatch baseline for this action: %s", why))
+	}
+	dispatchedAt, bad := d.writePhase(ctx, w, name, string(name), write)
+	if bad != nil {
+		return *bad
+	}
+	return unconfirmableOutcome(name, dispatchedAt, fmt.Sprintf(
+		"the pre-dispatch baseline could not be read (%s), so post-dispatch evidence cannot distinguish this action's effect from the state it found", why))
+}
+
+// --- The write phase --------------------------------------------------------
+
+// writePhase issues one action's dispatch request under
+// [MaxWritePhaseBudget], re-checking the identity gate immediately before it:
+// the gate at the top of a dispatch ran before the baseline reads, which can
+// be seconds, and re-reading the cached snapshot is free. bad is non-nil when
+// the outcome is already decided.
+func (d *ActionDispatcher) writePhase(ctx context.Context, w dispatchWindow, name ActionName, what string, fn func(context.Context) error) (time.Time, *ActionOutcome) {
+	if reason, refuse := d.identityGate(name, d.collector.LastSurveySnapshot()); refuse {
+		out := refusedOutcome(name, "composition identity stopped being confirmed before this action was dispatched: "+reason)
+		return time.Time{}, &out
+	}
+
+	wctx, cancel, endAt := w.phase(ctx, MaxWritePhaseBudget)
+	defer cancel()
+
+	dispatchedAt := d.now()
+	err := fn(wctx)
+	if err == nil {
+		return dispatchedAt, nil
+	}
+	// A write that ran out of budget may or may not have reached Arena, so it
+	// is unconfirmed. Only a definite negative from Resolume is failed.
+	if d.expired(endAt) {
+		out := ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt, Reason: fmt.Sprintf(
+			"dispatching %s ran out of its %s write budget, so whether Resolume received it is not known: %s", what, MaxWritePhaseBudget, ClassifyError(err))}
+		return dispatchedAt, &out
+	}
+	out := failedOutcome(name, dispatchedAt, fmt.Sprintf("dispatching %s failed: %s", what, ClassifyError(err)))
+	return dispatchedAt, &out
 }
 
 // --- Shared outcome constructors ------------------------------------------
@@ -508,93 +508,170 @@ func unconfirmableOutcome(name ActionName, dispatchedAt time.Time, reason string
 	return ActionOutcome{Action: name, State: ActionUnconfirmable, DispatchedAt: dispatchedAt, Reason: reason}
 }
 
+// evidenceIsPostDispatch is §4.1's fence, a single named function so a test
+// can remove it and watch every confirmation predicate start accepting
+// pre-dispatch evidence. readAt must be STRICTLY after dispatchedAt: a read
+// collected in the same instant as dispatch proves nothing about what
+// happened after that instant, which is Step 7's 179-microsecond defect.
+func evidenceIsPostDispatch(readAt, dispatchedAt time.Time) bool {
+	return readAt.After(dispatchedAt)
+}
+
 // --- The composition-identity gate (§3.6) ---------------------------------
 
-// identityGateRefusal reports whether snap allows ANY action to dispatch,
-// per TRACK-D-D3-SPEC.md §3.6: "no action dispatches while composition
-// identity is unknown or false." Consumes [Collector.LastSurveySnapshot]
-// exclusively — see this file's own top comment — never issuing an HTTP
-// request of its own. The reason names when identity was last checked and
-// what it found, per §3.4's own "the reading is itself evidence and is
-// fenced" rule extended to this gate as well.
-func identityGateRefusal(snap SurveySnapshot) (reason string, refuse bool) {
+// identityGateRefusal reports whether snap allows any action to dispatch:
+// §3.6's "no action dispatches while composition identity is unknown or
+// false", plus an age fence, since a survey runs only on an event and the
+// reading can otherwise be arbitrarily old. stale distinguishes the age
+// refusal from the others so a caller can nudge a fresh survey.
+func identityGateRefusal(snap SurveySnapshot, now time.Time) (reason string, refuse, stale bool) {
 	if !snap.SurveyRan || !snap.IdentityKnown {
-		return "no composition survey has completed yet, so composition identity is not known", true
+		return "no composition survey has completed yet, so composition identity is not known", true, false
+	}
+	if age := now.Sub(snap.IdentityObservedAt); age > MaxIdentityEvidenceAge {
+		return fmt.Sprintf(
+			"the composition identity evidence is %s old (last checked %s), past the %s an action may rest on; a fresh check has been requested",
+			age.Round(time.Second), snap.IdentityObservedAt.Format(time.RFC3339), MaxIdentityEvidenceAge), true, true
 	}
 	if snap.Identity == IdentityTrue {
-		return "", false
+		return "", false, false
 	}
 	return fmt.Sprintf(
 		"composition identity is not confirmed (last checked %s, state %q); an action is not dispatched until identity is confirmed",
-		snap.IdentityObservedAt.Format(time.RFC3339), snap.Identity), true
+		snap.IdentityObservedAt.Format(time.RFC3339), snap.Identity), true, false
+}
+
+// identityGate applies [identityGateRefusal] and, when the reading is too old
+// to rest a decision on, asks for a fresh survey so the next attempt is not
+// refused for the same reason.
+//
+// An exempt action is not refused for a STALE reading. Staleness is a fact
+// about this package's own evidence pipeline, and refusing a stop for want of
+// our own evidence is the fail-closed inversion ADR-024 decision 11 settled
+// for the audit write. An identity of unknown or false is a fact about the
+// composition, so §3.6's refusal still applies to every action.
+func (d *ActionDispatcher) identityGate(name ActionName, snap SurveySnapshot) (string, bool) {
+	reason, refuse, stale := identityGateRefusal(snap, d.now())
+	if stale {
+		d.collector.RequestSurvey(false)
+		if actionSafetyClass(name) == ActionSafetyClassExempt {
+			return "", false
+		}
+	}
+	return reason, refuse
 }
 
 // --- The clip deck refusal (§3.4) -----------------------------------------
 
-// deckRefusal reports whether a clip stored against expectedDeck may
-// dispatch, per §3.4: a clip whose deck is not the currently selected deck
-// is refused before dispatch, naming both decks, off the cached
-// [SurveySnapshot] alone — never a fresh HTTP request (acceptance criterion
-// 3: "issuing no HTTP request to Resolume at all"). tc supplies
-// expectedDeck's own display name when known, purely for the message; the
-// comparison itself is by id.
-func deckRefusal(tc *TrackedComposition, expectedDeck ObjectID, snap SurveySnapshot) (reason string, refuse bool) {
+// deckSelectionRefusal decides §3.4's deck term from deck, a by-id read of
+// the clip's OWN deck taken at readAt. It rests on that fresh read rather
+// than on the cached survey snapshot, which is event-driven and under Show
+// Mode can be hours old — refusing a legitimate clip from a stale deck
+// reading is the disguise §3.4 names. snap contributes only the last-known
+// selected deck for the message, attributed with its own age.
+func deckSelectionRefusal(tc *TrackedComposition, expectedDeck ObjectID, deck Deck, readAt time.Time, snap SurveySnapshot) (reason string, refuse bool) {
 	expectedName := ""
 	if tc != nil {
-		if d, ok := tc.DeckByID(expectedDeck); ok {
-			expectedName = d.Name
+		if dk, ok := tc.DeckByID(expectedDeck); ok {
+			expectedName = dk.Name
 		}
 	}
-	if !snap.SelectedDeckKnown {
+	selected, ok := deck.Selected.Bool()
+	if !ok {
 		return fmt.Sprintf(
-			"this clip belongs to %s, and the currently selected deck is not known, so its deck cannot be verified",
-			formatRef(expectedDeck, expectedName)), true
+			"this clip belongs to %s, and that deck did not report whether it is selected when read at %s, so its deck cannot be verified",
+			formatRef(expectedDeck, expectedName), readAt.Format(time.RFC3339)), true
 	}
-	if snap.SelectedDeckID == expectedDeck {
+	if selected {
 		return "", false
 	}
-	return fmt.Sprintf(
-		"this clip belongs to %s, but the currently selected deck (as of %s) is %s",
-		formatRef(expectedDeck, expectedName),
-		snap.SelectedDeckObservedAt.Format(time.RFC3339),
-		formatRef(snap.SelectedDeckID, snap.SelectedDeckName)), true
+	other := "the currently selected deck is not known"
+	if snap.SelectedDeckKnown {
+		other = fmt.Sprintf("the most recently observed selected deck is %s (as of %s)",
+			formatRef(snap.SelectedDeckID, snap.SelectedDeckName), snap.SelectedDeckObservedAt.Format(time.RFC3339))
+	}
+	return fmt.Sprintf("this clip belongs to %s, and that deck is not selected (read at %s); %s",
+		formatRef(expectedDeck, expectedName), readAt.Format(time.RFC3339), other), true
 }
 
 // --- The confirmation poll (§4.1, §4.3) -----------------------------------
 
-// pollUntilConfirmedOrDeadline retries check at d's own poll interval until
-// either check reports confirmed, ctx is done, or [ActionDispatcher.now]
-// passes dispatchedAt+deadline — whichever comes first. check performs
-// exactly the "1 to 3 targeted by-id reads" TRACK-D-D3-SPEC.md §4.3
-// describes for one action (never a poll-loop signal added anywhere else —
-// see this package's own doc comment) and must itself apply
-// [evidenceIsPostDispatch] to every value it reads before reporting
-// confirmed; this function does not re-check that fence, only the deadline.
+// confirmScope is what one confirmation check is handed: a context bounded by
+// what is left of the deadline, and expired, which a check walking many
+// objects must test between reads so one in-flight check cannot outrun the
+// deadline it is being polled against.
+type confirmScope struct {
+	ctx     context.Context
+	expired func() bool
+}
+
+// pollUntilConfirmedOrDeadline retries check on a growing interval until
+// check confirms, ctx is done, or the deadline passes — whichever comes
+// first. The deadline is the smaller of dispatchedAt+deadline and what is
+// left of the dispatch window. check applies [evidenceIsPostDispatch] to
+// every value it reads; this function only enforces the deadline.
 func (d *ActionDispatcher) pollUntilConfirmedOrDeadline(
 	ctx context.Context,
+	w dispatchWindow,
 	name ActionName,
 	dispatchedAt time.Time,
 	deadline time.Duration,
-	check func() (confirmed bool, confirmedAt time.Time, reason string),
+	check func(confirmScope) (confirmed bool, confirmedAt time.Time, reason string),
 ) ActionOutcome {
 	deadlineAt := dispatchedAt.Add(deadline)
+	windowBound := false
+	if deadlineAt.After(w.endAt) {
+		deadlineAt, windowBound = w.endAt, true
+	}
+	expired := func() bool { return d.expired(deadlineAt) }
+
 	lastReason := "no confirming evidence has arrived yet"
+	interval := d.pollInterval
 
 	for {
-		if confirmed, confirmedAt, reason := check(); confirmed {
-			return ActionOutcome{Action: name, State: ActionConfirmed, DispatchedAt: dispatchedAt, ConfirmedAt: confirmedAt, Reason: reason}
-		} else if reason != "" {
-			lastReason = reason
+		if expired() {
+			return d.unconfirmedOutcome(name, dispatchedAt, deadline, windowBound, lastReason)
 		}
 
-		if ctx.Err() != nil {
+		cctx, cancel := context.WithTimeout(ctx, deadlineAt.Sub(d.now()))
+		confirmed, confirmedAt, reason := check(confirmScope{ctx: cctx, expired: expired})
+		cancel()
+
+		if confirmed {
+			return ActionOutcome{Action: name, State: ActionConfirmed, DispatchedAt: dispatchedAt, ConfirmedAt: confirmedAt, Reason: reason}
+		}
+		if reason != "" {
+			lastReason = reason
+		}
+		if ctx.Err() != nil && !expired() {
 			return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt,
 				Reason: fmt.Sprintf("the request was canceled before confirming evidence arrived: %s", lastReason)}
 		}
-		if !d.now().Before(deadlineAt) {
-			return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt,
-				Reason: fmt.Sprintf("no confirming evidence arrived within %s of dispatch: %s", deadline, lastReason)}
+		if expired() {
+			return d.unconfirmedOutcome(name, dispatchedAt, deadline, windowBound, lastReason)
 		}
-		d.sleep(d.pollInterval)
+
+		// Never sleep past the deadline: the last nap of a poll loop is the
+		// one place a bound enforced between attempts can still overshoot it.
+		nap := interval
+		if left := deadlineAt.Sub(d.now()); nap > left {
+			nap = left
+		}
+		d.sleep(nap)
+		if interval < maxActionConfirmPollInterval {
+			if interval *= 2; interval > maxActionConfirmPollInterval {
+				interval = maxActionConfirmPollInterval
+			}
+		}
 	}
+}
+
+// unconfirmedOutcome names which budget ran out — the action's own derived
+// confirmation deadline, or the total dispatch window that cut it short.
+func (d *ActionDispatcher) unconfirmedOutcome(name ActionName, dispatchedAt time.Time, deadline time.Duration, windowBound bool, lastReason string) ActionOutcome {
+	reason := fmt.Sprintf("no confirming evidence arrived within %s of dispatch: %s", deadline, lastReason)
+	if windowBound {
+		reason = fmt.Sprintf("the confirmation phase ran out of the %s total dispatch budget before evidence arrived: %s", MaxDispatchDuration, lastReason)
+	}
+	return ActionOutcome{Action: name, State: ActionUnconfirmed, DispatchedAt: dispatchedAt, Reason: reason}
 }

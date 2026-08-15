@@ -225,7 +225,9 @@ surface is gated by `node:read`, `fpp:read`, `observation:read`, and
 `event:read`, one per resource the v1 read API actually serves, rather than by a
 single scope whose name is narrower than the surface it controls. The write
 surface adds `show:macro:run`, `device:power`, `fpp:command`, `config:write`,
-`principal:write`, and `audit:read`.
+`principal:write`, and `audit:read`. **Amended 2026-08-15:** Track D's seam D-3
+adds `resolume:action`, one scope for the whole Resolume action vocabulary, on
+the same reasoning as `fpp:command`.
 
 Roles are named bundles of scopes. None of them is restricted to a principal
 kind:
@@ -233,7 +235,7 @@ kind:
 | Role | Holds |
 |---|---|
 | `viewer` | every read scope, and nothing else |
-| `operator` | the read scopes plus the show, device, and FPP action scopes |
+| `operator` | the read scopes plus the show, device, FPP, and Resolume action scopes |
 | `admin` | everything, including `principal:write` and `audit:read` |
 | `scheduler` | `show:macro:run` and nothing else |
 

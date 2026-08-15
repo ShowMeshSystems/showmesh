@@ -6,6 +6,28 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## A refusal is not a null action
+
+**Track D, seam D-3, three times in one diff.** A guard that cannot read its evidence refused the action. Applied to `launchClip` that is right: refusing a start costs only that the clip does not start. Applied to `blackout` it is the inversion this project has now caught four times. Three instances shipped together: a pre-dispatch baseline read that failed refused every action; an identity reading older than fifteen minutes refused every action, and because surveys are event-driven and [ADR-033](../decisions/ADR-033-show-mode.md) Show Mode closes the WebSocket, that refusal was permanent until something else happened to trigger a survey; and a coordinator sitting quietly overnight would have hit both.
+
+Each was written by someone applying "do not act on evidence you do not have" correctly. What the rule misses is that refusing is itself a decision about the show: it leaves the wall lit, and per [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) decision 7 a refusal fires no fallback, so the operator is worse off than if the coordinator had been switched off. The distinction that resolves it: **staleness is a fact about our own evidence pipeline, and an identity of `unknown` or `false` is a fact about the world.** The first must not refuse a stop. The second may refuse anything.
+
+**Rule:** before writing a guard, name what the refusal leaves running, and check whether the thing being refused is the operator's way of stopping it. "We could not confirm it was safe" and "we confirmed it was unsafe" are different findings and must not produce the same behaviour.
+
+## An exported bound is only a bound where every phase enforces it
+
+**Track D, seam D-3.** A constant was exported and documented as the upper bound on how long a dispatch could take, precisely so a caller could size an HTTP write deadline before knowing which action was about to run. The caller did exactly that. The constant bounded only the confirmation poll: the pre-dispatch baseline reads ran outside it, one in-flight confirmation check ran outside it, and two bookkeeping writes ran outside it. Measured at 2.256 seconds against a 1.1 second deadline on three layers, scaling linearly, so eighteen layers exceeded both the server's write deadline and the client's budget.
+
+This is the Step 7 client-timeout lesson one level up. There, two numbers on opposite sides of one contract were a single decision. Here there were **three** sides, and the middle one was sizing itself off a number the first one was not honouring, which no test on either pair could catch.
+
+**Rule:** a number is a bound only if the code that computes it is the code that enforces it, in every phase it claims to cover. If you export one for a caller to size against, write the test that measures the real end-to-end duration against it, not the test that compares two constants.
+
+## A decorative assertion can hide inside the fix for a decorative assertion
+
+**Track D, seam D-3.** A review found that two of criterion 1's three tests passed with the post-dispatch evidence fence removed, and the fix was to add the missing `ConfirmedAt.After(DispatchedAt)` assertion to both. Re-running the mutation showed one of them **still** passed: the fake's own delay had advanced the simulated clock enough that the assertion held whether or not the fence existed. It only became load-bearing after the delay was set to zero.
+
+**Rule:** run the mutation again after fixing a test that failed to catch one. The fix is a claim of the same kind as the original test's name, and it has the same failure mode.
+
 ## The thing you resolve on a transport event is resolved before the thing exists
 
 **Track D, seam D-1.** The Resolume adapter re-resolves object and parameter ids from a fresh composition read every time its WebSocket connects, because parameter ids are minted at composition load and 0 of 14 survive a restart. Correct, and it fires at the wrong moment: the socket is accepted about 1.5 seconds after Arena launches, and the composition takes about 4.9 seconds to load. Caught live on a real restart — the resolver held `layer_count 3, column_count 9, deck "empty"`, which is Arena's default empty composition, and ninety seconds later Arena held the real 18-layer show while the resolver still held every id of a composition that no longer existed. Nothing corrected it, because Arena does not drop the socket when loading finishes.

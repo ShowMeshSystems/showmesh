@@ -465,6 +465,19 @@ func Run() int {
 		logger.Warn("resolved commands left stranded by a prior process", "count", n)
 	}
 
+	// Review fix 1 (2026-08-15): the Resolume-action sibling of the sweep
+	// immediately above, closing the identical gap for a second command
+	// family — see api.ReconcileStrandedResolumeActions' own doc comment
+	// (resolumeaction_reconcile.go) for why a Resolume row a prior process
+	// left dispatched-but-unresolved used to replay a blank outcome
+	// forever. Same synchronous, non-fatal call shape and the same
+	// reasoning for why it is safe to call before ListenAndServe below.
+	if n, rerr := api.ReconcileStrandedResolumeActions(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile stranded resolume actions at startup", "error", rerr)
+	} else if n > 0 {
+		logger.Warn("resolved resolume actions left stranded by a prior process", "count", n)
+	}
+
 	// fppHTTPClient and fppRunner were already constructed above (before
 	// apiDeps), one shared *http.Client per contract/Task C's own guidance
 	// ("callers SHOULD construct one *http.Client and pass it to every

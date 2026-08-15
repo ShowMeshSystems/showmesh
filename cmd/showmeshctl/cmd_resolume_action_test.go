@@ -38,37 +38,37 @@ func TestEffectiveResolumeActionTimeoutNeverBelowMinimum(t *testing.T) {
 
 // TestMinResolumeActionClientTimeoutExceedsServerDefault is the CLI-side
 // half of the client-timeout-derived-from-server-deadline reconciliation
-// CLAUDE.md requires. This program does not import
-// internal/coordinator/api (importgraph_test.go forbids it), so the
-// server's own resolumeActionMaxConfirmDeadline is a SECOND, independently
-// chosen literal, hardcoded here — the mirror of
-// TestResolumeActionMaxConfirmDeadlineFitsWithinCLIClientBudget in
-// internal/coordinator/api/resolumeaction_test.go, which hardcodes THIS
-// program's own minResolumeActionClientTimeout. Together the two tests
-// fail if either literal is ever changed without updating the other.
-//
-// resolumeActionMaxConfirmDeadline is no longer an independent guess on
-// the server side: it is checked for exact equality against
-// resolume.MaxActionConfirmDeadline — internal/coordinator/collector/resolume's
-// own real, structurally-enforced deadline clamp (action.go) — by
-// TestResolumeActionMaxConfirmDeadlineEqualsRegistryMax, a test file that
-// CAN import that producer package without creating a production
-// dependency. This program still cannot reach that value directly (it
-// cannot import either coordinator package), so this literal remains the
-// one genuinely independent link in the chain, reconciled the only way an
-// unavoidably independent literal safely can be: a test, on each side,
-// that fails the moment the two disagree.
+// CLAUDE.md requires: this program cannot import
+// internal/coordinator/api (importgraph_test.go), so
+// resolumeActionHTTPWriteDeadline (55s) and command.ClientTimeoutMargin
+// (15s) are independently chosen literals here, mirrored by
+// TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget in
+// internal/coordinator/api/resolumeaction_test.go, which hardcodes this
+// program's own minResolumeActionClientTimeout (80s). Both tests fail if
+// either side is changed without updating the other.
 func TestMinResolumeActionClientTimeoutExceedsServerDefault(t *testing.T) {
-	// This MUST match internal/coordinator/api/resolumeaction.go's own
-	// resolumeActionMaxConfirmDeadline literal exactly.
-	const serverMaxConfirmDeadline = 30 * time.Second
+	// These two MUST match resolumeActionHTTPWriteDeadline
+	// (internal/coordinator/api/resolumeaction.go) and
+	// command.ClientTimeoutMargin (pkg/command/command.go) exactly.
+	const serverWriteDeadline = 55 * time.Second
 	const roundTripMargin = 15 * time.Second
-	if minResolumeActionClientTimeout < serverMaxConfirmDeadline+roundTripMargin {
-		t.Fatalf("minResolumeActionClientTimeout (%s) is below the server's own resolumeActionMaxConfirmDeadline "+
-			"(%s) plus a %s round-trip margin — this program could abort a dispatch before the coordinator's own "+
-			"write deadline elapses, producing a false transport-timeout failure for a healthy, still-working "+
-			"conversation. Raise minResolumeActionClientTimeout to match.",
-			minResolumeActionClientTimeout, serverMaxConfirmDeadline, roundTripMargin)
+	// slack is real headroom over the computed floor, matching the
+	// reciprocal server-side test's own slack requirement — not a
+	// boundary equality, which cannot distinguish "correct" from "wrong
+	// by a coincidence."
+	const slack = 10 * time.Second
+
+	need := serverWriteDeadline + roundTripMargin
+	if minResolumeActionClientTimeout < need {
+		t.Fatalf("minResolumeActionClientTimeout (%s) is below resolumeActionHTTPWriteDeadline (%s) plus a %s "+
+			"round-trip margin — this program could abort a dispatch before the coordinator's own write deadline "+
+			"elapses, producing a false transport-timeout failure for a healthy, still-working conversation. "+
+			"Raise minResolumeActionClientTimeout to match.",
+			minResolumeActionClientTimeout, serverWriteDeadline, roundTripMargin)
+	}
+	if got := minResolumeActionClientTimeout - need; got < slack {
+		t.Fatalf("minResolumeActionClientTimeout (%s) leaves only %s of slack over the computed floor (%s), want at least %s",
+			minResolumeActionClientTimeout, got, need, slack)
 	}
 }
 
@@ -94,14 +94,14 @@ func TestReportResolumeActionResultOutcomeVocabulary(t *testing.T) {
 		{"confirmed", exitOK},
 		{"unconfirmed", exitCommandUnconfirmed},
 		{"unconfirmable", exitActionUnconfirmable},
-		{"refused", exitConflict},
+		{"refused", exitActionRefused},
 		{"failed", exitActionFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.outcome, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
+			var stdout bytes.Buffer
 			result := resolumeActionResult{ID: "cmd-1", Action: "launchClip", Outcome: tc.outcome, OutcomeReason: "reason for " + tc.outcome}
-			code := reportResolumeActionResult(&stdout, &stderr, "resolume action launch-clip", result)
+			code := reportResolumeActionResult(&stdout, "resolume action launch-clip", result)
 			if code != tc.wantExit {
 				t.Errorf("exit code = %d, want %d for outcome %q", code, tc.wantExit, tc.outcome)
 			}
@@ -115,16 +115,15 @@ func TestReportResolumeActionResultOutcomeVocabulary(t *testing.T) {
 	}
 }
 
-// TestReportResolumeActionResultDegradedAttributionWarns proves the
+// TestReportResolumeActionWarningsDegradedAttributionWarns proves the
 // ADR-024 decision 11 exemption (blackout/clearLayer proceeding on a
-// failing audit store) is surfaced to the operator, not silently absorbed.
-func TestReportResolumeActionResultDegradedAttributionWarns(t *testing.T) {
-	var stdout, stderr bytes.Buffer
+// failing audit store) is surfaced to the operator, not silently absorbed
+// — in both --output modes, since dispatchResolumeAction calls
+// reportResolumeActionWarnings before branching on g.output.
+func TestReportResolumeActionWarningsDegradedAttributionWarns(t *testing.T) {
+	var stderr bytes.Buffer
 	result := resolumeActionResult{ID: "cmd-1", Action: "blackout", Outcome: "confirmed", OutcomeReason: "ok", AttributionDegraded: true}
-	code := reportResolumeActionResult(&stdout, &stderr, "resolume action blackout", result)
-	if code != exitOK {
-		t.Fatalf("exit code = %d, want exitOK", code)
-	}
+	reportResolumeActionWarnings(&stderr, "resolume action blackout", result)
 	if !strings.Contains(stderr.String(), "degraded attribution") {
 		t.Errorf("stderr = %q, want a degraded-attribution warning", stderr.String())
 	}
@@ -256,7 +255,7 @@ func TestCmdResolumeActionUnconfirmableExitsNonZeroButIsNotAnError(t *testing.T)
 	}
 }
 
-func TestCmdResolumeActionRefusedExitsConflict(t *testing.T) {
+func TestCmdResolumeActionRefusedExitsActionRefused(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
@@ -267,11 +266,45 @@ func TestCmdResolumeActionRefusedExitsConflict(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "clip-1"}, &stdout, &stderr, time.Now)
-	if code != exitConflict {
-		t.Fatalf("exit code = %d, want exitConflict (%d); stdout=%s stderr=%s", code, exitConflict, stdout.String(), stderr.String())
+	if code != exitActionRefused {
+		t.Fatalf("exit code = %d, want exitActionRefused (%d); stdout=%s stderr=%s", code, exitActionRefused, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "refused") {
 		t.Errorf("stdout = %q, want it to report \"refused\"", stdout.String())
+	}
+}
+
+// TestCmdResolumeActionJSONOutputStillWarnsOnStderr proves the Replay and
+// AttributionDegraded warnings reach stderr in --output json mode too: the
+// warnings are operator-facing, stderr is not the JSON stream, and both
+// facts already appear in the JSON body, so omitting them from stderr in
+// this mode only would make the two --output modes inconsistent for no
+// reason.
+func TestCmdResolumeActionJSONOutputStillWarnsOnStderr(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-6", "blackout", "confirmed", "ok", true, true))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"blackout", "--server", ts.URL, "--output", "json"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already used") {
+		t.Errorf("stderr = %q, want the replay warning even in --output json mode", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "degraded attribution") {
+		t.Errorf("stderr = %q, want the degraded-attribution warning even in --output json mode", stderr.String())
+	}
+	var decoded resolumeActionResponse
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout was not valid JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if !decoded.Result.Replay || !decoded.Result.AttributionDegraded {
+		t.Errorf("decoded JSON body = %+v, want both Replay and AttributionDegraded true", decoded.Result)
 	}
 }
 

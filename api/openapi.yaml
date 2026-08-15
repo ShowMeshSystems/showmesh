@@ -2860,8 +2860,32 @@ components:
           type: string
         outcome:
           type: string
+          description: >-
+            The command family's own outcome word — FPP's "confirmed"/
+            "unconfirmed", or Resolume's five-word vocabulary
+            (ResolumeActionResult.outcome's own enum) — deliberately left
+            unconstrained here because this ONE field is shared across
+            every command family this coordinator has or will ever audit,
+            unlike outcomeState below. Empty except on an `outcome`-kind
+            entry (see this schema's own `kind` enum).
         outcomeState:
           type: string
+          enum:
+            [current, stale, unknown_age, not_collected, collection_failed,
+             unsupported, ""]
+          description: >-
+            pkg/observation's six-value evidence-state vocabulary — never a
+            command family's own outcome word (Review fix 3, 2026-08-15:
+            before this, a Resolume outcome-kind entry carried its own
+            five-word outcome here instead, so an audit reader filtering on
+            evidence states would silently drop or misread every Resolume
+            entry). Empty on every entry that is not an `outcome`-kind
+            entry (identity.AuditEntry's own doc comment: "populated only
+            on an AuditOutcome entry"), and ALSO empty for an outcome-kind
+            entry whose command family has no per-observation evidence-state
+            signal to honestly report for that particular outcome — see
+            ResolumeActionResult's own outcome enum for which of ITS five
+            values do (only "confirmed" does today).
         outcomeReason:
           type: string
     AuditResponse:
@@ -3408,7 +3432,7 @@ components:
       description: >-
         What happened to one dispatched (or replayed) action. outcome is
         never inferred from this endpoint's own `200` status — it is
-        exactly one of the five values in its enum below, and a `200` is
+        exactly one of the six values in its enum below, and a `200` is
         sent for every one of them, including "refused" and "failed": this
         endpoint reports honestly what happened rather than using the HTTP
         status to editorialize about the answer.
@@ -3433,7 +3457,7 @@ components:
             action described here was NOT dispatched by this request.
         outcome:
           type: string
-          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed"]
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed", ""]
           description: >-
             "confirmed": the effect was observed on evidence collected
             strictly after dispatch. "unconfirmed": this action's own
@@ -3444,10 +3468,24 @@ components:
             dispatch (a clip's deck was not selected, the composition
             identity was unknown, or a non-exempt action's audit write
             failed) — no request ever reached Resolume. "failed": dispatch
-            was attempted and the attempt itself failed.
+            was attempted and the attempt itself failed. Empty only for a
+            REPLAY response returned before the original request's own
+            dispatch/confirmation has finished — a real, honest value
+            (ADR-020's absence-is-stated rule), matching
+            FPPCommandResult.outcome's identical narrow case exactly. A
+            coordinator restart can no longer make this PERMANENT: any
+            Resolume command row still unresolved at startup is resolved by
+            a startup reconciliation pass (mirroring
+            FPPCommandResult.outcomeReason's own note on
+            ReconcileStrandedFPPCommands) before it can ever reach a client
+            in that state.
         outcomeReason:
           type: string
-          description: A short, human-readable explanation. Non-empty for every resolved result, including "confirmed".
+          description: >-
+            A short, human-readable explanation. Non-empty for every
+            resolved result, including "confirmed" — the only value for
+            which it may be empty is the identical narrow replay race
+            `outcome`'s own description names.
         attributionDegraded:
           type: boolean
           description: >-
@@ -3517,7 +3555,12 @@ components:
         One is Track D seam D-2a's own addition: "payload-too-large" (413,
         POST /config/resolume/composition refusing an uploaded file larger
         than this coordinator's own upload bound, before buffering it
-        whole). One is Track D seam D-3/B's own addition:
+        whole; reused verbatim, not duplicated, by POST /resolume/actions
+        for a request body over its own much smaller limit — Review fix 5,
+        2026-08-15 — because both refusals share the identical remedy,
+        "shrink the request", unlike the busy/evidence-not-current split
+        above where the type had to fork because the remedies differ). One
+        is Track D seam D-3/B's own addition:
         "resolume-action-refused-audit-unavailable" (POST /resolume/actions'
         own ADR-024 decision 11 fail-closed default for a non-exempt
         action — every action except `blackout` and `clearLayer` — `503`,

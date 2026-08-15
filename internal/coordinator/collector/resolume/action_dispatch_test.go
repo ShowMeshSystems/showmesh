@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
 // This file is action.go/action_dispatch.go/action_client.go's own
@@ -97,6 +99,14 @@ type fakeArena struct {
 
 	requests []string // "METHOD /path", in issued order
 
+	// perRequestDelay advances the shared fake clock by this much on every
+	// request, simulating an Arena that answers slowly without any real
+	// sleeping. It is what lets a test drive the phase budgets
+	// (MaxBaselinePhaseBudget, MaxWritePhaseBudget, MaxDispatchDuration),
+	// which are enforced on the dispatcher's own clock rather than on a
+	// context timer, precisely so a fake clock can drive them.
+	perRequestDelay time.Duration
+
 	// answerValuelessAfterWrite simulates the defect-1 confirmation hazard:
 	// when true, a PUT to a layer's bypassed/master parameter does NOT
 	// apply the requested value at all — instead every subsequent by-id
@@ -109,13 +119,18 @@ type fakeArena struct {
 	answerValuelessAfterWrite bool
 }
 
+// newFakeArena pre-registers deck one as the selected deck, because §3.4's
+// deck term is now decided by a by-id read of the clip's own deck rather than
+// off the cached snapshot: without a deck object to read, every clip action
+// would refuse for want of that read. A test exercising the deck term
+// overwrites this entry.
 func newFakeArena(now *time.Time) *fakeArena {
 	return &fakeArena{
 		now:     now,
 		layers:  map[ObjectID]*faLayer{},
 		clips:   map[ObjectID]*faClip{},
 		columns: map[ObjectID]*faColumn{},
-		decks:   map[ObjectID]*faDeck{},
+		decks:   map[ObjectID]*faDeck{testDeckOne: {selected: true, name: "Deck One"}},
 	}
 }
 
@@ -165,6 +180,9 @@ func (a *fakeArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.requests = append(a.requests, r.Method+" "+r.URL.Path)
+	if a.perRequestDelay > 0 {
+		*a.now = a.now.Add(a.perRequestDelay)
+	}
 
 	path := r.URL.Path
 	switch {
@@ -342,10 +360,17 @@ const (
 // advances instead of sleeping.
 func newTestActionDispatcher(t *testing.T, arena *fakeArena, now *time.Time, snap SurveySnapshot) *ActionDispatcher {
 	t.Helper()
+	return newTestActionDispatcherWithComposition(t, arena, now, snap, parseTestComposition(t))
+}
+
+// newTestActionDispatcherWithComposition is the same wiring over a caller-
+// supplied composition, for the budget tests that need a layer count the
+// shared fixture does not have.
+func newTestActionDispatcherWithComposition(t *testing.T, arena *fakeArena, now *time.Time, snap SurveySnapshot, comp *resolumecomp.Composition) *ActionDispatcher {
+	t.Helper()
 	srv := httptest.NewServer(arena)
 	t.Cleanup(srv.Close)
 
-	comp := parseTestComposition(t)
 	store := newTestCompositionStore(t, comp)
 
 	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(now), CompositionStore: store})
@@ -437,17 +462,24 @@ func TestDispatchLaunchClipAlreadyPlayingIsUnconfirmable(t *testing.T) {
 	}
 }
 
-// TestDispatchLaunchClipDeckMismatchIsRefused is acceptance criterion 3.
+// TestDispatchLaunchClipDeckMismatchIsRefused is acceptance criterion 3, as
+// amended by fix 3: the refusal now costs exactly one by-id read of the
+// clip's own deck, taken at decision time, instead of resting on a cached
+// snapshot with no freshness bound. No write reaches Resolume and nothing is
+// dispatched. The snapshot here deliberately still reports deck one selected
+// and an hour old — if the decision came off the snapshot rather than the
+// read, this clip would be allowed through.
 func TestDispatchLaunchClipDeckMismatchIsRefused(t *testing.T) {
 	now := time.Now()
 	arena := newFakeArena(&now)
 	arena.layers[testLayerOne] = &faLayer{bypassedParamID: 9001, masterParamID: 9002, master: 1}
 	arena.clips[testClipA] = &faClip{connected: "Disconnected", ownerLayer: testLayerOne}
+	arena.decks[testDeckOne] = &faDeck{selected: false, name: "Deck One"}
+	arena.decks[testDeckTwo] = &faDeck{selected: true, name: "Deck Two"}
 
-	// testClipA belongs to testDeckOne, but the snapshot reports
-	// testDeckTwo selected.
 	snap := identifiedSnapshot(now)
 	snap.SelectedDeckID, snap.SelectedDeckName = testDeckTwo, "Deck Two"
+	snap.SelectedDeckObservedAt = now.Add(-time.Hour)
 
 	d := newTestActionDispatcher(t, arena, &now, snap)
 
@@ -467,8 +499,34 @@ func TestDispatchLaunchClipDeckMismatchIsRefused(t *testing.T) {
 
 	arena.mu.Lock()
 	defer arena.mu.Unlock()
-	if len(arena.requests) != 0 {
-		t.Errorf("requests = %v, want zero HTTP requests for a deck-mismatch refusal", arena.requests)
+	want := []string{"GET /api/v1/composition/decks/by-id/2000000000001"}
+	if len(arena.requests) != 1 || arena.requests[0] != want[0] {
+		t.Errorf("requests = %v, want exactly %v — one deck read, no clip read, no write", arena.requests, want)
+	}
+}
+
+// TestDispatchLaunchClipDeckSelectedNowOverridesAStaleSnapshot is the other
+// direction of the same amendment, and the one §3.4 names by name: a
+// 40-minute-old snapshot saying another deck is selected must not refuse a
+// clip whose own deck reads selected right now.
+func TestDispatchLaunchClipDeckSelectedNowOverridesAStaleSnapshot(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.layers[testLayerOne] = &faLayer{bypassedParamID: 9001, masterParamID: 9002, master: 1}
+	arena.clips[testClipA] = &faClip{connected: "Disconnected", ownerLayer: testLayerOne}
+	arena.decks[testDeckOne] = &faDeck{selected: true, name: "Deck One"}
+
+	snap := identifiedSnapshot(now)
+	snap.SelectedDeckID, snap.SelectedDeckName = testDeckTwo, "Deck Two"
+	snap.SelectedDeckObservedAt = now.Add(-40 * time.Minute)
+
+	d := newTestActionDispatcher(t, arena, &now, snap)
+	out, err := d.Dispatch(context.Background(), ActionLaunchClip, ActionParams{ClipID: testClipA})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionConfirmed {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionConfirmed, out.Reason)
 	}
 }
 
@@ -531,6 +589,14 @@ func TestDispatchRefusesWhenIdentityFalse(t *testing.T) {
 	if out.State != ActionRefused {
 		t.Fatalf("State = %q, want %q", out.State, ActionRefused)
 	}
+	// Without this, the test passes with identityGateRefusal disabled: the
+	// fake would refuse anyway, for the unrelated reason that no column
+	// object is registered.
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if len(arena.requests) != 0 {
+		t.Errorf("requests = %v, want zero — the identity gate must refuse before any read", arena.requests)
+	}
 }
 
 func TestDispatchRefusesWhenIdentityDeckMismatch(t *testing.T) {
@@ -548,6 +614,67 @@ func TestDispatchRefusesWhenIdentityDeckMismatch(t *testing.T) {
 	if out.State != ActionRefused {
 		t.Fatalf("State = %q, want %q", out.State, ActionRefused)
 	}
+	// As above: deck one IS registered in the fake, so with the gate disabled
+	// this dispatch would reach a write. Zero requests is the only assertion
+	// that distinguishes the gate from an unrelated refusal.
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if len(arena.requests) != 0 {
+		t.Errorf("requests = %v, want zero — the identity gate must refuse before any read", arena.requests)
+	}
+}
+
+// TestDispatchRefusesWhenIdentityEvidenceIsStale is fix 3's identity term at
+// the dispatch level: a snapshot that says "identified" but was taken longer
+// ago than [MaxIdentityEvidenceAge] refuses, states the age, and issues no
+// request. Surveys are event-driven, so this is reachable simply by nothing
+// happening for long enough.
+func TestDispatchRefusesWhenIdentityEvidenceIsStale(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	snap := identifiedSnapshot(now)
+	snap.IdentityObservedAt = now.Add(-MaxIdentityEvidenceAge - time.Minute)
+
+	d := newTestActionDispatcher(t, arena, &now, snap)
+	out, err := d.Dispatch(context.Background(), ActionLaunchColumn, ActionParams{ColumnID: testColumnOne})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionRefused {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+	}
+	if !contains(out.Reason, "old") {
+		t.Errorf("Reason = %q, want it to name the reading's age", out.Reason)
+	}
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if len(arena.requests) != 0 {
+		t.Errorf("requests = %v, want zero", arena.requests)
+	}
+}
+
+// An exempt action is NOT refused for a stale identity reading: staleness is a
+// fact about this package's own evidence pipeline, and refusing a stop for want
+// of our own evidence is the inversion ADR-024 decision 11 settled. An identity
+// of unknown or false still refuses every action, which
+// TestDispatchRefusesWhenIdentityFalse covers.
+func TestDispatchExemptActionIsNotRefusedForStaleIdentityEvidence(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	snap := identifiedSnapshot(now)
+	snap.IdentityObservedAt = now.Add(-MaxIdentityEvidenceAge - time.Minute)
+
+	d := newTestActionDispatcher(t, arena, &now, snap)
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State == ActionRefused {
+		t.Fatalf("State = %q, want blackout to dispatch on a stale identity reading (reason: %s)", out.State, out.Reason)
+	}
+	if out.DispatchedAt.IsZero() {
+		t.Errorf("DispatchedAt is zero, so nothing was dispatched")
+	}
 }
 
 // --- clearLayer, and acceptance criterion 4 (derived deadline) -----------
@@ -555,10 +682,14 @@ func TestDispatchRefusesWhenIdentityDeckMismatch(t *testing.T) {
 func TestDispatchClearLayerConfirms(t *testing.T) {
 	now := time.Now()
 	arena := newFakeArena(&now)
+	// pendingClearDelay 0: the layer is clear the instant the write lands, so
+	// the very first confirmation read carries a timestamp EQUAL to
+	// DispatchedAt. That is what makes the ConfirmedAt.After(DispatchedAt)
+	// assertion below load-bearing — with the §4.1 fence removed this
+	// confirms on same-instant evidence and the assertion fails.
 	arena.layers[testLayerOne] = &faLayer{
 		bypassedParamID: 9001, masterParamID: 9002, master: 1,
 		activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 0.1,
-		pendingClearDelay: 120 * time.Millisecond,
 	}
 
 	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
@@ -569,42 +700,88 @@ func TestDispatchClearLayerConfirms(t *testing.T) {
 	if out.State != ActionConfirmed {
 		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionConfirmed, out.Reason)
 	}
+	if !out.ConfirmedAt.After(out.DispatchedAt) {
+		t.Errorf("ConfirmedAt (%s) is not after DispatchedAt (%s) — acceptance criterion 1's fence", out.ConfirmedAt, out.DispatchedAt)
+	}
 }
 
-// TestDispatchClearLayerDeadlineIsDerivedFromTransitionDuration is
-// acceptance criterion 4: a clearLayer against a layer with a longer
-// transition.duration takes longer (in the fake's own simulated time) to
-// confirm than the identical action against a layer with a shorter one —
-// demonstrating [deriveClearDeadline] actually drives the poll's own
-// deadline rather than a constant. Both delays are set just OVER their own
-// transition.duration, mirroring capture §7.2's own measured 75-113ms
-// overshoot pattern.
+// clearResolvesAt is the shared 2.59s pivot both criterion-4 tests below turn
+// on: an Arena that takes 2.59s to actually clear a layer sits between the
+// deadline a 2.5s transition derives (3.5s) and the one a 0.1s transition
+// derives (1.1s), so the SAME Arena behaviour must confirm under one and
+// report unconfirmed under the other.
+const clearResolvesAt = 2590 * time.Millisecond
+
+// TestDispatchClearLayerDeadlineIsDerivedFromTransitionDuration is acceptance
+// criterion 4. It asserts the OUTCOME STATE rather than a wall-clock
+// difference: the previous version measured a delay the fake itself produced
+// via pendingClearDelay, which is independent of the deadline, so replacing
+// deriveClearDeadline's body with a flat constant left it green.
+//
+// Before trusting this test: replaced deriveClearDeadline's body with
+// `return MaxActionConfirmDeadline` and reran — the 0.1s case confirmed
+// instead of reporting unconfirmed, and this test failed. Restored afterward.
 func TestDispatchClearLayerDeadlineIsDerivedFromTransitionDuration(t *testing.T) {
-	run := func(transitionSecs float64, overshoot time.Duration) time.Duration {
+	run := func(transitionSecs float64) ActionOutcome {
 		now := time.Now()
 		arena := newFakeArena(&now)
 		arena.layers[testLayerOne] = &faLayer{
 			bypassedParamID: 9001, masterParamID: 9002, master: 1,
 			activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: transitionSecs,
-			pendingClearDelay: time.Duration(transitionSecs*float64(time.Second)) + overshoot,
+			pendingClearDelay: clearResolvesAt,
 		}
 		d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
 		out, err := d.Dispatch(context.Background(), ActionClearLayer, ActionParams{LayerID: testLayerOne})
 		if err != nil {
-			t.Fatalf("Dispatch error = %v", err)
+			t.Fatalf("transitionSecs=%v: Dispatch error = %v", transitionSecs, err)
 		}
-		if out.State != ActionConfirmed {
-			t.Fatalf("transitionSecs=%v: State = %q, want %q (reason: %s)", transitionSecs, out.State, ActionConfirmed, out.Reason)
-		}
-		return out.ConfirmedAt.Sub(out.DispatchedAt)
+		return out
 	}
 
-	fast := run(0.1, 20*time.Millisecond)
-	slow := run(2.5, 90*time.Millisecond)
+	if out := run(2.5); out.State != ActionConfirmed {
+		t.Errorf("transition 2.5s (deadline 3.5s) against a clear that resolves at %s: State = %q, want %q (reason: %s)",
+			clearResolvesAt, out.State, ActionConfirmed, out.Reason)
+	}
+	if out := run(0.1); out.State != ActionUnconfirmed {
+		t.Errorf("transition 0.1s (deadline 1.1s) against a clear that resolves at %s: State = %q, want %q (reason: %s)",
+			clearResolvesAt, out.State, ActionUnconfirmed, out.Reason)
+	}
+}
 
-	if !(fast < slow) {
-		t.Errorf("fast-transition confirm delay (%s) is not shorter than slow-transition confirm delay (%s); "+
-			"a fixed deadline would make these indistinguishable", fast, slow)
+// TestDispatchBlackoutDeadlineIsDerivedFromTheAffectedLayers is criterion 4's
+// blackout row, which had no test at all: deleting dispatchBlackout's
+// max-over-affected-layers derivation left the package green.
+//
+// Before trusting this test: replaced the derivation with a flat
+// `deadline := DefaultActionConfirmDeadlineUnknownTransition` and reran — the
+// 0.1s case confirmed instead of reporting unconfirmed, and this test failed.
+// Restored afterward.
+func TestDispatchBlackoutDeadlineIsDerivedFromTheAffectedLayers(t *testing.T) {
+	run := func(transitionSecs float64) ActionOutcome {
+		now := time.Now()
+		arena := newFakeArena(&now)
+		for _, id := range []ObjectID{testLayerOne, testLayerTwo, 3000000000003} {
+			arena.layers[id] = &faLayer{
+				bypassedParamID: 9001, masterParamID: 9002, master: 1,
+				activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: transitionSecs,
+				pendingClearDelay: clearResolvesAt,
+			}
+		}
+		d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+		out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+		if err != nil {
+			t.Fatalf("transitionSecs=%v: Dispatch error = %v", transitionSecs, err)
+		}
+		return out
+	}
+
+	if out := run(2.5); out.State != ActionConfirmed {
+		t.Errorf("transitions 2.5s (deadline 3.5s) against a blackout that resolves at %s: State = %q, want %q (reason: %s)",
+			clearResolvesAt, out.State, ActionConfirmed, out.Reason)
+	}
+	if out := run(0.1); out.State != ActionUnconfirmed {
+		t.Errorf("transitions 0.1s (deadline 1.1s) against a blackout that resolves at %s: State = %q, want %q (reason: %s)",
+			clearResolvesAt, out.State, ActionUnconfirmed, out.Reason)
 	}
 }
 
@@ -707,6 +884,9 @@ func TestDispatchLaunchColumnConfirms(t *testing.T) {
 	}
 	if out.State != ActionConfirmed {
 		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionConfirmed, out.Reason)
+	}
+	if !out.ConfirmedAt.After(out.DispatchedAt) {
+		t.Errorf("ConfirmedAt (%s) is not after DispatchedAt (%s) — acceptance criterion 1's fence", out.ConfirmedAt, out.DispatchedAt)
 	}
 }
 
@@ -1002,6 +1182,251 @@ func TestDispatchLaunchClipDispatchFailureAfterBaseline(t *testing.T) {
 	if out.Reason == "" {
 		t.Error("Reason is empty")
 	}
+}
+
+// --- The end-to-end dispatch budget (MaxDispatchDuration) ------------------
+
+// slowArenaDispatcher builds a dispatcher over an 18-layer composition — the
+// operator's own layer count — served by an Arena that advances the shared
+// fake clock by perRequest on every request and never actually clears a
+// layer. 18 x 5s is the reviewer's own measured pre-fix blackout baseline.
+func slowArenaDispatcher(t *testing.T, now *time.Time, layerCount int, perRequest time.Duration) (*ActionDispatcher, *fakeArena) {
+	t.Helper()
+	arena := newFakeArena(now)
+	arena.perRequestDelay = perRequest
+
+	comp := &resolumecomp.Composition{
+		Name:      "slow-arena fixture",
+		WrittenBy: resolumecomp.WrittenBy{Product: "Resolume Arena", Major: 7, Minor: 23, Micro: 2, Revision: 1},
+		Canvas:    resolumecomp.Canvas{Width: 1920, Height: 1080},
+		Decks:     []resolumecomp.Deck{{ID: testDeckOne.String(), Name: "Deck One"}},
+	}
+	for i := 0; i < layerCount; i++ {
+		id := ObjectID(3000000000001 + i)
+		comp.Layers = append(comp.Layers, resolumecomp.Layer{ID: id.String(), Index: i})
+		arena.layers[id] = &faLayer{
+			bypassedParamID: ParameterID(9000 + i*2), masterParamID: ParameterID(9001 + i*2), master: 1,
+			activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 3600,
+			pendingClearDelay: time.Hour,
+		}
+	}
+	return newTestActionDispatcherWithComposition(t, arena, now, identifiedSnapshot(*now), comp), arena
+}
+
+// TestDispatchBlackoutStaysWithinMaxDispatchDuration is the bound the API and
+// the CLI size their own timeouts from, measured on the fake clock. Before
+// the phase budgets existed, blackout's baseline read every tracked layer
+// sequentially with nothing bounding the phase, and one in-flight
+// confirmation check could add another N per-request timeouts on top of the
+// confirm deadline.
+//
+// Before trusting this test: removed the budget check from
+// baselineReader.read (so the baseline phase is bounded only per request, as
+// it was) and reran — elapsed went to 1m39.6s against a MaxDispatchDuration
+// of 40s, and this test failed.
+func TestDispatchBlackoutStaysWithinMaxDispatchDuration(t *testing.T) {
+	now := time.Now()
+	start := now
+	d, _ := slowArenaDispatcher(t, &now, 18, 5*time.Second)
+
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if elapsed := now.Sub(start); elapsed > MaxDispatchDuration {
+		t.Errorf("Dispatch took %s on the fake clock, want at most MaxDispatchDuration (%s); state %q, reason %q",
+			elapsed, MaxDispatchDuration, out.State, out.Reason)
+	}
+	if !contains(out.Reason, "budget") {
+		t.Errorf("Reason = %q, want it to name the phase whose budget ran out", out.Reason)
+	}
+}
+
+// TestDispatchBlackoutWithAnUnreadableBaselineStillDispatches is the owner's
+// decision of 2026-08-15: the exempt safety class does not refuse for want of
+// a pre-dispatch READ. Refusing blackout because a baseline could not be read
+// is the same fail-closed inversion ADR-024 decision 11 already settled for
+// the audit write. It reports unconfirmable, states why, and runs no
+// confirmation poll — without a baseline the poll could not mean anything.
+func TestDispatchBlackoutWithAnUnreadableBaselineStillDispatches(t *testing.T) {
+	now := time.Now()
+	d, arena := slowArenaDispatcher(t, &now, 18, 5*time.Second)
+
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmable {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
+	}
+	if !contains(out.Reason, "baseline") {
+		t.Errorf("Reason = %q, want it to say the pre-dispatch baseline could not be read", out.Reason)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	dispatched, reads := false, 0
+	for _, req := range arena.requests {
+		if req == "POST /api/v1/composition/disconnect-all" {
+			dispatched = true
+		}
+		if strings.HasPrefix(req, "GET ") {
+			reads++
+		}
+	}
+	if !dispatched {
+		t.Errorf("blackout was never dispatched; requests = %v", arena.requests)
+	}
+	// One 5s baseline read exhausts the 5s budget, so the other 17 layers are
+	// never attempted. If a confirmation poll ran despite the missing
+	// baseline, this count would keep climbing.
+	if reads > 2 {
+		t.Errorf("GET count = %d, want at most 2 — no confirmation poll may run without a baseline; requests = %v", reads, arena.requests)
+	}
+}
+
+// TestDispatchLaunchClipBaselineBudgetRefusesANotExemptAction is the other
+// half of the same decision: a not-exempt action still refuses, because
+// refusing a start costs only that it does not start.
+func TestDispatchLaunchClipBaselineBudgetRefusesANotExemptAction(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.perRequestDelay = 6 * time.Second // one read alone exceeds MaxBaselinePhaseBudget
+	arena.layers[testLayerOne] = &faLayer{bypassedParamID: 9001, masterParamID: 9002, master: 1}
+	arena.clips[testClipA] = &faClip{connected: "Disconnected", ownerLayer: testLayerOne}
+
+	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+	out, err := d.Dispatch(context.Background(), ActionLaunchClip, ActionParams{ClipID: testClipA})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionRefused {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	for _, req := range arena.requests {
+		if strings.HasPrefix(req, "POST ") || strings.HasPrefix(req, "PUT ") {
+			t.Errorf("a write reached Arena on a refused action; requests = %v", arena.requests)
+		}
+	}
+}
+
+// TestDispatchRechecksIdentityImmediatelyBeforeTheWrite: the §3.6 gate at the
+// top of a dispatch runs before the baseline reads, and that window can be
+// seconds. Here the baseline read alone burns past
+// [MaxIdentityEvidenceAge], so the evidence the top-of-dispatch gate accepted
+// is no longer good enough by the time the write would go out. Re-reading the
+// cached snapshot is free, so there is no excuse for dispatching on it.
+func TestDispatchRechecksIdentityImmediatelyBeforeTheWrite(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.perRequestDelay = MaxIdentityEvidenceAge + time.Minute
+	arena.layers[testLayerOne] = &faLayer{
+		bypassedParamID: 9001, masterParamID: 9002, master: 1,
+		activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 0.1,
+	}
+
+	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+	out, err := d.Dispatch(context.Background(), ActionSetLayerBypass, ActionParams{LayerID: testLayerOne, Bypassed: true})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionRefused {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionRefused, out.Reason)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	for _, req := range arena.requests {
+		if strings.HasPrefix(req, "PUT ") {
+			t.Errorf("the parameter write reached Arena after identity went stale; requests = %v", arena.requests)
+		}
+	}
+}
+
+// TestDispatchBlackoutConfirmationStopsInsideTheLayerWalk: the confirmation
+// check walks every tracked layer, and the deadline is tested BETWEEN those
+// reads, not only between poll attempts. Otherwise one in-flight check adds
+// another N per-request timeouts past the deadline it is being polled
+// against.
+func TestDispatchBlackoutConfirmationStopsInsideTheLayerWalk(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	// Layers one and two clear immediately; layer three never does. At 800ms
+	// per read the walk gets through layer one and then finds the 1.1s
+	// derived deadline already gone, so it must stop rather than read the
+	// remaining two.
+	arena.perRequestDelay = 800 * time.Millisecond
+	for _, id := range []ObjectID{testLayerOne, testLayerTwo} {
+		arena.layers[id] = &faLayer{
+			bypassedParamID: 9001, masterParamID: 9002, master: 1,
+			activeClip: idPtr(testClipA), hasTransition: true, transitionSecs: 0.1,
+		}
+	}
+	arena.layers[3000000000003] = &faLayer{
+		bypassedParamID: 9021, masterParamID: 9022, master: 1,
+		activeClip: idPtr(testClipB), hasTransition: true, transitionSecs: 0.1,
+		pendingClearDelay: time.Hour,
+	}
+	d := newTestActionDispatcher(t, arena, &now, identifiedSnapshot(now))
+
+	dispatchStart := now
+	out, err := d.Dispatch(context.Background(), ActionBlackout, ActionParams{})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmed {
+		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmed, out.Reason)
+	}
+	if elapsed := now.Sub(dispatchStart); elapsed > MaxDispatchDuration {
+		t.Errorf("Dispatch took %s, want at most %s", elapsed, MaxDispatchDuration)
+	}
+	if !contains(out.Reason, "stopped at layer") && !contains(out.Reason, "did not finish before the deadline") {
+		t.Errorf("Reason = %q, want it to state that the layer walk was cut short by the deadline", out.Reason)
+	}
+}
+
+// TestConfirmationFootprintStaysBounded pins the request volume
+// [DefaultActionConfirmPollInterval]'s doc comment claims, at the PRODUCTION
+// intervals rather than the 10ms the rest of this file injects. At the flat
+// 50ms this seam shipped with, the same single-object action issued about 40
+// attempts across its 2s deadline while the comment said "tens, not
+// thousands"; the crash Track D is engineering around is sensitive to
+// connection churn, so this number is one to keep honest.
+func TestConfirmationFootprintStaysBounded(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.layers[testLayerOne] = &faLayer{bypassed: true, bypassedParamID: 9001, masterParamID: 9002, master: 1}
+	arena.answerValuelessAfterWrite = true // never confirms, so the full deadline is spent
+
+	srv := httptest.NewServer(arena)
+	t.Cleanup(srv.Close)
+	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(&now), CompositionStore: newTestCompositionStore(t, parseTestComposition(t))})
+	c.recordSurveySnapshot(identifiedSnapshot(now))
+	d := NewActionDispatcher(c, ActionDispatcherOptions{Now: fixedClock(&now), Sleep: fakeSleep(&now)})
+
+	out, err := d.Dispatch(context.Background(), ActionSetLayerBypass, ActionParams{LayerID: testLayerOne, Bypassed: false})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionUnconfirmed {
+		t.Fatalf("State = %q, want %q — this test needs the full deadline to be spent", out.State, ActionUnconfirmed)
+	}
+
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	reads := 0
+	for _, req := range arena.requests {
+		if strings.HasPrefix(req, "GET ") {
+			reads++
+		}
+	}
+	if reads > 12 {
+		t.Errorf("a single-object action spent %d reads across its %s deadline, want at most 12", reads, DefaultActionConfirmDeadline)
+	}
+	t.Logf("single-object confirmation footprint across a %s deadline: %d reads", DefaultActionConfirmDeadline, reads)
 }
 
 // --- Unrecognized action name ---------------------------------------------

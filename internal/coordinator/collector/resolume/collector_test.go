@@ -356,6 +356,84 @@ func TestSteadyStateIsExactlyOneProductRequestPerInterval(t *testing.T) {
 	}
 }
 
+// TestSteadyStateAfterADispatchStillExactlyOneProductRequestPerInterval
+// extends the test above to a case it cannot catch: it never constructs an
+// [ActionDispatcher], so a future seam that wired a post-dispatch
+// [Collector.RequestSurvey] call (or any other extra steady-state traffic)
+// would only show up in the poll intervals AFTER a real dispatch — never
+// in a suite that never dispatches anything. This drives one genuinely
+// CONFIRMED action (selectDeck) against the SAME [Collector] the polling
+// loop below measures, over a server that answers both /api/v1/product
+// (for Poll) and [fakeArena]'s by-id/write surface (for Dispatch), then
+// asserts steady state is unchanged afterward — the same one-request-per-
+// interval, product-only assertion the sibling test makes, without
+// weakening it.
+func TestSteadyStateAfterADispatchStillExactlyOneProductRequestPerInterval(t *testing.T) {
+	now := time.Now()
+	arena := newFakeArena(&now)
+	arena.decks[testDeckOne] = &faDeck{selected: false, name: "Deck One"}
+	arena.decks[testDeckTwo] = &faDeck{selected: true, name: "Deck Two"}
+
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		if r.URL.Path == "/api/v1/product" {
+			w.Write(loadTestdata(t, "product.json"))
+			return
+		}
+		arena.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	store := newTestCompositionStore(t, parseTestComposition(t))
+	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(&now), CompositionStore: store})
+
+	// Prime past the reachability-transition survey exactly like the
+	// sibling test above — real, desired traffic this test does not
+	// measure either. What that survey's identity check concludes does
+	// not matter here: recordSurveySnapshot below overrides it with the
+	// confirmed snapshot selectDeck's own identity gate needs.
+	if _, complete := c.Poll(context.Background()); !complete {
+		t.Fatalf("priming Poll() complete = false, want true")
+	}
+	now = now.Add(c.Footprint().PollInterval())
+	c.recordSurveySnapshot(identifiedSnapshot(now))
+	requested = nil
+
+	d := NewActionDispatcher(c, ActionDispatcherOptions{
+		Now: fixedClock(&now), Sleep: fakeSleep(&now), PollInterval: 10 * time.Millisecond,
+	})
+	out, err := d.Dispatch(context.Background(), ActionSelectDeck, ActionParams{DeckID: testDeckOne})
+	if err != nil {
+		t.Fatalf("Dispatch error = %v", err)
+	}
+	if out.State != ActionConfirmed {
+		t.Fatalf("State = %q, want %q (reason: %s) — this test needs a genuinely CONFIRMED dispatch to prove anything about what happens after one", out.State, ActionConfirmed, out.Reason)
+	}
+	requested = nil // discard the dispatch's own baseline/write/confirm traffic; only what follows is steady state
+
+	const intervals = 5
+	for i := 0; i < intervals; i++ {
+		obs, complete := c.Poll(context.Background())
+		if !complete {
+			t.Fatalf("interval %d: Poll() complete = false, want true (this poll was due)", i)
+		}
+		if len(obs) != 2 {
+			t.Fatalf("interval %d: Poll() returned %d observation(s), want exactly 2 (reachable, product) — a dispatch must never leave a pending survey behind", i, len(obs))
+		}
+		now = now.Add(c.Footprint().PollInterval())
+	}
+
+	if len(requested) != intervals {
+		t.Fatalf("total requests after the dispatch = %d, want exactly %d (one per interval) — a dispatch must not grow steady-state traffic", len(requested), intervals)
+	}
+	for i, path := range requested {
+		if path != "/api/v1/product" {
+			t.Errorf("request %d after the dispatch = %q, want /api/v1/product — steady state must never touch another path after a dispatch either", i, path)
+		}
+	}
+}
+
 // TestPollSkipsWhenNotYetDueUnderDynamicInterval proves the OTHER half of
 // the self-throttle collector.go's own doc comment describes: calling Poll
 // again before FootprintControls.PollInterval has elapsed must issue NO

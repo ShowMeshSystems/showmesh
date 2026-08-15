@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -137,6 +139,72 @@ func TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse(t *tes
 	}
 }
 
+// TestOpenAPIResolumeActionAuditEntryOutcomeStateMatchesSchema is Review
+// fix 3's own schema-conformance proof: a real GET /audit response
+// containing a Resolume action's outcome entry validates against
+// AuditEntry.outcomeState's newly-added enum (pkg/observation's six
+// states plus "") — before this fix, outcomeState carried this endpoint's
+// own outcome word instead ("confirmed", "refused", ...), which is not a
+// member of that vocabulary and would fail this exact assertion once the
+// enum existed at all.
+func TestOpenAPIResolumeActionAuditEntryOutcomeStateMatchesSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.results["blackout"] = confirmedResult("every tracked layer's active_clip reported absent")
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, setup.svc, admin.ID)
+
+	req := newResolumeActionRequest(t, resolumeActionBody("blackout", "key-audit-schema", ""), adminToken)
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("dispatch status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/audit", nil)
+	auditReq.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, body := doRawRequest(t, api.Handler, auditReq)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /audit status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "AuditResponse", body)
+}
+
+// TestOpenAPIResolumeActionInFlightReplayOutcomeMatchesSchema is Review
+// fix 1's own schema-conformance proof, reproducing exactly the scenario
+// filed against this endpoint: force Dispatch to fail (the handler answers
+// 500 and, by construction, writes nothing further to the row), then
+// replay the SAME idempotency key. Before this fix, the resulting
+// outcome="" response failed validation against ResolumeActionResult's own
+// enum, which had no "" member — the endpoint's own contract rejected a
+// value its own handler legitimately produces.
+func TestOpenAPIResolumeActionInFlightReplayOutcomeMatchesSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.err = errors.New("simulated internal dispatcher failure")
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	body := resolumeActionBody("blackout", "key-schema-dead-dispatch", "")
+	req1 := newResolumeActionRequest(t, body, token)
+	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("first request status = %d, want 500; body: %s", resp1.StatusCode, body1)
+	}
+
+	req2 := newResolumeActionRequest(t, body, token)
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200; body: %s", resp2.StatusCode, body2)
+	}
+	m := decodeMap(t, body2)
+	result, _ := m["result"].(map[string]any)
+	if result["outcome"] != "" {
+		t.Fatalf("outcome = %v, want \"\" (fixture setup is wrong if this fails)", result["outcome"])
+	}
+	assertMatchesSchema(t, c, "ResolumeActionResponse", body2)
+}
+
 // TestOpenAPIResolumeActionReplayConflictResponseMatchesSchema proves the
 // 409 idempotency-conflict problem validates against the shared Problem
 // schema.
@@ -160,4 +228,32 @@ func TestOpenAPIResolumeActionReplayConflictResponseMatchesSchema(t *testing.T) 
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
 	}
 	assertMatchesSchema(t, c, "Problem", body2)
+}
+
+// TestOpenAPIResolumeActionRequestBodyTooLargeResponseMatchesSchema proves
+// the 413 size refusal (Review fix 5, 2026-08-15) validates against the
+// shared Problem schema and carries the SAME "payload-too-large" type
+// POST /config/resolume/composition already uses (this file's own
+// resolumeActionRequestBodyTooLargeProblem doc comment explains why one
+// generic type serves both).
+func TestOpenAPIResolumeActionRequestBodyTooLargeResponseMatchesSchema(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	padding := strings.Repeat("x", maxResolumeActionRequestBodyBytes+256)
+	body := `{"action":"blackout","idempotencyKey":"key-schema-too-large","padding":"` + padding + `"}`
+	req := newResolumeActionRequest(t, body, token)
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", resp.StatusCode, respBody)
+	}
+	assertMatchesSchema(t, c, "Problem", respBody)
+
+	m := decodeMap(t, respBody)
+	if m["type"] != ProblemTypeResolumeCompositionTooLarge {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeResolumeCompositionTooLarge)
+	}
 }

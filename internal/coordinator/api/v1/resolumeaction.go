@@ -84,6 +84,15 @@ type ResolumeActionResponse struct {
 // including "confirmed" — exactly as FPPCommandResult.OutcomeReason
 // (commands.go) already documents for its own two-value outcome, widened
 // here to five.
+//
+// Outcome (and, identically, OutcomeReason) may ALSO be "" — a sixth,
+// narrow, accepted value — for a REPLAY response answered before the
+// original request's own dispatch/confirmation has finished
+// (api/openapi.yaml's own enum documents this, matching
+// FPPCommandResult.Outcome's identical case exactly). A coordinator
+// restart cannot make this permanent: ReconcileStrandedResolumeActions
+// (resolumeaction_reconcile.go) resolves any Resolume command row still
+// unresolved at startup before it can ever reach a client in that state.
 type ResolumeActionResult struct {
 	ID             string         `json:"id"`
 	IdempotencyKey string         `json:"idempotencyKey"`

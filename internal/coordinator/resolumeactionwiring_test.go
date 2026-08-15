@@ -7,7 +7,9 @@ package coordinator
 // resolumeactionwiring_e2e_test.go is where the wired-path proof lives.
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
@@ -251,6 +253,59 @@ func TestBuildResolumeActionParamsSetLayerMasterRejectsNonNumeric(t *testing.T) 
 	_, _, err := buildResolumeActionParams(resolume.ActionSetLayerMaster, map[string]any{"id": "1", "master": true})
 	if err == nil {
 		t.Fatalf("err = nil, want a non-nil error for a boolean master param")
+	}
+}
+
+// --- sanitizeResolumeActionReason (Review fix 2): a reason string that
+// leaked a Resolume URL (and, embedded in its path, a raw object id) must
+// never reach the wire; a reason with no URL passes through unchanged. ---
+
+func TestSanitizeResolumeActionReasonRedactsAURLAndTheObjectIDInIt(t *testing.T) {
+	// The exact shape a *url.Error's own Error() method produces — this is
+	// what ClassifyError's fallthrough (client.go) returns today for a
+	// connection reset, since that vocabulary has no entry for it.
+	leaked := `dispatching the clip launch failed: Put "http://10.0.0.20:8080/api/v1/parameter/by-id/8391": read tcp 10.0.0.20:54321->10.0.0.20:8080: read: connection reset by peer`
+
+	got := sanitizeResolumeActionReason(resolume.ActionLaunchClip, leaked)
+
+	if strings.Contains(got, "://") {
+		t.Errorf("sanitized reason still contains a URL: %q", got)
+	}
+	if strings.Contains(got, "10.0.0.20") {
+		t.Errorf("sanitized reason still contains the Resolume host: %q", got)
+	}
+	if strings.Contains(got, "8391") {
+		t.Errorf("sanitized reason still contains the raw object id: %q", got)
+	}
+	if !strings.Contains(got, string(resolume.ActionLaunchClip)) {
+		t.Errorf("sanitized reason = %q, want it to still name the action", got)
+	}
+}
+
+func TestSanitizeResolumeActionReasonPassesThroughAnOrdinaryReason(t *testing.T) {
+	ordinary := "the layer's own confirming evidence reports active_clip absent"
+	if got := sanitizeResolumeActionReason(resolume.ActionClearLayer, ordinary); got != ordinary {
+		t.Errorf("sanitizeResolumeActionReason(%q) = %q, want it unchanged (no URL present)", ordinary, got)
+	}
+}
+
+// TestTranslateActionOutcomeSanitizesTheReason proves the sanitization is
+// actually wired into the translation path a real dispatch goes through
+// (translateActionOutcome), not merely available as an unused function.
+func TestTranslateActionOutcomeSanitizesTheReason(t *testing.T) {
+	adapter := &resolumeActionDispatcherAdapter{now: time.Now}
+	leaked := `dispatching the master change failed: Put "http://resolume.local:8080/api/v1/parameter/by-id/42": connection reset by peer`
+
+	result, err := adapter.translateActionOutcome(resolume.ActionOutcome{
+		Action: resolume.ActionSetLayerMaster,
+		State:  resolume.ActionFailed,
+		Reason: leaked,
+	})
+	if err != nil {
+		t.Fatalf("translateActionOutcome: %v", err)
+	}
+	if strings.Contains(result.Reason, "://") || strings.Contains(result.Reason, "resolume.local") {
+		t.Errorf("translateActionOutcome's own Reason still carries a URL/host: %q", result.Reason)
 	}
 }
 

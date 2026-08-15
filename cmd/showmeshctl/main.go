@@ -198,9 +198,7 @@ Exit codes:
      to decide that is not current, or an idempotency key was reused
      against a different action/target/params; see stderr for the
      specific reason and remedy. Distinct from exit 6: the coordinator is
-     healthy and answered correctly, it declined on purpose). Also used by
-     a "resolume action <verb>" subcommand for outcome "refused" (the
-     action was refused before dispatch — see stderr for why)
+     healthy and answered correctly, it declined on purpose)
   11 action unconfirmable (a "resolume action <verb>" subcommand only:
      the action was dispatched, but its own effect could not be told
      apart from its state before dispatch, so the coordinator cannot say
@@ -212,6 +210,10 @@ Exit codes:
      which means this program's own request to the coordinator failed;
      here the coordinator answered normally and reported, honestly, that
      its own attempt to reach Resolume did not work)
+  13 action refused (a "resolume action <verb>" subcommand only: the
+     coordinator answered "refused" — no HTTP request ever reached
+     Resolume, see stderr for why. Distinct from exit 10: this is not an
+     idempotency-key conflict, and minting a fresh key will not help)
 `)
 }
 

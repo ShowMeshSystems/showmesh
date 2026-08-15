@@ -175,7 +175,7 @@ func TestPollUntilConfirmedOrDeadlineConfirmsWhenCheckSucceeds(t *testing.T) {
 	d := &ActionDispatcher{now: fixedClock(&now), sleep: fakeSleep(&now), pollInterval: 10 * time.Millisecond}
 
 	calls := 0
-	out := d.pollUntilConfirmedOrDeadline(context.Background(), ActionBlackout, now, time.Second, func() (bool, time.Time, string) {
+	out := d.pollUntilConfirmedOrDeadline(context.Background(), d.openWindow(), ActionBlackout, now, time.Second, func(confirmScope) (bool, time.Time, string) {
 		calls++
 		if calls < 3 {
 			return false, time.Time{}, "not yet"
@@ -195,7 +195,7 @@ func TestPollUntilConfirmedOrDeadlineExpiresAsUnconfirmed(t *testing.T) {
 	dispatchedAt := now
 	d := &ActionDispatcher{now: fixedClock(&now), sleep: fakeSleep(&now), pollInterval: 10 * time.Millisecond}
 
-	out := d.pollUntilConfirmedOrDeadline(context.Background(), ActionLaunchClip, dispatchedAt, 100*time.Millisecond, func() (bool, time.Time, string) {
+	out := d.pollUntilConfirmedOrDeadline(context.Background(), d.openWindow(), ActionLaunchClip, dispatchedAt, 100*time.Millisecond, func(confirmScope) (bool, time.Time, string) {
 		return false, time.Time{}, "still not yet"
 	})
 	if out.State != ActionUnconfirmed {
@@ -213,11 +213,43 @@ func TestPollUntilConfirmedOrDeadlineRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	out := d.pollUntilConfirmedOrDeadline(ctx, ActionLaunchClip, now, time.Hour, func() (bool, time.Time, string) {
+	out := d.pollUntilConfirmedOrDeadline(ctx, d.openWindow(), ActionLaunchClip, now, time.Hour, func(confirmScope) (bool, time.Time, string) {
 		return false, time.Time{}, "not yet"
 	})
 	if out.State != ActionUnconfirmed {
 		t.Fatalf("State = %q, want %q", out.State, ActionUnconfirmed)
+	}
+}
+
+// TestPollUntilConfirmedOrDeadlineIsBoundedByTheDispatchWindow: a deadline
+// longer than what is left of [MaxDispatchDuration] is cut to the window, and
+// the reason names that phase rather than the action's own deadline.
+func TestPollUntilConfirmedOrDeadlineIsBoundedByTheDispatchWindow(t *testing.T) {
+	now := time.Now()
+	d := &ActionDispatcher{now: fixedClock(&now), sleep: fakeSleep(&now), pollInterval: 100 * time.Millisecond}
+	w := d.openWindow()
+
+	start := now
+	out := d.pollUntilConfirmedOrDeadline(context.Background(), w, ActionBlackout, now, 24*time.Hour, func(confirmScope) (bool, time.Time, string) {
+		return false, time.Time{}, "never"
+	})
+	if out.State != ActionUnconfirmed {
+		t.Fatalf("State = %q, want %q", out.State, ActionUnconfirmed)
+	}
+	if elapsed := now.Sub(start); elapsed > MaxDispatchDuration {
+		t.Errorf("poll ran for %s, want at most MaxDispatchDuration (%s)", elapsed, MaxDispatchDuration)
+	}
+	if !contains(out.Reason, "total dispatch budget") {
+		t.Errorf("Reason = %q, want it to name the total dispatch budget as the phase that ran out", out.Reason)
+	}
+}
+
+// TestMaxDispatchDurationIsTheSumOfEveryPhaseBudget pins the arithmetic the
+// API and the CLI size their own timeouts from: the exported total is not an
+// independent guess, it is every separately enforced phase added up.
+func TestMaxDispatchDurationIsTheSumOfEveryPhaseBudget(t *testing.T) {
+	if want := MaxBaselinePhaseBudget + MaxWritePhaseBudget + MaxActionConfirmDeadline; MaxDispatchDuration != want {
+		t.Fatalf("MaxDispatchDuration = %s, want %s", MaxDispatchDuration, want)
 	}
 }
 
@@ -238,7 +270,7 @@ func TestIdentityGateRefusalAllowsOnlyIdentityTrue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason, refuse := identityGateRefusal(tt.snap)
+			reason, refuse, _ := identityGateRefusal(tt.snap, base)
 			if refuse != tt.refuse {
 				t.Errorf("refuse = %v, want %v", refuse, tt.refuse)
 			}
@@ -247,6 +279,51 @@ func TestIdentityGateRefusalAllowsOnlyIdentityTrue(t *testing.T) {
 			}
 			if !refuse && reason != "" {
 				t.Errorf("reason = %q, want empty when not refusing", reason)
+			}
+		})
+	}
+}
+
+// TestIdentityGateRefusalFencesTheReadingsAge is fix 3's identity term: the
+// snapshot is event-driven and, with the WebSocket closed under Show Mode on
+// a stable Arena, nothing refreshes it. A confirmed-but-ancient reading must
+// refuse with the staleness named, never permit, and never dress the age up
+// as an identity failure.
+//
+// Before trusting this test: deleted the age branch from identityGateRefusal
+// and reran — "well past the fence" flipped to refuse=false, permitting a
+// dispatch against a reading an hour old. Restored afterward.
+func TestIdentityGateRefusalFencesTheReadingsAge(t *testing.T) {
+	base := time.Now()
+	identified := func(observedAt time.Time) SurveySnapshot {
+		return SurveySnapshot{SurveyRan: true, IdentityKnown: true, Identity: IdentityTrue, IdentityObservedAt: observedAt}
+	}
+	tests := []struct {
+		name        string
+		observedAt  time.Time
+		wantRefuse  bool
+		wantStale   bool
+		wantInReasn string
+	}{
+		{"fresh", base, false, false, ""},
+		{"just inside the fence", base.Add(-MaxIdentityEvidenceAge + time.Second), false, false, ""},
+		{"just past the fence", base.Add(-MaxIdentityEvidenceAge - time.Second), true, true, "old"},
+		{"well past the fence", base.Add(-time.Hour), true, true, "old"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, refuse, stale := identityGateRefusal(identified(tt.observedAt), base)
+			if refuse != tt.wantRefuse {
+				t.Errorf("refuse = %v, want %v (reason %q)", refuse, tt.wantRefuse, reason)
+			}
+			if stale != tt.wantStale {
+				t.Errorf("stale = %v, want %v", stale, tt.wantStale)
+			}
+			if tt.wantInReasn != "" && !contains(reason, tt.wantInReasn) {
+				t.Errorf("reason = %q, want it to state the reading's age", reason)
+			}
+			if stale && contains(reason, "not confirmed") {
+				t.Errorf("reason = %q — a stale reading must not be reported as an identity failure", reason)
 			}
 		})
 	}
@@ -273,10 +350,18 @@ func TestClampActionConfirmDeadlineNeverExceedsTheMax(t *testing.T) {
 		in   time.Duration
 		want time.Duration
 	}{
-		{"well under the max", 500 * time.Millisecond, 500 * time.Millisecond},
+		{"under the max, over the min", 2 * time.Second, 2 * time.Second},
 		{"exactly the max", MaxActionConfirmDeadline, MaxActionConfirmDeadline},
 		{"just over the max", MaxActionConfirmDeadline + time.Millisecond, MaxActionConfirmDeadline},
 		{"absurdly over the max", time.Hour, MaxActionConfirmDeadline},
+		// A negative transition.duration is what makes the lower clamp
+		// load-bearing: without it the derived deadline is already in the
+		// past, so the confirmation window never opens and the action
+		// reports unconfirmed without issuing a single read.
+		{"exactly the min", MinActionConfirmDeadline, MinActionConfirmDeadline},
+		{"under the min", MinActionConfirmDeadline - time.Millisecond, MinActionConfirmDeadline},
+		{"zero", 0, MinActionConfirmDeadline},
+		{"negative", -4 * time.Second, MinActionConfirmDeadline},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -306,30 +391,55 @@ func TestDeriveClearDeadlineClampsAnArbitrarilyLongTransition(t *testing.T) {
 	}
 }
 
-func TestDeckRefusalNamesBothDecksAndComparesByID(t *testing.T) {
+// TestDeriveClearDeadlineFloorsANegativeTransition: transition.duration is
+// live operator-set state, and a negative one produced a deadline already in
+// the past before the lower clamp existed.
+func TestDeriveClearDeadlineFloorsANegativeTransition(t *testing.T) {
+	l := Layer{Transition: &layerTransition{
+		Duration: ParamRangeField{Presence: PresencePresent, Param: &ParamRange{ID: 1, Value: -5, ValuePresence: PresencePresent}},
+	}}
+	if got := deriveClearDeadline(l); got < MinActionConfirmDeadline {
+		t.Fatalf("deriveClearDeadline(-5s transition) = %s, want at least MinActionConfirmDeadline (%s)", got, MinActionConfirmDeadline)
+	}
+}
+
+// TestDeckSelectionRefusalRestsOnTheFreshReadNotTheSnapshot is fix 3's deck
+// term. The decision comes from the deck object read at decision time; the
+// snapshot only supplies the last-known selected deck for the message. The
+// second case is the one that matters: an hours-old snapshot naming a
+// different deck must NOT refuse a clip whose own deck reads selected right
+// now, which is the disguise TRACK-D-D3-SPEC.md §3.4 names.
+func TestDeckSelectionRefusalRestsOnTheFreshReadNotTheSnapshot(t *testing.T) {
 	comp := parseTestComposition(t)
 	tc, err := BuildTrackedComposition(comp)
 	if err != nil {
 		t.Fatalf("BuildTrackedComposition: %v", err)
 	}
-
 	now := time.Now()
-	matching := SurveySnapshot{SelectedDeckKnown: true, SelectedDeckID: testDeckOne, SelectedDeckName: "Deck One", SelectedDeckObservedAt: now}
-	if reason, refuse := deckRefusal(tc, testDeckOne, matching); refuse {
-		t.Errorf("refuse = true (reason %q), want false when the clip's deck matches the selected deck", reason)
+	selected := func(v bool) Deck {
+		return Deck{ID: testDeckOne, Selected: ParamBooleanField{Presence: PresencePresent, Param: &ParamBoolean{ID: 1, Value: v, ValuePresence: PresencePresent}}}
+	}
+	staleSnap := SurveySnapshot{SelectedDeckKnown: true, SelectedDeckID: testDeckTwo, SelectedDeckName: "Deck Two", SelectedDeckObservedAt: now.Add(-time.Hour)}
+
+	if reason, refuse := deckSelectionRefusal(tc, testDeckOne, selected(true), now, staleSnap); refuse {
+		t.Errorf("refuse = true (reason %q), want false: the clip's own deck reads selected right now", reason)
 	}
 
-	mismatched := SurveySnapshot{SelectedDeckKnown: true, SelectedDeckID: testDeckTwo, SelectedDeckName: "Deck Two", SelectedDeckObservedAt: now}
-	reason, refuse := deckRefusal(tc, testDeckOne, mismatched)
+	reason, refuse := deckSelectionRefusal(tc, testDeckOne, selected(false), now, staleSnap)
 	if !refuse {
-		t.Fatal("refuse = false, want true for a mismatched deck")
+		t.Fatal("refuse = false, want true when the clip's own deck reads not selected")
 	}
 	if !contains(reason, "2000000000001") || !contains(reason, "2000000000002") {
 		t.Errorf("reason = %q, want it to name both deck ids", reason)
 	}
+	if !contains(reason, now.Format(time.RFC3339)) {
+		t.Errorf("reason = %q, want it to state when the deck was read", reason)
+	}
 
-	unknown := SurveySnapshot{SelectedDeckKnown: false}
-	if _, refuse := deckRefusal(tc, testDeckOne, unknown); !refuse {
-		t.Error("refuse = false, want true when the selected deck is not known")
+	// A value-less `selected` envelope is contract-legal and must refuse
+	// rather than read as false-and-therefore-not-selected.
+	valueless := Deck{ID: testDeckOne, Selected: ParamBooleanField{Presence: PresencePresent, Param: &ParamBoolean{ID: 1}}}
+	if _, refuse := deckSelectionRefusal(tc, testDeckOne, valueless, now, staleSnap); !refuse {
+		t.Error("refuse = false, want true when the deck did not report whether it is selected")
 	}
 }

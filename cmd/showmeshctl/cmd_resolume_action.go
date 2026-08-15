@@ -9,22 +9,12 @@ import (
 	"time"
 )
 
-// This file is Track D seam D-3/B's showmeshctl surface: "resolume action
+// This file is showmeshctl's Resolume action surface: "resolume action
 // <verb> [args]" over POST /api/v1/resolume/actions, and "resolume action
-// list" over GET /api/v1/resolume/actions. Per this program's own
-// independence rule (doc.go, importgraph_test.go), every wire type below
-// is this file's own transcription of the contract, not a shared struct
-// with the coordinator's internal types — see resolumeActionRequest's own
-// doc comment.
-//
-// ADR-030: this coverage is not deferred to a later Operator UI seam. The
-// CLI is the "the show is broken and the UI is down" path, which makes it
-// a fully tested emergency path rather than contract hygiene, so every one
-// of the seven actions gets its own subcommand here, shaped exactly like
-// the "fpp <verb>" write subcommands (cmd_fpp_command.go): one shared
-// dispatch core (dispatchResolumeAction below), a fresh idempotency key
-// minted per invocation, and an outcome reported honestly — never a bare
-// 200 read as success (ADR-003).
+// list" over GET /api/v1/resolume/actions. Every wire type below is this
+// program's own transcription of the contract, never a shared struct with
+// the coordinator's internal types — see resolumeActionRequest's own doc
+// comment for why.
 
 // resolumeActionResult mirrors v1.ResolumeActionResult field for field —
 // see that type's doc comment in
@@ -85,26 +75,15 @@ type resolumeActionsResponse struct {
 	Actions    []resolumeActionDescriptor `json:"actions"`
 }
 
-// minResolumeActionClientTimeout is this program's own minimum request
-// budget for every "resolume action <verb>" write subcommand, mirroring
-// minFPPCommandClientTimeout's identical reasoning (cmd_fpp_command.go): a
-// budget smaller than what the coordinator's own confirmation wait can
-// take can only ever abort a healthy, still-working conversation and
-// report it as a transport failure.
-//
-// This MUST match internal/coordinator/api/resolumeaction.go's own
-// resolumeActionMaxConfirmDeadline (30s) plus a 15s round-trip margin —
-// this program does not import that package (importgraph_test.go forbids
-// it), so this is a SECOND, independently chosen literal, reconciled
-// against the server's value by
-// TestResolumeActionMaxConfirmDeadlineFitsWithinCLIClientBudget in
-// internal/coordinator/api/resolumeaction_test.go, which hardcodes this
-// exact value and fails if the server's own deadline is ever raised past
-// what this literal assumes. See that test's own doc comment for why two
-// independently chosen literals, not one shared constant, is the correct
-// shape here — the identical reconciliation minFPPCommandClientTimeout's
-// own doc comment describes for its own server-side counterpart.
-const minResolumeActionClientTimeout = 45 * time.Second
+// minResolumeActionClientTimeout is every "resolume action <verb>"
+// subcommand's minimum request budget, since the coordinator can hold a
+// dispatched action open for its own write deadline before answering.
+// Reconciled against resolumeActionHTTPWriteDeadline (55s,
+// internal/coordinator/api/resolumeaction.go) by
+// TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget there and
+// TestMinResolumeActionClientTimeoutExceedsServerDefault here — two
+// independent literals, since this program cannot import that package.
+const minResolumeActionClientTimeout = 80 * time.Second
 
 func effectiveResolumeActionTimeout(flagTimeout time.Duration) time.Duration {
 	if flagTimeout < minResolumeActionClientTimeout {
@@ -149,6 +128,7 @@ func dispatchResolumeAction(stdout, stderr io.Writer, clock func() time.Time, g 
 		return reportError(stderr, cmdLabel, reqErr)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
+	reportResolumeActionWarnings(stderr, cmdLabel, resp.Result)
 
 	if g.output == outputJSON {
 		if err := printJSON(stdout, resp); err != nil {
@@ -156,15 +136,14 @@ func dispatchResolumeAction(stdout, stderr io.Writer, clock func() time.Time, g 
 		}
 		return exitCodeForResolumeActionResult(resp.Result)
 	}
-	return reportResolumeActionResult(stdout, stderr, cmdLabel, resp.Result)
+	return reportResolumeActionResult(stdout, cmdLabel, resp.Result)
 }
 
-// reportResolumeActionResult prints result's outcome honestly to stdout
-// and returns the exit code it maps to — the Resolume-action sibling of
-// reportFPPCommandResult (cmd_fpp_command.go), widened to this
-// vocabulary's five outcomes instead of two. exitOK is returned only for a
-// genuinely "confirmed" outcome, never for any of the other four.
-func reportResolumeActionResult(stdout, stderr io.Writer, cmdLabel string, result resolumeActionResult) int {
+// reportResolumeActionWarnings writes result's Replay/AttributionDegraded
+// warnings to stderr — shared by both --output modes, since both facts
+// are operator-facing and stderr is not the JSON stream printed to
+// stdout.
+func reportResolumeActionWarnings(stderr io.Writer, cmdLabel string, result resolumeActionResult) {
 	if result.Replay {
 		_, _ = fmt.Fprintf(stderr, "showmeshctl %s: this idempotency key was already used; "+
 			"returning the ORIGINAL command's result (id %s), nothing was dispatched\n", cmdLabel, result.ID)
@@ -174,7 +153,14 @@ func reportResolumeActionResult(stdout, stderr io.Writer, cmdLabel string, resul
 			"failed for this command; it proceeded anyway (ADR-024 decision 11's safety class) with degraded "+
 			"attribution recorded only to its own stderr\n", cmdLabel)
 	}
+}
 
+// reportResolumeActionResult prints result's outcome honestly to stdout
+// and returns the exit code it maps to — the Resolume-action sibling of
+// reportFPPCommandResult (cmd_fpp_command.go), widened to this
+// vocabulary's five outcomes instead of two. exitOK is returned only for a
+// genuinely "confirmed" outcome, never for any of the other four.
+func reportResolumeActionResult(stdout io.Writer, cmdLabel string, result resolumeActionResult) int {
 	switch result.Outcome {
 	case "confirmed":
 		_, _ = fmt.Fprintf(stdout, "confirmed: %s (command %s): %s\n", result.Action, result.ID, result.OutcomeReason)
@@ -187,7 +173,7 @@ func reportResolumeActionResult(stdout, stderr io.Writer, cmdLabel string, resul
 		return exitActionUnconfirmable
 	case "refused":
 		_, _ = fmt.Fprintf(stdout, "refused: %s: %s (command %s)\n", result.Action, result.OutcomeReason, result.ID)
-		return exitConflict
+		return exitActionRefused
 	case "failed":
 		_, _ = fmt.Fprintf(stdout, "failed: %s: %s (command %s)\n", result.Action, result.OutcomeReason, result.ID)
 		return exitActionFailed
@@ -212,7 +198,7 @@ func exitCodeForResolumeActionResult(result resolumeActionResult) int {
 	case "unconfirmable":
 		return exitActionUnconfirmable
 	case "refused":
-		return exitConflict
+		return exitActionRefused
 	case "failed":
 		return exitActionFailed
 	default:
@@ -401,10 +387,9 @@ func cmdResolumeBlackout(args []string, stdout, stderr io.Writer, clock func() t
 }
 
 // cmdResolumeSetLayerBoolParam implements set-layer-bypass — a layer id and
-// one named boolean parameter. setLayerMaster used to share this shape too
-// (a boolean "master" mapped to Arena's own 0.0/1.0 range endpoints), but
-// defect 3 (2026-08-15) made master a continuous number end to end; see
-// cmdResolumeSetLayerMaster below for its own subcommand.
+// one named boolean parameter. setLayerMaster is a continuous number end to
+// end, not a boolean, so it has its own subcommand below rather than
+// sharing this shape.
 func cmdResolumeSetLayerBoolParam(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, wireAction, boolParamName, help string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	fs.Usage = func() {
@@ -439,12 +424,10 @@ func cmdResolumeSetLayerBoolParam(args []string, stdout, stderr io.Writer, clock
 }
 
 // cmdResolumeSetLayerMaster implements set-layer-master — a layer id and
-// one continuous numeric value, per defect 3 (2026-08-15): a layer master
-// that can only be 0 or 1 is not a master, so this is its own subcommand
-// rather than sharing cmdResolumeSetLayerBoolParam's boolean shape. The
-// coordinator validates the value against Arena's own declared range for
-// this specific layer's master parameter (read fresh at dispatch time);
-// this program does not duplicate that check client-side.
+// one continuous numeric value: a layer master that can only be 0 or 1 is
+// not a master. The coordinator validates the value against Arena's own
+// declared range for this specific layer's master parameter (read fresh at
+// dispatch time); this program does not duplicate that check client-side.
 func cmdResolumeSetLayerMaster(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	const cmdLabel = "resolume action set-layer-master"
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
