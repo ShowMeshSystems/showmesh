@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [RES-001](../research/RES-001-resolume-smpte-behavior.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-003](../decisions/ADR-003-desired-and-observed-state.md)
 
-Status: D-1 built and verified against the running Arena 2026-08-14; D-2 built 2026-08-14 and closed 2026-08-15; **D-3 built, reviewed and closed 2026-08-15, on unit-test evidence only**; crash recovery and D-4 (the Operator UI) are next; D0 (the timecode bench) outstanding and not gating. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
+Status: D-1 built and verified against the running Arena 2026-08-14; D-2 built 2026-08-14 and closed 2026-08-15; **D-3 built, reviewed and closed 2026-08-15, on unit-test evidence only**; [D-3a, crash recovery](TRACK-D-D3A-CRASH-RECOVERY-SPEC.md) is specified and not built, with three owner decisions outstanding; D-4 (the Operator UI) is next after it; D0 (the timecode bench) outstanding and not gating. Specified 2026-08-13. **Day-0 scope**, promoted from "not sequenced" the same day.
 
 > **Seam letters and deliverable letters are not the same list, and this document uses both.** The deliverables below are D0 and D1 through D4 as they were scoped on 2026-08-13. The build seams are D-1 (the adapter), D-2 (observations), D-3 (the action vocabulary) and D-4 (the Operator UI), and those are what [TRACK-D-ADAPTER-SPEC.md](TRACK-D-ADAPTER-SPEC.md) and the per-seam specifications mean. Deliverable D2 (explicit composition control) and deliverable D4 (confirmation by evidence) both landed inside seam D-3.
 >
