@@ -80,10 +80,11 @@ piped through an edit in between) genuinely round-trips. It refuses,
 before sending anything, if it cannot find an "endpoints" key in either
 shape; it never sends a request with a nil or absent endpoints list.
 
-A configuration change here does NOT take effect until the coordinator's
-next restart: this coordinator does not hot-reload configuration.
-"showmeshctl config set" and "showmeshctl config get" both print this
-fact; do not skip it when scripting against this command.
+A configuration change here takes effect without a restart (ADR-036):
+command dispatch resolves the endpoint list per request, and the
+collector set follows within about ten seconds. "showmeshctl config set"
+and "showmeshctl config get" both print this fact; do not skip it when
+scripting against this command.
 
 While SHOWMESH_FPP_ENDPOINTS is still set in the coordinator's own
 environment, "config set" is refused outright (409): remove it from the
@@ -161,7 +162,9 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fpp.endpoints configuration revision (requires config:write,")
 		_, _ = fmt.Fprintln(stderr, "admin only). Validated before activation: an invalid payload is rejected")
 		_, _ = fmt.Fprintln(stderr, "and appends no revision (ADR-009).")
-		_, _ = fmt.Fprintln(stderr, "\nThis does NOT take effect until the coordinator's next restart.")
+		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): dispatch resolves the")
+		_, _ = fmt.Fprintln(stderr, "endpoint list per request, and the collector set follows within about")
+		_, _ = fmt.Fprintln(stderr, "ten seconds.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

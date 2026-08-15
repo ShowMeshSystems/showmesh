@@ -2494,8 +2494,8 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
     createdByPrincipalId: 'p-1',
     createdByPrincipalName: 'admin-1',
     source: 'api',
-    restartRequired: true,
-    restartRequiredReason: 'this coordinator does not hot-reload configuration',
+    restartRequired: false,
+    restartRequiredReason: 'this change is already in effect (ADR-036)',
   }
 
   // None of these three methods needs store.connect() / the SSE read loop

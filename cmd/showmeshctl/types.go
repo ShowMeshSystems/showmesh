@@ -425,9 +425,11 @@ type configFPPEndpointsPayload struct {
 // /api/v1/config/fpp.endpoints. createdByPrincipalId/createdByPrincipalName
 // are null for the one revision the coordinator's startup env->store
 // migration creates (source "env_migration") — a startup migration has no
-// principal. restartRequired is always true: this coordinator does not
-// hot-reload configuration, so a change here takes effect on the
-// coordinator's NEXT RESTART, never immediately.
+// principal. restartRequired is always false since ADR-036: dispatch
+// resolves the endpoint list per request and collectors reconcile within
+// about ten seconds, so a change here needs no restart. The field stays on
+// the wire because the contract is additive-only within a major version
+// (ADR-020).
 type fppEndpointsConfigResponse struct {
 	ServerTime             time.Time                 `json:"serverTime"`
 	Kind                   string                    `json:"kind"`

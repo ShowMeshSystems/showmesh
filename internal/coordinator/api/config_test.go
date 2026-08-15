@@ -416,9 +416,11 @@ func TestGetFPPEndpointsConfigRevisionsListsNewestFirst(t *testing.T) {
 	}
 }
 
-// TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated is A4: the API
-// response carries the "takes effect on next restart" fact rather than
-// leaving the client to know it out of band.
+// TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated is A4 as ADR-036
+// left it: the response still carries restartRequired and its reason
+// rather than leaving the client to know the delivery model out of band,
+// and since ADR-036 the stated fact is false with a reason saying the
+// change is already in effect.
 func TestGetFPPEndpointsConfigRestartRequiredIsAlwaysStated(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)

@@ -803,13 +803,10 @@ type ConfigFPPEndpointsPayload struct {
 // FPPEndpointsConfigResponse is the body of GET and PUT
 // /config/fpp.endpoints.
 //
-// RestartRequired is always true and RestartRequiredReason states why —
-// RES-008 section 10 records "restart-required for everything" as today's
-// true and stable answer; no configuration change in this coordinator
-// hot-reloads. This is carried on the wire, not left for a client to know
-// out of band, per this step's own spec: "a configuration surface that
-// silently does nothing until a restart nobody mentioned is the same
-// defect class as a control that renders enabled when it is not."
+// RestartRequired is always false since ADR-036: dispatch resolves the
+// endpoint list per request and collectors reconcile within about ten
+// seconds, so a change here needs no restart. The field stays on the wire
+// because the contract is additive-only within a major version (ADR-020).
 //
 // CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
 // the startup env->store migration creates (Source

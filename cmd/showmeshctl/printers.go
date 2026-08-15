@@ -313,17 +313,23 @@ func printAuditTable(w io.Writer, resp auditResponse) {
 }
 
 // printFPPEndpointsConfig renders GET/PUT /api/v1/config/fpp.endpoints
-// (Step 7 seam A, RES-008 D1). restartRequired is always rendered — never
-// silently dropped — so the operator sees the "takes effect on next
-// restart" fact at the point of use, matching the API's own carrying of it
-// on the wire rather than leaving a client to know it out of band.
+// (Step 7 seam A, RES-008 D1). RestartRequiredReason is always rendered,
+// never silently dropped; the loud RESTART REQUIRED label is driven by the
+// wire boolean rather than assumed, so this stays correct if a future
+// server ever sets it true again.
 func printFPPEndpointsConfig(w io.Writer, resp fppEndpointsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
 	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
 	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
 	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
-	_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		// The reason is a full sentence from the server; a label in front
+		// of it would just restate its opening clause.
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
 
 	if len(resp.Payload.Endpoints) == 0 {
 		_, _ = fmt.Fprintln(w, "(no FPP endpoints configured)")

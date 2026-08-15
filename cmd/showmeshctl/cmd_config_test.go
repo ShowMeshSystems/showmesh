@@ -18,6 +18,18 @@ const testFPPEndpointsConfigResponse = `{
 	"serverTime":"2026-08-12T00:00:00Z","kind":"fpp.endpoints","revision":1,
 	"payload":{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]},
 	"updatedAt":"2026-08-12T00:00:00Z","createdByPrincipalId":"p-1","createdByPrincipalName":"admin-1",
+	"source":"api","restartRequired":false,
+	"restartRequiredReason":"this change is already in effect: command dispatch resolves the endpoint list per request, and the collector set follows this configuration within about ten seconds. No restart is needed."
+}`
+
+// testFPPEndpointsConfigResponseRestartRequired is the same fixture with
+// restartRequired true, for the loud-warning rendering path. No shipped
+// server response looks like this since ADR-036, but the CLI renders
+// whatever the wire says rather than assuming the current server behavior.
+const testFPPEndpointsConfigResponseRestartRequired = `{
+	"serverTime":"2026-08-12T00:00:00Z","kind":"fpp.endpoints","revision":1,
+	"payload":{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]},
+	"updatedAt":"2026-08-12T00:00:00Z","createdByPrincipalId":"p-1","createdByPrincipalName":"admin-1",
 	"source":"api","restartRequired":true,
 	"restartRequiredReason":"this coordinator does not hot-reload configuration; restart to apply"
 }`
@@ -42,8 +54,33 @@ func TestCmdConfigGetRendersActiveConfiguration(t *testing.T) {
 	if !strings.Contains(out, "player-01") || !strings.Contains(out, "10.0.1.20") {
 		t.Errorf("stdout = %q, want it to render the configured endpoint", out)
 	}
-	if !strings.Contains(out, "RESTART REQUIRED") {
-		t.Errorf("stdout = %q, want the restart-required fact stated at the point of use", out)
+	if !strings.Contains(out, "this change is already in effect") {
+		t.Errorf("stdout = %q, want the reason rendered at the point of use", out)
+	}
+	if strings.Contains(out, "RESTART REQUIRED") {
+		t.Errorf("stdout = %q, want no RESTART REQUIRED label when restartRequired is false", out)
+	}
+}
+
+// TestCmdConfigGetRendersRestartRequiredWarning proves the CLI still
+// renders the loud warning when the wire says restartRequired is true: it
+// must render what the wire says, not hardcode today's server behavior.
+func TestCmdConfigGetRendersRestartRequiredWarning(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponseRestartRequired)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"get", "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "RESTART REQUIRED: this coordinator does not hot-reload configuration; restart to apply") {
+		t.Errorf("stdout = %q, want the loud restart-required warning when restartRequired is true", out)
 	}
 }
 

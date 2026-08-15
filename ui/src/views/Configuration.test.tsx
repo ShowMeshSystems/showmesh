@@ -81,8 +81,9 @@ const activeConfig = {
   createdByPrincipalId: 'p-1',
   createdByPrincipalName: 'admin-1',
   source: 'api',
-  restartRequired: true,
-  restartRequiredReason: 'this coordinator does not hot-reload configuration; restart to apply',
+  restartRequired: false,
+  restartRequiredReason:
+    'this change is already in effect: command dispatch resolves the endpoint list per request, and the collector set follows this configuration within about ten seconds. No restart is needed.',
 }
 
 const emptyRevisions = { serverTime: '2026-08-12T00:00:00Z', kind: 'fpp.endpoints', revisions: [] }
@@ -152,7 +153,7 @@ describe('Configuration', () => {
     await waitFor(() => expect(getFPPEndpointsConfig).toHaveBeenCalled())
     expect(await screen.findByDisplayValue('player-01')).toBeInTheDocument()
     expect(screen.getByDisplayValue('http://10.0.1.20')).toBeInTheDocument()
-    expect(screen.getByText(/does not hot-reload configuration/i)).toBeInTheDocument()
+    expect(screen.getByText(/already in effect/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /save configuration/i })).toBeEnabled()
   })
 
