@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-08-14
 
-Narrows [ADR-009](ADR-009-storage-and-config.md)'s revision model with a delivery requirement, and closes the gap [STEP-9-SPEC](../build/STEP-9-SPEC.md) §5.6 described but did not have.
+Narrows [ADR-009](ADR-009-sqlite-configuration-storage.md)'s revision model with a delivery requirement, and closes the gap [STEP-9-SPEC](../build/STEP-9-SPEC.md) §5.6 described but did not have.
 
 Originally issued as ADR-034 on the `step-9-wave-3` branch, and renumbered on 2026-08-15 when that branch merged, alongside [ADR-035](ADR-035-a-run-always-runs-every-step.md) whose number collided with Track D's show mode record. Nothing about this record's content changed.
 
@@ -41,7 +41,7 @@ Removal does not depend on this interval at all. Dispatch is live, so a removed 
 
 A transient store error must not empty the fleet. An empty endpoint list is indistinguishable, to everything downstream, from an operator having deliberately removed every endpoint, so manufacturing one on a failed read would turn a database hiccup into a fleet-wide outage that looks like a deliberate change. The last successfully read list is returned and the failure is logged.
 
-This is [ADR-011](ADR-011-context-aware-health.md)'s rule in a fifth subsystem: absence of evidence is not evidence of absence.
+This is [ADR-011](ADR-011-context-aware-observability.md)'s rule in a fifth subsystem: absence of evidence is not evidence of absence.
 
 ### 5. Removing an endpoint deletes none of its observations
 

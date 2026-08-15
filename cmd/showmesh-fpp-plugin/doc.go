@@ -78,6 +78,16 @@
 // exactly 0600 is this program's own defence against a defect that would
 // otherwise be invisible until read off the host or the broker.
 //
+// # Where the packaging lives
+//
+// This directory holds the plugin's Go source only. Its FPP packaging —
+// pluginInfo.json, the command definitions, and the install, upgrade,
+// uninstall and preStart scripts — lives in a separate repository whose
+// long-term home is its own public repository under ShowMeshSystems
+// (owner decision, 2026-08-15; not created yet). Release artifacts stay
+// unpublished until the first real-host install, so an install points
+// SHOWMESH_PLUGIN_ARTIFACT_BASE_URL at a bench path until then.
+//
 // # What this program does NOT prove
 //
 // This program is developed and tested against a bench FPP instance, never

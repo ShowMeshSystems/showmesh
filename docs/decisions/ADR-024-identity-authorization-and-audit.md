@@ -881,6 +881,18 @@ than one that is visibly incomplete.
   RES-015 on the critical path of the step that discharges this decision rather
   than beside it.
 
+  **DISCHARGED 2026-08-15, on evidence from Step 9's acceptance run of
+  2026-08-14** (recorded in the dated BUILD-LOG entry for that day; merged to
+  `main` on 2026-08-15). Acceptance criteria 8 and 9 both passed: the FPP
+  plugin's local status record distinguishes four classes rather than
+  collapsing them, so a `401`, a `403`, a transport failure, and a successful
+  call are each separable in evidence on the FPP host itself; and its failure
+  buffer survives a `404` and a `409` and flushes into coalesced events on the
+  next `2xx`. Both detections live in ShowMesh-authored code on the FPP host,
+  which is what this paragraph said they would have to. **Verified against the
+  bench `fppd` container and not on real show hardware**, per the standing
+  owner decision that real-host install stays deferred, so RES-015 stays L1.
+
   The generalizable shape is worth stating, because it is the third variant of
   one defect this project keeps meeting. This decision exists because the first
   draft made **an argument against the wrong failure direction**. This is an

@@ -56,6 +56,8 @@ The show has moved on and ShowMesh does not know how. Resuming would mean a coor
 
 ### 5. The audit exemption applies per step, and it is declared on the action
 
+> **SUPERSEDED, 2026-08-14, by [ADR-035](ADR-035-a-run-always-runs-every-step.md) decision 1.** There is no audit exemption inside a macro run any more, because there is no audit refusal inside one to be exempt from: every step dispatches whatever its safety class, and attribution is downgraded on the step and raised onto the run. The acceptance run measured what this section actually produced, which was a macro of `[stopPlaylist, startPlaylist]` refused in its entirety at submission with a `503`, dropping the stop. **The per-step reasoning below is still right about the hazard it names** (a stop step must never launder an unaccountable start) and is preserved for it; what changed is that the answer is now "downgrade the attribution", never "withhold the command". The banner at the top of this record covers the same supersession's other half, the `onFailure` default.
+
 [ADR-024](ADR-024-identity-authorization-and-audit.md) decision 11 says blackout, stop and power-off are never refused for want of an audit write, because every other degradation in this architecture points at the show continuing while an unqualified audit gate points at the operator being unable to stop it.
 
 **A step's own action decides whether that step is exempt.** A refused non-exempt step fails and aborts the run under decision 2, with a reason. An exempt step dispatches with degraded attribution, recorded on the step and raised onto the run.

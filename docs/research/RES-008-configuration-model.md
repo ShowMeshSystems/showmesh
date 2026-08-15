@@ -30,6 +30,8 @@ This re-run was performed because this record's own closing instruction requires
 
 **Fact.** `internal/coordinator/store/migrations.go` defines six forward-only migrations applied in one transaction, with downgrade refused (`ErrSchemaTooNew`). Seventeen tables exist through schema v6. The v5 set is unchanged and remains observed state, history, or identity; **schema v6 added the first six tables in this project that are none of those things.**
 
+**Schema v7 post-dates this survey, and reading it does not invalidate anything above (noted 2026-08-15, when Step 9 merged to `main`).** v7 adds the macro run history, which is *history* in the same sense the v5 set already was: its rows are written as a run progresses and are never the configuration a run executes from, which stays in the v6 configuration tables this section surveyed. The boundary this record exists to decide is therefore untouched. Recorded as a note rather than a re-run, because nothing a re-run would examine has moved.
+
 | Table | Class | Schema |
 |---|---|---|
 | `nodes`, `node_lwt`, `node_health` | Observed. Populated from agent hellos, Last Will, and heartbeats. | v1–v2 |
