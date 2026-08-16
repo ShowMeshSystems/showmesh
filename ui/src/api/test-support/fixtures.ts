@@ -11,6 +11,7 @@ type Evidence = components['schemas']['Evidence']
 type Node = components['schemas']['Node']
 type NodeDeclaration = components['schemas']['NodeDeclaration']
 type FPPInstance = components['schemas']['FPPInstance']
+type ResolumeInstance = components['schemas']['ResolumeInstance']
 type Snapshot = components['schemas']['Snapshot']
 type EventsResponse = components['schemas']['EventsResponse']
 type Event = components['schemas']['Event']
@@ -92,6 +93,16 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
     observations: [],
     lastPollAt: NOW,
     lastPollError: null,
+    ...overrides,
+  }
+}
+
+export function makeResolumeInstance(instanceId: string, overrides: Partial<ResolumeInstance> = {}): ResolumeInstance {
+  return {
+    instanceId,
+    health: 'healthy',
+    observations: [],
+    composition: null,
     ...overrides,
   }
 }

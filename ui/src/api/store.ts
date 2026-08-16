@@ -56,7 +56,13 @@
  * observations within an FPP instance that remains present, never of the
  * instance itself (ADR-023's own scoping of that field).
  */
-import { ApiClient, FPP_COMMAND_REQUEST_TIMEOUT_MS, type FetchLike } from './client'
+import {
+  ApiClient,
+  FPP_COMMAND_REQUEST_TIMEOUT_MS,
+  RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
+  RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
+  type FetchLike,
+} from './client'
 import { uploadFileWithProgress, type UploadProgress } from './resolumeCompositionUpload'
 import { computeBackoffMs, DEFAULT_BACKOFF, type BackoffConfig } from './backoff'
 import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
@@ -70,6 +76,7 @@ import {
   type FPPCommandResult,
   type FPPInstance,
   type Model,
+  type ResolumeInstance,
 } from './domain'
 import { IncompatibleVersionError, UnauthorizedError, isAbortError } from './errors'
 import { SSEParser, type SSEFrame } from './sse'
@@ -112,6 +119,15 @@ type SchemaMacroRunSummary = components['schemas']['MacroRunSummary']
 // Track D seam D-2a (ADR-032).
 type SchemaResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
 type SchemaResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
+// Track D seam D-4: Resolume as an observability resource (seam E) and
+// the seven-action vocabulary (D-3/seam B).
+type SchemaResolumeInstance = components['schemas']['ResolumeInstance']
+type SchemaResolumeInstancesResponse = components['schemas']['ResolumeInstancesResponse']
+type SchemaResolumeInstanceResponse = components['schemas']['ResolumeInstanceResponse']
+type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
+type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
+type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
+type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -138,6 +154,16 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * never caller-supplied — see that method's own doc comment).
  */
 type FPPCommandDispatchArgs = DistributiveOmit<SchemaFPPCommandRequest, 'idempotencyKey'>
+
+/**
+ * Every variant of [SchemaResolumeActionRequest] MINUS `idempotencyKey` —
+ * the Resolume sibling of [FPPCommandDispatchArgs], for the identical
+ * reason: [ApiStore.dispatchResolumeAction] mints the key itself, and the
+ * distribution keeps this a real discriminated union on `action` rather
+ * than collapsing every variant's own `params` shape to their common
+ * subset.
+ */
+type ResolumeActionDispatchArgs = DistributiveOmit<SchemaResolumeActionRequest, 'idempotencyKey'>
 
 /**
  * UNMEASURED SHOWMESH HYPOTHESIS: how many events the in-browser model
@@ -553,7 +579,15 @@ export class ApiStore {
     }
   }
 
-  /** `POST /api/v1/resolume/recovery/restore` (Track D seam D-3a). Requires resolume:action. */
+  /**
+   * `POST /api/v1/resolume/recovery/restore` (Track D seam D-3a). Requires
+   * resolume:action. A restore can attempt up to 30 sequential per-layer
+   * dispatches before answering (client.ts's own doc comment on
+   * [RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS]) — this uses that
+   * budget rather than the instance-wide default, matching D-4's own rule
+   * that a client timeout is sized from the server's bound, never picked
+   * independently (build contract §3).
+   */
   async restoreResolumeRecovery(): Promise<SchemaResolumeRecoveryRestoreResponse> {
     const controller = this.beginSideCall()
     try {
@@ -561,10 +595,134 @@ export class ApiStore {
         '/resolume/recovery/restore',
         undefined,
         controller.signal,
+        RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
       )
     } finally {
       this.endSideCall(controller)
     }
+  }
+
+  // -- Track D seam D-4: Resolume as an observability resource (seam E)
+  // and the seven-action vocabulary (D-3/seam B) --------------------------
+  //
+  // listResolumeInstances/getResolumeInstance/listResolumeActions are
+  // plain side-calls (never touch `this.model`), matching every open-read
+  // pass-through above. `model.resolume` itself is populated from the
+  // snapshot/`resolume.changed` stream, not from these — the Resolume view
+  // calls listResolumeInstances directly only where it wants a fetch
+  // independent of the live model (none of D-4's own views do; it is
+  // exposed because ADR-014 requires the API surface itself to stay
+  // reachable with no UI, and this store is the one place that surface is
+  // wrapped for the browser).
+
+  /** `GET /api/v1/resolume/instances`. Open read (`observation:read` under closed reads); never throws on 401/403 when reads are open. */
+  async listResolumeInstances(): Promise<SchemaResolumeInstancesResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeInstancesResponse>('/resolume/instances', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/resolume/instances/{instanceId}`. Throws (404) when no such instance is configured. */
+  async getResolumeInstance(instanceId: string): Promise<SchemaResolumeInstanceResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeInstanceResponse>(
+        `/resolume/instances/${encodeURIComponent(instanceId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/resolume/actions`. Never gated by any scope — static capability metadata, identical across every coordinator running this software version. */
+  async listResolumeActions(): Promise<SchemaResolumeActionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeActionsResponse>('/resolume/actions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/resolume/actions` (D-3/seam B, ADR-024, ADR-037) — the
+   * Resolume sibling of [dispatchFPPCommand]. Mints a fresh idempotency
+   * key per call via `randomUUIDv4()`, exactly like every other command
+   * dispatch in this store, never caller-supplied. Uses
+   * RESOLUME_ACTION_REQUEST_TIMEOUT_MS, not the instance-wide default —
+   * this coordinator can hold the response open for its own ~55s write
+   * deadline before answering (client.ts's own doc comment), and a
+   * shorter client budget would make the coordinator's own honest
+   * "unconfirmed" outcome unreachable, exactly the Step 7 seam C defect
+   * this project already paid for once on the FPP side.
+   *
+   * Returns `result` as-is — including its own five-word `outcome`, never
+   * inferred from this call's own success (ADR-029: "an action whose
+   * effect cannot be observed reports as unconfirmable ... never as
+   * success"). Every caller renders it honestly through
+   * ResolumeActionOutcome, never a bare "done" on a 200 alone.
+   */
+  private async dispatchResolumeAction(request: ResolumeActionDispatchArgs): Promise<SchemaResolumeActionResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaResolumeActionRequest = {
+        ...request,
+        idempotencyKey: randomUUIDv4(),
+      } as SchemaResolumeActionRequest
+      const resp = await this.client.postJson<SchemaResolumeActionResponse>(
+        '/resolume/actions',
+        body,
+        controller.signal,
+        RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `{"action":"launchClip","params":{clip,deck?,layer?,persistent?}}` — see [dispatchResolumeAction]. */
+  async launchResolumeClip(params: {
+    clip: string
+    deck?: string
+    layer?: string
+    persistent?: boolean
+  }): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'launchClip', params })
+  }
+
+  /** `{"action":"clearLayer","params":{layer}}` — see [dispatchResolumeAction]. */
+  async clearResolumeLayer(layer: string): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'clearLayer', params: { layer } })
+  }
+
+  /** `{"action":"launchColumn","params":{column,deck}}` — see [dispatchResolumeAction]. */
+  async launchResolumeColumn(column: string, deck: string): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'launchColumn', params: { column, deck } })
+  }
+
+  /** `{"action":"selectDeck","params":{deck}}` — see [dispatchResolumeAction]. */
+  async selectResolumeDeck(deck: string): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'selectDeck', params: { deck } })
+  }
+
+  /** `{"action":"blackout"}`, no params — see [dispatchResolumeAction]. */
+  async blackoutResolume(): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'blackout' })
+  }
+
+  /** `{"action":"setLayerBypass","params":{layer,bypassed}}` — see [dispatchResolumeAction]. */
+  async setResolumeLayerBypass(layer: string, bypassed: boolean): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'setLayerBypass', params: { layer, bypassed } })
+  }
+
+  /** `{"action":"setLayerMaster","params":{layer,master}}` — see [dispatchResolumeAction]. */
+  async setResolumeLayerMaster(layer: string, master: number): Promise<SchemaResolumeActionResult> {
+    return this.dispatchResolumeAction({ action: 'setLayerMaster', params: { layer, master } })
   }
 
   // -- Track D seam D-2a (ADR-032): the Resolume composition upload
@@ -1408,6 +1566,17 @@ export class ApiStore {
         this.applyEventRecorded(payload.event, payload.serverTime)
         return
       }
+      case 'resolume.changed': {
+        // Track D seam D-4 (build contract §1.7): mirrors `fpp.changed`
+        // exactly — this event carries the instance's COMPLETE current
+        // representation (every observation, all 114 of them, per §4's own
+        // 37,343-byte measurement), never a delta. There is no
+        // `resolume.observations.changed` variant.
+        const payload = tryParse<{ serverTime: string; instance: SchemaResolumeInstance }>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyResolumeChanged(payload.instance, payload.serverTime)
+        return
+      }
       case 'macroRun.changed': {
         // Unlike every case above, this frame's own schema (MacroRunChangedEvent)
         // carries serverTime as one of its OWN top-level fields rather than
@@ -1510,6 +1679,11 @@ export class ApiStore {
       // bounded recently-finished tail), not a delta this store needs to
       // merge.
       macroRuns: snapshot.macroRuns,
+      // Track D seam D-4 (build contract §1.7): a plain wholesale replace,
+      // exactly like `fpp` above — `Snapshot.resolume` is this
+      // coordinator's own authoritative current list, never a delta this
+      // store needs to merge.
+      resolume: snapshot.resolume,
     })
   }
 
@@ -1646,6 +1820,27 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       fpp,
+    })
+  }
+
+  /**
+   * `resolume.changed` carries a Resolume instance's COMPLETE current
+   * representation, matching [applyFppChanged]'s exact same
+   * whole-object-replace posture and for the identical reason (no
+   * `resolume.observations.changed` delta variant exists — build contract
+   * §4).
+   */
+  private applyResolumeChanged(instance: SchemaResolumeInstance, serverTime: string): void {
+    const idx = this.model.resolume.findIndex((i) => i.instanceId === instance.instanceId)
+    const resolume: ResolumeInstance[] =
+      idx === -1 ? [...this.model.resolume, instance] : replaceAt(this.model.resolume, idx, instance)
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime,
+      clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      resolume,
     })
   }
 

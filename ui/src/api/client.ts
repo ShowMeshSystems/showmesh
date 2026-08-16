@@ -117,6 +117,52 @@ export const MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS =
   SERVER_FPP_COMMAND_CONFIRM_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
+ * Track D seam D-4's own request budget for `POST /resolume/actions`, the
+ * Resolume sibling of [FPP_COMMAND_REQUEST_TIMEOUT_MS] above and for the
+ * identical reason: this coordinator can hold the response open for its
+ * own write deadline (`resolumeActionHTTPWriteDeadline`,
+ * internal/coordinator/api/resolumeaction.go — 55s, composed from a 40s
+ * max dispatch duration plus two 5s bookkeeping rounds plus a 5s margin)
+ * before answering. 80s matches `cmd/showmeshctl`'s own independently
+ * chosen `minResolumeActionClientTimeout` (cmd_resolume_action.go) —
+ * duplicated by value, not shared, for the same module-boundary reason
+ * [FPP_COMMAND_REQUEST_TIMEOUT_MS]'s own doc comment gives.
+ */
+const SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS = 55_000 // internal/coordinator/api/resolumeaction.go resolumeActionHTTPWriteDeadline
+const RESOLUME_ACTION_CLIENT_MARGIN_MS = 25_000
+export const RESOLUME_ACTION_REQUEST_TIMEOUT_MS =
+  SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS + RESOLUME_ACTION_CLIENT_MARGIN_MS
+/** Reconciliation target for [RESOLUME_ACTION_REQUEST_TIMEOUT_MS] — see [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS]'s identical role. */
+export const MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS = SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS
+
+/**
+ * The manual restore (`POST /resolume/recovery/restore`) can dispatch up
+ * to `resolumeRecoveryMaxLayers` (30, internal/coordinator/api/resolumerecovery.go)
+ * sequential per-layer actions before answering, so its own write deadline
+ * scales with layer count — `resolumeRecoveryRestoreDeadline`, that same
+ * file. This client cannot know the composition's layer count before
+ * asking, so — matching cmd/showmeshctl's own `minResolumeRecoveryRestoreClientTimeout`
+ * (cmd_resolume_recovery.go), duplicated by value for the identical
+ * module-boundary reason — this budgets for the worst case (30 layers)
+ * rather than a guess.
+ */
+const RESOLUME_RECOVERY_MAX_LAYERS = 30
+const RESOLUME_ACTION_SINGLE_DISPATCH_CEILING_MS = 40_000
+const RESOLUME_RECOVERY_BOOKKEEPING_BUDGET_MS = 5_000
+const RESOLUME_RECOVERY_DEADLINE_MARGIN_MS = 5_000
+const RESOLUME_RECOVERY_CLIENT_MARGIN_MS = 30_000
+export const RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS =
+  RESOLUME_RECOVERY_MAX_LAYERS * RESOLUME_ACTION_SINGLE_DISPATCH_CEILING_MS +
+  2 * RESOLUME_RECOVERY_BOOKKEEPING_BUDGET_MS +
+  RESOLUME_RECOVERY_DEADLINE_MARGIN_MS +
+  RESOLUME_RECOVERY_CLIENT_MARGIN_MS
+/** Reconciliation target for [RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS]. */
+export const MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS =
+  RESOLUME_RECOVERY_MAX_LAYERS * RESOLUME_ACTION_SINGLE_DISPATCH_CEILING_MS +
+  2 * RESOLUME_RECOVERY_BOOKKEEPING_BUDGET_MS +
+  RESOLUME_RECOVERY_DEADLINE_MARGIN_MS
+
+/**
  * Thin transport layer: builds the request (version header, bearer
  * token if one is stored), and turns a non-2xx response into a typed
  * error by dispatching on the RFC 9457 problem document's `type` field
