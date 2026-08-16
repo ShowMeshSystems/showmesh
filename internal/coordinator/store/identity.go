@@ -52,16 +52,23 @@ var ErrPrincipalNotFound = errors.New("store: principal not found")
 // already in use by another principal (principals.name UNIQUE).
 var ErrPrincipalNameTaken = errors.New("store: principal name already in use")
 
-// CreatePrincipal inserts a new principal. rec.ID, rec.Name, rec.Kind, and
-// rec.Role must already be set by the caller (the identity package
-// generates IDs; this package invents nothing an audit trail would later
-// need to explain). rec.CreatedAt/UpdatedAt are ignored on input and
-// stamped from this Store's own clock, matching [Store.AppendEvent]'s
-// ev.RecordedAt convention. rec.Generation is forced to 0 regardless of
-// input: a brand-new principal has never had a session revoked out from
-// under it, so there is no history to start counting from above zero.
-func (s *Store) CreatePrincipal(ctx context.Context, rec PrincipalRecord) (PrincipalRecord, error) {
-	guardNotInTx(ctx, "Store.CreatePrincipal")
+// ReservedPrincipalID is Track D seam D-3a's built-in automatic-recovery
+// principal id and name (identity.ReservedResolumeRecoveryPrincipalID
+// duplicated by VALUE, not by import: this package must not import
+// identity — see this file's own top comment). A mismatch between the two
+// definitions would silently let a user-created principal claim the name
+// this package's own guards are built to protect, so both are named
+// explicitly here rather than left to be rediscovered by testing it.
+const ReservedPrincipalID = "system-resolume-recovery"
+
+// ErrReservedPrincipal is returned by [Store.CreatePrincipal],
+// [Store.SetPrincipalDisabled], [Store.SetPrincipalRole], and
+// [Store.SetPrincipalPasswordHash] for any attempt to create, disable,
+// re-role, or re-credential [ReservedPrincipalID] through the ordinary
+// path. [Store.EnsureReservedPrincipal] is the one path that may create it.
+var ErrReservedPrincipal = errors.New("store: this is the reserved built-in Resolume recovery principal and cannot be created, disabled, re-roled, or re-credentialed through this path")
+
+func insertPrincipal(ctx context.Context, s *Store, rec PrincipalRecord) (PrincipalRecord, error) {
 	now := s.now()
 	rec.CreatedAt = now
 	rec.UpdatedAt = now
@@ -81,6 +88,58 @@ func (s *Store) CreatePrincipal(ctx context.Context, rec PrincipalRecord) (Princ
 		return PrincipalRecord{}, fmt.Errorf("store: create principal %q: %w", rec.Name, err)
 	}
 	return rec, nil
+}
+
+// CreatePrincipal inserts a new principal. rec.ID, rec.Name, rec.Kind, and
+// rec.Role must already be set by the caller (the identity package
+// generates IDs; this package invents nothing an audit trail would later
+// need to explain). rec.CreatedAt/UpdatedAt are ignored on input and
+// stamped from this Store's own clock, matching [Store.AppendEvent]'s
+// ev.RecordedAt convention. rec.Generation is forced to 0 regardless of
+// input: a brand-new principal has never had a session revoked out from
+// under it, so there is no history to start counting from above zero.
+//
+// Refuses [ErrReservedPrincipal] when rec.ID or rec.Name equals
+// [ReservedPrincipalID] — this is the ordinary, user-facing creation path
+// (CLI create-principal, identity.Service.CreatePrincipal); only
+// [Store.EnsureReservedPrincipal] may create that principal.
+func (s *Store) CreatePrincipal(ctx context.Context, rec PrincipalRecord) (PrincipalRecord, error) {
+	guardNotInTx(ctx, "Store.CreatePrincipal")
+	if rec.ID == ReservedPrincipalID || rec.Name == ReservedPrincipalID {
+		return PrincipalRecord{}, ErrReservedPrincipal
+	}
+	return insertPrincipal(ctx, s, rec)
+}
+
+// EnsureReservedPrincipal idempotently creates [ReservedPrincipalID] if it
+// does not already exist — the one path in this package permitted to
+// create it, called only at coordinator startup (identity.Service's own
+// EnsureReservedRecoveryPrincipal). created reports whether this call
+// actually inserted the row (false when it already existed).
+func (s *Store) EnsureReservedPrincipal(ctx context.Context, rec PrincipalRecord) (result PrincipalRecord, created bool, err error) {
+	guardNotInTx(ctx, "Store.EnsureReservedPrincipal")
+	existing, err := s.GetPrincipal(ctx, rec.ID)
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, ErrPrincipalNotFound) {
+		return PrincipalRecord{}, false, err
+	}
+	inserted, err := insertPrincipal(ctx, s, rec)
+	if err != nil {
+		if errors.Is(err, ErrPrincipalNameTaken) {
+			// Raced with a concurrent EnsureReservedPrincipal call (or, in
+			// principle, the same startup path invoked twice): the row now
+			// exists, created by whichever caller won.
+			existing, gerr := s.GetPrincipal(ctx, rec.ID)
+			if gerr != nil {
+				return PrincipalRecord{}, false, gerr
+			}
+			return existing, false, nil
+		}
+		return PrincipalRecord{}, false, err
+	}
+	return inserted, true, nil
 }
 
 const principalColumns = `id, name, kind, role, password_hash, disabled, generation, created_at, updated_at`
@@ -163,13 +222,17 @@ func (s *Store) ListPrincipals(ctx context.Context) ([]PrincipalRecord, error) {
 	return out, nil
 }
 
-// HasAnyPrincipal reports whether at least one principal row exists —
-// first-run state per ADR-024 decision 9, which [identity.Service.HasAnyPrincipal]
-// exposes directly.
+// HasAnyPrincipal reports whether at least one principal a human ever
+// created exists — first-run state per ADR-024 decision 9, which
+// [identity.Service.HasAnyPrincipal] exposes directly. [ReservedPrincipalID]
+// is excluded: it is created by [Store.EnsureReservedPrincipal] at every
+// startup regardless of whether an operator has ever claimed this
+// deployment, so counting it here would make bootstrap a permanent no-op on
+// any coordinator running Track D seam D-3a's wiring.
 func (s *Store) HasAnyPrincipal(ctx context.Context) (bool, error) {
 	guardNotInTx(ctx, "Store.HasAnyPrincipal")
 	var exists int64
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM principals)`).Scan(&exists); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM principals WHERE id != ?)`, ReservedPrincipalID).Scan(&exists); err != nil {
 		return false, fmt.Errorf("store: check any principal exists: %w", err)
 	}
 	return exists != 0, nil
@@ -183,6 +246,9 @@ func (s *Store) HasAnyPrincipal(ctx context.Context) (bool, error) {
 // generation value.
 func (s *Store) SetPrincipalPasswordHash(ctx context.Context, principalID, passwordHash string) (uint64, error) {
 	guardNotInTx(ctx, "Store.SetPrincipalPasswordHash")
+	if principalID == ReservedPrincipalID {
+		return 0, ErrReservedPrincipal
+	}
 	return s.bumpPrincipalGenerationTx(ctx, principalID, func(tx *sql.Tx, now string) error {
 		_, err := tx.ExecContext(ctx, `UPDATE principals SET password_hash = ? WHERE id = ?`, passwordHash, principalID)
 		return err
@@ -197,6 +263,9 @@ func (s *Store) SetPrincipalPasswordHash(ctx context.Context, principalID, passw
 // back on.
 func (s *Store) SetPrincipalDisabled(ctx context.Context, principalID string, disabled bool) (uint64, error) {
 	guardNotInTx(ctx, "Store.SetPrincipalDisabled")
+	if principalID == ReservedPrincipalID {
+		return 0, ErrReservedPrincipal
+	}
 	if !disabled {
 		now := timeToDB(s.now())
 		_, err := s.db.ExecContext(ctx, `UPDATE principals SET disabled = 0, updated_at = ? WHERE id = ?`, now, principalID)
@@ -232,6 +301,9 @@ func (s *Store) SetPrincipalDisabled(ctx context.Context, principalID string, di
 // from a cookie a client is still holding.
 func (s *Store) SetPrincipalRole(ctx context.Context, principalID, role string) (uint64, error) {
 	guardNotInTx(ctx, "Store.SetPrincipalRole")
+	if principalID == ReservedPrincipalID {
+		return 0, ErrReservedPrincipal
+	}
 	return s.bumpPrincipalGenerationTx(ctx, principalID, func(tx *sql.Tx, now string) error {
 		_, err := tx.ExecContext(ctx, `UPDATE principals SET role = ? WHERE id = ?`, role, principalID)
 		return err
@@ -324,6 +396,9 @@ type TokenRecord struct {
 // generation at creation time regardless of what a caller guessed it to be.
 func (s *Store) CreateToken(ctx context.Context, rec TokenRecord) (TokenRecord, error) {
 	guardNotInTx(ctx, "Store.CreateToken")
+	if rec.PrincipalID == ReservedPrincipalID {
+		return TokenRecord{}, ErrReservedPrincipal
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TokenRecord{}, fmt.Errorf("store: begin create token for principal %q: %w", rec.PrincipalID, err)
@@ -828,6 +903,9 @@ func (t *Tx) ClaimBootstrapAndCreatePrincipal(ctx context.Context, principal Pri
 // exists to close is the race between the caller's GetBootstrap check and
 // this write, not to be a second, weaker copy of that check.
 func claimBootstrapAndCreatePrincipal(ctx context.Context, q querier, now time.Time, principal PrincipalRecord) (PrincipalRecord, error) {
+	if principal.ID == ReservedPrincipalID || principal.Name == ReservedPrincipalID {
+		return PrincipalRecord{}, ErrReservedPrincipal
+	}
 	res, err := q.ExecContext(ctx, `UPDATE bootstrap SET claimed_at = ? WHERE id = 1 AND claimed_at IS NULL`, timeToDB(now))
 	if err != nil {
 		return PrincipalRecord{}, fmt.Errorf("store: claim bootstrap: %w", err)

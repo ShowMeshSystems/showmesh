@@ -1,22 +1,33 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ShowActionDetail } from './ShowActionDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import {
+  makeModel,
+  makeResolumeCompositionClip,
+  makeResolumeCompositionDeck,
+  makeResolumeCompositionLayer,
+  makeResolumeCompositionResponse,
+} from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
+import { ForbiddenError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { putShowAction } = vi.hoisted(() => ({ putShowAction: vi.fn() }))
+const { putShowAction, getResolumeComposition } = vi.hoisted(() => ({
+  putShowAction: vi.fn(),
+  getResolumeComposition: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putShowAction }
+  return { ...actual, putShowAction, getResolumeComposition }
 })
 
 afterEach(() => {
   cleanup()
   putShowAction.mockReset()
+  getResolumeComposition.mockReset()
 })
 
 function renderNewAction(model: Model) {
@@ -174,5 +185,151 @@ describe('ShowActionDetail (new action authoring)', () => {
         }),
       }),
     )
+  })
+})
+
+describe('ShowActionDetail (Resolume authoring)', () => {
+  // Review finding 7: useResolumeComposition('show-action-detail') used
+  // to fire unconditionally on mount, issuing a config:write-gated
+  // request for a form that might never touch Resolume at all.
+  it('does not fetch the stored composition until the resolume integration is selected', async () => {
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'launch-snow')
+    expect(getResolumeComposition).not.toHaveBeenCalled()
+
+    getResolumeComposition.mockResolvedValue(makeResolumeCompositionResponse())
+    await user.selectOptions(screen.getByLabelText('Integration'), 'resolume')
+
+    await waitFor(() => expect(getResolumeComposition).toHaveBeenCalledTimes(1))
+  })
+
+  // Review finding 7: a non-admin (or any 403) used to see four empty
+  // "Choose one" dropdowns and no explanation at all — blank read as fine.
+  it('states the reason instead of leaving the pickers blank when the composition read is forbidden', async () => {
+    getResolumeComposition.mockRejectedValue(new ForbiddenError('this principal’s role does not include "config:write"'))
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.selectOptions(screen.getByLabelText('Integration'), 'resolume')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/config:write/)
+    expect(alert.className).toContain('panel--warning')
+  })
+
+  // Review finding 6: the clip picker disambiguates "Snow (on Layer B)"
+  // and buildPayload used to discard the disambiguation, saving a bare
+  // `clip: "Snow"` with no `layer` — ambiguous again the moment the macro
+  // runs. ResolumeActionController.tsx already got this right; this form
+  // must agree.
+  //
+  // Review finding B4: the picked clip used to be recovered by re-matching
+  // `form.resolumeClip` (the NAME) against `resolumeClips`, which always
+  // resolves to whichever of the two same-named clips comes first — so
+  // picking the SECOND "Snow" option here still saved the FIRST clip's
+  // own layer. Two explicitly named layers (rather than relying on one
+  // clip falling back to a generated "layer 2" label) make the assertion
+  // below unambiguous: `allClipOptions[1]` is the clip on "Layer B", and
+  // `ref.layer` must name it exactly, never "Layer A".
+  it('saves the disambiguating layer when the picked clip name is shared by another clip on this deck', async () => {
+    getResolumeComposition.mockResolvedValue(
+      makeResolumeCompositionResponse({
+        decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main', nameGenerated: false })],
+        layers: [
+          makeResolumeCompositionLayer({ id: 'layer-1', index: 0, name: 'Layer A', nameGenerated: false }),
+          makeResolumeCompositionLayer({ id: 'layer-2', index: 1, name: 'Layer B', nameGenerated: false }),
+        ],
+        clips: [
+          makeResolumeCompositionClip({ id: 'clip-1', name: 'Snow', deckId: 'deck-1', layerIndex: 0 }),
+          makeResolumeCompositionClip({ id: 'clip-2', name: 'Snow', deckId: 'deck-1', layerIndex: 1 }),
+        ],
+      }),
+    )
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-16T00:00:00Z',
+      kind: 'show.action',
+      id: 'launch-snow',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Launch snow',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'resolume', action: 'launchClip', ref: { clip: 'Snow', deck: 'Main', layer: 'Layer 2' } },
+      },
+      updatedAt: '2026-08-16T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'launch-snow')
+    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Launch snow')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.selectOptions(screen.getByLabelText('Integration'), 'resolume')
+    await waitFor(() => expect(getResolumeComposition).toHaveBeenCalled())
+
+    await user.selectOptions(screen.getByLabelText('Action'), 'launchClip')
+    await user.selectOptions(screen.getByLabelText('Deck'), screen.getByRole('option', { name: /^Main/ }))
+    // Two SEPARATE "Snow (on ...)" options must exist and be distinguishable
+    // before either is picked (acceptance criterion 7).
+    const allClipOptions = await waitFor(() => {
+      const options = screen.getAllByRole('option', { name: /^Snow \(on/i })
+      expect(options).toHaveLength(2)
+      return options
+    })
+    expect(new Set(allClipOptions.map((o) => o.textContent)).size).toBe(2)
+    await user.selectOptions(screen.getByLabelText('Clip'), allClipOptions[1] as HTMLElement)
+
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    await waitFor(() => expect(putShowAction).toHaveBeenCalled())
+    const [, payload] = putShowAction.mock.calls[0] as [string, { target: { ref?: Record<string, unknown> } }]
+    expect(payload.target.ref?.clip).toBe('Snow')
+    // The SECOND option (allClipOptions[1]) was picked above — its own
+    // layer is "Layer B", never "Layer A" (the first duplicate's layer,
+    // which review finding B4's bug always saved regardless of which
+    // option was actually selected).
+    expect(payload.target.ref?.layer).toBe('Layer B')
+  })
+
+  // Review finding 8: an HTML <select> cannot distinguish two <option>s
+  // sharing a value, so the deck picker's own option value is now the
+  // deck's id — this proves picking the SECOND of two same-named decks
+  // actually scopes the clip list to that deck, not silently to the first.
+  it('scopes the clip list to the deck actually picked when two decks share a name', async () => {
+    getResolumeComposition.mockResolvedValue(
+      makeResolumeCompositionResponse({
+        decks: [
+          makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main', nameGenerated: false }),
+          makeResolumeCompositionDeck({ id: 'deck-2', name: 'Main', nameGenerated: false }),
+        ],
+        clips: [
+          makeResolumeCompositionClip({ id: 'clip-1', name: 'First Deck Clip', deckId: 'deck-1' }),
+          makeResolumeCompositionClip({ id: 'clip-2', name: 'Second Deck Clip', deckId: 'deck-2' }),
+        ],
+      }),
+    )
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.selectOptions(screen.getByLabelText('Integration'), 'resolume')
+    await waitFor(() => expect(getResolumeComposition).toHaveBeenCalled())
+    await user.selectOptions(screen.getByLabelText('Action'), 'launchClip')
+
+    const deckOptionsFound = screen.getAllByRole('option', { name: /^Main/ })
+    expect(deckOptionsFound).toHaveLength(2)
+    await user.selectOptions(screen.getByLabelText('Deck'), deckOptionsFound[1] as HTMLElement)
+
+    const clipSelect = screen.getByLabelText('Clip')
+    const clipTexts = Array.from(clipSelect.querySelectorAll('option'))
+      .map((o) => o.textContent ?? '')
+      .filter((t) => t !== 'Choose one')
+    expect(clipTexts).toEqual(['Second Deck Clip'])
   })
 })

@@ -169,6 +169,8 @@ Commands:
   assets manifest [--node <id>] [--require-ready]
                            what each node should hold for the active show,
                            versus what it actually holds (Track E seam E5)
+  resolume status [id]                 show the configured Resolume instance's health, loaded
+                                        composition, and every resolume.* observation
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

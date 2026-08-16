@@ -245,9 +245,11 @@ export interface paths {
          *       | `fpp.observations.changed` | `FPPObservationsChangedEvent` | `?deltas=1` connections only |
          *       | `event.recorded` | `EventRecordedEvent` | every connection |
          *       | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
+         *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
+         *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
-         *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for these six types, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
+         *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
          *
          *     **Delta frames are opt-in per connection (ADR-023).** A request to this exact path with no query string, or with any `deltas` value other than the literal `1`, gets precisely what this endpoint produced before `fpp.observations.changed` existed — byte for byte, with no `fpp.observations.changed` event ever appearing on that connection. This is what makes the addition additive rather than a silent break under ADR-020's own additive-only rule (contract section 6.2, "within a major version the contract is additive-only... clients must ignore unknown fields"): no existing client's behavior changes, and a client that has never heard of deltas cannot be affected by them.
          *
@@ -393,6 +395,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/resolume.recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The resolume.recovery auto-restore toggle's revision metadata (Track D seam D-3a)
+         * @description Requires `config:write`, mirroring `GET /config/fpp.endpoints`'s own always-sensitive posture. Unlike fpp.endpoints, "nothing has ever been written" is never a `404` here — the toggle has a well-defined default (enabled) — so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         */
+        get: operations["getResolumeRecoveryConfig"];
+        /**
+         * Write a new resolume.recovery auto-restore toggle revision (Track D seam D-3a)
+         * @description Requires `config:write` (admin only). The body's `autoRestoreEnabled` field is required and must be a JSON boolean, never absent and never null. No other top-level field is accepted. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putResolumeRecoveryConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/resolume.recovery/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * resolume.recovery revision history, newest first (Track D seam D-3a)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+         */
+        get: operations["getResolumeRecoveryConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/resolume/actions": {
         parameters: {
             query?: never;
@@ -413,6 +459,87 @@ export interface paths {
          *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition — see GET /resolume/actions' own `auditExempt` field.
          */
         post: operations["dispatchResolumeAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Arena crash-recovery record, toggle, and last restore (Track D seam D-3a)
+         * @description Never gated by any scope — the dashboard renders this with no session (ADR-024's reads-stay-open posture). autoRestoreEnabled is the current toggle value; autoRestoreConfigured is false when nothing has ever been written for it (the default is enabled). record is one row per layer in the current composition, every object reference a name (ADR-037), never an id. lastRestore is null until a restore has run.
+         */
+        get: operations["getResolumeRecovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/recovery/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually run the crash-recovery restore (Track D seam D-3a)
+         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check — an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
+         */
+        post: operations["restoreResolumeRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolume as a first-class observability resource
+         * @description Everything ShowMesh already holds for its configured Resolume instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its `resolume.*` observations and the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. No request to Resolume is ever made serving this route. Gated by `observation:read` — the same guard `GET /observations` uses, since this is telemetry, not configuration, unlike `GET /config/resolume/composition` (which uses `config:write`).
+         *     An unconfigured coordinator returns `200` with an empty `instances` array, never `null` and never a `404` — "nothing is configured" is a fact about the deployment, not an error.
+         */
+        get: operations["listResolumeInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/instances/{instanceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One Resolume instance
+         * @description Unlike the list route, no match here — including on an unconfigured coordinator — is the ordinary resource-not-found shape, matching `GET /fpp/{instanceId}`'s identical posture for a bare, single-resource GET.
+         */
+        get: operations["getResolumeInstance"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -607,266 +734,6 @@ export interface paths {
          * @description Requires `show:macro:run` OR `config:write`. A step's `command` member is never blank: `state` is "none" (no dispatched command at all), "retained" (the commands row still exists; `detail` carries it), or "not_retained" (retention has pruned the row; `id` is still named, per STEP-9-SPEC.md section 6.1).
          */
         get: operations["getMacroRun"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Enumerate show objects (Track E, ADR-027)
-         * @description Object ids with label (the show's own name), show (the show's own id — a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro — never toggled by `Options.CloseReads`.
-         */
-        get: operations["listShows"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One show object's active revision (Track E) */
-        get: operations["getShow"];
-        /**
-         * Write a new show revision (Track E, ADR-027 decision 2)
-         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" — the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent).
-         */
-        put: operations["putShow"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show/{id}/revisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** show revision history, newest first (Track E) */
-        get: operations["listShowRevisions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show.surface": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Enumerate show.surface objects (Track E, ADR-026)
-         * @description Object ids with label (the surface's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. Same read posture as GET /config/show.
-         */
-        get: operations["listShowSurfaces"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show.surface/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One show.surface object's active revision (Track E) */
-        get: operations["getShowSurface"];
-        /**
-         * Write a new show.surface revision (Track E, ADR-026)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node — this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent — support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule).
-         */
-        put: operations["putShowSurface"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show.surface/{id}/revisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** show.surface revision history, newest first (Track E) */
-        get: operations["listShowSurfaceRevisions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show.active": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * The active-show pointer (Track E, ADR-027 decision 3)
-         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/fpp.endpoints and GET /config/resolume/composition already answer for "nothing configured yet" — two configuration surfaces answering differently for the same condition is a thing an operator would have to learn twice.
-         */
-        get: operations["getShowActive"];
-        /**
-         * Activate a show (Track E, ADR-027 decision 3)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` object. The active show is configuration, revisioned and audited exactly like every other kind here, so that programming Christmas cannot accidentally break Halloween. This is a singleton: the underlying object id is a fixed constant, never derived from `show` or from any other configuration value, so activating a different show accumulates as a new revision of the SAME object rather than orphaning the previous history.
-         */
-        put: operations["putShowActive"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/show.active/revisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** show.active revision history, newest first (Track E) */
-        get: operations["listShowActiveRevisions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/assets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Enumerate asset metadata (Track E seam E3/E4, ADR-028)
-         * @description Metadata only — bytes never live in SQLite (ADR-028 decision 4). Optionally narrowed with `?show=`, `?sequence=`, and/or `?node=`. `?node=` returns node-TARGETED assets only, never show-wide ones — the manifest (a different, not-yet-built surface) is what answers "what should this node hold" by combining both; this is one question, never the other. Never gated by asset:write: reads stay open by default (ADR-024), matching every other Track E config kind's readAnyGuard(show:macro:run OR config:write) posture.
-         */
-        get: operations["listAssets"];
-        put?: never;
-        /**
-         * Upload one asset's bytes and register its metadata (Track E seam E3/E4, ADR-028)
-         * @description Requires `asset:write` (admin only). `multipart/form-data`: the `show`, `sequence`, `mediaType`, `targetKind`, and (for `targetKind: "node"`) `target` fields MUST arrive before the `file` part — a `file` part that arrives first is refused, naming that requirement, so every field is already known before this coordinator streams a single byte to its backend. The bytes are staged, hashed, and only THEN is the metadata row (plus its audit entry) written, in one transaction — an interrupted upload registers nothing (ADR-030).
-         *     `targetKind` is required with no default; `targetKind: "node"` requires a non-empty `target` naming a DECLARED node (`400` `asset-target-required` when it is missing). `show` must name an existing `show` object; `sequence` uses the same slug rule every other Track E object id uses; `mediaType` is one of `fseq`, `audio`, `media`.
-         *     Re-uploading IDENTICAL bytes for an identity that already exists is idempotent: `200` with the existing asset, no new row. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction — a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
-         */
-        post: operations["uploadAsset"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/assets/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One asset's metadata (Track E seam E3/E4) */
-        get: operations["getAsset"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/assets/{id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * One asset's bytes (Track E seam E3/E4)
-         * @description Gated by `node:read`, not the show:macro:run/config:write posture every other Track E route on this surface uses — this is the route an AGENT authenticates against to fetch its own bytes, and node:read is what an agent credential already holds. Supports `Range` (via the standard HTTP mechanism), so an interrupted transfer can resume. `ETag` is the asset's own content hash, quoted. Before serving, this coordinator compares the stored blob's actual on-disk size against the asset's own recorded size: on a mismatch it fails with `500` naming the asset rather than serving a truncated or corrupted body.
-         */
-        get: operations["getAssetContent"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/assets/manifest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Every declared node's asset readiness (Track E seam E5, ADR-028)
-         * @description "What should a node hold" (the active show's current assets) compared against "what does it actually hold" (its own inventory report), for every declared node, in declaration order. Computed identically to `GET /nodes/{nodeId}/assets`, one node at a time. Never gated by `asset:write`: reads stay open by default (ADR-024), matching every other Track E config-metadata read's `readAnyGuard(show:macro:run OR config:write)` posture. Absent evidence is stated, never omitted (ADR-020): no active show configured, a report that has never arrived, a report older than the staleness window, and a report that said it could not fully enumerate its own directory each render `state: "unknown"` with their own distinct `reason` — an `unknown` verdict never renders as `ready` or `not_ready`, and a stale report never renders as `not_ready` (a stale report is not evidence of absence).
-         */
-        get: operations["getAssetManifest"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/nodes/{nodeId}/assets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * One node's asset readiness (Track E seam E5, ADR-028)
-         * @description The same verdict `GET /assets/manifest` renders for this node alone. `404` when `nodeId` does not name a declared node — matching `GET /nodes/{nodeId}`'s identical posture, never `state: "unknown"` for a node this coordinator has never heard of at all.
-         */
-        get: operations["getNodeAssetManifest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1106,6 +973,31 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
+        /** @description Which show is loaded, from the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. Name only — owner ruling, 2026-08-16: this is an open read with no credential by default, the same class as an FPP playlist name. Revision and activatedAt are administrative provenance and stay on the gated GET /config/resolume/composition. */
+        ResolumeInstanceComposition: {
+            name: string;
+        };
+        /** @description One configured Resolume Arena instance's current representation. Mirrors FPPInstance's conventions: observations is never null, and composition is null before any composition has ever been uploaded. */
+        ResolumeInstance: {
+            instanceId: string;
+            /** @enum {string} */
+            health: "healthy" | "degraded" | "failed" | "unknown" | "suppressed";
+            /** @description Ordered by signal, ascending, and this ordering is guaranteed. */
+            observations: components["schemas"]["Evidence"][];
+            composition: components["schemas"]["ResolumeInstanceComposition"] | null;
+        };
+        ResolumeInstancesResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @description At most one element today (SHOWMESH_RESOLUME_ID). An unconfigured coordinator returns an empty array, never null. */
+            instances: components["schemas"]["ResolumeInstance"][];
+        };
+        /** @description See NodeResponse; the same rule applies identically here. */
+        ResolumeInstanceResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            instance: components["schemas"]["ResolumeInstance"];
+        };
         /**
          * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) — a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies — the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape — required fields, enums, numeric bounds — as real JSON Schema, not as prose a generator cannot see.
          *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant — see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
@@ -1242,6 +1134,8 @@ export interface components {
             collectors: components["schemas"]["CollectorStatus"][];
             /** @description Step 9: every in-flight macro run, plus a bounded window of recently finished ones (STEP-9-SPEC.md section 6.6). Fatal to omit per ADR-020 decision 3: the change stream emits no id, so a client connecting for the first time during an in-flight run has no other way to learn the run exists. */
             macroRuns: components["schemas"]["MacroRunSummary"][];
+            /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
+            resolume: components["schemas"]["ResolumeInstance"][];
         };
         /** @description A principal's own non-secret identity (ADR-024). */
         PrincipalSummary: {
@@ -1365,12 +1259,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, and GET /config/show.active/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers; Track E added three more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, and GET /config/resolume.recovery/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers; Track D seam D-3a added a fourth). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "resolume.recovery";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -1386,10 +1280,11 @@ export interface components {
             width: number;
             height: number;
         };
-        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. */
+        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. name/nameGenerated are ADR-037 decision 4: name is the deck's own authored name when non-empty, otherwise a generated "Deck <n>" from its 1-based position among this response's own deck list, and nameGenerated says which. */
         ResolumeCompositionDeckSummary: {
             id: string;
             name: string;
+            nameGenerated: boolean;
             closed: boolean;
             clipCount: number;
         };
@@ -1430,19 +1325,23 @@ export interface components {
             name: string;
             nameGenerated: boolean;
         };
-        /** @description One column position within one deck. */
+        /** @description One column position within one deck. name/nameGenerated are ADR-037 decision 4: columns never carry an authored name at all (the .avc format gives them none), so nameGenerated is always true and name is always the generated "Column <n>" form from index — carried anyway so every kind's response shares the identical (name, nameGenerated) shape. */
         ResolumeCompositionColumn: {
             id: string;
             deckId: string;
             index: number;
+            name: string;
+            nameGenerated: boolean;
         };
-        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. */
+        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. name/nameGenerated are ADR-037 decision 4: name is the clip's own authored name when non-empty, otherwise a generated form — "Clip L<layerIndex+1>C<columnIndex+1>" for a deck clip, "Persistent clip <n>" (1-based position among "persistentClips") for a persistent one. ambiguous (amendment, 2026-08-16) is true when this clip's own (deck-or-persistent, layer, label) triple is shared by another clip in this composition, meaning no reference — including one naming this clip's own layer — can ever resolve it; the remedy is renaming one of the colliding clips in Resolume and re-uploading. */
         ResolumeCompositionClip: {
             id: string;
             deckId?: string;
             layerIndex: number;
             columnIndex: number;
             name: string;
+            nameGenerated: boolean;
+            ambiguous: boolean;
             transportTypeIndex?: number;
             sourcePath?: string;
             width?: number;
@@ -1463,7 +1362,7 @@ export interface components {
             clips: components["schemas"]["ResolumeCompositionClip"][];
             persistentClips: components["schemas"]["ResolumeCompositionClip"][];
         };
-        /** @description One named parameter one Resolume action's "params" object accepts. Every parameter in this seven-action vocabulary is required — none of these seven actions has an optional parameter with a default — so there is no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters. */
+        /** @description One named parameter one Resolume action's "params" object accepts. ADR-037 gave this vocabulary its first optional parameters (launchClip's "layer" and "persistent", and its conditionally required "deck") — required: false means the parameter may be absent, never that an absent value is silently defaulted; there is still no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters, because what an absence means is a resolution rule the caller applies, not a decode-time default. */
         ResolumeActionParam: {
             name: string;
             /** @enum {string} */
@@ -1484,19 +1383,66 @@ export interface components {
             serverTime: string;
             actions: components["schemas"]["ResolumeAction"][];
         };
-        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. */
-        ResolumeActionRequest: components["schemas"]["ResolumeIDActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
-        /** @description `action` one of `"launchClip"`, `"clearLayer"`, `"launchColumn"`, `"selectDeck"` — every action in this vocabulary whose entire payload is one ShowMesh object reference. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` (never a stale-reference error and never a silent deck change) — see ResolumeActionResult.outcome. */
-        ResolumeIDActionRequest: {
+        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition — a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
+        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
+        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) — `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference — see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
+        ResolumeLaunchClipActionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "launchClip" | "clearLayer" | "launchColumn" | "selectDeck";
+            action: "launchClip";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference this action resolves through the stored composition id map. */
-                id: string;
+                /** @description The clip's own label — its authored name, or its generated form if unnamed. */
+                clip: string;
+                /** @description The deck this clip lives on. Required unless `persistent` is `true`; must be absent when `persistent` is `true`. */
+                deck?: string;
+                /** @description Disambiguates a clip name that occurs more than once. Never required. */
+                layer?: string;
+                /** @description True when `clip` names a persistent clip (no `deck` allowed). Absent or false means a deck clip, and `deck` is then required. */
+                persistent?: boolean;
+            } & (unknown | unknown);
+        };
+        /** @description `action: "clearLayer"`: clears (disconnects) a layer's active clip, named by `params.layer`. */
+        ResolumeClearLayerActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "clearLayer";
+            idempotencyKey: string;
+            params: {
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
+            };
+        };
+        /** @description `action: "launchColumn"`: launches (connects) a column named by `params.column`, on the deck named by `params.deck`. */
+        ResolumeLaunchColumnActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "launchColumn";
+            idempotencyKey: string;
+            params: {
+                /** @description The column's own generated label — columns never carry an authored name. */
+                column: string;
+                /** @description The deck this column lives on. Always required. */
+                deck: string;
+            };
+        };
+        /** @description `action: "selectDeck"`: selects the deck named by `params.deck`. */
+        ResolumeSelectDeckActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "selectDeck";
+            idempotencyKey: string;
+            params: {
+                /** @description The deck's own label — its authored name, or its generated form if unnamed. */
+                deck: string;
             };
         };
         /** @description `action: "blackout"`: disconnects every tracked layer. Exempt from ADR-024 decision 11's fail-closed audit rule. */
@@ -1519,8 +1465,8 @@ export interface components {
             action: "setLayerBypass";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference of the layer to change. */
-                id: string;
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
                 bypassed: boolean;
             };
         };
@@ -1533,8 +1479,8 @@ export interface components {
             action: "setLayerMaster";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference of the layer to change. */
-                id: string;
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
                 /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
                 master: number;
             };
@@ -1572,6 +1518,102 @@ export interface components {
             dispatchedAt: string | null;
             /** Format: date-time */
             resolvedAt: string | null;
+            /** @description The Resolume object id this action's own name reference resolved to, kept visible for debugging (ADR-037 removes the id from what an operator types, not from the record). Absent for `blackout`, which addresses nothing, and for a refusal reached before any name was resolved. */
+            resolvedId?: string;
+            /** @description Whether the selected deck changed between this action's decision and its confirmation. Meaningful only for a confirmed `launchClip` (the only action that can race a deck — layers are deck-independent). ALWAYS present; null, never false, both when the deck could not be read at confirmation time and for every action other than a confirmed launchClip. Evidence, never a refusal. */
+            selectedDeckChanged: boolean | null;
+        };
+        /** @description One layer's row in the crash-recovery record (Track D seam D-3a). Every object reference is a name (ADR-037), never an id. clip, clipNameGenerated, and deck are absent when state is not "clip". establishedAt and source are absent only when no record has ever been established for this layer at all (state "unknown", reason "never observed"). reason is always present when state is "unknown". */
+        ResolumeRecoveryRecordEntry: {
+            layer: string;
+            layerNameGenerated: boolean;
+            /** @enum {string} */
+            state: "clip" | "dark" | "unknown";
+            clip?: string;
+            clipNameGenerated?: boolean;
+            deck?: string;
+            /** Format: date-time */
+            establishedAt?: string;
+            /** @enum {string} */
+            source?: "action" | "survey";
+            reason?: string;
+        };
+        /** @description One layer's own outcome within a restore (Track D seam D-3a). reason is always present on "skipped" and "failed", always absent on "restored". clip is present only when this layer had a clip-state target. actionOutcome is present only when a D-3 dispatch was actually issued for this layer. */
+        ResolumeRecoveryRestoreLayer: {
+            layer: string;
+            layerNameGenerated: boolean;
+            /** @enum {string} */
+            result: "restored" | "skipped" | "failed";
+            reason?: string;
+            clip?: string;
+            /** @enum {string} */
+            actionOutcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused";
+        };
+        /** @description One restore's whole outcome (Track D seam D-3a). */
+        ResolumeRecoveryRestoreReport: {
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            /** @enum {string} */
+            trigger: "automatic" | "manual";
+            /** @enum {string} */
+            outcome: "restored" | "partial" | "nothing_to_do" | "failed";
+            principal: string;
+            layers: components["schemas"]["ResolumeRecoveryRestoreLayer"][];
+            /** @description Nonzero when the composition had more layers than one restore attempts: the excess layers were never attempted and do not appear in layers. Zero means nothing was omitted. Run the restore again to continue. */
+            omittedLayerCount: number;
+        };
+        /** @description The body of GET /resolume/recovery (Track D seam D-3a): the auto-restore toggle, the recovery record, and the last restore. lastRestore is null until a restore has run. */
+        ResolumeRecoveryResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            resolumeConfigured: boolean;
+            autoRestoreEnabled: boolean;
+            /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
+            autoRestoreConfigured: boolean;
+            settleDelaySeconds: number;
+            record: components["schemas"]["ResolumeRecoveryRecordEntry"][];
+            lastRestore: components["schemas"]["ResolumeRecoveryRestoreReport"] | null;
+        };
+        /** @description The body of a successful POST /resolume/recovery/restore. */
+        ResolumeRecoveryRestoreResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            restore: components["schemas"]["ResolumeRecoveryRestoreReport"];
+        };
+        /** @description The payload of a "resolumeRecovery.changed" SSE event (Track D seam D-3a): the resource's own rendered wire representation, minus serverTime (stamped separately, alongside seq, at broadcast time). No delta event kind exists for this resource, matching resolume.changed's own posture. */
+        ResolumeRecoveryChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            resolumeConfigured: boolean;
+            autoRestoreEnabled: boolean;
+            /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
+            autoRestoreConfigured: boolean;
+            settleDelaySeconds: number;
+            record: components["schemas"]["ResolumeRecoveryRecordEntry"][];
+            lastRestore: components["schemas"]["ResolumeRecoveryRestoreReport"] | null;
+        };
+        /** @description The "resolume.recovery" configuration kind's decoded payload (Track D seam D-3a): the body PUT /config/resolume.recovery accepts, and the "payload" member of GET /config/resolume.recovery's response. One boolean, no other keys. */
+        ConfigResolumeRecoveryPayload: {
+            autoRestoreEnabled: boolean;
+        };
+        /** @description The body of GET and PUT /config/resolume.recovery. */
+        ResolumeRecoveryConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigResolumeRecoveryPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
@@ -1585,7 +1627,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -1626,6 +1668,13 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
+        /** @description The payload of a resolume.changed event. */
+        ResolumeChangedEvent: {
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            instance: components["schemas"]["ResolumeInstance"];
+        };
         EventRecordedEvent: {
             seq: number;
             /** Format: date-time */
@@ -1651,12 +1700,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, and GET /config/show.surface. */
+        /** @description The body of GET /config/show.action and GET /config/show.macro. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface";
+            kind: "show.action" | "show.macro";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -1684,10 +1733,10 @@ export interface components {
             value?: string;
             deadlineSeconds?: number;
         };
-        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp fields or the mqtt fields directly, never nested a second level under an "fpp"/"mqtt" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. To submit a target, use ConfigShowActionTargetWrite instead. */
+        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
         ConfigShowActionTarget: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -1696,11 +1745,17 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublish"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
+            /** @description resolume-only: one of the seven Track D D-3 action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster). */
+            action?: string;
+            /** @description resolume-only: ADR-037's named-reference vocabulary for this action. Every key is a reference or a value from a closed, per-action list, enforced by this coordinator's write-time validation rather than by this schema. */
+            ref?: {
+                [key: string]: unknown;
+            };
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */
         ConfigShowActionTargetWrite: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -1709,6 +1764,10 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublishWrite"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
+            action?: string;
+            ref?: {
+                [key: string]: unknown;
+            };
         };
         /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
         ConfigShowAction: {
@@ -1836,7 +1895,7 @@ export interface components {
             actionObjectId: string;
             actionRevision: number;
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             /** @enum {string} */
@@ -1927,202 +1986,6 @@ export interface components {
             confirmed: boolean | null;
             reason: string;
             attributionDegraded: boolean;
-        };
-        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container — this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
-        ConfigShow: {
-            name: string;
-            notes: string;
-        };
-        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required — an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
-        ConfigShowWrite: {
-            name: string;
-            notes?: string;
-        };
-        /** @description The body of GET and PUT /config/show/{id}. */
-        ShowConfigResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            /** @enum {string} */
-            kind: "show";
-            id: string;
-            revision: number;
-            payload: components["schemas"]["ConfigShow"];
-            /** Format: date-time */
-            updatedAt: string;
-            createdByPrincipalId: string | null;
-            createdByPrincipalName: string | null;
-            /** @enum {string} */
-            source: "api";
-        };
-        /** @description show.surface.channelRange (Track E, ADR-026). Required and must be non-empty: an empty range makes xLights render a full, non-sparse FSEQ (RES-003), which is the gigabytes-per-song case ADR-028's asset store exists to avoid. This schema alone cannot express "channelCount must be at least 1" as a REFUSAL DISTINCT FROM absent/null (see PUT /config/show.surface/{id}'s own description); that three-way distinction is enforced server-side. */
-        ConfigShowSurfaceChannelRange: {
-            startChannel: number;
-            /** @description The published minimum is 0 so a schema validator does not reject the exact "explicitly empty" request body this coordinator's own write-time validation exists to name and refuse with its own message; the server's real minimum is 1. */
-            channelCount: number;
-        };
-        /** @description show.surface.geometry (Track E, ADR-026). width * height * channelsPerPixel(pixelFormat) must equal the sibling channelRange.channelCount exactly — enforced server-side, since it is a rule across two sibling objects. */
-        ConfigShowSurfaceGeometry: {
-            width: number;
-            height: number;
-            /** @enum {string} */
-            pixelFormat: "rgb" | "rgbw";
-        };
-        /** @description show.surface.output.ndi (ADR-026 — NDI is the reference transport). */
-        ConfigShowSurfaceNDIOutput: {
-            sourceName: string;
-        };
-        /** @description show.surface.output.hdmi (ADR-026 — HDMI is a supported alternate). */
-        ConfigShowSurfaceHDMI: {
-            display: string;
-        };
-        /** @description show.surface.output (Track E, ADR-026). Exactly one of ndi/hdmi must be present, and it must be the one named by transport — support for one transport is never evidence for the other, so this never defaults or infers a transport from whichever sub-object happens to be present. Only transport is required by THIS schema; which of ndi/hdmi accompanies it is enforced server-side. */
-        ConfigShowSurfaceOutput: {
-            /** @enum {string} */
-            transport: "ndi" | "hdmi";
-            ndi?: components["schemas"]["ConfigShowSurfaceNDIOutput"];
-            hdmi?: components["schemas"]["ConfigShowSurfaceHDMI"];
-        };
-        /** @description The "show.surface" configuration kind's decoded payload (Track E, ADR-026), returned by GET and accepted by PUT /config/show.surface/{id}. Every field is required on write — unlike ConfigShow, this payload has no optional/defaulted key, so one shape serves both the read and write side. `node` must name a declared node; this coordinator deliberately does not check the node's advertised NDI/HDMI capability (observed state, absent whenever the node is offline). A second surface assigned to the same node is a valid payload on its own terms (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule). */
-        ConfigShowSurface: {
-            show: string;
-            name: string;
-            node: string;
-            channelRange: components["schemas"]["ConfigShowSurfaceChannelRange"];
-            geometry: components["schemas"]["ConfigShowSurfaceGeometry"];
-            /** @description ADR-026's day-0 profile of 40 fps over NDI on OptiPlex 7040-class hardware is L0 design intent, a target to validate and not a supported profile. */
-            frameRate: number;
-            output: components["schemas"]["ConfigShowSurfaceOutput"];
-        };
-        /** @description The body of GET and PUT /config/show.surface/{id}. */
-        ShowSurfaceConfigResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            /** @enum {string} */
-            kind: "show.surface";
-            id: string;
-            revision: number;
-            payload: components["schemas"]["ConfigShowSurface"];
-            /** Format: date-time */
-            updatedAt: string;
-            createdByPrincipalId: string | null;
-            createdByPrincipalName: string | null;
-            /** @enum {string} */
-            source: "api";
-        };
-        /** @description The "show.active" singleton configuration kind's decoded payload (Track E, ADR-027 decision 3): the body PUT /config/show.active accepts, and the "payload" member of GET /config/show.active's response. show must name an existing show config object (server-side; not expressible in this schema alone). */
-        ConfigShowActive: {
-            show: string;
-        };
-        /** @description The body of GET and PUT /config/show.active. */
-        ShowActiveConfigResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            /** @enum {string} */
-            kind: "show.active";
-            id: string;
-            revision: number;
-            payload: components["schemas"]["ConfigShowActive"];
-            /** Format: date-time */
-            updatedAt: string;
-            createdByPrincipalId: string | null;
-            createdByPrincipalName: string | null;
-            /** @enum {string} */
-            source: "api";
-        };
-        /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID — empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 — a filename is not an asset identity). */
-        Asset: {
-            id: string;
-            show: string;
-            sequence: string;
-            /** @enum {string} */
-            targetKind: "node" | "show";
-            /** @description A declared node id, or empty when targetKind is "show". */
-            target: string;
-            /** @enum {string} */
-            mediaType: "fseq" | "audio" | "media";
-            /** @description sha256:<hex> */
-            contentHash: string;
-            runtimeFilename: string;
-            sizeBytes: number;
-            /** Format: date-time */
-            createdAt: string;
-            createdByPrincipalId: string | null;
-            createdByPrincipalName: string | null;
-            /**
-             * Format: date-time
-             * @description Null for the CURRENT asset serving its (show, sequence, targetKind, target) tuple.
-             */
-            supersededAt: string | null;
-            /** @description True exactly when supersededAt is null. */
-            current: boolean;
-        };
-        /** @description The body of POST /assets and GET /assets/{id}. */
-        AssetResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            asset: components["schemas"]["Asset"];
-        };
-        /** @description The body of GET /assets. */
-        AssetsListResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            assets: components["schemas"]["Asset"][];
-        };
-        /** @description POST /assets' multipart/form-data body. show, sequence, mediaType, and targetKind are required on every request; target is required only when targetKind is "node" (not expressible in this schema alone — see the operation's own description). Every field part MUST arrive before the file part. */
-        AssetUploadRequest: {
-            /** Format: binary */
-            file: string;
-            show: string;
-            sequence: string;
-            /** @enum {string} */
-            mediaType: "fseq" | "audio" | "media";
-            /** @enum {string} */
-            targetKind: "node" | "show";
-            /** @description Required, and must name a declared node, when targetKind is "node". */
-            target?: string;
-        };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state — never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
-        NodeAssetManifest: {
-            node: string;
-            /** @enum {string} */
-            state: "ready" | "not_ready" | "unknown";
-            reason: string | null;
-            missing: components["schemas"]["MissingAsset"][];
-            gaps: components["schemas"]["AssetGap"][];
-            extra: components["schemas"]["ExtraAsset"][];
-            /** Format: date-time */
-            observedAt: string | null;
-        };
-        /** @description One expected asset a manifest found the node does not currently hold. */
-        MissingAsset: {
-            assetId: string;
-            sequence: string;
-            filename: string;
-            contentHash: string;
-            sizeBytes: number;
-        };
-        /** @description A sequence the active show has some current asset for, that a node carrying one or more surfaces in that show has no coverage for at all — inferred from the show's own asset rows, not a stored surface-to-sequence link. */
-        AssetGap: {
-            sequence: string;
-            surfaces: string[];
-        };
-        /** @description One asset a node holds that this manifest did not expect. Never an error and never a basis for deletion. */
-        ExtraAsset: {
-            contentHash: string;
-            filename: string;
-            sizeBytes: number;
-        };
-        /** @description The body of GET /nodes/{nodeId}/assets. */
-        NodeAssetManifestResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            manifest: components["schemas"]["NodeAssetManifest"];
-        };
-        /** @description The body of GET /assets/manifest. */
-        AssetManifestResponse: {
-            /** Format: date-time */
-            serverTime: string;
-            nodes: components["schemas"]["NodeAssetManifest"][];
         };
     };
     responses: {
@@ -2988,6 +2851,95 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getResolumeRecoveryConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putResolumeRecoveryConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigResolumeRecoveryPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeRecoveryConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listResolumeActions: {
         parameters: {
             query?: never;
@@ -3059,6 +3011,107 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    getResolumeRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryResponse"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restoreResolumeRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryRestoreResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listResolumeInstances: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstanceResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     listFPPEndpointsConfigRevisions: {
@@ -3405,549 +3458,6 @@ export interface operations {
                     "application/json": components["schemas"]["MacroRunResponse"];
                 };
             };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listShows: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getShow: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowConfigResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    putShow: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfigShowWrite"];
-            };
-        };
-        responses: {
-            /** @description OK. The newly activated revision. */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowConfigResponse"];
-                };
-            };
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listShowRevisions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listShowSurfaces: {
-        parameters: {
-            query?: {
-                /** @description Narrow the list to surfaces belonging to this show id. */
-                show?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getShowSurface: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowSurfaceConfigResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    putShowSurface: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfigShowSurface"];
-            };
-        };
-        responses: {
-            /** @description OK. The newly activated revision. */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowSurfaceConfigResponse"];
-                };
-            };
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listShowSurfaceRevisions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getShowActive: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowActiveConfigResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    putShowActive: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfigShowActive"];
-            };
-        };
-        responses: {
-            /** @description OK. The newly activated revision. */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShowActiveConfigResponse"];
-                };
-            };
-            400: components["responses"]["InvalidParameter"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listShowActiveRevisions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    listAssets: {
-        parameters: {
-            query?: {
-                /** @description Narrow the list to this show id. */
-                show?: string;
-                /** @description Narrow the list to this logical sequence id. */
-                sequence?: string;
-                /** @description Narrow the list to CURRENT assets targeted at this node specifically — never a show-wide asset, even one that node would also need. */
-                node?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetsListResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    uploadAsset: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["AssetUploadRequest"];
-            };
-        };
-        responses: {
-            /** @description OK. The registered (or, on an idempotent re-upload, the pre-existing) asset. */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetResponse"];
-                };
-            };
-            /** @description Invalid or missing field (`invalid-parameter`), or `targetKind: "node"` with no `target` (`asset-target-required`) — see `detail` for which. */
-            400: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `asset:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
-            403: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            405: components["responses"]["MethodNotAllowed"];
-            /** @description The uploaded file exceeds this coordinator's own upload size bound (`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`). Nothing was stored. Shares `type` `payload-too-large` with the identical refusal on `POST /config/resolume/composition` — one class, one URI. */
-            413: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            500: components["responses"]["InternalError"];
-            /** @description This coordinator's asset storage ran out of space while staging the upload (`storage-full`). Nothing was registered. */
-            507: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    getAsset: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getAssetContent: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Standard HTTP byte-range request, e.g. "bytes=0-1023". */
-                Range?: string;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK. The complete asset bytes. */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    /** @description The asset's content hash, quoted. */
-                    ETag?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": string;
-                };
-            };
-            /** @description Partial Content, honoring a `Range` request header. */
-            206: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/octet-stream": string;
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["ResourceNotFound"];
-            405: components["responses"]["MethodNotAllowed"];
-            /** @description An internal error, OR (see `detail`) the stored blob's on-disk size disagrees with its recorded size: a corrupted or truncated asset is reported, never served. */
-            500: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    getAssetManifest: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssetManifestResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            405: components["responses"]["MethodNotAllowed"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    getNodeAssetManifest: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
-                nodeId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NodeAssetManifestResponse"];
-                };
-            };
-            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];

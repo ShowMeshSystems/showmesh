@@ -1152,3 +1152,128 @@ func TestReadPasswordNonTerminalStdinReadsOneLine(t *testing.T) {
 		t.Errorf("stderr = %q, want empty for a non-terminal stdin", stderr.String())
 	}
 }
+
+// --- the reserved recovery principal cannot be created over, reset, or
+// credentialed from this CLI, and list-principals marks it ---
+
+// setupReservedRecoveryPrincipal ensures
+// identity.ReservedResolumeRecoveryPrincipalID exists, mirroring how the
+// coordinator's own startup path creates it, so a test can resolve it by
+// id/name the same way reset-password and issue-token do.
+func setupReservedRecoveryPrincipal(t *testing.T, deps *cliDeps) identity.Principal {
+	t.Helper()
+	ctx := context.Background()
+	st, svc, err := openIdentityService(ctx, deps)
+	if err != nil {
+		t.Fatalf("setupReservedRecoveryPrincipal: open identity service: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	p, err := svc.EnsureReservedRecoveryPrincipal(ctx)
+	if err != nil {
+		t.Fatalf("setupReservedRecoveryPrincipal: %v", err)
+	}
+	return p
+}
+
+func TestCreatePrincipalRefusesTheReservedRecoveryName(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	exit := runCreatePrincipalSubcommandWithDeps(withStdin(deps, ""),
+		[]string{"-name=" + identity.ReservedResolumeRecoveryPrincipalID, "-role=admin", "-kind=human"})
+	if exit != 1 {
+		t.Errorf("exit = %d, want 1", exit)
+	}
+	if !strings.Contains(stderr.String(), "built-in") {
+		t.Errorf("stderr = %q, want it to name the reserved/built-in principal", stderr.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		ps, err := svc.ListPrincipals(ctx)
+		if err != nil {
+			t.Fatalf("ListPrincipals: %v", err)
+		}
+		if len(ps) != 0 {
+			t.Errorf("a principal was created under the reserved name: %+v", ps)
+		}
+	})
+}
+
+func TestResetPasswordRefusesTheReservedRecoveryPrincipal(t *testing.T) {
+	deps, _, stderr, _, _ := newTestDeps(t)
+	principal := setupReservedRecoveryPrincipal(t, deps)
+
+	exit := runResetPasswordSubcommandWithDeps(withStdin(deps, "a-new-password"), []string{"-id=" + principal.ID})
+	if exit != 1 {
+		t.Errorf("exit = %d, want 1", exit)
+	}
+	if !strings.Contains(stderr.String(), "built-in") {
+		t.Errorf("stderr = %q, want it to name the reserved/built-in principal", stderr.String())
+	}
+}
+
+// TestIssueTokenRefusesTheReservedRecoveryPrincipal proves the guard added
+// to identity.Service.IssueToken and store.Store.CreateToken: the reserved
+// recovery principal holds no credential of any form, so minting it a
+// bearer token must be refused, and no token row may exist afterward.
+// This test was run against the guard removed from both layers and
+// confirmed to fail (a token WAS minted) before the guard was restored —
+// see this task's final report for that result.
+func TestIssueTokenRefusesTheReservedRecoveryPrincipal(t *testing.T) {
+	deps, stdout, stderr, _, _ := newTestDeps(t)
+	principal := setupReservedRecoveryPrincipal(t, deps)
+
+	exit := runIssueTokenSubcommandWithDeps(deps, []string{"-principal=" + principal.ID, "-label=x"})
+	if exit != 1 {
+		t.Errorf("exit = %d, want 1", exit)
+	}
+	if !strings.Contains(stderr.String(), "built-in") {
+		t.Errorf("stderr = %q, want it to name the reserved/built-in principal", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Issued a token") {
+		t.Errorf("stdout = %q, a token must not have been issued", stdout.String())
+	}
+
+	withServiceAfter(t, deps, func(ctx context.Context, svc identity.Service) {
+		tokens, err := svc.ListTokens(ctx, principal.ID)
+		if err != nil {
+			t.Fatalf("ListTokens: %v", err)
+		}
+		if len(tokens) != 0 {
+			t.Errorf("a token was minted for the reserved recovery principal: %+v", tokens)
+		}
+	})
+}
+
+func TestListPrincipalsMarksTheReservedRecoveryPrincipal(t *testing.T) {
+	deps, stdout, stderr, _, _ := newTestDeps(t)
+	setupReservedRecoveryPrincipal(t, deps)
+	setupPrincipal(t, deps, "alice", identity.KindHuman, identity.RoleAdmin, "")
+
+	exit := runListPrincipalsSubcommandWithDeps(deps, nil)
+	if exit != 0 {
+		t.Fatalf("list-principals exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	var reservedLine, ordinaryLine string
+	for _, line := range lines {
+		if strings.Contains(line, identity.ReservedResolumeRecoveryPrincipalID) {
+			reservedLine = line
+		}
+		if strings.Contains(line, "alice") {
+			ordinaryLine = line
+		}
+	}
+	if reservedLine == "" {
+		t.Fatalf("stdout = %q, want a row for the reserved recovery principal", stdout.String())
+	}
+	if !strings.Contains(reservedLine, "true") {
+		t.Errorf("reserved principal row = %q, want it to show RESERVED true", reservedLine)
+	}
+	if ordinaryLine == "" {
+		t.Fatalf("stdout = %q, want a row for alice", stdout.String())
+	}
+	if !strings.Contains(ordinaryLine, "false") {
+		t.Errorf("ordinary principal row = %q, want it to show RESERVED false", ordinaryLine)
+	}
+}

@@ -37,6 +37,10 @@ const NAV_GROUPS: Array<{
       { to: '/', label: 'Dashboard', end: true },
       { to: '/nodes', label: 'Nodes', end: false },
       { to: '/fpp', label: 'FPP', end: false },
+      // Track D seam D-4: monitor and control both live on this one route
+      // (build contract §2.2/§2.3), so it belongs in Monitor rather than
+      // splitting it across two nav groups.
+      { to: '/resolume', label: 'Resolume', end: false },
       { to: '/capabilities', label: 'Capabilities', end: false },
       { to: '/events', label: 'Events', end: false },
     ],

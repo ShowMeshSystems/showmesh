@@ -56,6 +56,8 @@ func (e *Executor) resolveStrandedStep(ctx context.Context, runID string, step s
 		return e.resolveStrandedFPPStep(ctx, runID, step, now, neverDispatchedReason)
 	case config.ShowActionIntegrationMQTT:
 		return e.resolveStrandedMQTTStep(ctx, runID, step, now, neverDispatchedReason)
+	case config.ShowActionIntegrationResolume:
+		return e.resolveStrandedResolumeStep(ctx, runID, step, now, neverDispatchedReason)
 	default:
 		// Unreachable given write-time validation (config.decodeShowAction
 		// rejects any integration other than "fpp"/"mqtt") — answered
@@ -213,6 +215,52 @@ func (e *Executor) resolveStrandedMQTTStep(ctx context.Context, runID string, st
 	outcomeState := mqttStateRestartInterrupted
 	reason := "this step's dispatch was recorded as having begun before the coordinator restarted, but whether the " +
 		"publish reached the broker, or a response arrived, cannot be established from what was recorded"
+	dispatchedAt := entry.RecordedAt
+
+	return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
+		State: &state, DispatchedAt: &dispatchedAt, ResolvedAt: &now,
+		Outcome: &outcome, OutcomeState: &outcomeState, OutcomeReason: &reason,
+	})
+}
+
+// resolveStrandedResolumeStep implements this file's own rule for a
+// Resolume step, which — like an MQTT step — has no commands-table row to
+// fall back on (step_resolume.go's own dispatchResolumeStep writes only
+// audit entries and, at the very end, this step's own row; there is no
+// separate journal recording an in-flight dispatch). The one piece of
+// durable evidence a Resolume step's dispatch leaves behind BEFORE the
+// process could still be killed is its own DISPATCH audit entry
+// (identity.AuditDispatch, written by dispatchResolumeStep before it ever
+// calls Dispatch) — mirroring resolveStrandedMQTTStep's identical
+// reasoning one function up, applied to the identical shape.
+//
+// Its absence means this step's dispatch call never began: genuinely
+// never attempted, so "skipped" is correct, identical to the FPP and MQTT
+// cases' "no evidence" branch. Its presence means dispatch began but this
+// function cannot determine whether the request reached Resolume or
+// resolved before the crash — there is no second source of evidence to
+// consult. That is stated as unconfirmed with a reason that says exactly
+// that, never "skipped" because it is the enum member available.
+func (e *Executor) resolveStrandedResolumeStep(ctx context.Context, runID string, step store.MacroRunStepRecord, now time.Time, neverDispatchedReason string) error {
+	key := stepIdempotencyKey(runID, step.StepIndex)
+	entry, found, err := e.store.FindAuditDispatchEntry(ctx, key)
+	if err != nil {
+		return fmt.Errorf("look up dispatch audit entry for step %d: %w", step.StepIndex, err)
+	}
+	if !found {
+		state := stepStateSkipped
+		outcome := outcomeSkipped
+		outcomeState := stepStateSkipped
+		return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{
+			State: &state, ResolvedAt: &now, Outcome: &outcome, OutcomeState: &outcomeState, OutcomeReason: &neverDispatchedReason,
+		})
+	}
+
+	state := stepStateResolved
+	outcome := outcomeUnconfirmed
+	outcomeState := resolumeStateRestartInterrupted
+	reason := "this step's dispatch was recorded as having begun before the coordinator restarted, but whether the " +
+		"request reached Resolume, or resolved, cannot be established from what was recorded"
 	dispatchedAt := entry.RecordedAt
 
 	return e.store.UpdateMacroRunStepOutcome(ctx, runID, step.StepIndex, store.MacroRunStepOutcomeUpdate{

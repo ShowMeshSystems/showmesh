@@ -235,6 +235,19 @@ type pendingFrame struct {
 	instance *v1.FPPInstance
 	ev       *v1.Event
 
+	// resolumeInstance is set only for a "resolume.changed" pendingFrame,
+	// mirroring instance's role for "fpp.changed" — full-frame only, no
+	// ADR-023 delta narrowing: this resource has no delta event kind, so
+	// audience is always the zero value (audienceAll).
+	resolumeInstance *v1.ResolumeInstance
+
+	// resolumeRecovery is set only for a "resolumeRecovery.changed"
+	// pendingFrame (Track D seam D-3a, build contract §1.7): the
+	// resolumerecovery:default singleton resource, full-frame only, same
+	// posture as resolumeInstance immediately above — no delta kind exists
+	// for it either.
+	resolumeRecovery *v1.ResolumeRecoveryChangedEvent
+
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
 	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
 	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
@@ -272,6 +285,13 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "macroRun.changed", ev
+	case "resolume.changed":
+		return "resolume.changed", v1.ResolumeChangedEvent{Seq: seq, ServerTime: pf.serverTime, Instance: *pf.resolumeInstance}
+	case "resolumeRecovery.changed":
+		ev := *pf.resolumeRecovery
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "resolumeRecovery.changed", ev
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -499,6 +519,59 @@ func (h *Hub) render(ctx context.Context) {
 		h.evictRendered("macrorun:", present)
 	}
 
+	// Every configured Resolume instance, full-frame only — no ADR-023
+	// delta narrowing exists for this resource. composition is
+	// coordinator-wide stored configuration, fetched once per render pass
+	// and shared across every instance rendered in it.
+	if rviews, err := h.deps.Resolume.ListInstances(ctx); err != nil {
+		h.logger.Warn("stream hub: list resolume instances failed", "error", err)
+	} else if composition, err := resolumeInstanceComposition(ctx, h.deps.Config); err != nil {
+		// The store erroring is not evidence Resolume is gone: skip this
+		// resource kind for the pass, mirroring every other dependency-error
+		// branch in this method — never publish an empty Resolume list on a
+		// transient read failure.
+		h.logger.Warn("stream hub: get resolume composition failed", "error", err)
+	} else {
+		present := make(map[string]struct{}, len(rviews))
+		for _, rv := range rviews {
+			key := "resolume:" + rv.InstanceID
+			present[key] = struct{}{}
+			inst := mapResolumeInstance(rv, composition, now)
+			proj := resolumeInstanceDiffProjection(inst)
+			if h.updateRendered(key, proj) {
+				i := inst
+				pending = append(pending, pendingFrame{event: "resolume.changed", serverTime: formatTime(now), resolumeInstance: &i})
+			}
+		}
+		h.evictRendered("resolume:", present)
+	}
+
+	// The recovery record, the auto-restore toggle, and the last restore:
+	// one fixed singleton resource, keyed "resolumerecovery:default" —
+	// never evicted, full-frame only, no delta kind, mirroring
+	// resolume.changed's own posture immediately above. Skipped entirely
+	// when ResolumeRecovery is unwired ([noResolumeRecoveryProvider]): a
+	// singleton has no natural empty state the way ListInstances gives
+	// resolume:<id> above for free. Once wired, a toggle-read error skips
+	// this pass rather than publishing a default-looking state —
+	// Record/LastReport never error.
+	if _, unwired := h.deps.ResolumeRecovery.(noResolumeRecoveryProvider); !unwired {
+		if enabled, configured, err := ResolveResolumeRecoveryToggle(ctx, h.deps.Config); err != nil {
+			h.logger.Warn("stream hub: resolve resolume.recovery toggle failed", "error", err)
+		} else {
+			const key = "resolumerecovery:default"
+			// resolumeConfigured is always true here — this whole branch is
+			// gated on ResolumeRecovery being wired (the !unwired check
+			// above), which is exactly what that field reports.
+			proj := resolumeRecoveryChangedEventProjection(true, enabled, configured, h.deps.ResolumeRecoverySettleSeconds,
+				h.deps.ResolumeRecovery.Record(), h.deps.ResolumeRecovery.LastReport())
+			if h.updateRendered(key, proj) {
+				ev := proj
+				pending = append(pending, pendingFrame{event: "resolumeRecovery.changed", serverTime: formatTime(now), resolumeRecovery: &ev})
+			}
+		}
+	}
+
 	pending = append(pending, h.renderNewEvents(ctx, now)...)
 
 	for _, pf := range pending {
@@ -592,6 +665,18 @@ func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	for i, o := range inst.Observations {
 		// Delegated, never repeated: see maskEvidenceForDiff's doc comment
 		// for what happened the one time these were two implementations.
+		proj.Observations[i] = maskEvidenceForDiff(o)
+	}
+	return proj
+}
+
+// resolumeInstanceDiffProjection mirrors [fppInstanceDiffProjection] for a
+// Resolume instance, masking evidence via the SAME [maskEvidenceForDiff]
+// function rather than a second implementation of the rule.
+func resolumeInstanceDiffProjection(inst v1.ResolumeInstance) v1.ResolumeInstance {
+	proj := inst
+	proj.Observations = make([]v1.Evidence, len(inst.Observations))
+	for i, o := range inst.Observations {
 		proj.Observations[i] = maskEvidenceForDiff(o)
 	}
 	return proj

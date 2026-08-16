@@ -210,7 +210,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
 
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 		ResolumeActions: adapter,
 	}, api.Options{Logger: logger})
 
-	reqBody := fmt.Sprintf(`{"action":"launchClip","idempotencyKey":"e2e-launch-clip-1","params":{"id":%q}}`, e2eClipID)
+	reqBody := `{"action":"launchClip","idempotencyKey":"e2e-launch-clip-1","params":{"clip":"E2E Clip","deck":"Deck One"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/resolume/actions", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok.Value)
@@ -274,6 +274,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 			Outcome       string  `json:"outcome"`
 			OutcomeReason string  `json:"outcomeReason"`
 			DispatchedAt  *string `json:"dispatchedAt"`
+			ResolvedID    string  `json:"resolvedId"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -287,6 +288,12 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 	}
 	if resp.Result.DispatchedAt == nil {
 		t.Error("dispatchedAt is null on a confirmed outcome")
+	}
+	// Review finding 8: the object id this launchClip actually addressed
+	// stays visible in the response, even though the request that reached
+	// it never named one.
+	if resp.Result.ResolvedID != e2eClipID {
+		t.Errorf("resolvedId = %q, want %q (the object id \"E2E Clip\" resolved to)", resp.Result.ResolvedID, e2eClipID)
 	}
 
 	// The proof: the real HTTP request this seam was supposed to issue
@@ -302,6 +309,90 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("arena never received %q; requests = %v", wantPath, arena.requestLog())
+	}
+}
+
+// failOnAnyRequestArena is ADR-037 acceptance criterion 6's own fixture:
+// resolution (internal/coordinator/collector/resolume/references.go) reads
+// only the stored *TrackedComposition already in memory, and issues no
+// HTTP request of its own — this handler fails the test outright the
+// moment it receives ANY request, which is a stronger proof than counting
+// requests before and after.
+type failOnAnyRequestArena struct{ t *testing.T }
+
+func (a *failOnAnyRequestArena) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.t.Errorf("resolution issued an HTTP request to Arena: %s %s — resolving a name against the stored "+
+		"composition must never touch the network", r.Method, r.URL.Path)
+	w.WriteHeader(http.StatusInternalServerError)
+}
+
+// TestResolumeActionEndToEndUnresolvedReferenceIssuesNoHTTPRequest is
+// acceptance criterion 6: a launchClip naming a clip the stored composition
+// does not contain is refused by resolution alone, before
+// resolume.ActionDispatcher.Dispatch — and therefore before ANY of its own
+// pre-dispatch reads — is ever reached. Deliberately skips the warmup
+// wire.collector.Poll every other test in this file performs: composition
+// identity is a fact resolume.ActionDispatcher.Dispatch checks, and this
+// test proves resolution never reaches that far, so there is nothing for a
+// warmup poll to warm.
+func TestResolumeActionEndToEndUnresolvedReferenceIssuesNoHTTPRequest(t *testing.T) {
+	arena := &failOnAnyRequestArena{t: t}
+	srv := httptest.NewServer(arena)
+	defer srv.Close()
+
+	ctx := context.Background()
+	st := openTestStore(t)
+	logger := testLogger()
+
+	writeTestCompositionRevision(t, st, 1, e2eTestComposition())
+	compWiring := newResolumeCompositionWiring(ctx, st, logger)
+
+	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-noreq"}
+	sink := &fppSink{st: st, logger: logger}
+	runner := collector.NewRunner(sink, logger)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
+	if err != nil {
+		t.Fatalf("newResolumeWiring: %v", err)
+	}
+
+	adapter := newResolumeActionDispatcherAdapter(wire.collector)
+
+	svc := identity.NewService(st, time.Now, t.TempDir(), identity.WithLogger(logger))
+	operator, err := svc.CreatePrincipal(ctx, "e2e-operator-noreq", identity.KindHuman, identity.RoleOperator, "not-a-real-secret-04")
+	if err != nil {
+		t.Fatalf("CreatePrincipal: %v", err)
+	}
+	tok, err := svc.IssueToken(ctx, operator.ID, "e2e-test", nil)
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+
+	apiInst := api.New(api.Dependencies{Identity: svc, Commands: st, ResolumeActions: adapter}, api.Options{Logger: logger})
+
+	reqBody := `{"action":"launchClip","idempotencyKey":"e2e-unresolved-1","params":{"clip":"Does Not Exist","deck":"Deck One"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/resolume/actions", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok.Value)
+	rec := httptest.NewRecorder()
+	apiInst.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Result struct {
+			Outcome       string `json:"outcome"`
+			OutcomeReason string `json:"outcomeReason"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body: %s", err, rec.Body.String())
+	}
+	if resp.Result.Outcome != "refused" {
+		t.Fatalf("outcome = %q, want %q; reason: %s", resp.Result.Outcome, "refused", resp.Result.OutcomeReason)
+	}
+	if !strings.Contains(resp.Result.OutcomeReason, "Does Not Exist") {
+		t.Errorf("outcomeReason = %q, want it to name the unresolved clip", resp.Result.OutcomeReason)
 	}
 }
 
@@ -336,7 +427,7 @@ func TestResolumeActionEndToEndDeckMismatchIssuesNoHTTPRequest(t *testing.T) {
 	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-2"}
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -365,7 +456,7 @@ func TestResolumeActionEndToEndDeckMismatchIssuesNoHTTPRequest(t *testing.T) {
 
 	apiInst := api.New(api.Dependencies{Identity: svc, Commands: st, ResolumeActions: adapter}, api.Options{Logger: logger})
 
-	reqBody := fmt.Sprintf(`{"action":"launchClip","idempotencyKey":"e2e-deck-mismatch-1","params":{"id":%q}}`, e2eClipID)
+	reqBody := `{"action":"launchClip","idempotencyKey":"e2e-deck-mismatch-1","params":{"clip":"E2E Clip","deck":"Deck One"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/resolume/actions", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok.Value)
@@ -491,7 +582,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-audit"}
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -543,6 +634,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		Result struct {
 			Outcome             string `json:"outcome"`
 			AttributionDegraded bool   `json:"attributionDegraded"`
+			ResolvedID          string `json:"resolvedId"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &blackoutResp); err != nil {
@@ -553,6 +645,9 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	}
 	if !blackoutResp.Result.AttributionDegraded {
 		t.Errorf("blackout (exempt) attributionDegraded = false, want true (it proceeded on a failing audit store)")
+	}
+	if blackoutResp.Result.ResolvedID != "" {
+		t.Errorf("blackout resolvedId = %q, want absent — blackout addresses nothing to resolve an id for", blackoutResp.Result.ResolvedID)
 	}
 	foundDisconnectAll := false
 	for _, r := range arena.requestLog() {
@@ -567,7 +662,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	// launchClip: NOT exempt. Must fail closed (503) with nothing sent to
 	// Arena — the default ADR-024 decision 11 rule, and the direction the
 	// safety-class translation must never accidentally exempt.
-	status, body = doDispatch("launchClip", "e2e-audit-launchclip-1", `{"id":"`+e2eClipID+`"}`)
+	status, body = doDispatch("launchClip", "e2e-audit-launchclip-1", `{"clip":"E2E Clip","deck":"Deck One"}`)
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("launchClip (not exempt) status = %d, want 503 (fail closed on a failing audit store); body: %s", status, body)
 	}

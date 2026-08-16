@@ -475,6 +475,26 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		runs = append(runs, mapMacroRunSummary(run))
 	}
 
+	// Every configured Resolume instance, rendered exactly as GET
+	// /resolume/instances renders it — fatal to omit under ADR-020 decision
+	// 3, matching MacroRuns above. The composition read is skipped when
+	// there are no views and degrades to null on a config-store error
+	// rather than failing the whole snapshot — see
+	// resolumeCompositionDegradeOnError's own doc comment.
+	resolumeViews, err := h.deps.Resolume.ListInstances(ctx)
+	if err != nil {
+		h.writeInternalError(w, now, "list resolume instances", err)
+		return
+	}
+	var resolumeComposition *v1.ResolumeInstanceComposition
+	if len(resolumeViews) > 0 {
+		resolumeComposition = resolumeCompositionDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
+	}
+	resolumeInstances := make([]v1.ResolumeInstance, 0, len(resolumeViews))
+	for _, rv := range resolumeViews {
+		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -482,6 +502,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		FPP:            v1.FPPSection{Instances: instances},
 		Collectors:     collectors,
 		MacroRuns:      runs,
+		Resolume:       resolumeInstances,
 	})
 }
 

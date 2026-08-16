@@ -486,6 +486,78 @@ func TestHasAnyPrincipalTrueOnceAPrincipalExists(t *testing.T) {
 	}
 }
 
+// TestHasAnyPrincipalTrueOnceAPrincipalExistsWithReservedPresent proves the
+// reserved principal never masks a genuine one: once a real human principal
+// exists, HasAnyPrincipal stays true and EnsureBootstrap stays a no-op
+// regardless of whether the reserved recovery principal also exists.
+func TestHasAnyPrincipalTrueOnceAPrincipalExistsWithReservedPresent(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, dataDir := newTestService(t, clock)
+	ctx := context.Background()
+
+	if _, err := svc.EnsureReservedRecoveryPrincipal(ctx); err != nil {
+		t.Fatalf("ensure reserved recovery principal: %v", err)
+	}
+	if _, err := svc.CreatePrincipal(ctx, "operator", KindHuman, RoleViewer, "some-password"); err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+
+	has, err := svc.HasAnyPrincipal(ctx)
+	if err != nil {
+		t.Fatalf("has any principal: %v", err)
+	}
+	if !has {
+		t.Errorf("HasAnyPrincipal = false with a real principal and the reserved principal both present, want true")
+	}
+
+	if err := svc.EnsureBootstrap(ctx); err != nil {
+		t.Fatalf("ensure bootstrap: %v", err)
+	}
+	if _, err := os.Stat(bootstrapFilePath(dataDir)); !os.IsNotExist(err) {
+		t.Errorf("bootstrap file exists after EnsureBootstrap with a real principal present, want none")
+	}
+}
+
+// TestFirstBootWithReservedRecoveryPrincipalAlreadyPresent is the
+// regression test for the first-boot bug: coordinator.go creates the
+// built-in recovery principal before EnsureBootstrap is ever consulted, so
+// this reproduces that exact order. Before the fix, HasAnyPrincipal counted
+// the reserved principal, EnsureBootstrap treated the deployment as already
+// claimed, and no bootstrap file was ever written.
+func TestFirstBootWithReservedRecoveryPrincipalAlreadyPresent(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	svc, _, dataDir := newTestService(t, clock)
+	ctx := context.Background()
+
+	if _, err := svc.EnsureReservedRecoveryPrincipal(ctx); err != nil {
+		t.Fatalf("ensure reserved recovery principal: %v", err)
+	}
+
+	if err := svc.EnsureBootstrap(ctx); err != nil {
+		t.Fatalf("ensure bootstrap: %v", err)
+	}
+	code := readBootstrapCode(t, dataDir)
+	if code == "" {
+		t.Fatalf("bootstrap file is empty with only the reserved principal present")
+	}
+
+	admin, err := svc.ClaimBootstrap(ctx, code, "operator", "a-strong-password", "phone", "", FormPassword, clock.now())
+	if err != nil {
+		t.Fatalf("claim bootstrap: %v", err)
+	}
+	if admin.Role != RoleAdmin || admin.Kind != KindHuman || admin.Reserved {
+		t.Errorf("created principal = %+v, want Role=admin Kind=human Reserved=false", admin)
+	}
+
+	authenticated, err := svc.AuthenticatePassword(ctx, "operator", "a-strong-password")
+	if err != nil {
+		t.Fatalf("authenticate as newly created admin: %v", err)
+	}
+	if authenticated.ID != admin.ID {
+		t.Errorf("authenticated principal ID = %q, want %q", authenticated.ID, admin.ID)
+	}
+}
+
 func TestClaimBootstrapCreatesAdminAndInvalidatesCode(t *testing.T) {
 	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
 	svc, st, dataDir := newTestService(t, clock)

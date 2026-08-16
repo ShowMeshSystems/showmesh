@@ -130,6 +130,16 @@ type ActionOutcome struct {
 	// ConfirmedAt is meaningful only when State == ActionConfirmed, and is
 	// always strictly after DispatchedAt.
 	ConfirmedAt time.Time
+
+	// SelectedDeckChanged records whether the selected deck changed
+	// between this action's decision and its confirmation (TRACK-D-ADAPTER-SPEC.md
+	// §3.8) — evidence carried alongside the outcome, never a refusal
+	// (making it one would reintroduce the fail-closed inversion D-3's own
+	// review found three times in one diff). nil means either this is not
+	// [ActionLaunchClip] (the only action that races a deck — layers are
+	// deck-independent) or the deck could not be read at confirmation
+	// time; nil is NEVER coerced to false.
+	SelectedDeckChanged *bool
 }
 
 // ActionParams is the typed parameter bag for one Dispatch call; which fields
@@ -157,6 +167,16 @@ type ActionParams struct {
 	// against THIS layer's own declared bound read off the pre-dispatch
 	// baseline, never against the [0, 1] the bench capture happened to see.
 	Master float64
+
+	// ResolvedAtRevision is the CompositionStore revision that was current
+	// when a caller above this dispatcher resolved a name into one of the
+	// id fields above — 0 when nothing was resolved against a composition
+	// (blackout). Dispatch refuses before doing anything else if the store
+	// has since moved past this revision: Arena preserves an object's own
+	// id across a rename, so a resolved id does not fail safe on its own
+	// against a rename-and-re-upload that lands between resolution and
+	// dispatch.
+	ResolvedAtRevision int64
 }
 
 // ActionDispatcherOptions configures an [ActionDispatcher]. Every field left
@@ -208,6 +228,23 @@ func NewActionDispatcher(collector *Collector, opts ActionDispatcherOptions) *Ac
 	return &ActionDispatcher{collector: collector, now: now, sleep: sleep, pollInterval: pollInterval}
 }
 
+// CurrentCompositionWithRevision returns the stored composition Dispatch
+// itself resolves every id against, together with the CompositionStore
+// revision it was read at — for a caller that resolves a name into an
+// [ActionParams] field (setting [ActionParams.ResolvedAtRevision] to the
+// returned revision) before Dispatch is ever called.
+//
+// Revision is read BEFORE the composition, never after: Refresh always
+// stores a new composition strictly before it stores the new revision
+// number, so this ordering can only under-report freshness, never pair a
+// revision with a composition older than the one actually resolved
+// against.
+func (d *ActionDispatcher) CurrentCompositionWithRevision() (*TrackedComposition, int64, error) {
+	revision := d.collector.compositionStore.LoadedRevision()
+	tc, err := d.collector.compositionStore.Current()
+	return tc, revision, err
+}
+
 // Actions returns [actionRegistry]'s entries, sorted by Name so a discovery
 // endpoint built from them does not depend on Go's slice-literal order.
 func (d *ActionDispatcher) Actions() []ActionDescriptor {
@@ -227,28 +264,48 @@ func (d *ActionDispatcher) Actions() []ActionDescriptor {
 // Resolume said or failed to say is a state in the returned [ActionOutcome].
 // That signature is the stability contract D-3/B is built against.
 func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params ActionParams) (ActionOutcome, error) {
+	if params.ResolvedAtRevision != 0 {
+		if current := d.collector.compositionStore.LoadedRevision(); current != params.ResolvedAtRevision {
+			return refusedOutcome(name, fmt.Sprintf(
+				"the composition was replaced (revision %d, now %d) while this command was being prepared; the "+
+					"resolved reference may no longer name the intended object — re-issue the command",
+				params.ResolvedAtRevision, current)), nil
+		}
+	}
+
 	w := d.openWindow()
 	ctx, cancel := context.WithDeadline(ctx, w.endAt)
 	defer cancel()
 
+	var outcome ActionOutcome
 	switch name {
 	case ActionLaunchClip:
-		return d.dispatchLaunchClip(ctx, w, params), nil
+		outcome = d.dispatchLaunchClip(ctx, w, params)
 	case ActionClearLayer:
-		return d.dispatchClearLayer(ctx, w, params), nil
+		outcome = d.dispatchClearLayer(ctx, w, params)
 	case ActionBlackout:
-		return d.dispatchBlackout(ctx, w), nil
+		outcome = d.dispatchBlackout(ctx, w)
 	case ActionLaunchColumn:
-		return d.dispatchLaunchColumn(ctx, w, params), nil
+		outcome = d.dispatchLaunchColumn(ctx, w, params)
 	case ActionSelectDeck:
-		return d.dispatchSelectDeck(ctx, w, params), nil
+		outcome = d.dispatchSelectDeck(ctx, w, params)
 	case ActionSetLayerBypass:
-		return d.dispatchSetLayerBypass(ctx, w, params), nil
+		outcome = d.dispatchSetLayerBypass(ctx, w, params)
 	case ActionSetLayerMaster:
-		return d.dispatchSetLayerMaster(ctx, w, params), nil
+		outcome = d.dispatchSetLayerMaster(ctx, w, params)
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}
+
+	// Track D seam D-3a §4 rule 1: the recovery record updates at
+	// confirmation, never at dispatch (ADR-003). Centralized here, once,
+	// rather than in each dispatchX method, so every action's confirmed
+	// path updates the record identically.
+	if outcome.State == ActionConfirmed {
+		d.collector.applyConfirmedActionToRecoveryRecord(name, params, outcome.ConfirmedAt)
+	}
+
+	return outcome, nil
 }
 
 // --- Deadline and budget constants (§3.3) ---------------------------------

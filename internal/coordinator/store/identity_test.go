@@ -175,6 +175,35 @@ func TestHasAnyPrincipal(t *testing.T) {
 	}
 }
 
+// TestHasAnyPrincipalExcludesReservedPrincipal is the regression test for
+// the first-boot bug: the built-in recovery principal is created at every
+// coordinator startup, so counting it here would make bootstrap a
+// permanent no-op on any coordinator running that wiring.
+func TestHasAnyPrincipalExcludesReservedPrincipal(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	ensureReservedPrincipalForTest(t, st)
+
+	has, err := st.HasAnyPrincipal(ctx)
+	if err != nil {
+		t.Fatalf("has any principal (reserved only): %v", err)
+	}
+	if has {
+		t.Errorf("HasAnyPrincipal = true with only the reserved principal present, want false")
+	}
+
+	if _, err := st.CreatePrincipal(ctx, PrincipalRecord{ID: "p-1", Name: "operator", Kind: "human", Role: "admin"}); err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+	has, err = st.HasAnyPrincipal(ctx)
+	if err != nil {
+		t.Fatalf("has any principal (reserved + real): %v", err)
+	}
+	if !has {
+		t.Errorf("HasAnyPrincipal = false with a real principal alongside the reserved one, want true")
+	}
+}
+
 func TestSetPrincipalPasswordHashBumpsGeneration(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()

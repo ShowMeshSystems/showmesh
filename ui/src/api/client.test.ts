@@ -7,7 +7,15 @@
  * `fetch` response behavior.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { ApiClient, FPP_COMMAND_REQUEST_TIMEOUT_MS, MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS } from './client'
+import {
+  ApiClient,
+  FPP_COMMAND_REQUEST_TIMEOUT_MS,
+  MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS,
+  MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS,
+  MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS,
+  RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
+  RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
+} from './client'
 import { CSRFRejectedError, ForbiddenError, TooManyRequestsError, UnauthorizedError } from './errors'
 import { startTestServer, waitFor, type TestServer } from './test-support/test-server'
 import { makeProblem } from './test-support/fixtures'
@@ -317,6 +325,93 @@ describe('FPP_COMMAND_REQUEST_TIMEOUT_MS', () => {
     })
 
     clock.advance(FPP_COMMAND_REQUEST_TIMEOUT_MS - 1)
+    if (release.fn === null) throw new Error('release.fn not set')
+    release.fn()
+
+    const result = await resultPromise
+    expect(result).toEqual({ ok: true })
+  })
+})
+
+// D-4 review finding 2: MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS and
+// MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS were exported but never
+// referenced by any test — proved vacuous by setting
+// RESOLUME_ACTION_CLIENT_MARGIN_MS to -49_000 (an 6_000ms budget against
+// the 55s server deadline) and RESOLUME_RECOVERY_CLIENT_MARGIN_MS to
+// -1_209_000 (a 6_000ms budget against the ~1,215,000ms server bound):
+// all 596 tests, typecheck, lint and build passed regardless. The tests
+// below fail on both mutations and pass at the shipped values (80s
+// action, 1,245,000ms restore); see this task's own report for the exact
+// commands run to confirm both directions.
+describe('RESOLUME_ACTION_REQUEST_TIMEOUT_MS', () => {
+  it('is never below the reconciled server write deadline plus round-trip margin', () => {
+    // Mirrors cmd_resolume_action_test.go's own
+    // TestMinResolumeActionClientTimeoutExceedsServerDefault: the target
+    // is server deadline PLUS a margin for the round trip, never the
+    // server deadline alone — a bound merely equal to it means the server
+    // can still be answering when this client has already given up.
+    expect(RESOLUME_ACTION_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS)
+  })
+
+  it('actually waits this long: a response arriving just before the deadline still succeeds', async () => {
+    const release: { fn: (() => void) | null } = { fn: null }
+    const s = await server((_req, res) => {
+      release.fn = () => respondJson(res, 200, { ok: true })
+    })
+
+    const clock = new FakeClock()
+    const client = new ApiClient(s.baseUrl, fetch, RESOLUME_ACTION_REQUEST_TIMEOUT_MS, clock)
+
+    const resultPromise = client.postJson<{ ok: boolean }>(
+      '/resolume/instance-1/actions',
+      { action: 'launchClip' },
+      new AbortController().signal,
+    )
+    await waitFor(() => release.fn !== null, {
+      message: 'the POST was never received by the test server',
+    })
+
+    clock.advance(RESOLUME_ACTION_REQUEST_TIMEOUT_MS - 1)
+    if (release.fn === null) throw new Error('release.fn not set')
+    release.fn()
+
+    const result = await resultPromise
+    expect(result).toEqual({ ok: true })
+  })
+})
+
+describe('RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS', () => {
+  it('is strictly above the server own worst-case restore bound', () => {
+    // Mirrors cmd_resolume_recovery_test.go's own
+    // TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerBound:
+    // STRICT inequality, because the server spends time past its own
+    // write-deadline computation (the post-restore audit write) before it
+    // can answer, so a client budget merely equal to it is still the
+    // Step 7 defect.
+    expect(RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS).toBeGreaterThan(
+      MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS,
+    )
+  })
+
+  it('actually waits this long: a response arriving just before the deadline still succeeds', async () => {
+    const release: { fn: (() => void) | null } = { fn: null }
+    const s = await server((_req, res) => {
+      release.fn = () => respondJson(res, 200, { ok: true })
+    })
+
+    const clock = new FakeClock()
+    const client = new ApiClient(s.baseUrl, fetch, RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS, clock)
+
+    const resultPromise = client.postJson<{ ok: boolean }>(
+      '/resolume/recovery/restore',
+      {},
+      new AbortController().signal,
+    )
+    await waitFor(() => release.fn !== null, {
+      message: 'the POST was never received by the test server',
+    })
+
+    clock.advance(RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS - 1)
     if (release.fn === null) throw new Error('release.fn not set')
     release.fn()
 

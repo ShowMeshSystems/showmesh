@@ -5,25 +5,25 @@ import (
 	"time"
 )
 
-// This file declares this package's own consumer-side view of Track D
-// seam D-3/A's action engine (internal/coordinator/collector/resolume,
-// built concurrently by a different builder against
-// docs/build/TRACK-D-D3-SPEC.md sections 2-4) — the same pattern
-// interfaces.go already established for [FPPInstanceView]/[FPPLister] and
-// [EventRecord]/[EventReader]: this package does not import a producer
-// package that is being built in parallel, or that this package does not
-// own the production wiring of; it declares the narrow shape it needs, and
-// a later wiring task (or a thin adapter, if D-3/A's real return types do
-// not already satisfy this shape verbatim) joins the two.
+// This file declares this package's own consumer-side view of
+// internal/coordinator/collector/resolume's action engine, the same
+// pattern interfaces.go already uses for [FPPInstanceView]/[FPPLister] and
+// [EventRecord]/[EventReader]: this interface names the narrow shape this
+// package needs from that dispatch engine without this file importing it,
+// and a wiring adapter elsewhere joins the two. No file in this package
+// imports that producer directly (resolumeinstances_test.go's
+// TestPackageNeverImportsACollector enforces it structurally): label
+// rendering calls pkg/resolumecomp instead, and the dispatch-budget
+// constant is a duplicated literal reconciled against the producer from a
+// TEST file, not a shared constant.
 //
-// This package's own job (D-3/B) ends at "decode the wire request,
-// authorize it, record it durably per ADR-024 decision 11, hand it to
+// This package's own job ends at "decode the wire request, authorize it,
+// record it durably per ADR-024 decision 11, hand it to
 // [ResolumeActionDispatcher.Dispatch], and render the wire response
 // honestly." Everything about HOW an action is dispatched — the derived
-// per-action deadline, the pre-dispatch baseline, the deck refusal
-// (TRACK-D-D3-SPEC.md section 3.4), composition-identity gating (section
-// 3.6), and confirmation itself — is D-3/A's, reached only through this
-// interface.
+// per-action deadline, the pre-dispatch baseline, the deck refusal,
+// composition-identity gating, and confirmation itself — is reached only
+// through this interface.
 
 // ResolumeActionParamKind is the wire JSON type one action parameter's
 // value must decode as — a ShowMesh object reference (a string), a
@@ -51,11 +51,15 @@ const (
 )
 
 // ResolumeActionParam describes one named parameter one action's "params"
-// object may carry. Every parameter in this seven-action vocabulary is
-// required — spec section 2 has no action with an optional parameter and a
-// default to fall back to — so, unlike fppcommand_primitives.go's
-// fppParamDef, this type carries no Default field: an absent required
-// parameter is always a 400, never silently defaulted.
+// object may carry. ADR-037 seam B added this vocabulary's first optional
+// parameters ("layer", "persistent", and launchClip's conditionally
+// required "deck"): unlike fppcommand_primitives.go's fppParamDef, this
+// type still carries no Default field, because an absent optional
+// parameter here is never silently filled with a value — it is simply
+// absent from the normalized map [decodeResolumeActionParams] returns, and
+// what an absent reference field means (e.g. "persistent" absent implies
+// false) is a resolution rule the caller applies, not a decode-time
+// default.
 type ResolumeActionParam struct {
 	Name     string
 	Kind     ResolumeActionParamKind
@@ -173,6 +177,20 @@ type ResolumeActionResult struct {
 	// before returning).
 	DispatchedAt *time.Time
 	ResolvedAt   *time.Time
+
+	// ResolvedID is the Resolume object id the ADR-037 name reference
+	// resolved to — "" for blackout, which addresses nothing, and for a
+	// request refused before any name was resolved at all. ADR-037
+	// removes the id from what an operator types, not from the record: it
+	// stays visible here for debugging, so an audit reader can answer
+	// "which object did this dispatch actually address" even after a
+	// rename makes that no longer obvious from the name alone.
+	ResolvedID string
+
+	// SelectedDeckChanged mirrors [v1.ResolumeActionResult.SelectedDeckChanged]
+	// (TRACK-D-ADAPTER-SPEC.md §3.8) — passed straight through from
+	// resolume.ActionOutcome.SelectedDeckChanged, never recomputed here.
+	SelectedDeckChanged *bool
 }
 
 // ResolumeActionDispatcher is what this package needs from D-3/A's action

@@ -49,6 +49,22 @@ type fppDispatcher interface {
 	Dispatch(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error)
 }
 
+// resolumeActionDispatcher is this package's own minimal view of
+// [api.ResolumeActionDispatcher] (Track D seam C): dispatch one
+// already-authored Resolume action by name, through the SAME dispatch
+// path the HTTP handler uses. Declared here rather than importing that
+// package's own interface type directly is unnecessary — api is already
+// imported for [fppDispatcher] — but the method set is narrowed to
+// Dispatch alone, since Actions() (the static vocabulary listing) is a
+// config-write-time concern this package never needs at run time. A real
+// *api.ResolumeActionDispatcher-satisfying value (the adapter
+// internal/coordinator's resolumeactionwiring.go builds) satisfies this
+// with no adapter of its own, the identical "no adapter needed" property
+// interfaces.go's own precedent already establishes elsewhere.
+type resolumeActionDispatcher interface {
+	Dispatch(ctx context.Context, action string, params map[string]any, now time.Time) (api.ResolumeActionResult, error)
+}
+
 // mqttRegistry is this package's own minimal view of [broker.Registry]:
 // resolve a broker identifier, publish through it, and run one
 // publish-then-wait exchange through it. *broker.Registry satisfies this
@@ -113,6 +129,17 @@ type Dependencies struct {
 	// an ordinary broker.ErrUnknownBroker rather than a nil dereference
 	// (see step_mqtt.go).
 	Brokers mqttRegistry
+
+	// ResolumeActions is Track D seam D-3/A's action engine, reached
+	// through the SAME [api.ResolumeActionDispatcher]
+	// api.Dependencies.ResolumeActions holds — coordinator.go wires this
+	// field from that exact value (apiDeps.ResolumeActions), so a macro's
+	// Resolume step and the HTTP endpoint dispatch through one path, never
+	// two. May be nil when no live Resolume instance is configured on this
+	// coordinator at all; every call site in step_resolume.go handles that
+	// as an ordinary refused outcome rather than a nil dereference,
+	// matching Brokers' identical nil-safe posture above.
+	ResolumeActions resolumeActionDispatcher
 
 	// Primitives is the Step 8 FPP primitive registry, used at resolve
 	// time to re-normalize a pinned action's params out of stored JSON
@@ -234,15 +261,16 @@ func (o Options) withDefaults() Options {
 // that method's own doc comment for what it does and, as importantly, what
 // it does not.
 type Executor struct {
-	store    *store.Store
-	identity identity.Service
-	dispatch fppDispatcher
-	brokers  mqttRegistry
-	prims    config.FPPPrimitiveRegistry
-	notify   func()
-	clock    func() time.Time
-	newID    func() string
-	logger   *slog.Logger
+	store           *store.Store
+	identity        identity.Service
+	dispatch        fppDispatcher
+	brokers         mqttRegistry
+	resolumeActions resolumeActionDispatcher
+	prims           config.FPPPrimitiveRegistry
+	notify          func()
+	clock           func() time.Time
+	newID           func() string
+	logger          *slog.Logger
 
 	maxSnapshotFinishedRuns   int
 	maxPriorFailuresPerSubmit int
@@ -267,6 +295,7 @@ func NewExecutor(deps Dependencies, opts Options) *Executor {
 		identity:                  deps.Identity,
 		dispatch:                  deps.Dispatch,
 		brokers:                   deps.Brokers,
+		resolumeActions:           deps.ResolumeActions,
 		prims:                     deps.Primitives,
 		notify:                    deps.Notify,
 		clock:                     deps.Clock,

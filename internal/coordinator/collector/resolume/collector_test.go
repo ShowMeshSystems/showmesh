@@ -1062,6 +1062,112 @@ func TestTransitionToReachableTriggersSurveyInTheSamePoll(t *testing.T) {
 	}
 }
 
+// TestGenuineReturnDefersTransitionSurveyPastTheSettleWindow is review
+// finding B3's own regression test (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §5
+// term 2, acceptance criterion 11): with Options.TransitionSurveySettle
+// configured, a GENUINE crash-return (down -> up, never this Collector's
+// own first-ever/startup transition, which has no crash to settle from)
+// must not survey on the identical poll cycle that first observes the
+// return — the by-id traffic waits for a LATER poll, once the settle
+// window elapses, with no external trigger (no RequestSurvey, no
+// WebSocket reconnect) needed to make that later poll happen.
+// TestGateWaitsSettleDelayBeforeSurveying (recovery_test.go) proves the
+// identical property for Recovery's OWN confirming survey; this proves it
+// for the collector's UNCONDITIONAL transition-survey trigger, which runs
+// even with no Recovery ever wired in — the gap this finding named
+// (that stub-driven test cannot see this Collector's own survey call at
+// all). Breaking: the `if gateTransition && c.transitionSurveySettle > 0`
+// branch in noteLivenessAndCheckTransition (collector.go) deleted —
+// confirmed this test goes red (the return poll's own observation count
+// grew past 2 on the very cycle that observed the return), then restored.
+func TestGenuineReturnDefersTransitionSurveyPastTheSettleWindow(t *testing.T) {
+	store := newTestCompositionStore(t, recoveryTestComposition())
+
+	var mu sync.Mutex
+	up := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/product" {
+			mu.Lock()
+			curUp := up
+			mu.Unlock()
+			if !curUp {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write(loadTestdata(t, "product.json"))
+			return
+		}
+		// Content does not matter for this test — only WHETHER a survey's
+		// worth of by-id traffic landed, measured via the returned
+		// observation count, exactly as TestFlappingReachabilityRateLimitsTransitionSurveys
+		// measures it via a raw request count.
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	now := time.Now()
+	settle := 5 * time.Second
+	c := newTestCollector(t, srv.URL, Options{Now: fixedClock(&now), CompositionStore: store, TransitionSurveySettle: settle})
+	c.Footprint().SetPollInterval(time.Second)
+
+	poll := func() ([]observation.Observation, bool) {
+		now = now.Add(c.Footprint().PollInterval())
+		return c.Poll(context.Background())
+	}
+
+	// Startup transition: this Collector's first-ever liveness result,
+	// never a "return" — surveys immediately, exactly as
+	// TestTransitionToReachableTriggersSurveyInTheSamePoll's own startup
+	// case does. Consumed here so the assertions below measure only the
+	// LATER, genuine down->up transition.
+	obs, complete := poll()
+	if !complete || len(obs) <= 2 {
+		t.Fatalf("startup Poll() = (%d obs, complete=%v), want more than 2 observations and complete=true", len(obs), complete)
+	}
+	now = now.Add(DefaultTransitionSurveyMinInterval + time.Second)
+
+	// Crash: liveness fails.
+	mu.Lock()
+	up = false
+	mu.Unlock()
+	if obs, _ = poll(); len(obs) != 2 {
+		t.Fatalf("down poll returned %d observation(s), want exactly 2 (both collection_failed)", len(obs))
+	}
+
+	// Return: liveness succeeds again — a GENUINE crash-return. Criterion
+	// 11's own assertion: no survey on THIS cycle.
+	mu.Lock()
+	up = true
+	mu.Unlock()
+	obs, complete = poll()
+	if !complete {
+		t.Fatalf("return Poll() complete = false, want true")
+	}
+	if len(obs) != 2 {
+		t.Fatalf("return poll returned %d observation(s), want exactly 2 (liveness only) — a survey was issued on the same cycle that observed the return, violating the settle window", len(obs))
+	}
+
+	// Four more polls, still well inside the 5s settle window measured
+	// from the return above (1s + 2s + 3s + 4s < 5s): still liveness only.
+	for i := 0; i < 4; i++ {
+		obs, complete = poll()
+		if !complete || len(obs) != 2 {
+			t.Fatalf("poll %d inside the settle window = (%d obs, complete=%v), want exactly 2 observations and complete=true", i, len(obs), complete)
+		}
+	}
+
+	// The fifth poll lands exactly on the settle deadline (5 x 1s poll
+	// interval == the configured 5s settle): the deferred survey now
+	// runs, with no external trigger.
+	obs, complete = poll()
+	if !complete {
+		t.Fatalf("post-settle Poll() complete = false, want true")
+	}
+	if len(obs) <= 2 {
+		t.Fatalf("post-settle poll returned only %d observation(s), want more than 2 — the deferred survey must run once the settle window elapses", len(obs))
+	}
+}
+
 // TestSteadyStateAfterInitialTransitionNeverSurveysAgain is
 // TRACK-D-D2-SPEC.md's own required companion test: once the one
 // legitimate startup-transition survey has run, a steady succession of
@@ -1403,6 +1509,41 @@ func TestCompositionUploadTriggersSurveyWithoutWaitingForAnythingElse(t *testing
 	identified := findSignal(t, obs, SignalCompositionIdentified)
 	if identified.Absence == observation.StateNotCollected {
 		t.Errorf("resolume.composition.identified Absence = %q after an upload landed, want a real survey result, not still not_collected", identified.Absence)
+	}
+}
+
+// TestIdentityObservationEmitsForDeckMismatch is the owner review finding
+// 1 regression guard (2026-08-16): identityObservation used to return
+// ok=false for IdentityDeckMismatch, on the theory that omitting the
+// observation left resolume.composition.identified "untouched". It does
+// not: survey's other resolume-survey rows are delivered complete=true in
+// the same batch, so an omitted row is pruned, not preserved — deleting
+// the evidence instead of leaving it. This fails if the observation is
+// ever skipped again.
+func TestIdentityObservationEmitsForDeckMismatch(t *testing.T) {
+	c := newTestCollector(t, "http://127.0.0.1:1", Options{})
+	identity := IdentityResult{
+		Outcome:         IdentityDeckMismatch,
+		Reason:          "the selected deck changed while this identity check was running, so the missing clips are not evidence of a stale composition",
+		ExpectedDeck:    IdentitySampleClip{ID: 2000000000001},
+		ActualDeckKnown: true,
+		ActualDeck:      2000000000002,
+		ActualDeckName:  "Deck Two",
+	}
+
+	obs := c.identityObservation(identity, false, time.Now())
+	if obs.Absence != "" {
+		t.Fatalf("identityObservation(deck mismatch) Absence = %q, want empty — the observation must be emitted as a real value, never skipped", obs.Absence)
+	}
+	s, ok := obs.Value.(string)
+	if !ok || !contains(s, "deck_mismatch:") {
+		t.Fatalf("identityObservation(deck mismatch) Value = %v, want a string carrying \"deck_mismatch:\"", obs.Value)
+	}
+	if !contains(s, "2000000000001") {
+		t.Errorf("identityObservation(deck mismatch) Value = %q, want it to name the expected deck (id 2000000000001)", s)
+	}
+	if !contains(s, "Deck Two") {
+		t.Errorf("identityObservation(deck mismatch) Value = %q, want it to name the actual selected deck (Deck Two)", s)
 	}
 }
 

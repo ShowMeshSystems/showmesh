@@ -110,7 +110,7 @@ func TestResolumeWiringSurfacesReachableObservation(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(context.Background(), cfg, runner, &resolume.CompositionStore{}, testLogger())
+	wire, err := newResolumeWiring(context.Background(), cfg, runner, &resolume.CompositionStore{}, testLogger(), nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(context.Background(), config.Config{}, runner, &resolume.CompositionStore{}, testLogger())
+	wire, err := newResolumeWiring(context.Background(), config.Config{}, runner, &resolume.CompositionStore{}, testLogger(), nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -202,6 +202,36 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	}
 	if len(obs) != 0 {
 		t.Errorf("observations = %v, want none for resource kind resolume when the collector was never configured", obs)
+	}
+}
+
+// TestResolumeInstanceListerSynthesizesNotYetPolledBeforeFirstPoll is
+// finding 5's regression guard (owner review, 2026-08-16): before the
+// first successful poll for a freshly configured Resolume instance (or
+// immediately after a coordinator restart), GET /resolume/instances must
+// report a stated not_collected row per static signal, not an empty
+// observations array — mirroring apiwiring_test.go's identical FPP-side
+// case for notYetPolledObservations (the Step 3 review finding both
+// repeat: an empty array renders as blank, and blank reads as fine).
+func TestResolumeInstanceListerSynthesizesNotYetPolledBeforeFirstPoll(t *testing.T) {
+	st := openTestStore(t)
+	lister := resolumeInstanceLister{st: st, instanceID: "resolume-test"}
+
+	views, err := lister.ListInstances(context.Background())
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len(views) = %d, want 1", len(views))
+	}
+	if len(views[0].Observations) != len(resolume.AllSignals) {
+		t.Fatalf("len(Observations) = %d, want %d (one not_collected row per resolume.AllSignals entry)",
+			len(views[0].Observations), len(resolume.AllSignals))
+	}
+	for _, o := range views[0].Observations {
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("signal %q Absence = %q, want %q", o.Signal, o.Absence, observation.StateNotCollected)
+		}
 	}
 }
 

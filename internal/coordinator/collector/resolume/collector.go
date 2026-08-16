@@ -222,6 +222,51 @@ type Options struct {
 	// reference, since [Collector.Footprint] merely returns whatever was
 	// stored at construction.
 	Footprint *FootprintControls
+
+	// OnReachableTransition is Track D seam D-3a's own hook (§5 term 1):
+	// called on a GENUINE reachable->unreachable->reachable return — never
+	// on this Collector's very first liveness result ever, which is not a
+	// "return" (a coordinator that starts while Resolume is already
+	// reachable must not fire the crash-recovery gate for a crash that
+	// never happened). Never throttled: the crash-recovery gate must
+	// still fire on a second crash inside [DefaultTransitionSurveyMinInterval]
+	// (§5's own bypass, criterion 12) — that limiter applies only to the
+	// ordinary transition SURVEY trigger below, a separate condition.
+	// Invoked in its own goroutine, never synchronously from
+	// [Collector.Poll] — this Collector has no idea how long the callback
+	// takes and must never block on it. nil means no hook.
+	OnReachableTransition func(returnedAt time.Time)
+
+	// OnUnreachableTransition is Track D seam D-3a's own crash-detection
+	// hook: called on a genuine reachable->unreachable transition, i.e.
+	// the crash itself. Invoked SYNCHRONOUSLY from
+	// [Collector.Poll] — unlike OnReachableTransition — because the
+	// callback's own job (snapshotting the recovery record) must complete
+	// before any LATER Poll call could detect the eventual return;
+	// internal/coordinator/collector.Runner never calls Poll concurrently
+	// with itself for one collector, so a synchronous call here is
+	// guaranteed ordered against every subsequent call. Must be fast and
+	// must never issue a request to Resolume — see
+	// [Recovery.CaptureCrashTarget], the only intended implementation.
+	// nil means no hook.
+	OnUnreachableTransition func(at time.Time)
+
+	// TransitionSurveySettle is Track D seam D-3a §5 term 2's own settle
+	// delay, applied to THIS Collector's own transition-triggered survey
+	// (the noteLivenessAndCheckTransition trigger below) on a genuine
+	// crash-return: the ~30-read survey must not land on the same poll
+	// cycle that first observes the return (criterion 11). [Recovery]'s
+	// own explicit confirming survey (recovery.go,
+	// Recovery.HandleReachableTransition) applies an equal delay
+	// independently via its own RecoveryOptions.Settle — production
+	// wiring (resolumewiring.go) configures both from the SAME
+	// cfg.ResolumeRecoverySettle value rather than letting them drift,
+	// but each enforces its own copy, because this Collector must hold
+	// the rule even with no Recovery wired at all. Zero (the default)
+	// disables deferral entirely — every pre-existing test in this
+	// package, none of which sets this field, keeps behaving exactly as
+	// before.
+	TransitionSurveySettle time.Duration
 }
 
 // Collector polls one Resolume Arena instance's REST API. On the liveness
@@ -311,6 +356,17 @@ type Collector struct {
 	lastLivenessReachable  bool
 	lastTransitionSurveyAt time.Time // zero means "never yet" — the first transition-triggered survey this Collector ever runs is never rate-limited
 
+	// transitionSurveySettle is [Options.TransitionSurveySettle], stored
+	// verbatim; zero disables deferral (see that field's own doc comment).
+	transitionSurveySettle time.Duration
+
+	// transitionSurveyDueAt is when a survey deferred by a genuine
+	// crash-return may run — the zero value means none is currently
+	// deferred. Set only inside [Collector.noteLivenessAndCheckTransition]'s
+	// own gateTransition branch; consumed by
+	// [Collector.takeDueDeferredTransitionSurvey].
+	transitionSurveyDueAt time.Time
+
 	// lastSeenCompositionRevision mirrors [CompositionStore]'s own "0 ==
 	// nothing loaded yet" convention exactly (idmap.go): starting this at
 	// the Go zero value means a Collector constructed before anything was
@@ -318,6 +374,26 @@ type Collector struct {
 	// change (0 == 0), while a genuinely new upload — whose revision is
 	// always >= 1 — always does.
 	lastSeenCompositionRevision int64
+
+	// onReachableTransition is [Options.OnReachableTransition], stored
+	// verbatim; nil is a legitimate value (no crash-recovery gate wired
+	// in — most tests, and any coordinator with no Resolume instance
+	// configured).
+	onReachableTransition func(time.Time)
+
+	// onUnreachableTransition is [Options.OnUnreachableTransition], stored
+	// verbatim; nil is legitimate for the identical reasons
+	// onReachableTransition's nil is.
+	onUnreachableTransition func(time.Time)
+
+	// recoveryMu guards recoveryRecord — Track D seam D-3a's own recovery
+	// record (recovery.go), deliberately its own lock in this file's
+	// established granular-locking style: a reader of the record
+	// ([Collector.RecoveryRecord]) must never block behind an in-progress
+	// survey the way [Collector.surveyMu] correctly does for a second
+	// survey attempt.
+	recoveryMu     sync.Mutex
+	recoveryRecord map[ObjectID]recoveryEntry
 }
 
 // New constructs a Collector for one Resolume Arena instance. id must
@@ -366,14 +442,17 @@ func New(id string, baseURL string, opts Options) (*Collector, error) {
 	}
 
 	return &Collector{
-		id:               id,
-		client:           client,
-		validFor:         validFor,
-		now:              now,
-		logger:           logger,
-		surveyValidFor:   surveyValidFor,
-		compositionStore: compositionStore,
-		footprint:        footprint,
+		id:                      id,
+		client:                  client,
+		validFor:                validFor,
+		now:                     now,
+		logger:                  logger,
+		surveyValidFor:          surveyValidFor,
+		compositionStore:        compositionStore,
+		footprint:               footprint,
+		onReachableTransition:   opts.OnReachableTransition,
+		onUnreachableTransition: opts.OnUnreachableTransition,
+		transitionSurveySettle:  opts.TransitionSurveySettle,
 	}, nil
 }
 
@@ -519,6 +598,19 @@ func (c *Collector) requeueSurvey(afterReconnect bool) {
 	}
 }
 
+// SurveyNow runs a survey immediately, bypassing both the liveness poll
+// cadence and [DefaultTransitionSurveyMinInterval] — the "explicit path"
+// that limiter already exempts (its own doc comment). Used only by the
+// crash-recovery gate (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §5's bypass),
+// which must still be able to restore on a second crash inside that
+// minute. Returns the resulting [SurveySnapshot] directly, so a caller
+// never needs to poll [Collector.LastSurveySnapshot] afterward to learn
+// what its own call just produced.
+func (c *Collector) SurveyNow(ctx context.Context, afterReconnect bool) SurveySnapshot {
+	c.survey(ctx, afterReconnect, c.now())
+	return c.LastSurveySnapshot()
+}
+
 // Poll performs one collection cycle.
 //
 // Liveness (SignalReachable, SignalProduct, source [sourceName]):
@@ -574,12 +666,17 @@ func (c *Collector) requeueSurvey(afterReconnect bool) {
 //     describing the previous show. Never rate-limited: an upload is an
 //     explicit operator action, not something that can flap.
 //
-// Either trigger runs the survey in THIS poll cycle, not a queued one for
-// next time — unlike [Collector.RequestSurvey], which only sets a flag
-// [Collector.takePendingSurvey] consumes on a LATER call. Both triggers are
-// evaluated only once this cycle's liveness result is already known, so
-// there is nothing to check, and nothing rate-limited, on a throttled skip
-// (due == false above) or on a liveness failure.
+// Both triggers are evaluated only once this cycle's liveness result is
+// already known, so there is nothing to check, and nothing rate-limited,
+// on a throttled skip (due == false above) or on a liveness failure.
+// compositionRevisionChanged runs its survey in THIS poll cycle, not a
+// queued one for next time. The first trigger does too, UNLESS this
+// success is a GENUINE crash-return (gateTransition) and
+// [Options.TransitionSurveySettle] is configured — TRACK-D-D3A-CRASH-RECOVERY-SPEC.md
+// §5 term 2 / criterion 11: that survey is deferred until the settle
+// window elapses, picked up by [Collector.takeDueDeferredTransitionSurvey]
+// on a later call, with no external trigger required — see
+// [Collector.noteLivenessAndCheckTransition]'s own doc comment.
 //
 // complete is ALWAYS true when this poll actually ran (liveness, or
 // liveness plus survey): see [surveySourceName]'s own doc comment for why
@@ -630,6 +727,10 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 		runSurvey = true
 		surveyAfterReconnect = true
 	}
+	if c.takeDueDeferredTransitionSurvey(now) {
+		runSurvey = true
+		surveyAfterReconnect = true
+	}
 	if c.compositionRevisionChanged() {
 		runSurvey = true
 	}
@@ -660,13 +761,43 @@ func (c *Collector) noteLivenessAndCheckTransition(reachable bool, now time.Time
 	c.transitionMu.Lock()
 	defer c.transitionMu.Unlock()
 
-	// "The previous liveness result was a failure" (down->up) and "this is
-	// the very first successful poll ever" (livenessKnown still false)
-	// collapse into one test: !livenessKnown || !lastLivenessReachable,
-	// evaluated BEFORE either field is updated for this cycle.
-	isTransition := reachable && (!c.livenessKnown || !c.lastLivenessReachable)
+	wasKnown, wasReachable := c.livenessKnown, c.lastLivenessReachable
+
+	// isTransition: "the previous liveness result was a failure" (down->up)
+	// or "this is the very first successful poll ever" (livenessKnown
+	// still false) — evaluated BEFORE either field is updated for this
+	// cycle. This is the SURVEY trigger: a first-ever observation is
+	// legitimately worth surveying (there is nothing yet to compare it
+	// against).
+	isTransition := reachable && (!wasKnown || !wasReachable)
+
+	// gateTransition/crashTransition are a GENUINE return/crash only — never
+	// this Collector's very first liveness result, which is not a "return":
+	// a coordinator started while Resolume is already reachable must not
+	// report a phantom automatic restore. Both require wasKnown, unlike
+	// isTransition above.
+	gateTransition := reachable && wasKnown && !wasReachable
+	crashTransition := !reachable && wasKnown && wasReachable
+
 	c.livenessKnown = true
 	c.lastLivenessReachable = reachable
+
+	if gateTransition && c.onReachableTransition != nil {
+		// Fired on EVERY genuine return, unrate-limited — see
+		// [Options.OnReachableTransition]'s own doc comment for why this
+		// must not share the transition-survey rate limit below. Spawned
+		// so a slow or blocking hook (the crash-recovery gate's own
+		// settle wait) can never stall this Poll call.
+		cb, at := c.onReachableTransition, now
+		go cb(at)
+	}
+	if crashTransition && c.onUnreachableTransition != nil {
+		// Called SYNCHRONOUSLY, unlike the return hook above — see
+		// [Options.OnUnreachableTransition]'s own doc comment for why
+		// ordering against a later Poll call depends on this completing
+		// before this call returns.
+		c.onUnreachableTransition(now)
+	}
 
 	if !isTransition {
 		return false
@@ -675,6 +806,36 @@ func (c *Collector) noteLivenessAndCheckTransition(reachable bool, now time.Time
 		return false
 	}
 	c.lastTransitionSurveyAt = now
+
+	// Track D seam D-3a §5 term 2 / criterion 11: a GENUINE crash-return
+	// (gateTransition — never this Collector's first-ever liveness
+	// result, which has no crash to settle from) must not survey on the
+	// SAME cycle that observes the return. The rate-limit check above
+	// still decides WHETHER this transition earns a survey at all; this
+	// only changes WHEN an approved one actually runs — deferred until
+	// transitionSurveySettle elapses, then picked up by a later
+	// [Collector.Poll] call via [Collector.takeDueDeferredTransitionSurvey],
+	// with no external trigger required.
+	if gateTransition && c.transitionSurveySettle > 0 {
+		c.transitionSurveyDueAt = now.Add(c.transitionSurveySettle)
+		return false
+	}
+	return true
+}
+
+// takeDueDeferredTransitionSurvey reports whether a survey deferred by
+// [Collector.noteLivenessAndCheckTransition]'s own settle gate is due, and
+// clears the deferral if so. Called once per successful [Collector.Poll]
+// cycle. Returns false, leaving any deferral in place, both when nothing
+// is deferred and when the settle window has not yet elapsed — a later
+// Poll call re-checks it the identical way.
+func (c *Collector) takeDueDeferredTransitionSurvey(now time.Time) bool {
+	c.transitionMu.Lock()
+	defer c.transitionMu.Unlock()
+	if c.transitionSurveyDueAt.IsZero() || now.Before(c.transitionSurveyDueAt) {
+		return false
+	}
+	c.transitionSurveyDueAt = time.Time{}
 	return true
 }
 
@@ -1048,17 +1209,27 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 	}
 	loadWindow := !c.identityConfirmed
 
+	// Track D seam D-3a §4 rule 2/§2.3, gated on THIS survey confirming
+	// our composition is actually loaded (review finding B2): an
+	// unconfirmed-identity survey — mid-load-window, or reading the wrong
+	// composition — is not evidence about our composition and must never
+	// demote an action-sourced recovery entry, because that demotion is
+	// exactly what left the manual restore with nothing usable after a
+	// crash. Fed from the reads this survey already performed, never a
+	// separate poll of its own (criterion 8).
+	if identity.Outcome == IdentityTrue {
+		c.recoveryUpdateFromSurvey(layerResults, surveyedAt)
+	}
+
 	// Track D seam D-3's action vocabulary consumes this survey's identity
 	// and selected-deck result — never a fresh read of its own — via
 	// [Collector.LastSurveySnapshot]. Recorded here, once, after both are
 	// known for this survey, using this survey's own IdentityOutcome
-	// UNCHANGED by the load-window/deck-mismatch handling below: a
-	// snapshot reader (a pre-dispatch guard) needs the real classification
-	// (including IdentityDeckMismatch, which the identified-signal
-	// observation below deliberately does NOT publish) rather than the
-	// load-window-adjusted "unknown" string that signal renders for an
-	// operator dashboard — see TRACK-D-D3-SPEC.md §3.6's own "consumes it,
-	// does not recompute it."
+	// UNCHANGED by the load-window handling below: a snapshot reader (a
+	// pre-dispatch guard) needs the real classification rather than the
+	// load-window-adjusted "unknown" string the identified-signal
+	// observation below renders for an operator dashboard — see
+	// TRACK-D-D3-SPEC.md §3.6's own "consumes it, does not recompute it."
 	snapIdentity := identity.Outcome
 	if loadWindow {
 		snapIdentity = IdentityUnknown
@@ -1071,21 +1242,7 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 
 	var obs []observation.Observation
 	obs = append(obs, c.compositionNameObservation(surveyedAt))
-	if identityObs, ok := c.identityObservation(identity, loadWindow, surveyedAt); ok {
-		obs = append(obs, identityObs)
-	} else {
-		// IdentityDeckMismatch: §6's own "leave identified untouched" —
-		// no observation is emitted for this signal this cycle at all, so
-		// whatever the store already holds simply ages normally. Logged so
-		// the mismatch is not silently invisible to anyone watching logs.
-		c.logger.Warn("resolume composition identity check found a deck mismatch, not a stale reference; resolume.composition.identified left unchanged this cycle",
-			"resolume_id", c.id,
-			"expected_deck", identity.ExpectedDeck.ID,
-			"actual_deck_known", identity.ActualDeckKnown,
-			"actual_deck", identity.ActualDeck,
-		)
-	}
-
+	obs = append(obs, c.identityObservation(identity, loadWindow, surveyedAt))
 	obs = append(obs, c.deckObservations(deckResults, tc.Decks(), selectedID, selectedName, selectedKnown, surveyedAt)...)
 	obs = append(obs, c.layerObservations(tc.Layers(), layerResults, groupResults, loadWindow, surveyedAt)...)
 	obs = append(obs, c.clipObservations(clipIDs, clipResults, surveyedAt)...)
@@ -1103,26 +1260,39 @@ func (c *Collector) surveyNoCompositionObservations(now time.Time) []observation
 	}
 }
 
-// identityObservation builds resolume.composition.identified's
-// observation, or ok=false when none should be emitted this cycle at all
-// — §6's "leave identified untouched" for a deck-mismatch outcome, which
-// is "not an identity result at all" (§6's own wording).
-func (c *Collector) identityObservation(identity IdentityResult, loadWindow bool, now time.Time) (observation.Observation, bool) {
+// identityObservation builds resolume.composition.identified's observation.
+// A deck mismatch is not skipped: the survey's other resolume-survey rows
+// are delivered complete=true in the same batch (survey's own caller), so
+// omitting this signal here does not leave it "unchanged" — ReplaceObservations
+// prunes any resolume-survey row not present in a complete=true batch, which
+// deletes the evidence instead of preserving it.
+func (c *Collector) identityObservation(identity IdentityResult, loadWindow bool, now time.Time) observation.Observation {
 	if identity.Outcome == IdentityDeckMismatch {
-		return observation.Observation{}, false
+		return c.surveyMeasured(SignalCompositionIdentified, "deck_mismatch: "+identity.Reason+" ("+deckMismatchDetail(identity)+")", now)
 	}
 
 	switch {
 	case loadWindow:
 		return c.surveyMeasured(SignalCompositionIdentified,
-			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now), true
+			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now)
 	case identity.Outcome == IdentityTrue:
-		return c.surveyMeasured(SignalCompositionIdentified, "identified", now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "identified", now)
 	case identity.Outcome == IdentityFalse:
-		return c.surveyMeasured(SignalCompositionIdentified, "not_identified: "+identity.Reason+formatMissing(identity.MissingIDs), now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "not_identified: "+identity.Reason+formatMissing(identity.MissingIDs), now)
 	default: // IdentityUnknown
-		return c.surveyMeasured(SignalCompositionIdentified, "unknown: "+identity.Reason, now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "unknown: "+identity.Reason, now)
 	}
+}
+
+// deckMismatchDetail names both decks per §6.4's "naming both decks"
+// requirement, using the same formatRef every other deck/clip reference in
+// this file uses.
+func deckMismatchDetail(identity IdentityResult) string {
+	expected := "expected deck " + formatRef(identity.ExpectedDeck.ID, "")
+	if !identity.ActualDeckKnown {
+		return expected + ", now selected deck could not be re-identified"
+	}
+	return expected + ", now selected " + formatRef(identity.ActualDeck, identity.ActualDeckName)
 }
 
 func formatMissing(ids []IdentitySampleClip) string {

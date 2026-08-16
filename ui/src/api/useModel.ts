@@ -23,6 +23,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
+  ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
   ConfigShowMacro,
@@ -31,9 +32,13 @@ import type {
   Model,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
+  ResolumeRecoveryConfigResponse,
+  ResolumeRecoveryResponse,
+  ResolumeRecoveryRestoreResponse,
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
+import type { ResolumeActionResult } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -43,6 +48,9 @@ type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigRespo
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
+type SchemaResolumeInstancesResponse = components['schemas']['ResolumeInstancesResponse']
+type SchemaResolumeInstanceResponse = components['schemas']['ResolumeInstanceResponse']
+type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -92,6 +100,25 @@ export function putFPPEndpointsConfig(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
+export function getResolumeRecovery(): Promise<ResolumeRecoveryResponse> {
+  return store.getResolumeRecovery()
+}
+
+export function getResolumeRecoveryConfig(): Promise<ResolumeRecoveryConfigResponse> {
+  return store.getResolumeRecoveryConfig()
+}
+
+export function putResolumeRecoveryConfig(
+  payload: ConfigResolumeRecoveryPayload,
+): Promise<ResolumeRecoveryConfigResponse> {
+  return store.putResolumeRecoveryConfig(payload)
+}
+
+export function restoreResolumeRecovery(): Promise<ResolumeRecoveryRestoreResponse> {
+  return store.restoreResolumeRecovery()
 }
 
 // Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin
@@ -210,4 +237,53 @@ export function uploadResolumeComposition(
   onProgress: (progress: UploadProgress) => void,
 ): Promise<ResolumeCompositionUploadResponse> {
   return store.uploadResolumeComposition(file, onProgress)
+}
+
+// Track D seam D-4: Resolume as an observability resource (seam E) and
+// the seven-action vocabulary (D-3/seam B). Same thin pass-through
+// pattern as every method above.
+
+export function listResolumeInstances(): Promise<SchemaResolumeInstancesResponse> {
+  return store.listResolumeInstances()
+}
+
+export function getResolumeInstance(instanceId: string): Promise<SchemaResolumeInstanceResponse> {
+  return store.getResolumeInstance(instanceId)
+}
+
+export function listResolumeActions(): Promise<SchemaResolumeActionsResponse> {
+  return store.listResolumeActions()
+}
+
+export function launchResolumeClip(params: {
+  clip: string
+  deck?: string
+  layer?: string
+  persistent?: boolean
+}): Promise<ResolumeActionResult> {
+  return store.launchResolumeClip(params)
+}
+
+export function clearResolumeLayer(layer: string): Promise<ResolumeActionResult> {
+  return store.clearResolumeLayer(layer)
+}
+
+export function launchResolumeColumn(column: string, deck: string): Promise<ResolumeActionResult> {
+  return store.launchResolumeColumn(column, deck)
+}
+
+export function selectResolumeDeck(deck: string): Promise<ResolumeActionResult> {
+  return store.selectResolumeDeck(deck)
+}
+
+export function blackoutResolume(): Promise<ResolumeActionResult> {
+  return store.blackoutResolume()
+}
+
+export function setResolumeLayerBypass(layer: string, bypassed: boolean): Promise<ResolumeActionResult> {
+  return store.setResolumeLayerBypass(layer, bypassed)
+}
+
+export function setResolumeLayerMaster(layer: string, master: number): Promise<ResolumeActionResult> {
+  return store.setResolumeLayerMaster(layer, master)
 }

@@ -6,6 +6,169 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## A correct diagnosis of the cause is not a correct diagnosis of the mechanism
+
+**Local toolchain condition, Track D, 2026-08-16.** 82 of 528 UI tests failed locally on every branch checked, including `main` with no Track D code present, all with `RequestInit: Expected signal ("AbortSignal {}") to be an instance of AbortSignal`. The first diagnosis got the cause right and the mechanism wrong. It correctly identified a Node 26.7.0 toolchain as the proximate cause — right, because Track D's own new UI tests passed cleanly on the same run, which correctly ruled out the repository. It concluded from that, incorrectly, that Node 22 was no longer installed locally. It was: Node 22.21.1 was present under nvm the entire time, with nvm's own `default` alias already pointed at it. What had actually happened was narrower — a tool install on 2026-08-16 at 12:54 planted `node`, `npm` and `npx` symlinks in `~/.local/bin` pointing at its own bundled Node 26.7.0, and the shell profile prepends `~/.local/bin` after nvm loads, so those symlinks sat in front of nvm's Node 22 on every interactive shell. Node 22 was shadowed, not missing, and `which node` would have shown that in one command; it was not run before the first diagnosis was written down.
+
+The two readings prescribe different remedies. "Node 22 is not installed" points at installing it, which would have left the shadowing symlinks in place and the failure unchanged. "Node 22 is installed and shadowed" points at removing what sits in front of it, which is what actually fixed it: the repository changed nothing, and the local environment now resolves `node` to the same version CI pins.
+
+**Rule:** ruling out the wrong cause (here, the repository) does not certify the mechanism proposed for the right one. Before prescribing a remedy, run the one command that distinguishes "not installed" from "shadowed" — for a toolchain, that is `which`/`command -v` before anything else — because the two diagnoses share every symptom and only that command tells them apart.
+
+## A test suite cannot tell you that nothing can *reach* the function
+
+**Track D seam D-4, 2026-08-16.** D-3a's built-in `system-resolume-recovery` principal is created at every coordinator startup, and `Store.HasAnyPrincipal` was a bare `SELECT EXISTS(SELECT 1 FROM principals)`. So the reserved principal always existed by the time bootstrap asked, bootstrap always no-opped, the bootstrap file was never written, and no operator could ever claim a fresh deployment. Every test in both seams' suites passed throughout, because nothing in either suite ever exercised bootstrap against a store that already held the reserved principal — D-3a's own tests created it and moved on; D-4's own tests ran against fixtures that never had it.
+
+It surfaced only because building D-4 required standing up a coordinator from scratch and claiming it as an operator would, exactly the step both suites had skipped. That is Step 6's own lesson (CLAUDE.md, and BUILD-LOG's 2026-08-12 entry: `ClaimBootstrap`, `IssueToken`, and `CreatePrincipal` all shipped compiled and tested with no caller that could reach them) reappearing in a sharper form. Step 6's version was "nothing calls the function" — a dead capability, findable in principle by grepping for callers. This one is worse: `HasAnyPrincipal` *is* called, by exactly the code meant to guard it, and returns a wrong but entirely plausible answer. The function is reachable; what is unreachable is the state that would expose it as wrong, because nothing in either seam's test suite ever ran a fresh store forward through both `EnsureReservedPrincipal` and `EnsureBootstrap` in that order.
+
+**Rule:** a test suite cannot tell you that nothing calls the function, and it cannot tell you that nothing can *reach* the function either — not "is this called" but "does anything exercise the sequence of startup side effects a real boot performs, in the order a real boot performs them." Two features can each ship with full unit coverage and still be mutually incompatible the moment both run against one real store from a cold start. The requirement to verify in a real browser against a real, freshly-created stack is what found this; no suite in either seam's own branch was structured to.
+
+## A guard constant that is exported and never asserted is not a guard
+
+**Track D, 2026-08-16, twice in one day.** D-4's review found `MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS` and `MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS`, both exported from `ui/src/api/client.ts`, asserted against by nothing. A reviewer set the action budget to 6 seconds against the coordinator's 55-second write deadline and all 596 UI tests, typecheck, lint and build stayed green, because no test compared the two numbers. The file carrying both constants has a doc comment on `FPP_COMMAND_REQUEST_TIMEOUT_MS`, roughly forty lines above, that narrates this exact defect as already paid for: it describes Step 8's client-side review finding a client timeout set to 6,000 ms with 389/389 tests passing, and records the fix as a reconciliation test that fails the build the day the constant is ever set too small again. The comment was read; the pattern it describes was not reapplied to the two constants written right below it.
+
+Hours earlier the same day, D-3a's own review caught the identical shape in its third finding: the recovery-restore client's timeout floor was reconciled against the server bound with `>=` rather than strict `>`, so a client permitted to give up at the exact instant the server might still be answering had a "reconciliation test" that could never fail on that condition, because it accepted equality as sufficient.
+
+**Rule:** an exported constant whose name promises a bound is not a bound until a test fails when it is violated — export alone documents intent, it does not enforce it. And a defect a project has already paid for once, with the payment recorded in the code as a doc comment, still has to be checked for again at every new call site; a comment describing the fix is not the same artifact as a test enforcing it, and only the second one survives a reviewer who reads code faster than comments.
+
+## Verification that only exercises the success path misses the defects that live on the failure path
+
+**Track D seam D-4, 2026-08-16.** The build's own real-Arena browser check drove two actions and both succeeded: a live dispatch and a real ambiguous-clip disambiguation in the launchClip picker. Every one of D-4's four object-id leaks — action-outcome text, the restore report, the crash-recovery record, and the ambiguous-clips-adjacent copy, all capable of embedding a raw Arena id via `deckSelectionRefusal`'s `formatRef` or a bare `by-id/<id>` path segment inside a Go error string — sits on a refusal path, and the refusal is the one an operator hits first, because a clip id resolves only while its own deck is selected (ADR-032 decision 6). None of them could have been found by a check that only exercises actions that work.
+
+The gap was not unique to the manual browser pass: the automated test that should have caught the leak did not, because its fixture used a hand-written paraphrase of the refusal string instead of the string the coordinator's own `resolumeaction` package actually produces. A paraphrase cannot leak what it never contained. The review-fix commit closed both gaps together: it drove a real `launchClip` against an unselected deck on the operator's real Arena to capture a genuine refusal string, then proved the new sanitizer strips it losslessly — the fixture that finally caught the defect was the server's own text, not a description of it.
+
+**Rule:** a success-only pass through a feature — driving actions that work, on fixtures that assert paraphrased strings — structurally cannot find defects that only appear when something is refused, is missing, or is wrong. Refusal paths, error paths, and degraded-evidence paths need their own pass, with fixtures built from the real strings the system under test actually emits, not a maintainer's summary of what those strings probably say.
+
+## A survey destroyed the restore target, and its own tests were green
+
+**Track D seam D-3a, 2026-08-16.** The crash-recovery record kept, per layer, the most
+recent thing ShowMesh knew was playing there: a confirmed `launchClip` wrote `{clip,
+action}`, and any later survey overwrote that entry survey-sourced. The reader then
+reclassified every survey-sourced entry to `unknown` before a restore could use it. So any
+survey that ran between a confirmed launch and a crash silently erased the very entry the
+restore exists to read.
+
+The production sequence made this certain rather than unlucky, and that is what makes it
+worth keeping. A survey runs on WebSocket connect; a crash-restart of the coordinator's
+connection to Arena always reconnects the socket; the socket returns roughly 1.5 seconds
+after Arena launches, while the liveness poll that gates the restore notices the return on
+its own ten-second cadence. So the survey always landed first, always overwrote the record,
+and the gate always read a wiped entry. The reviewer reproduced it directly rather than
+inferring it.
+
+The test suite that shipped with the first version of this seam was green throughout,
+because every test that exercised the transition drove it directly — set the record, fire
+the reachable-transition handler, assert the restore — with no WebSocket, no survey, and no
+reconnect in the loop. The shorter path the test took was also the path that never
+triggered the defect.
+
+**Rule:** when a test drives a state transition directly, ask what else fires on that same
+transition in production and is not in the test's call graph. This is related to but
+distinct from the existing rule that a test environment differing from the deployment
+environment reports success on exactly that difference: here the harness was not a
+different environment, it was a shorter causal chain through the identical one.
+
+## File ownership prevents conflicts, not incompatibilities
+
+**Track D, four seams merged 2026-08-16.** Git merged every seam cleanly — no path
+collision, no textual conflict — and the combined tree still broke twice, caught only by
+the post-fold gate suite rather than by the merge itself.
+
+First: seam E added `TestPackageNeverImportsACollector`, an AST guard asserting
+`internal/coordinator/api` imports no collector package, while seam B's own work needed
+`internal/coordinator/api/resolumecomposition.go` and `resolumeaction.go` to call label and
+ambiguity helpers that lived in `internal/coordinator/collector/resolume`. Both seams were
+specified by the same orchestrator and the two specifications contradicted each other; nothing
+in either branch's own gates could have found it, because each branch only had its own half.
+The fix moved the shared vocabulary into `pkg/resolumecomp`, which both the `api` package and
+the collector package already import legitimately, so there is exactly one implementation of
+each label rather than two that could drift.
+
+Second: seam D-3a added a parameter to `newResolumeWiring` and updated every call site it
+could see in its own branch. Seam C created a new test file, `resolumemacro_e2e_test.go`,
+calling that same constructor in parallel. Neither branch's own test suite covered the
+other's new file, so both branches individually built and tested clean, and git merged them
+into a tree that did not compile.
+
+**Rule:** parallel seams need a shared contract for anything they both touch by name — a
+signature, an import boundary, a registry — stated once and referenced by both specs rather
+than derived independently by each. Beyond that, the fold's own gate run is the only thing
+that catches what the shared contract missed; a clean git merge is evidence of no textual
+conflict and no evidence of compatibility.
+
+## `make test-integration` is not concurrency-safe, and its failures look like regressions
+
+**Multi-track session, 2026-08-16.** Four integration fixtures use fixed, non-namespaced
+container names: `showmesh-test-mosquitto` (port 11883), `showmesh-bench-fpp-master` (port
+8090), `showmesh-test-mosquitto-fpp` (11893), `showmesh-test-mosquitto-fppmqtt` (11894).
+`showmesh-test-mosquitto`'s harness registers `trap cleanup EXIT`, and `cleanup` removes the
+container **by name**. Two concurrent runs of `make test-integration` therefore share one
+container: whichever run exits first tears down the broker the still-running second run is
+using, mid-test.
+
+Two builders working different worktrees hit this from opposite directions the same night —
+one saw its own broker vanish mid-suite, the other saw a "port already in use" failure
+starting its own — and both correctly diagnosed contention between concurrent runs rather
+than reporting a regression in the code either of them had touched.
+
+**Rule:** a shared fixture failure presents as a red test in code the diff never touched.
+Before chasing a red integration gate as a regression, check whether another run of the same
+suite is using the same fixed container name or port at the same time. This project's
+worktree-per-track model makes concurrent runs routine, not an edge case, so the fixtures
+need namespacing to actually match that model; until they do, treat a same-night red run
+against otherwise-unrelated code as contention first.
+
+## A flaky test that was a test defect, diagnosed by falsification
+
+**Multi-track session, 2026-08-16.** `TestRetainedHeartbeatReplayNeverReadsHealthy` failed
+about 4% of the time. Reproduced alone on an exclusively-owned broker at roughly 1-in-25,
+which ruled out the contention lesson above before it was even written down.
+
+The polling loop made two independent HTTP round trips per iteration: one `getRaw` call
+captured the raw response body for a later assertion, and a separate `findNode` call decoded
+the gate condition the loop was waiting on. Both calls hit a live coordinator answering
+correctly at every instant, but the two requests were not atomic with each other. When the
+`not_collected` to `unknown_age` transition landed in the gap between them, the raw body
+(request one) still read `not_collected` while the decoded gate (request two) already read
+`unknown_age`, so the loop exited on a body that was one HTTP round trip stale relative to
+the condition it exited on.
+
+The fix decodes the gate from the same `getRaw` response that captures the body, removing
+the second round trip entirely. Verified 50 passes out of 50 across two separate foreground
+batches, and then — because a fix that removes a flake is not by itself evidence the test
+still catches anything — a deliberate mutation (making `inventory.classify` return a
+non-nil timestamp on a retained delivery, which the test exists to forbid) turned the fixed
+test red 3 times out of 3 before the mutation was reverted.
+
+**Rule:** a flake that survives isolation from concurrent runs is a test defect, not
+infrastructure noise, and the usual shape is two requests standing in for one atomic read.
+And fixing a flake without proving the test still bites can leave it permanently green and
+useless — mutate the behavior it names and confirm the fixed version still fails.
+Separately, this is a fourth instance of a rule this project keeps needing: `not_collected`
+and `unknown_age` are different claims about evidence, and a test straddling the transition
+between them has to read both halves from one instant, not two.
+
+## The measured shape of the operator's own composition beat the record of it
+
+**Track D seam B, 2026-08-16.** [ADR-037](../decisions/ADR-037-resolume-references-are-names-not-ids.md)'s
+Context section states the operator's real composition has 13 of 18 layers named and 5
+unnamed, and lists the 13 by name. Seam B's parser, run against the same `.avc` file, finds
+**12** named and **6** unnamed — and the ADR's own bulleted list of names has 12 entries, one
+fewer than its own prose claims. The record and the data it describes had already drifted by
+the time the seam that implements the record started.
+
+The more consequential gap is in the decision itself. ADR-037 decision 3 assumed a reference
+scoped by deck plus layer name would be enough to be unambiguous. Measured against the same
+real composition: **seven groups covering 16 of the 36 clips remain ambiguous** under deck
+plus layer plus name, and every one of them is on `Main`, the deck the show runs from. The
+vocabulary was not wrong to require scoping; it was optimistic about how far deck-plus-name
+scoping alone would go, and the gap surfaced only once the parser ran against the operator's
+own file rather than against the record's summary of it.
+
+**Rule:** when a decision rests on the shape of real data, parse the real data before
+building the decision's vocabulary around it, and re-check after — a record that summarizes
+external data is itself a measurement with its own error, not a substitute for reading the
+source again at build time.
+
 ## A branch that is never pushed is never linted
 
 **Step 9's close-out.** The `step-9-wave-3` branch ran every local gate before merging: `gofmt`, `go vet`, `go test -race`, the UI suite, the FPP integration suite. All green, honestly reported, and the claim was believed. But `golangci-lint` runs only in CI, and the branch was never pushed, so the one gate that would have failed was the one gate the branch never met: the merge landed on `main` with 63 lint findings, and CI had already been red since the day before on Track D's own findings, so the new ones arrived invisibly behind the old ones.

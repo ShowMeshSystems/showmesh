@@ -4,6 +4,30 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResolumeCompositionUpload } from './ResolumeCompositionUpload'
 import { ApiError, ForbiddenError, UnauthorizedError } from '../api/errors'
 import type { ResolumeCompositionSummary, ResolumeCompositionUploadResponse } from '../api'
+import { ModelContext } from '../app/ModelContext'
+import { makeModel } from '../app/test-support/fixtures'
+import { makeAuthenticatedSession, makeSessionResponse } from '../api/test-support/fixtures'
+import type { Model } from '../app/types'
+
+// Review finding 5: this control lost its config:write scope gate when it
+// moved from Configuration.tsx (which only ever mounted it inside that
+// scope's own gate) to ResolumeView.tsx (which renders with no session at
+// all). Every test below now renders inside a ModelContext carrying an
+// authenticated, config:write-holding session by default, matching what
+// this component could always assume before the move — the "no scope"
+// case gets its own describe block further down.
+const writeSession = makeAuthenticatedSession({
+  principal: { id: 'p-1', name: 'admin-1', kind: 'human', role: 'admin' },
+  scopes: ['config:write'],
+})
+
+function renderUpload(model: Model = makeModel({ session: writeSession })) {
+  return render(
+    <ModelContext.Provider value={model}>
+      <ResolumeCompositionUpload />
+    </ModelContext.Provider>,
+  )
+}
 
 // Mirrors Configuration.test.tsx's own pattern exactly (that file's own
 // header comment explains why): the two API functions this component
@@ -38,8 +62,8 @@ const summary: ResolumeCompositionSummary = {
   writtenBy: { product: 'Arena', major: 7, minor: 23, micro: 2, revision: 0 },
   canvas: { width: 1920, height: 1080 },
   decks: [
-    { id: 'deck-1', name: 'Main', closed: false, clipCount: 30 },
-    { id: 'deck-2', name: 'Backup', closed: true, clipCount: 12 },
+    { id: 'deck-1', name: 'Main', nameGenerated: false, closed: false, clipCount: 30 },
+    { id: 'deck-2', name: 'Backup', nameGenerated: false, closed: true, clipCount: 12 },
   ],
   layerCount: 18,
   layerGroupCount: 3,
@@ -77,7 +101,7 @@ describe('ResolumeCompositionUpload', () => {
     getResolumeComposition.mockRejectedValue(
       new ApiError('no Resolume composition has been uploaded yet; upload a composition file to create one', 404),
     )
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
 
     expect(await screen.findByText(/no Resolume composition has been uploaded yet/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/composition file/i)).toBeInTheDocument()
@@ -86,7 +110,7 @@ describe('ResolumeCompositionUpload', () => {
 
   it('renders a 403 on the initial read as a permissions state, not a connectivity or server failure', async () => {
     getResolumeComposition.mockRejectedValue(new ForbiddenError('this principal’s role does not include "config:write"'))
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/config:write/)
@@ -96,7 +120,7 @@ describe('ResolumeCompositionUpload', () => {
 
   it('renders a 401 on the initial read distinctly from a 403 or a transport failure', async () => {
     getResolumeComposition.mockRejectedValue(new UnauthorizedError(false, 'no valid credential was presented'))
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/no valid credential/i)
@@ -104,7 +128,7 @@ describe('ResolumeCompositionUpload', () => {
 
   it('renders the stored composition: name, Arena version, and every deck name', async () => {
     getResolumeComposition.mockResolvedValue(storedResponse)
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
 
     expect(await screen.findByText('Christmas 25')).toBeInTheDocument()
     expect(screen.getByText(/Arena 7\.23\.2\.0/)).toBeInTheDocument()
@@ -116,7 +140,7 @@ describe('ResolumeCompositionUpload', () => {
     getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
     uploadResolumeComposition.mockResolvedValue(uploadResponse)
     const user = userEvent.setup()
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
 
     const file = makeAvcFile()
@@ -135,7 +159,7 @@ describe('ResolumeCompositionUpload', () => {
     getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
     uploadResolumeComposition.mockResolvedValue(uploadResponse)
     const user = userEvent.setup()
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
 
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
@@ -151,7 +175,7 @@ describe('ResolumeCompositionUpload', () => {
       new ApiError('the uploaded file is not a valid Resolume composition (.avc) file', 400),
     )
     const user = userEvent.setup()
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByText('Christmas 25')
 
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile('not-a-composition.avc'))
@@ -185,7 +209,7 @@ describe('ResolumeCompositionUpload', () => {
       new ApiError('This does not look like a Resolume composition file: its root element is not <Composition>.', 400),
     )
     const user = userEvent.setup()
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
 
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile('not-a-composition.avc'))
@@ -200,7 +224,7 @@ describe('ResolumeCompositionUpload', () => {
     const user = userEvent.setup()
 
     uploadResolumeComposition.mockRejectedValue(new ApiError('the uploaded file exceeds this coordinator’s upload limit', 413))
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
     await user.click(screen.getByRole('button', { name: /upload composition/i }))
@@ -209,7 +233,7 @@ describe('ResolumeCompositionUpload', () => {
 
     getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
     uploadResolumeComposition.mockRejectedValue(new ForbiddenError('this principal’s role does not include "config:write"'))
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
     await user.click(screen.getByRole('button', { name: /upload composition/i }))
@@ -219,7 +243,7 @@ describe('ResolumeCompositionUpload', () => {
 
     getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
     uploadResolumeComposition.mockRejectedValue(new UnauthorizedError(true, 'the supplied credential was rejected'))
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
     await user.click(screen.getByRole('button', { name: /upload composition/i }))
@@ -230,7 +254,7 @@ describe('ResolumeCompositionUpload', () => {
     getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
     uploadResolumeComposition.mockRejectedValue(new ApiError('network error uploading to /config/resolume/composition'))
     const user = userEvent.setup()
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
 
     await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
@@ -258,7 +282,7 @@ describe('ResolumeCompositionUpload', () => {
           resolveUpload = resolve
         }),
     )
-    render(<ResolumeCompositionUpload />)
+    renderUpload()
     await screen.findByRole('button', { name: /upload composition/i })
 
     const input = screen.getByLabelText(/composition file/i) as HTMLInputElement
@@ -276,5 +300,45 @@ describe('ResolumeCompositionUpload', () => {
     await waitFor(() => expect(screen.getByText('Christmas 25')).toBeInTheDocument())
 
     expect(uploadResolumeComposition).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Review finding 5: this control used to be mounted only inside
+// Configuration.tsx's own config:write gate; on ResolumeView.tsx, which
+// renders with no session at all, that protection was silently lost — a
+// plain <button> submitted a real upload for a session that would only
+// learn it lacked the scope from the resulting 403. ADR-024 decision 12
+// requires a disabled control with a stated reason instead.
+describe('ResolumeCompositionUpload (config:write scope gate)', () => {
+  it('disables the upload button with a stated reason when there is no session at all', async () => {
+    getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
+    renderUpload(makeModel({ session: null }))
+
+    const button = await screen.findByRole('button', { name: /upload composition/i })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/coordinator what this device may do/i)).toBeInTheDocument()
+  })
+
+  it('disables the upload button with a stated reason for a signed-out session', async () => {
+    getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
+    renderUpload(makeModel({ session: makeSessionResponse() }))
+
+    const button = await screen.findByRole('button', { name: /upload composition/i })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/sign in to use this control/i)).toBeInTheDocument()
+  })
+
+  it('disables the upload button for a session that lacks config:write, and never dispatches on click', async () => {
+    getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
+    const user = userEvent.setup()
+    renderUpload(makeModel({ session: makeAuthenticatedSession({ scopes: [] }) }))
+
+    const button = await screen.findByRole('button', { name: /upload composition/i })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/does not include "config:write"/i)).toBeInTheDocument()
+
+    await user.upload(screen.getByLabelText(/composition file/i), makeAvcFile())
+    await user.click(button)
+    expect(uploadResolumeComposition).not.toHaveBeenCalled()
   })
 })

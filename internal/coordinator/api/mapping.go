@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -580,27 +581,43 @@ var healthCriticalSignals = map[observation.SignalID]func(value any) observation
 // cannot see, because a signal with zero observations never becomes a
 // member to begin with.
 func deriveInstanceHealth(obs []observation.Observation, now time.Time) observation.Health {
-	members := make([]observation.AggregateMember, 0, len(healthCriticalSignals))
 	fppdStateHealthy := false
-	for _, o := range obs {
-		if o.Absence == observation.StateUnsupported {
-			continue
-		}
-		whenCurrent, critical := healthCriticalSignals[o.Signal]
-		if !critical {
-			continue
-		}
-		h := observation.DeriveHealth(o, now, whenCurrent)
-		members = append(members, observation.AggregateMember{Health: h, Critical: true})
-		if o.Signal == "fpp.fppd.state" && h == observation.HealthHealthy {
+	health := deriveHealthFromCriticalSignals(obs, now, healthCriticalSignals, func(sig observation.SignalID, h observation.Health) {
+		if sig == "fpp.fppd.state" && h == observation.HealthHealthy {
 			fppdStateHealthy = true
 		}
-	}
-	health := observation.AggregateHealth(members)
+	})
 	if health == observation.HealthHealthy && !fppdStateHealthy {
 		return observation.HealthUnknown
 	}
 	return health
+}
+
+// deriveHealthFromCriticalSignals is the one aggregator loop every
+// resource's own derive*Health function calls, parameterized on that
+// resource's own critical-signal map — see [healthCriticalSignals] and
+// [resolumeHealthCriticalSignals]. onMember, when non-nil, is invoked with
+// each critical, non-unsupported observation's signal and resolved Health
+// as its AggregateMember is built, so a resource-specific rule (deriveInstanceHealth's
+// fpp.fppd.state cap) can inspect one signal without a second copy of this
+// loop.
+func deriveHealthFromCriticalSignals(obs []observation.Observation, now time.Time, critical map[observation.SignalID]func(value any) observation.Health, onMember func(sig observation.SignalID, h observation.Health)) observation.Health {
+	members := make([]observation.AggregateMember, 0, len(critical))
+	for _, o := range obs {
+		if o.Absence == observation.StateUnsupported {
+			continue
+		}
+		whenCurrent, ok := critical[o.Signal]
+		if !ok {
+			continue
+		}
+		h := observation.DeriveHealth(o, now, whenCurrent)
+		members = append(members, observation.AggregateMember{Health: h, Critical: true})
+		if onMember != nil {
+			onMember(o.Signal, h)
+		}
+	}
+	return observation.AggregateHealth(members)
 }
 
 // mapFPPInstance renders one [FPPInstanceView] as a [v1.FPPInstance].
@@ -629,6 +646,86 @@ func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
 		Observations:  obsEvidence,
 		LastPollAt:    formatTimePtr(fv.LastPollAt),
 		LastPollError: fv.LastPollError,
+	}
+}
+
+// --- Resolume instances ---
+
+// resolumeHealthCriticalSignals is Resolume's own health-critical set,
+// beside [healthCriticalSignals] rather than folded into it: unrelated
+// signal vocabularies, no fppdState-shaped cap. Signal IDs are inlined
+// string literals rather than imported from
+// internal/coordinator/collector/resolume for the identical
+// source-agnostic reason [healthCriticalSignals] inlines "fpp.reachable".
+var resolumeHealthCriticalSignals = map[observation.SignalID]func(value any) observation.Health{
+	// "resolume.reachable" mirrors "fpp.reachable": true is healthy,
+	// anything else is failed.
+	"resolume.reachable": func(value any) observation.Health {
+		if b, ok := value.(bool); ok && b {
+			return observation.HealthHealthy
+		}
+		return observation.HealthFailed
+	},
+	// "resolume.composition.identified" carries a descriptive string
+	// (resolume.Collector's own identityObservation), not a bare bool.
+	// Exactly "identified" is healthy. A "not_identified" prefix is
+	// degraded: the operator may legitimately have loaded a different
+	// composition, which is a thing to surface, not a system failure. A
+	// "deck_mismatch" prefix is unknown, not degraded (owner amendment,
+	// 2026-08-16): it means the sampled clips did not resolve because the
+	// selected deck changed mid-check, so identity could not be
+	// determined — that is an absence of evidence, and claiming degraded
+	// would assert ShowMesh found something wrong with the composition
+	// when it did not. Anything else (the "unknown: ..." load-window
+	// case, or an unrecognized type) is unknown.
+	"resolume.composition.identified": func(value any) observation.Health {
+		s, ok := value.(string)
+		if !ok {
+			return observation.HealthUnknown
+		}
+		switch {
+		case s == "identified":
+			return observation.HealthHealthy
+		case strings.HasPrefix(s, "not_identified"):
+			return observation.HealthDegraded
+		default:
+			return observation.HealthUnknown
+		}
+	},
+}
+
+// deriveResolumeHealth aggregates a Resolume instance's RESOLVED
+// observations into one [observation.Health] against
+// [resolumeHealthCriticalSignals], via the same
+// [deriveHealthFromCriticalSignals] loop [deriveInstanceHealth] uses.
+func deriveResolumeHealth(obs []observation.Observation, now time.Time) observation.Health {
+	return deriveHealthFromCriticalSignals(obs, now, resolumeHealthCriticalSignals, nil)
+}
+
+// mapResolumeInstance renders one [ResolumeInstanceView] as a
+// [v1.ResolumeInstance], at the given now. Mirrors [mapFPPInstance]'s shape:
+// [ResolveObservations] runs here, once, so every caller — GET
+// /resolume/instances, GET /resolume/instances/{id}, the snapshot's
+// resolume section, and every resolume.changed stream event — resolves
+// identically. composition is computed by the caller (resolumecomposition.go's
+// resolumeInstanceComposition), never here: it is coordinator-wide stored
+// configuration, not per-instance collector state, so every caller in this
+// package computes it exactly once per response rather than once per
+// instance.
+func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstanceComposition, now time.Time) v1.ResolumeInstance {
+	resolved := ResolveObservations(rv.Observations)
+	sortObservations(resolved)
+
+	obsEvidence := make([]v1.Evidence, 0, len(resolved))
+	for _, o := range resolved {
+		obsEvidence = append(obsEvidence, mapEvidence(o, now))
+	}
+
+	return v1.ResolumeInstance{
+		InstanceID:   rv.InstanceID,
+		Health:       string(deriveResolumeHealth(resolved, now)),
+		Observations: obsEvidence,
+		Composition:  composition,
 	}
 }
 

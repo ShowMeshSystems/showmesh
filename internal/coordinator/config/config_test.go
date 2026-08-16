@@ -67,6 +67,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 		AssetMaxUploadBytes:    assetstore.DefaultMaxUploadBytes,
 		AssetSyncInterval:      defaultAssetSyncInterval,
 		AssetInventoryInterval: defaultAssetInventoryInterval,
+		// SHOWMESH_RESOLUME_RECOVERY_SETTLE also defaults regardless of
+		// whether the collector is active — see its own doc comment.
+		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
 	}
 
 	// reflect.DeepEqual, not ==: FPPEndpoints is a slice, which made Config
@@ -104,13 +107,13 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		LogLevel:     "debug",
 		FPPEndpoints: nil,
 
-		FPPMQTTTopicPrefix: "falcon/player",
-		ResolumeID:         "resolume",
-
 		AssetDir:               "/data/showmesh/assets",
 		AssetMaxUploadBytes:    assetstore.DefaultMaxUploadBytes,
 		AssetSyncInterval:      defaultAssetSyncInterval,
 		AssetInventoryInterval: defaultAssetInventoryInterval,
+		FPPMQTTTopicPrefix:     "falcon/player",
+		ResolumeID:             "resolume",
+		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
 	}
 
 	if !reflect.DeepEqual(cfg, want) {

@@ -41,7 +41,6 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -62,30 +61,41 @@ import (
 // against to decide [api.ResolumeActionDescriptor.CoordinatorRequired].
 const resolumeActionCoordinatorRequiredLabel = "coordinator-required"
 
-// resolumeActionParamVocabulary is this seam's own fixed answer to a gap
-// neither builder's type could see: resolume.ActionDescriptor (A's own
-// registry row) carries no parameter schema at all — only a name, a safety
-// class, and a local-fallback class — while api.ResolumeActionDescriptor
-// needs one to decode and validate a request's params object before
-// Dispatch is ever called. This table is not invented here: it is
-// TRACK-D-D3-SPEC.md section 2's own seven-action table, already fixed on
+// resolumeActionParamVocabulary is this file's own transcription of the
+// ADR-037 reference vocabulary (superseding a raw "id"), already fixed on
 // the wire by api/openapi.yaml and exercised end to end by
-// cmd/showmeshctl's own seven subcommands (cmd_resolume_action.go) — this
-// map is this file's own transcription of that already-shipped contract,
-// not a new decision. See this file's own top comment for setLayerMaster's
-// "master" specifically.
+// cmd/showmeshctl's own seven subcommands (cmd_resolume_action.go). See
+// this file's own top comment for setLayerMaster's "master" specifically.
+//
+// "deck" is launchClip's own CONDITIONAL parameter (required unless
+// "persistent" is true) — a shape [api.ResolumeActionParam.Required] alone
+// cannot express, so it is declared optional here and
+// buildResolumeActionParams (via resolume.ResolveClip) enforces the
+// conditional rule itself.
 var resolumeActionParamVocabulary = map[resolume.ActionName][]api.ResolumeActionParam{
-	resolume.ActionLaunchClip:   {{Name: "id", Kind: api.ResolumeActionParamString, Required: true}},
-	resolume.ActionClearLayer:   {{Name: "id", Kind: api.ResolumeActionParamString, Required: true}},
-	resolume.ActionBlackout:     {},
-	resolume.ActionLaunchColumn: {{Name: "id", Kind: api.ResolumeActionParamString, Required: true}},
-	resolume.ActionSelectDeck:   {{Name: "id", Kind: api.ResolumeActionParamString, Required: true}},
+	resolume.ActionLaunchClip: {
+		{Name: "clip", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "deck", Kind: api.ResolumeActionParamString, Required: false},
+		{Name: "layer", Kind: api.ResolumeActionParamString, Required: false},
+		{Name: "persistent", Kind: api.ResolumeActionParamBool, Required: false},
+	},
+	resolume.ActionClearLayer: {
+		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
+	},
+	resolume.ActionBlackout: {},
+	resolume.ActionLaunchColumn: {
+		{Name: "column", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "deck", Kind: api.ResolumeActionParamString, Required: true},
+	},
+	resolume.ActionSelectDeck: {
+		{Name: "deck", Kind: api.ResolumeActionParamString, Required: true},
+	},
 	resolume.ActionSetLayerBypass: {
-		{Name: "id", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
 		{Name: "bypassed", Kind: api.ResolumeActionParamBool, Required: true},
 	},
 	resolume.ActionSetLayerMaster: {
-		{Name: "id", Kind: api.ResolumeActionParamString, Required: true},
+		{Name: "layer", Kind: api.ResolumeActionParamString, Required: true},
 		{Name: "master", Kind: api.ResolumeActionParamNumber, Required: true},
 	},
 }
@@ -204,25 +214,71 @@ func (a *resolumeActionDispatcherAdapter) Dispatch(ctx context.Context, action s
 		return api.ResolumeActionResult{}, fmt.Errorf("coordinator: resolume action adapter: dispatch called with unrecognized action %q", action)
 	}
 
-	actionParams, refusalReason, err := buildResolumeActionParams(name, params)
+	var tc *resolume.TrackedComposition
+	var revision int64
+	if name != resolume.ActionBlackout {
+		// blackout takes no reference and needs no composition to resolve
+		// one — resolume.ActionDispatcher's own dispatchBlackout reads the
+		// composition itself when it actually dispatches. Every other
+		// action resolves at least one name against it before Dispatch is
+		// ever called.
+		var tcErr error
+		tc, revision, tcErr = a.dispatcher.CurrentCompositionWithRevision()
+		if tcErr != nil {
+			return api.ResolumeActionResult{
+				Outcome: api.ResolumeOutcomeRefused,
+				Reason:  "no composition has been uploaded to this coordinator yet",
+			}, nil
+		}
+	}
+
+	actionParams, refusalReason, err := buildResolumeActionParams(name, params, tc)
 	if err != nil {
 		return api.ResolumeActionResult{}, fmt.Errorf("coordinator: resolume action adapter: building params for %q: %w", action, err)
 	}
 	if refusalReason != "" {
-		// A malformed "id" (not a base-10 integer — Resolume's own object-id
-		// encoding, composition.go's [ObjectID]) can never resolve against
-		// the stored composition either way, so this is the identical
-		// outcome A's own Dispatch would reach after issuing zero HTTP
-		// requests — reported directly, without paying for a round trip
-		// through A only to have it refuse for the same reason a second way.
+		// A reference that does not resolve (not found, or ambiguous) can
+		// never dispatch either way, so this is the identical outcome A's
+		// own Dispatch would reach after issuing zero HTTP requests —
+		// reported directly, without paying for a round trip through A only
+		// to have it refuse for the same reason a second way, and issues no
+		// HTTP request of its own.
 		return api.ResolumeActionResult{Outcome: api.ResolumeOutcomeRefused, Reason: refusalReason, Dispatched: false}, nil
 	}
+	actionParams.ResolvedAtRevision = revision
 
 	outcome, err := a.dispatcher.Dispatch(ctx, name, actionParams)
 	if err != nil {
 		return api.ResolumeActionResult{}, fmt.Errorf("coordinator: resolume action adapter: dispatch %q: %w", action, err)
 	}
-	return a.translateActionOutcome(outcome)
+	result, err := a.translateActionOutcome(outcome)
+	if err != nil {
+		return api.ResolumeActionResult{}, err
+	}
+	if id, ok := resolvedObjectID(name, actionParams); ok {
+		result.ResolvedID = id.String()
+	}
+	return result, nil
+}
+
+// resolvedObjectID returns the object id actionParams carries for name's
+// own primary reference field, or ok=false for blackout, which resolves
+// nothing. Kept on the wire (ResolumeActionResult.ResolvedID) for
+// debugging, since ADR-037 removes an object id from what an operator
+// types, not from the record.
+func resolvedObjectID(name resolume.ActionName, actionParams resolume.ActionParams) (resolume.ObjectID, bool) {
+	switch name {
+	case resolume.ActionLaunchClip:
+		return actionParams.ClipID, true
+	case resolume.ActionClearLayer, resolume.ActionSetLayerBypass, resolume.ActionSetLayerMaster:
+		return actionParams.LayerID, true
+	case resolume.ActionLaunchColumn:
+		return actionParams.ColumnID, true
+	case resolume.ActionSelectDeck:
+		return actionParams.DeckID, true
+	default:
+		return 0, false
+	}
 }
 
 // translateActionOutcome maps one resolume.ActionOutcome to
@@ -254,11 +310,12 @@ func (a *resolumeActionDispatcherAdapter) translateActionOutcome(outcome resolum
 	resolvedAt := a.now()
 
 	return api.ResolumeActionResult{
-		Outcome:      state,
-		Reason:       sanitizeResolumeActionReason(outcome.Action, outcome.Reason),
-		Dispatched:   dispatched,
-		DispatchedAt: dispatchedAt,
-		ResolvedAt:   &resolvedAt,
+		Outcome:             state,
+		Reason:              sanitizeResolumeActionReason(outcome.Action, outcome.Reason),
+		Dispatched:          dispatched,
+		DispatchedAt:        dispatchedAt,
+		ResolvedAt:          &resolvedAt,
+		SelectedDeckChanged: outcome.SelectedDeckChanged,
 	}, nil
 }
 
@@ -352,30 +409,40 @@ func resolumeActionNameFromWire(action string) (resolume.ActionName, bool) {
 }
 
 // buildResolumeActionParams translates B's already-decoded, natively-typed
-// params map (string/bool values only — decodeResolumeActionParams,
-// resolumeaction.go, has already enforced presence, non-null, and kind
-// against resolumeActionParamVocabulary before this is ever called) into
-// A's resolume.ActionParams. refusalReason is non-empty only for a
-// malformed "id" — see [resolveWireObjectID] — in which case params/err are
-// both zero and the caller must not call Dispatch at all. err is non-nil
-// only for a shape decodeResolumeActionParams should have already made
-// impossible (a missing or wrong-typed key for the action's own declared
-// vocabulary): a genuine internal inconsistency between this file's own
-// resolumeActionParamVocabulary and B's decode step, surfaced loudly rather
-// than silently building a zero-valued ActionParams and dispatching it.
-func buildResolumeActionParams(name resolume.ActionName, params map[string]any) (out resolume.ActionParams, refusalReason string, err error) {
+// params map into A's resolume.ActionParams, resolving every name
+// reference against tc via the resolume package's resolve functions. tc is
+// nil only for blackout, which has nothing to resolve; every other case's
+// caller has already returned a refusal if tc could not be obtained.
+//
+// refusalReason is non-empty for a resolution failure (not found,
+// ambiguous, or an invalid deck/persistent combination), in which case
+// params/err are both zero and the caller must not call Dispatch. err is
+// non-nil only for a shape decodeResolumeActionParams should have already
+// made impossible, surfaced loudly rather than dispatching a zero value.
+func buildResolumeActionParams(name resolume.ActionName, params map[string]any, tc *resolume.TrackedComposition) (out resolume.ActionParams, refusalReason string, err error) {
 	switch name {
 	case resolume.ActionLaunchClip:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		clip, err := requiredStringParam(params, "clip")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		deck := optionalStringParam(params, "deck")
+		layer := optionalStringParam(params, "layer")
+		persistent, _ := params["persistent"].(bool) // optional; absent means false
+		id, rerr := resolume.ResolveClip(tc, resolume.ClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		return resolume.ActionParams{ClipID: id}, "", nil
 
 	case resolume.ActionClearLayer:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		layer, err := requiredStringParam(params, "layer")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		id, rerr := resolume.ResolveLayer(tc, layer)
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		return resolume.ActionParams{LayerID: id}, "", nil
 
@@ -383,23 +450,39 @@ func buildResolumeActionParams(name resolume.ActionName, params map[string]any) 
 		return resolume.ActionParams{}, "", nil
 
 	case resolume.ActionLaunchColumn:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		column, err := requiredStringParam(params, "column")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		deck, err := requiredStringParam(params, "deck")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		id, rerr := resolume.ResolveColumn(tc, deck, column)
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		return resolume.ActionParams{ColumnID: id}, "", nil
 
 	case resolume.ActionSelectDeck:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		deck, err := requiredStringParam(params, "deck")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		id, rerr := resolume.ResolveDeck(tc, deck)
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		return resolume.ActionParams{DeckID: id}, "", nil
 
 	case resolume.ActionSetLayerBypass:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		layer, err := requiredStringParam(params, "layer")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		id, rerr := resolume.ResolveLayer(tc, layer)
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		bypassed, ok := params["bypassed"].(bool)
 		if !ok {
@@ -408,9 +491,13 @@ func buildResolumeActionParams(name resolume.ActionName, params map[string]any) 
 		return resolume.ActionParams{LayerID: id, Bypassed: bypassed}, "", nil
 
 	case resolume.ActionSetLayerMaster:
-		id, refusal, err := resolveWireObjectID(params, "id")
-		if err != nil || refusal != "" {
-			return resolume.ActionParams{}, refusal, err
+		layer, err := requiredStringParam(params, "layer")
+		if err != nil {
+			return resolume.ActionParams{}, "", err
+		}
+		id, rerr := resolume.ResolveLayer(tc, layer)
+		if rerr != nil {
+			return resolume.ActionParams{}, rerr.Error(), nil
 		}
 		master, ok := params["master"].(float64)
 		if !ok {
@@ -430,21 +517,22 @@ func buildResolumeActionParams(name resolume.ActionName, params map[string]any) 
 	}
 }
 
-// resolveWireObjectID reads params[key] as a non-empty string and parses it
-// as a resolume.ObjectID (a base-10 integer — composition.go's own id
-// encoding, and idmap.go's parseObjectID applies the identical rule when a
-// composition file is first loaded). A non-numeric id can never resolve
-// against the stored composition either way — see this file's own
-// [resolumeActionDispatcherAdapter.Dispatch] for why that is reported as a
-// refusal, not a Go error.
-func resolveWireObjectID(params map[string]any, key string) (id resolume.ObjectID, refusalReason string, err error) {
-	raw, ok := params[key].(string)
-	if !ok || raw == "" {
-		return 0, "", fmt.Errorf("dispatched without a non-empty string %q param (got %#v)", key, params[key])
+// requiredStringParam reads params[key] as a non-empty string. A missing or
+// wrong-typed value here means B's own decode step and this file's own
+// vocabulary have disagreed — an internal inconsistency, not an ordinary
+// refusal (decodeResolumeActionParams already enforces presence, non-null,
+// and non-empty for every REQUIRED string parameter before this is ever
+// called).
+func requiredStringParam(params map[string]any, key string) (string, error) {
+	v, ok := params[key].(string)
+	if !ok || v == "" {
+		return "", fmt.Errorf("dispatched without a non-empty string %q param (got %#v)", key, params[key])
 	}
-	n, perr := strconv.ParseInt(raw, 10, 64)
-	if perr != nil {
-		return 0, fmt.Sprintf("%q is not a valid ShowMesh object reference (expected a numeric id, got %q)", key, raw), nil
-	}
-	return resolume.ObjectID(n), "", nil
+	return v, nil
+}
+
+// optionalStringParam reads params[key] as a string, "" when absent.
+func optionalStringParam(params map[string]any, key string) string {
+	v, _ := params[key].(string)
+	return v
 }

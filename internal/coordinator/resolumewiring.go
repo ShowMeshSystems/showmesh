@@ -25,6 +25,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // resolumeCollectorSourceID is this collector's own id in GET
@@ -57,6 +58,66 @@ func (l resolumeCollectorStatusLister) CollectorStatuses(context.Context) ([]api
 		return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+}
+
+// resolumeInstanceLister adapts *store.Store plus the coordinator's
+// resolved SHOWMESH_RESOLUME_ID into api.ResolumeLister. instanceID is
+// resolved once at construction, since it cannot change without a
+// coordinator restart. An empty instanceID (SHOWMESH_RESOLUME_URL unset)
+// means ListInstances always answers an empty slice.
+type resolumeInstanceLister struct {
+	st         *store.Store
+	instanceID string
+}
+
+func (l resolumeInstanceLister) ListInstances(ctx context.Context) ([]api.ResolumeInstanceView, error) {
+	if l.instanceID == "" {
+		return nil, nil
+	}
+	obs, err := l.st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceResolume,
+		ResourceID:   l.instanceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("coordinator: list resolume instance observations for %q: %w", l.instanceID, err)
+	}
+	if len(obs) == 0 {
+		// No poll has completed yet (freshly configured, or the
+		// coordinator just restarted) — synthesize a not_collected row per
+		// static signal rather than an empty list, mirroring
+		// fppInstanceLister's identical notYetPolledObservations
+		// (apiwiring.go): an empty array renders as blank, and blank reads
+		// as fine (finding 5, owner review 2026-08-16).
+		obs = notYetPolledResolumeObservations(l.instanceID, time.Now())
+	}
+	return []api.ResolumeInstanceView{{InstanceID: l.instanceID, Observations: obs}}, nil
+}
+
+// resolumeSignals is [resolume.AllSignals] verbatim, mirroring apiwiring.go's
+// identical fppSignals/fpp.AllSignals pattern — the static signal list
+// [notYetPolledResolumeObservations] synthesizes placeholders from.
+var resolumeSignals = resolume.AllSignals
+
+// notYetPolledResolumeObservations synthesizes one [observation.StateNotCollected]
+// observation per [resolumeSignals] entry, mirroring apiwiring.go's
+// notYetPolledObservations: passing now here is safe because mapEvidence
+// masks CollectedAt to null whenever State is not_collected, so this never
+// retriggers the hub's change detection on its own.
+func notYetPolledResolumeObservations(instanceID string, now time.Time) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: instanceID}
+	out := make([]observation.Observation, 0, len(resolumeSignals))
+	for _, sig := range resolumeSignals {
+		o, err := observation.NotCollected(res, sig,
+			"no poll has completed yet for this Resolume instance",
+			observation.WithSource(resolumeCollectorSourceID), observation.WithCollectedAt(now))
+		if err != nil {
+			// Unreachable: every argument above is a fixed constant or a
+			// non-empty literal reason string.
+			panic(fmt.Sprintf("coordinator: notYetPolledResolumeObservations(%q, %q): %v", instanceID, sig, err))
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // resolumeWiring is what newResolumeWiring hands back to coordinator.go's
@@ -198,7 +259,30 @@ func (w resolumeWiring) RunWatcherSupervisor(ctx context.Context) {
 // with no restart required — the identical property
 // newResolumeCompositionWiring's own doc comment already establishes for
 // itself.
-func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger) (resolumeWiring, error) {
+// onReachableTransition is Track D seam D-3a's own hook
+// (resolume.Options.OnReachableTransition): called by the collector,
+// already in its own goroutine, on every unreachable->reachable
+// transition. nil means no crash-recovery gate is wired in (no live
+// Resolume instance configured — see this function's own cfg.ResolumeURL
+// gate).
+//
+// onUnreachableTransition is the same seam's OTHER hook
+// (resolume.Options.OnUnreachableTransition): called by the collector,
+// SYNCHRONOUSLY from its own liveness-poll goroutine (never spawned — see
+// that Options field's own doc comment), on every reachable->unreachable
+// transition, i.e. the crash itself. Production wires this to
+// *resolume.Recovery.CaptureCrashTarget through the identical
+// atomic.Pointer late-binding cell onReachableTransition's own production
+// closure uses (coordinator.go), because the *Recovery neither closure
+// can call into exists yet at THIS function's own call time. Review
+// finding B1 (2026-08-16): this parameter did not previously exist, so
+// production never supplied anything for
+// [resolume.Options.OnUnreachableTransition] and a real crash left
+// Recovery's own crash-target snapshot permanently empty. nil (every
+// caller in this package's own test suite besides the one wiring-level
+// test built for that finding) means no crash-recovery gate is wired in,
+// identical to onReachableTransition's own nil case.
+func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger, onReachableTransition func(time.Time), onUnreachableTransition func(time.Time)) (resolumeWiring, error) {
 	if cfg.ResolumeURL == "" {
 		return resolumeWiring{status: resolumeCollectorStatusLister{configured: false}}, nil
 	}
@@ -233,10 +317,22 @@ func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector
 	}
 
 	resolumeCollector, err := resolume.New(cfg.ResolumeID, cfg.ResolumeURL, resolume.Options{
-		HTTPClient:       resolumeHTTPClient,
-		Logger:           logger,
-		CompositionStore: compositionStore,
-		Footprint:        footprint,
+		HTTPClient:              resolumeHTTPClient,
+		Logger:                  logger,
+		CompositionStore:        compositionStore,
+		Footprint:               footprint,
+		OnReachableTransition:   onReachableTransition,
+		OnUnreachableTransition: onUnreachableTransition,
+		// TransitionSurveySettle configures the collector's OWN
+		// transition-triggered survey (review finding B3) from the
+		// identical config value *resolume.Recovery's own confirming
+		// survey already uses (newResolumeRecoveryWiring's own
+		// cfg.ResolumeRecoverySettle argument, coordinator.go) — one
+		// number, read twice, rather than two settle durations that could
+		// drift apart. See [resolume.Options.TransitionSurveySettle]'s own
+		// doc comment for why each enforcement point still needs its own
+		// copy.
+		TransitionSurveySettle: cfg.ResolumeRecoverySettle,
 	})
 	if err != nil {
 		return resolumeWiring{}, fmt.Errorf("resolume collector %q: %w", cfg.ResolumeID, err)

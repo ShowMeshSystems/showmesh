@@ -126,4 +126,24 @@ type ResolumeActionResult struct {
 	// FPPCommandResult documents for its own identical fields.
 	DispatchedAt *string `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
+
+	// ResolvedID is the Resolume object id this action's own name
+	// reference resolved to, kept visible for debugging (ADR-037's own
+	// Consequences: the reference an operator types is a name, never an
+	// id, but the id "stays visible for debugging"). Omitted entirely for
+	// blackout, which addresses nothing, and for a refusal reached before
+	// any name was resolved.
+	ResolvedID string `json:"resolvedId,omitempty"`
+
+	// SelectedDeckChanged is TRACK-D-ADAPTER-SPEC.md §3.8's own evidence
+	// field: whether the selected deck changed between this action's
+	// decision and its confirmation. Meaningful only for a confirmed
+	// launchClip (the only action that can race a deck — layers are
+	// deck-independent). ALWAYS present, never omitted (ADR-020: absent
+	// evidence is stated, never omitted) — null, never false, both when
+	// the deck could not be read at confirmation time and for every
+	// action other than a confirmed launchClip. Evidence, never a
+	// refusal (ADR-024 decision 11's fail-closed inversion, avoided here
+	// on purpose).
+	SelectedDeckChanged *bool `json:"selectedDeckChanged"`
 }

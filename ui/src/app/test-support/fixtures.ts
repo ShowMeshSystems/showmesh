@@ -27,6 +27,15 @@ import type {
   Model,
   Node,
   NodeDeclaration,
+  ResolumeAction,
+  ResolumeActionResult,
+  ResolumeCompositionClip,
+  ResolumeCompositionDeckSummary,
+  ResolumeCompositionLayer,
+  ResolumeCompositionResponse,
+  ResolumeInstance,
+  ResolumeRecoveryRecordEntry,
+  ResolumeRecoveryResponse,
   ShowMeshEvent,
 } from '../types'
 
@@ -118,6 +127,151 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
   }
 }
 
+// Track D seam D-4: Resolume fixtures, same "every required field present"
+// posture as every builder above.
+export function makeResolumeInstance(instanceId: string, overrides: Partial<ResolumeInstance> = {}): ResolumeInstance {
+  return {
+    instanceId,
+    health: 'healthy',
+    observations: [],
+    composition: null,
+    ...overrides,
+  }
+}
+
+export function makeResolumeAction(overrides: Partial<ResolumeAction> = {}): ResolumeAction {
+  return {
+    name: 'launchClip',
+    params: [
+      { name: 'clip', kind: 'string', required: true },
+      { name: 'deck', kind: 'string', required: false },
+      { name: 'layer', kind: 'string', required: false },
+      { name: 'persistent', kind: 'bool', required: false },
+    ],
+    auditExempt: false,
+    coordinatorRequired: true,
+    ...overrides,
+  }
+}
+
+export function makeResolumeActionResult(overrides: Partial<ResolumeActionResult> = {}): ResolumeActionResult {
+  return {
+    id: 'ra-1',
+    idempotencyKey: 'idem-1',
+    action: 'launchClip',
+    params: { clip: 'Test Clip', deck: 'Deck 1' },
+    replay: false,
+    outcome: 'confirmed',
+    outcomeReason: 'clip connected',
+    attributionDegraded: false,
+    dispatchedAt: NOW,
+    resolvedAt: NOW,
+    resolvedId: 'obj-clip-1',
+    selectedDeckChanged: false,
+    ...overrides,
+  }
+}
+
+export function makeResolumeCompositionDeck(
+  overrides: Partial<ResolumeCompositionDeckSummary> = {},
+): ResolumeCompositionDeckSummary {
+  return {
+    id: 'deck-1',
+    name: 'Deck 1',
+    nameGenerated: true,
+    closed: false,
+    clipCount: 1,
+    ...overrides,
+  }
+}
+
+export function makeResolumeCompositionLayer(
+  overrides: Partial<ResolumeCompositionLayer> = {},
+): ResolumeCompositionLayer {
+  return {
+    id: 'layer-1',
+    index: 0,
+    name: 'Layer 1',
+    nameGenerated: true,
+    ...overrides,
+  }
+}
+
+export function makeResolumeCompositionClip(overrides: Partial<ResolumeCompositionClip> = {}): ResolumeCompositionClip {
+  return {
+    id: 'clip-1',
+    deckId: 'deck-1',
+    layerIndex: 0,
+    columnIndex: 0,
+    name: 'Test Clip',
+    nameGenerated: false,
+    ambiguous: false,
+    ...overrides,
+  }
+}
+
+export function makeResolumeCompositionResponse(
+  overrides: Partial<ResolumeCompositionResponse> = {},
+): ResolumeCompositionResponse {
+  return {
+    serverTime: NOW,
+    composition: {
+      name: 'Christmas 25',
+      sourceFilename: 'christmas25.avc',
+      contentHash: 'sha256:test',
+      sizeBytes: 407_000,
+      writtenBy: { product: 'Arena', major: 7, minor: 23, micro: 2, revision: 0 },
+      canvas: { width: 1920, height: 1080 },
+      decks: [makeResolumeCompositionDeck()],
+      layerCount: 1,
+      layerGroupCount: 0,
+      columnCount: 1,
+      clipCount: 1,
+      persistentClipCount: 0,
+    },
+    revision: 1,
+    activatedAt: NOW,
+    decks: [makeResolumeCompositionDeck()],
+    layerGroups: [],
+    layers: [makeResolumeCompositionLayer()],
+    columns: [{ id: 'col-1', deckId: 'deck-1', index: 0, name: 'Column 1', nameGenerated: true }],
+    clips: [makeResolumeCompositionClip()],
+    persistentClips: [],
+    ...overrides,
+  }
+}
+
+export function makeResolumeRecoveryRecordEntry(
+  overrides: Partial<ResolumeRecoveryRecordEntry> = {},
+): ResolumeRecoveryRecordEntry {
+  return {
+    layer: 'Layer 1',
+    layerNameGenerated: true,
+    state: 'clip',
+    clip: 'Test Clip',
+    clipNameGenerated: false,
+    deck: 'Deck 1',
+    establishedAt: NOW,
+    source: 'action',
+    ...overrides,
+  }
+}
+
+export function makeResolumeRecoveryResponse(
+  overrides: Partial<ResolumeRecoveryResponse> = {},
+): ResolumeRecoveryResponse {
+  return {
+    serverTime: NOW,
+    resolumeConfigured: true,
+    autoRestoreEnabled: true,
+    autoRestoreConfigured: false,
+    settleDelaySeconds: 5,
+    record: [],
+    lastRestore: null,
+    ...overrides,
+  }
+}
+
 export function makeCollectorStatus(id: string, overrides: Partial<CollectorStatus> = {}): CollectorStatus {
   return {
     id,
@@ -168,6 +322,9 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     // Step 9 (STEP-9-SPEC.md section 6.6, ADR-020 decision 3): required
     // on Model — a test that cares about macro runs overrides this.
     macroRuns: [],
+    // Track D seam D-4: required on Model — a test that cares about
+    // Resolume overrides this.
+    resolume: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

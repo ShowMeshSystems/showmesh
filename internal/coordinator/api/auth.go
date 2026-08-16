@@ -128,6 +128,10 @@ func (noIdentityService) GetPrincipal(context.Context, string) (identity.Princip
 	return identity.Principal{}, errIdentityNotConfigured
 }
 
+func (noIdentityService) EnsureReservedRecoveryPrincipal(context.Context) (identity.Principal, error) {
+	return identity.Principal{}, errIdentityNotConfigured
+}
+
 func (noIdentityService) IssueToken(context.Context, string, string, *time.Time) (identity.Token, error) {
 	return identity.Token{}, errIdentityNotConfigured
 }

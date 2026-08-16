@@ -64,9 +64,9 @@ type ConfigShowActionMQTTExpect struct {
 }
 
 // ConfigShowActionTarget is show.action.target (STEP-9-SPEC.md section
-// 5.3), flattened exactly as the specification's own wire examples show it:
-// Integration plus either the fpp fields or the mqtt fields directly,
-// never nested a second level under an "fpp"/"mqtt" key.
+// 5.3), flattened exactly as the specification's own wire examples show
+// it: Integration plus either the fpp, mqtt, or resolume fields directly,
+// never nested a second level under an "fpp"/"mqtt"/"resolume" key.
 type ConfigShowActionTarget struct {
 	Integration string `json:"integration"`
 
@@ -79,6 +79,12 @@ type ConfigShowActionTarget struct {
 	Broker  string                       `json:"broker,omitempty"`
 	Publish *ConfigShowActionMQTTPublish `json:"publish,omitempty"`
 	Expect  *ConfigShowActionMQTTExpect  `json:"expect,omitempty"`
+
+	// resolume-only. Action is one of the seven Track D D-3 action names;
+	// Ref carries ADR-037's named-reference vocabulary (clip, deck, layer,
+	// column, persistent, bypassed, master) — never a Resolume object id.
+	Action string         `json:"action,omitempty"`
+	Ref    map[string]any `json:"ref,omitempty"`
 }
 
 // ConfigShowAction is the "show.action" configuration kind's decoded

@@ -252,10 +252,19 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"StopPlaylistGracefullyCommandRequest", "SetVolumeCommandRequest",
 		"NoParamsFPPCommandRequest", "FPPCommandResponse", "FPPCommandResult",
 		"ResolumeActionParam", "ResolumeAction", "ResolumeActionsResponse",
-		"ResolumeActionRequest", "ResolumeIDActionRequest",
+		"ResolumeActionRequest", "ResolumeLaunchClipActionRequest",
+		"ResolumeClearLayerActionRequest", "ResolumeLaunchColumnActionRequest",
+		"ResolumeSelectDeckActionRequest",
 		"ResolumeBlackoutActionRequest", "ResolumeSetLayerBypassActionRequest",
 		"ResolumeSetLayerMasterActionRequest", "ResolumeActionResponse",
 		"ResolumeActionResult",
+		"ResolumeInstanceComposition", "ResolumeInstance",
+		"ResolumeInstancesResponse", "ResolumeInstanceResponse",
+		"ResolumeChangedEvent",
+		"ResolumeRecoveryRecordEntry", "ResolumeRecoveryRestoreLayer",
+		"ResolumeRecoveryRestoreReport", "ResolumeRecoveryResponse",
+		"ResolumeRecoveryRestoreResponse", "ResolumeRecoveryChangedEvent",
+		"ConfigResolumeRecoveryPayload", "ResolumeRecoveryConfigResponse",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -281,6 +290,8 @@ func TestOpenAPISchemasMatchRealResponses(t *testing.T) {
 		{"GET", "/api/v1/events", "EventsResponse"},
 		{"GET", "/api/v1/snapshot", "Snapshot"},
 		{"GET", "/api/v1/session", "SessionResponse"},
+		{"GET", "/api/v1/resolume/instances", "ResolumeInstancesResponse"},
+		{"GET", "/api/v1/resolume/instances/resolume", "ResolumeInstanceResponse"},
 	}
 
 	for _, tt := range tests {
@@ -803,4 +814,52 @@ func TestOpenAPIFPPObservationsChangedEventSchemaMatchesRealFrame(t *testing.T) 
 		t.Fatalf("event = %q, want fpp.observations.changed", event)
 	}
 	assertMatchesSchema(t, c, "FPPObservationsChangedEvent", []byte(data))
+}
+
+// TestOpenAPIResolumeInstancesResponsesMatchRealResponses is Track D seam
+// E's own conformance test: the list route, the single-instance route, and
+// a real resolume.changed stream frame, each validated against a REAL
+// response from a real coordinator wiring (not hand-built JSON).
+func TestOpenAPIResolumeInstancesResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	testAPI := buildTestAPI(t)
+
+	_, listBody := doRequest(t, testAPI.Handler, "GET", "/api/v1/resolume/instances", nil)
+	assertMatchesSchema(t, c, "ResolumeInstancesResponse", listBody)
+
+	_, oneBody := doRequest(t, testAPI.Handler, "GET", "/api/v1/resolume/instances/resolume", nil)
+	assertMatchesSchema(t, c, "ResolumeInstanceResponse", oneBody)
+
+	resolume := &mutableResolumeLister{}
+	resolume.setViews([]ResolumeInstanceView{{
+		InstanceID:   "resolume",
+		Observations: []observation.Observation{deltaObs(t, "resolume.reachable", true, testNow, 30*time.Second)},
+	}})
+	streamAPI := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{}, Resolume: resolume,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go streamAPI.Hub.Run(ctx)
+
+	srv := httptest.NewServer(streamAPI.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("event = %q, want stream.start", event)
+	}
+	streamAPI.Hub.Notify()
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "resolume.changed" {
+		t.Fatalf("event = %q, want resolume.changed", event)
+	}
+	assertMatchesSchema(t, c, "ResolumeChangedEvent", []byte(data))
 }

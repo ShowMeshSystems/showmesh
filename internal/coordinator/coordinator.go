@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -277,6 +279,14 @@ func Run() int {
 	// starts.
 	resolumeCompositionWire := newResolumeCompositionWiring(ctx, st, logger)
 
+	// Track D seam C: the write-time reference resolver
+	// (config.ResolumeReferenceResolver), built over
+	// resolumeCompositionWire.store directly above — unconditionally, like
+	// that store itself, so a resolume show.action can be authored and
+	// validated whether or not a live Resolume instance is configured
+	// (resolumereferencewiring.go's own doc comment).
+	resolumeReferences := newResolumeReferenceResolverAdapter(resolumeCompositionWire.store)
+
 	// Track D seam D-2/C: the Resolume Arena REST/WebSocket collector
 	// (internal/coordinator/collector/resolume), constructed here —
 	// BEFORE apiDeps, for the identical reason fppRunner itself just was —
@@ -298,7 +308,31 @@ func Run() int {
 	// resolumeWire.status reports CollectorNotConfigured, when
 	// SHOWMESH_RESOLUME_URL is unset — no goroutine, no warning storm, no
 	// failed-connection signals for a feature the operator did not enable.
-	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger)
+	// resolumeRecoveryHolder is Track D seam D-3a's own late-binding cell:
+	// the Collector's own OnReachableTransition AND OnUnreachableTransition
+	// callbacks must both be supplied at construction time (immediately
+	// below), but the *resolume.Recovery either one calls cannot exist
+	// until AFTER the Collector and its ActionDispatcher do — see this
+	// cell's own store below, and resolumerecoverywiring.go's own top
+	// comment. Safe under the race detector: nothing can invoke either
+	// callback before fppRunner.Run(ctx) starts polling, several lines
+	// below where this cell is stored. Both halves of the pair must be
+	// wired: without the unreachable half no crash ever reaches
+	// [resolume.Recovery.CaptureCrashTarget], and every automatic restore
+	// finds an empty target.
+	var resolumeRecoveryHolder atomic.Pointer[resolume.Recovery]
+	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger,
+		func(returnedAt time.Time) {
+			if rec := resolumeRecoveryHolder.Load(); rec != nil {
+				rec.HandleReachableTransition(ctx, returnedAt)
+			}
+		},
+		func(time.Time) {
+			if rec := resolumeRecoveryHolder.Load(); rec != nil {
+				rec.CaptureCrashTarget()
+			}
+		},
+	)
 	if err != nil {
 		logger.Error("failed to construct resolume collector/watcher", "error", err)
 		_ = bm.Disconnect(ctx)
@@ -334,7 +368,20 @@ func Run() int {
 	// that posture, only gates on the identical condition that already
 	// decides it for resolumeWire.collector.
 	var resolumeActions api.ResolumeActionDispatcher
+	// resolumeRecovery/resolumeRecoveryAdapter are Track D seam D-3a's own
+	// wiring gap, closed the identical way: nil under the identical
+	// cfg.ResolumeURL == "" gate. The built-in recovery principal is
+	// ensured to exist regardless of whether the collector is configured
+	// — it costs one idempotent SQLite read/insert at startup and keeps
+	// "the principal exists" true even for a coordinator that enables
+	// Resolume later without a restart being required first.
+	ensureResolumeRecoveryPrincipal(ctx, identitySvc, logger)
+	var resolumeRecovery api.ResolumeRecoveryProvider
 	if resolumeWire.collector != nil {
+		recoveryDispatcher := resolume.NewActionDispatcher(resolumeWire.collector, resolume.ActionDispatcherOptions{})
+		recovery, recoveryAdapter := newResolumeRecoveryWiring(st, identitySvc, resolumeWire.collector, recoveryDispatcher, cfg.ResolumeRecoverySettle, logger, notifyHub)
+		resolumeRecoveryHolder.Store(recovery)
+		resolumeRecovery = recoveryAdapter
 		resolumeActions = newResolumeActionDispatcherAdapter(resolumeWire.collector)
 	}
 
@@ -481,6 +528,28 @@ func Run() int {
 		// names explicitly: every action compiled, passed its own tests,
 		// and reached nothing.
 		ResolumeActions: resolumeActions,
+		// ResolumeReferences is Track D seam C's own write-time reference
+		// resolver, built above unconditionally (resolumeReferences) —
+		// unlike resolumeActions, this is never gated on cfg.ResolumeURL,
+		// because show.action write validation must work whether or not a
+		// live Resolume instance is configured.
+		ResolumeReferences: resolumeReferences,
+		// Resolume: resolumeInstanceLister (resolumewiring.go) reads whatever
+		// the D-2/C collector has already persisted, gated on
+		// resolumeConfiguredID exactly like ResolumeID above — the same
+		// cfg.ResolumeURL != "" condition decides both, so GET
+		// /resolume/instances and Dependencies.ResolumeID can never
+		// disagree about whether a Resolume instance is configured.
+		Resolume: resolumeInstanceLister{st: st, instanceID: resolumeConfiguredID},
+		// ResolumeRecovery is Track D seam D-3a's own recovery controller,
+		// wired above under the identical cfg.ResolumeURL != "" gate
+		// resolumeActions is built under (nil otherwise, against
+		// api.noResolumeRecoveryProvider's no-op default). ResolumeRecoverySettleSeconds
+		// is threaded through unconditionally (matching FPPMQTTTopicPrefix's
+		// own "defaults regardless of whether the feature is active"
+		// posture) since it costs nothing when unused.
+		ResolumeRecovery:              resolumeRecovery,
+		ResolumeRecoverySettleSeconds: cfg.ResolumeRecoverySettle.Seconds(),
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -556,9 +625,17 @@ func Run() int {
 		Identity: identitySvc,
 		Dispatch: macroDispatcher,
 		Brokers:  integrationBrokers,
-		Notify:   notifyHub,
-		Clock:    time.Now,
-		Logger:   logger,
+		// ResolumeActions is the SAME value apiDeps.ResolumeActions holds
+		// (wired above, under the identical cfg.ResolumeURL != "" gate
+		// resolumeWire.collector is built under) — Track D seam C's own
+		// "one dispatch path" rule: a macro's Resolume step and the HTTP
+		// endpoint dispatch through the identical
+		// api.ResolumeActionDispatcher, never two independently-wired
+		// copies of it.
+		ResolumeActions: apiDeps.ResolumeActions,
+		Notify:          notifyHub,
+		Clock:           time.Now,
+		Logger:          logger,
 	}, macro.Options{})
 	apiDeps.Macros = macroExecutor
 

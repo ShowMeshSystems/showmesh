@@ -299,6 +299,14 @@ type Config struct {
 	// every cycle rather than ready. Defaults to 2 minutes, matching the
 	// agent's own default.
 	AssetInventoryInterval time.Duration
+	// ResolumeRecoverySettle is SHOWMESH_RESOLUME_RECOVERY_SETTLE (Track D
+	// seam D-3a §5 term 2): how long the crash-recovery gate waits after
+	// Resolume becomes reachable again before issuing anything beyond the
+	// liveness probe that noticed the return. Default 8s. 0s is permitted
+	// and means no settle delay — a test affordance for driving the gate
+	// without a real wait, not a recommended production value. Valid range
+	// [0s, 60s]; anything else fails [Config.Validate].
+	ResolumeRecoverySettle time.Duration
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -445,6 +453,19 @@ const (
 
 	defaultAssetSyncInterval      = 5 * time.Minute
 	defaultAssetInventoryInterval = 2 * time.Minute
+	// envResolumeRecoverySettle backs [Config.ResolumeRecoverySettle]
+	// (Track D seam D-3a). Deliberately a tuning knob (env var), not
+	// revisioned show-state config: see that field's own doc comment.
+	envResolumeRecoverySettle = "SHOWMESH_RESOLUME_RECOVERY_SETTLE"
+
+	// defaultResolumeRecoverySettle is [Config.ResolumeRecoverySettle]'s
+	// default. SHOWMESH GUESS, NOT MEASURED — chosen to sit comfortably
+	// past the measured 1.2s wrong-composition window with room for a
+	// slower host; not timed against a real Arena restart.
+	defaultResolumeRecoverySettle = 8 * time.Second
+
+	// maxResolumeRecoverySettle bounds [Config.ResolumeRecoverySettle].
+	maxResolumeRecoverySettle = 60 * time.Second
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -551,6 +572,10 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resolumeRecoverySettle, err := parseDurationEnv(lookup, envResolumeRecoverySettle, defaultResolumeRecoverySettle)
+	if err != nil {
+		return Config{}, err
+	}
 
 	dataDir := getEnvDefault(lookup, EnvDataDir, DefaultDataDir)
 
@@ -609,6 +634,7 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		AssetContentBaseURL:    getEnvDefault(lookup, envAssetContentBaseURL, ""),
 		AssetSyncInterval:      assetSyncInterval,
 		AssetInventoryInterval: assetInventoryInterval,
+		ResolumeRecoverySettle: resolumeRecoverySettle,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -877,6 +903,9 @@ func (c Config) Validate() error {
 	}
 	if c.ResolumePollInterval < 0 {
 		return fmt.Errorf("%s must not be negative, got %s", envResolumePollInterval, c.ResolumePollInterval)
+	}
+	if c.ResolumeRecoverySettle < 0 || c.ResolumeRecoverySettle > maxResolumeRecoverySettle {
+		return fmt.Errorf("%s must be between 0s and %s, got %s", envResolumeRecoverySettle, maxResolumeRecoverySettle, c.ResolumeRecoverySettle)
 	}
 
 	if err := validateAssetConfig(c); err != nil {
@@ -1328,6 +1357,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("asset_content_base_url", c.AssetContentBaseURL),
 		slog.Duration("asset_sync_interval", c.AssetSyncInterval),
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
+		slog.Duration("resolume_recovery_settle", c.ResolumeRecoverySettle),
 	)
 }
 

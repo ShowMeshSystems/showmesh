@@ -10,6 +10,9 @@ import {
   type UploadProgress,
 } from '../api'
 import { describeApiError } from '../app/session'
+import { ScopedButton } from './ScopedButton'
+
+const CONFIG_WRITE_SCOPE = 'config:write'
 
 // Track D seam D-2a (ADR-032 decision 8): the composition upload control.
 // Uploading a `.avc` file is the ONLY way this subsystem's id map gets
@@ -25,17 +28,11 @@ import { describeApiError } from '../app/session'
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'not_stored'; reason: string }
-  // ADR-032's GET is gated behind the SAME config:write scope as
-  // POST (internal/coordinator/api/api.go's route registration), not
-  // open like an ordinary read — so a session that lacks it sees a 403
-  // here exactly as it would on the upload itself. This is a genuinely
-  // reachable state even though this component is only ever mounted
-  // inside Configuration.tsx's own config:write scope gate: that gate
-  // reads this browser's last-fetched, possibly-stale scope list, while
-  // this 403 is the coordinator's own live answer — they can disagree
-  // (a revoked scope the browser hasn't learned about yet), and CLAUDE.md
-  // is explicit that a `403` is a successful conversation with a healthy
-  // coordinator, never a connectivity failure.
+  // ADR-032's GET is gated behind the SAME config:write scope as POST
+  // (internal/coordinator/api/api.go's route registration), not open like
+  // an ordinary read. This view (ResolumeView.tsx) renders with no
+  // session at all (build contract §2.2), so a session lacking the scope
+  // reaches this branch routinely, not just on a revoked-scope race.
   | { kind: 'forbidden'; reason: string }
   | { kind: 'unauthorized'; reason: string }
   | { kind: 'error'; message: string }
@@ -268,9 +265,15 @@ export function ResolumeCompositionUpload() {
           disabled={uploading}
         />
         <div style={{ marginTop: '0.5rem' }}>
-          <button type="button" onClick={() => void handleUpload()} disabled={uploading}>
+          {/* Review finding 5: this used to sit inside Configuration.tsx's
+              config:write gate and lost that protection when it moved
+              here — rendering as an ordinary enabled <button> let a
+              session with no credential pick a file, transfer it, and
+              only THEN learn it was refused. ADR-024 decision 12 wants it
+              disabled with a stated reason instead. */}
+          <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => void handleUpload()} busy={uploading}>
             {uploading ? 'Uploading…' : 'Upload composition'}
-          </button>
+          </ScopedButton>
         </div>
 
         {uploadState.kind === 'uploading' && (

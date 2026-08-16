@@ -37,6 +37,24 @@ export type {
   ResourceRef,
   SessionInfo,
   SessionResponse,
+  // Track D seam D-4: Resolume as an observability resource and the
+  // seven-action vocabulary.
+  ResolumeInstanceComposition,
+  ResolumeInstance,
+  ResolumeActionParam,
+  ResolumeAction,
+  ResolumeActionResult,
+  ResolumeCompositionResponse,
+  ResolumeCompositionSummary,
+  ResolumeCompositionDeckSummary,
+  ResolumeCompositionLayerGroup,
+  ResolumeCompositionLayer,
+  ResolumeCompositionColumn,
+  ResolumeCompositionClip,
+  ResolumeRecoveryRecordEntry,
+  ResolumeRecoveryRestoreLayer,
+  ResolumeRecoveryRestoreReport,
+  ResolumeRecoveryResponse,
   // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
@@ -73,6 +91,10 @@ import type {
   ConfigShowMacroStep as ConfigShowMacroStepType,
   MacroRunSummary as MacroRunSummaryType,
   MacroRunStepCommand as MacroRunStepCommandType,
+  ResolumeInstance as ResolumeInstanceType,
+  ResolumeActionResult as ResolumeActionResultType,
+  ResolumeRecoveryRecordEntry as ResolumeRecoveryRecordEntryType,
+  ResolumeRecoveryRestoreLayer as ResolumeRecoveryRestoreLayerType,
 } from '../api'
 
 // Derived, not duplicated: these are indexed-access views onto seam B's
@@ -96,3 +118,9 @@ export type MacroStepOnUnconfirmed = ConfigShowMacroStepType['onUnconfirmed']
 export type MacroRunState = MacroRunSummaryType['state']
 export type MacroRunTrigger = MacroRunSummaryType['trigger']
 export type MacroRunStepCommandState = MacroRunStepCommandType['state']
+// Track D seam D-4: same derived-not-duplicated pattern as every alias
+// above.
+export type ResolumeHealth = ResolumeInstanceType['health']
+export type ResolumeActionOutcome = ResolumeActionResultType['outcome']
+export type ResolumeRecoveryLayerState = ResolumeRecoveryRecordEntryType['state']
+export type ResolumeRecoveryRestoreResult = ResolumeRecoveryRestoreLayerType['result']

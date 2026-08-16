@@ -30,6 +30,13 @@ const (
 	RoleOperator  Role = "operator"
 	RoleAdmin     Role = "admin"
 	RoleScheduler Role = "scheduler"
+
+	// RoleRecovery is Track D seam D-3a's own role, minted for the
+	// built-in automatic-recovery principal (build contract §1.2): exactly
+	// one scope wide (ScopeResolumeAction), because no existing bundle is
+	// that narrow in the right place — scheduler is show:macro:run,
+	// operator is far wider.
+	RoleRecovery Role = "recovery"
 )
 
 // Scope is one `<resource>:<action>` authorization unit (ADR-024 decision
@@ -109,6 +116,8 @@ func (r Role) Scopes() []Scope {
 		return append(out, adminOnlyScopes...)
 	case RoleScheduler:
 		return []Scope{ScopeShowMacroRun}
+	case RoleRecovery:
+		return []Scope{ScopeResolumeAction}
 	default:
 		return nil
 	}
@@ -138,7 +147,7 @@ var ErrUnknownRole = errors.New("identity: unknown role")
 // role string a scope check would then treat as "no scopes at all".
 func ParseRole(s string) (Role, error) {
 	switch Role(s) {
-	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler:
+	case RoleViewer, RoleOperator, RoleAdmin, RoleScheduler, RoleRecovery:
 		return Role(s), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownRole, s)
@@ -156,6 +165,11 @@ type Principal struct {
 	CreatedAt  time.Time
 	Disabled   bool
 	Generation uint64 // bumped by password change, revoke-all, or restore
+
+	// Reserved is true only for [ReservedResolumeRecoveryPrincipalID] —
+	// build contract §1.2: "visible wherever principals are listed". Never
+	// stored; derived from ID at read time.
+	Reserved bool
 }
 
 // CredentialForm records how a request authenticated: with a bearer token
@@ -277,6 +291,22 @@ var (
 	// from every other one).
 	ErrAuditWrite = errors.New("identity: state change succeeded but its audit entry could not be written; the transaction was rolled back")
 )
+
+// ReservedResolumeRecoveryPrincipalID is Track D seam D-3a's built-in
+// automatic-recovery principal id and name (build contract §1.2) — the
+// same fixed string for both, so "which principal" and "what is it called"
+// are never two facts that can drift apart. It cannot be deleted,
+// disabled, demoted, renamed, or re-credentialed through any path in this
+// package (build contract §1.2's enumerated survey): a deletable recovery
+// principal is a silent disarm, and the toggle is the one off switch.
+const ReservedResolumeRecoveryPrincipalID = "system-resolume-recovery"
+
+// ErrReservedPrincipal is returned by every mutation this package refuses
+// against [ReservedResolumeRecoveryPrincipalID] (or a caller attempting to
+// CREATE a principal under that name). The message names the toggle as the
+// way to turn recovery off, because a refusal that just says "reserved"
+// sends the operator hunting.
+var ErrReservedPrincipal = errors.New("identity: this is the built-in Resolume recovery principal and cannot be deleted, disabled, renamed, re-roled, or re-credentialed; use the resolume.recovery configuration toggle to turn automatic recovery off instead")
 
 // AuditKind distinguishes the append-only records ADR-024 decision 11
 // requires.

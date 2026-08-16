@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
@@ -755,6 +756,99 @@ func TestResolumeCompositionGetLayersCarryNamesOrAGeneratedLabel(t *testing.T) {
 	}
 	if generated, _ := second["nameGenerated"].(bool); !generated {
 		t.Errorf("layers[1].nameGenerated = %v, want true (this layer's name was invented, not authored)", second["nameGenerated"])
+	}
+}
+
+// ambiguousShapeComposition is a synthetic fixture reproducing the shape
+// measured against the operator's real composition (ADR-037 amendment,
+// 2026-08-16), deliberately NOT the real file or any real installation
+// name: one deck, one layer holding four clips sharing a name (the
+// "cannot be disambiguated even by layer" case), another layer holding two
+// clips of one name on a layer that is itself unique for that name (a
+// third, unrelated clip on it disambiguates), and two persistent clips
+// sharing a name.
+func ambiguousShapeComposition() *resolumecomp.Composition {
+	return &resolumecomp.Composition{
+		Name:   "Ambiguity Fixture",
+		Canvas: resolumecomp.Canvas{Width: 1920, Height: 1080},
+		Decks:  []resolumecomp.Deck{{ID: "9000000000001", Name: "Main"}},
+		Layers: []resolumecomp.Layer{
+			{ID: "9000000000101", Index: 0, Name: "Peak Only"},
+			{ID: "9000000000102", Index: 1, Name: "Whole House 1"},
+		},
+		Clips: []resolumecomp.Clip{
+			// Four clips, one layer, one name: no reference can ever tell
+			// them apart, not even one naming "Peak Only".
+			{ID: "9000000000201", DeckID: "9000000000001", LayerIndex: 0, ColumnIndex: 0, Name: "Text Block"},
+			{ID: "9000000000202", DeckID: "9000000000001", LayerIndex: 0, ColumnIndex: 1, Name: "Text Block"},
+			{ID: "9000000000203", DeckID: "9000000000001", LayerIndex: 0, ColumnIndex: 2, Name: "Text Block"},
+			{ID: "9000000000204", DeckID: "9000000000001", LayerIndex: 0, ColumnIndex: 3, Name: "Text Block"},
+			// A unique clip on the SAME layer, same deck: never ambiguous.
+			{ID: "9000000000205", DeckID: "9000000000001", LayerIndex: 0, ColumnIndex: 4, Name: "Unique Peak Clip"},
+		},
+		PersistentClips: []resolumecomp.Clip{
+			{ID: "9000000000301", LayerIndex: 1, ColumnIndex: 0, Name: "Solid Color"},
+			{ID: "9000000000302", LayerIndex: 1, ColumnIndex: 0, Name: "Solid Color"},
+		},
+	}
+}
+
+// TestResolumeCompositionAmbiguousClipsAreFlagged is acceptance criterion
+// 13: a clip whose (deck-or-persistent, layer, label) triple is shared is
+// marked ambiguous, and a unique one is not — exercised at the mapping
+// layer directly against the synthetic fixture above, independent of the
+// upload/XML round trip.
+func TestResolumeCompositionAmbiguousClipsAreFlagged(t *testing.T) {
+	comp := ambiguousShapeComposition()
+	payload := resolumeCompositionStoredPayload{Composition: comp}
+	resp := mapResolumeCompositionResponse(testNow, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{Revision: 1}, payload)
+
+	ambiguousIDs := map[string]bool{}
+	for _, clip := range resp.Clips {
+		ambiguousIDs[clip.ID] = clip.Ambiguous
+	}
+	for _, id := range []string{"9000000000201", "9000000000202", "9000000000203", "9000000000204"} {
+		if !ambiguousIDs[id] {
+			t.Errorf("clip %s: Ambiguous = false, want true (shares its triple with three others)", id)
+		}
+	}
+	if ambiguousIDs["9000000000205"] {
+		t.Error("clip 9000000000205 (\"Unique Peak Clip\"): Ambiguous = true, want false")
+	}
+
+	persistentAmbiguousIDs := map[string]bool{}
+	for _, clip := range resp.PersistentClips {
+		persistentAmbiguousIDs[clip.ID] = clip.Ambiguous
+	}
+	if !persistentAmbiguousIDs["9000000000301"] || !persistentAmbiguousIDs["9000000000302"] {
+		t.Errorf("persistent clips = %+v, want both 9000000000301 and 9000000000302 marked ambiguous (shared name)", persistentAmbiguousIDs)
+	}
+}
+
+// TestResolumeCompositionAmbiguityNeverGroupsTwoUnresolvedLayerClips is
+// review finding 2 extended to the composition read surface: two clips
+// sharing a deck and a name, but whose own layerIndex does not resolve to
+// any tracked layer, are NOT thereby marked as sharing a triple — this
+// package has no evidence their real layers agree.
+func TestResolumeCompositionAmbiguityNeverGroupsTwoUnresolvedLayerClips(t *testing.T) {
+	comp := &resolumecomp.Composition{
+		Name:   "Unresolved Layer Fixture",
+		Decks:  []resolumecomp.Deck{{ID: "1", Name: "Main"}},
+		Layers: []resolumecomp.Layer{{ID: "101", Index: 0, Name: "Layer A"}},
+		Clips: []resolumecomp.Clip{
+			// LayerIndex 98 and 99 both fail to resolve against the one
+			// declared layer (index 0).
+			{ID: "801", DeckID: "1", LayerIndex: 98, ColumnIndex: 0, Name: "Ghost"},
+			{ID: "802", DeckID: "1", LayerIndex: 99, ColumnIndex: 0, Name: "Ghost"},
+		},
+	}
+	payload := resolumeCompositionStoredPayload{Composition: comp}
+	resp := mapResolumeCompositionResponse(testNow, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{Revision: 1}, payload)
+
+	for _, clip := range resp.Clips {
+		if clip.Ambiguous {
+			t.Errorf("clip %s (%s): Ambiguous = true, want false — two unresolved-layer clips must never be treated as sharing one", clip.ID, clip.Name)
+		}
 	}
 }
 

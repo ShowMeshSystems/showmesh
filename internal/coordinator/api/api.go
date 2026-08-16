@@ -287,6 +287,49 @@ type Dependencies struct {
 	// the conservative reading when this coordinator has not said
 	// otherwise.
 	AssetSyncEnabled bool
+	// Resolume is this API's observability dependency: whatever
+	// Resolume instances this coordinator has configured, with their
+	// currently-held observations. A nil field is replaced by
+	// [noResolumeLister], under which GET /resolume/instances reports an
+	// empty array, the single-instance route always 404s, and the change
+	// stream announces no resolume.changed — matching this struct's
+	// standing "an unwired dependency is not this API failing" posture.
+	Resolume ResolumeLister
+
+	// ResolumeReferences is Track D seam C's own write-time reference
+	// resolver (ADR-037), reached only through
+	// [config.ResolumeReferenceResolver] — see that interface's own doc
+	// comment (internal/coordinator/config/showaction.go) for why config
+	// declares it rather than importing
+	// internal/coordinator/collector/resolume directly. Consumed by
+	// handlePutShowAction (showconfig.go) to validate a resolume
+	// show.action's ref against the coordinator's currently stored
+	// composition, independent of whether a live Resolume instance is even
+	// configured (the stored composition and the live collector are
+	// separate concerns — see resolumeCompositionWiring's own doc comment
+	// in internal/coordinator). A nil field is replaced by
+	// [noResolumeReferenceResolver]: every write of a resolume show.action
+	// is refused with config.ErrResolumeCompositionNotUploaded's own
+	// sentence, the honest answer for a coordinator with nothing wired to
+	// resolve against — matching this struct's standing "an unwired
+	// dependency is not this API failing" posture.
+	ResolumeReferences config.ResolumeReferenceResolver
+
+	// ResolumeRecovery is Track D seam D-3a's own recovery controller
+	// (internal/coordinator/collector/resolume.Recovery), reached only
+	// through [ResolumeRecoveryProvider]. A nil field is replaced by
+	// [noResolumeRecoveryProvider]: the record reads empty, no restore
+	// has ever run, and a manual restore refuses loudly — matching this
+	// struct's standing "an unwired dependency is not this API failing"
+	// posture.
+	ResolumeRecovery ResolumeRecoveryProvider
+
+	// ResolumeRecoverySettleSeconds threads [config.Config.ResolumeRecoverySettle]
+	// through for the identical "this package does not read the
+	// environment or config package state on its own" reason
+	// [Dependencies.ResolumeID] documents. Rendered on GET
+	// /resolume/recovery as settleDelaySeconds.
+	ResolumeRecoverySettleSeconds float64
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -357,6 +400,15 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
+	if d.Resolume == nil {
+		d.Resolume = noResolumeLister{}
+	}
+	if d.ResolumeReferences == nil {
+		d.ResolumeReferences = noResolumeReferenceResolver{}
+	}
+	if d.ResolumeRecovery == nil {
+		d.ResolumeRecovery = noResolumeRecoveryProvider{}
+	}
 	return d
 }
 
@@ -377,6 +429,42 @@ func (noAssetSyncNudger) Nudge() {}
 // [Dependencies.AssetInventoryInterval] is left unset, which production
 // wiring never does (config.Load always computes a positive value).
 const defaultAssetManifestInventoryInterval = 2 * time.Minute
+
+// noResolumeReferenceResolver is [Dependencies.ResolumeReferences]'s
+// nil-safe default: every method reports
+// [config.ErrResolumeCompositionNotUploaded], the same answer a real
+// resolver gives when nothing has ever been uploaded — an unwired
+// dependency and a genuinely empty one are indistinguishable from a
+// caller's point of view, which is correct: neither has anything to
+// resolve against.
+type noResolumeReferenceResolver struct{}
+
+func (noResolumeReferenceResolver) ResolveClip(config.ResolumeClipReference) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveLayer(string) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveColumn(string, string) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveDeck(string) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+// noResolumeLister is [Dependencies.Resolume]'s nil-safe default:
+// ListInstances always answers empty-and-successful, matching every other
+// no-op lister in this package (noNodeLister, noFPPLister) — an
+// unconfigured or unwired Resolume dependency is a real, honest "nothing
+// configured", never an error.
+type noResolumeLister struct{}
+
+func (noResolumeLister) ListInstances(context.Context) ([]ResolumeInstanceView, error) {
+	return nil, nil
+}
 
 // noFPPPollNudger is [Dependencies.Nudger]'s nil-safe default: NudgePoll
 // always reports false, which every caller already treats identically to
@@ -1094,6 +1182,31 @@ func New(deps Dependencies, opts Options) *API {
 	// doc comment — so this is not a route ordering hazard.
 	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
+	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
+	// never gated, per ADR-024's reads-stay-open posture and the build
+	// contract §1.3's own "the dashboard renders with no session"
+	// requirement. POST .../restore requires resolume:action, the same
+	// scope every other Resolume write requires. GET/PUT
+	// /config/resolume.recovery mirror /config/fpp.endpoints's own
+	// config:write-only posture (resolumerecovery.go).
+	mux.HandleFunc("GET /api/v1/resolume/recovery", h.handleGetResolumeRecovery)
+	mux.HandleFunc("POST /api/v1/resolume/recovery/restore", h.writeGuard(&scopeResolumeAction, h.handlePostResolumeRecoveryRestore))
+	mux.HandleFunc("GET /api/v1/config/resolume.recovery", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfig))
+	mux.HandleFunc("PUT /api/v1/config/resolume.recovery", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeRecoveryConfig))
+	mux.HandleFunc("GET /api/v1/config/resolume.recovery/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfigRevisions))
+
+	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
+	// seam E): Resolume as a first-class observability resource. "instances"
+	// is an explicit path segment, not a bare {id} under /resolume/, because
+	// /resolume/actions already exists and /resolume/recovery is being added
+	// in parallel — see resolumeinstances.go's own doc comment. Guarded by
+	// observation:read, the same guard GET /observations uses: this is
+	// telemetry, not configuration, so it follows ADR-024 decision 4's
+	// pre-existing open-by-default read posture rather than requireScope's
+	// always-sensitive one (compare GET /config/resolume/composition, which
+	// deliberately uses the latter).
+	mux.HandleFunc("GET /api/v1/resolume/instances", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstances))
+	mux.HandleFunc("GET /api/v1/resolume/instances/{instanceId}", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstance))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

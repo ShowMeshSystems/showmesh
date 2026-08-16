@@ -94,21 +94,27 @@ func (f *fakeResolumeActionDispatcher) lastCtxDeadline() (deadline time.Time, ok
 	return call.ctx.Deadline()
 }
 
-// standardResolumeActionDescriptors is TRACK-D-D3-SPEC.md section 2's
-// seven-action vocabulary and section 5.2's safety-class table, exactly as
-// this seam's own report describes them — this package's own tests do not
-// depend on D-3/A's real registry to exist; they fix this vocabulary
-// themselves, matching it against the spec directly.
+// standardResolumeActionDescriptors is the ADR-037 reference vocabulary
+// (superseding the earlier raw "id") and its safety-class table — this
+// package's own tests do not depend on D-3/A's real registry to exist;
+// they fix this vocabulary themselves, matching it against the spec
+// directly.
 func standardResolumeActionDescriptors() []ResolumeActionDescriptor {
-	idParam := ResolumeActionParam{Name: "id", Kind: ResolumeActionParamString, Required: true}
+	clipParam := ResolumeActionParam{Name: "clip", Kind: ResolumeActionParamString, Required: true}
+	deckOptional := ResolumeActionParam{Name: "deck", Kind: ResolumeActionParamString, Required: false}
+	deckRequired := ResolumeActionParam{Name: "deck", Kind: ResolumeActionParamString, Required: true}
+	layerOptional := ResolumeActionParam{Name: "layer", Kind: ResolumeActionParamString, Required: false}
+	layerRequired := ResolumeActionParam{Name: "layer", Kind: ResolumeActionParamString, Required: true}
+	persistentParam := ResolumeActionParam{Name: "persistent", Kind: ResolumeActionParamBool, Required: false}
+	columnParam := ResolumeActionParam{Name: "column", Kind: ResolumeActionParamString, Required: true}
 	return []ResolumeActionDescriptor{
-		{Name: "launchClip", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "clearLayer", Params: []ResolumeActionParam{idParam}, AuditExempt: true, CoordinatorRequired: true},
+		{Name: "launchClip", Params: []ResolumeActionParam{clipParam, deckOptional, layerOptional, persistentParam}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "clearLayer", Params: []ResolumeActionParam{layerRequired}, AuditExempt: true, CoordinatorRequired: true},
 		{Name: "blackout", Params: nil, AuditExempt: true, CoordinatorRequired: true},
-		{Name: "launchColumn", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "selectDeck", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "setLayerBypass", Params: []ResolumeActionParam{idParam, {Name: "bypassed", Kind: ResolumeActionParamBool, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "setLayerMaster", Params: []ResolumeActionParam{idParam, {Name: "master", Kind: ResolumeActionParamNumber, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "launchColumn", Params: []ResolumeActionParam{columnParam, deckRequired}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "selectDeck", Params: []ResolumeActionParam{deckRequired}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "setLayerBypass", Params: []ResolumeActionParam{layerRequired, {Name: "bypassed", Kind: ResolumeActionParamBool, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "setLayerMaster", Params: []ResolumeActionParam{layerRequired, {Name: "master", Kind: ResolumeActionParamNumber, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
 	}
 }
 
@@ -296,7 +302,7 @@ func TestResolumeActionOutcomeVocabularyAlwaysRendersAsTwoHundred(t *testing.T) 
 			operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 			token := mustIssueToken(t, setup.svc, operator.ID)
 
-			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-"+string(tc.outcome), `{"id":"col-1"}`), token)
+			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-"+string(tc.outcome), `{"column":"col-1","deck":"deck-1"}`), token)
 			resp, body := doRawRequest(t, api.Handler, req)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200 for outcome %q (never an HTTP error); body: %s", resp.StatusCode, tc.outcome, body)
@@ -369,12 +375,12 @@ func TestResolumeActionParamsAbsentNullEmptyRule(t *testing.T) {
 		body string
 	}{
 		{"required param absent", resolumeActionBody("launchClip", "key-1", `{}`)},
-		{"required param null", resolumeActionBody("launchClip", "key-1", `{"id":null}`)},
-		{"required string param empty", resolumeActionBody("launchClip", "key-1", `{"id":""}`)},
+		{"required param null", resolumeActionBody("launchClip", "key-1", `{"clip":null}`)},
+		{"required string param empty", resolumeActionBody("launchClip", "key-1", `{"clip":""}`)},
 		{"params object itself null", `{"action":"launchClip","idempotencyKey":"key-1","params":null}`},
-		{"unknown key", resolumeActionBody("launchClip", "key-1", `{"id":"clip-1","bogus":true}`)},
-		{"zero-param action given params", resolumeActionBody("blackout", "key-1", `{"id":"whatever"}`)},
-		{"wrong type for bool param", resolumeActionBody("setLayerBypass", "key-1", `{"id":"layer-1","bypassed":"yes"}`)},
+		{"unknown key", resolumeActionBody("launchClip", "key-1", `{"clip":"clip-1","bogus":true}`)},
+		{"zero-param action given params", resolumeActionBody("blackout", "key-1", `{"clip":"whatever"}`)},
+		{"wrong type for bool param", resolumeActionBody("setLayerBypass", "key-1", `{"layer":"layer-1","bypassed":"yes"}`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,7 +411,7 @@ func TestResolumeActionReplaySameKeyDispatchesOnlyOnce(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	body := resolumeActionBody("launchColumn", "key-replay", `{"id":"col-1"}`)
+	body := resolumeActionBody("launchColumn", "key-replay", `{"column":"col-1","deck":"deck-1"}`)
 	req1 := newResolumeActionRequest(t, body, token)
 	resp1, body1 := doRawRequest(t, api.Handler, req1)
 	if resp1.StatusCode != http.StatusOK {
@@ -434,12 +440,12 @@ func TestResolumeActionReplayDifferentActionIsConflict(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-conflict", `{"id":"col-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-conflict", `{"column":"col-1","deck":"deck-1"}`), token)
 	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-conflict", `{"id":"deck-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-conflict", `{"deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
@@ -456,12 +462,12 @@ func TestResolumeActionReplayDifferentParamsIsConflict(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"id":"clip-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"id":"clip-2"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"clip":"clip-2","deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
@@ -506,7 +512,7 @@ func TestResolumeActionNonExemptFailsClosedWhenAuditFails(t *testing.T) {
 
 	installFailAuditTrigger(t, setup.storeDir)
 
-	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-non-exempt", `{"id":"clip-1"}`), token)
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-non-exempt", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (launchClip is NOT exempt; ADR-024 decision 11's default fail-closed rule); body: %s", resp.StatusCode, body)
@@ -549,31 +555,67 @@ func TestStandardResolumeActionDescriptorsFixtureSafetyClassMatchesSpec(t *testi
 	}
 }
 
-// TestResolumeActionMaxDispatchDurationEqualsRegistryMax is the fix for
-// the defect CLAUDE.md names explicitly for this task: this package's own
-// HTTP write-deadline sizing must not drift from D-3/A's real,
-// structurally-enforced deadline bound. Renamed from
-// TestResolumeActionMaxConfirmDeadlineEqualsRegistryMax as part of Review
-// fix 4 (2026-08-15): the constant it checks is now
-// resolumeActionMaxDispatchDuration against resolume.MaxDispatchDuration —
-// the TOTAL bound (baseline phase + write + confirm clamp), not
-// resolume.MaxActionConfirmDeadline (the confirm-poll clamp alone), which
-// both review passes found was silently missing two whole phases. This
-// package's own production code still does not import that package (see
-// resolumeActionMaxDispatchDuration's own doc comment for why), but this is
-// a TEST file, and a test importing the producer to check a literal against
-// it creates no production coupling at all.
+// TestResolumeActionMaxDispatchDurationEqualsRegistryMax is the fix for the
+// defect CLAUDE.md names explicitly for this task: resolumeActionMaxDispatchDuration
+// is a duplicated literal, not read from resolume.MaxDispatchDuration
+// (internal/coordinator/collector/resolume, action.go) directly — this
+// package's own production code does not import that package (see
+// resolumeActionMaxDispatchDuration's own doc comment for why). This is a
+// TEST file, and a test importing the producer to check a literal against
+// it creates no production coupling at all — the same "test that fails if
+// a client budget is ever set below the server's maximum" CLAUDE.md asks
+// for, applied to the api<->resolume boundary specifically
+// (TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget below is
+// the SEPARATE test for the api<->showmeshctl boundary, which cannot do
+// this because that program is genuinely forbidden from importing either
+// package).
 //
-// Before trusting this test: temporarily changed
-// resolumeActionMaxDispatchDuration to 39*time.Second (one second below
-// resolume.MaxDispatchDuration) and reran — failed immediately, naming
-// both values. Reverted afterward.
+// Before trusting this test: temporarily changed resolumeActionMaxDispatchDuration
+// to 39*time.Second (one second below resolume.MaxDispatchDuration) and
+// reran — failed immediately, naming both values. Reverted afterward.
 func TestResolumeActionMaxDispatchDurationEqualsRegistryMax(t *testing.T) {
 	if resolumeActionMaxDispatchDuration != resolume.MaxDispatchDuration {
 		t.Fatalf("resolumeActionMaxDispatchDuration (%s) != resolume.MaxDispatchDuration (%s) — this package's "+
-			"own HTTP write-deadline sizing has drifted from D-3/A's real, structurally-enforced deadline bound; "+
+			"own dispatch-budget sizing has drifted from D-3/A's real, structurally-enforced deadline sum; "+
 			"raise or lower resolumeActionMaxDispatchDuration (resolumeaction.go) to match",
 			resolumeActionMaxDispatchDuration, resolume.MaxDispatchDuration)
+	}
+}
+
+// TestResolumeRecoveryMaxLayersEqualsProducerBound is
+// TestResolumeActionMaxDispatchDurationEqualsRegistryMax's own D-3a
+// sibling: resolumeRecoveryMaxLayers (resolumerecovery.go) duplicates
+// resolume.MaxRestoreLayers by value, and this is a TEST-only import
+// checking the two never drift apart.
+func TestResolumeRecoveryMaxLayersEqualsProducerBound(t *testing.T) {
+	if resolumeRecoveryMaxLayers != resolume.MaxRestoreLayers {
+		t.Fatalf("resolumeRecoveryMaxLayers (%d) != resolume.MaxRestoreLayers (%d) — this package's own "+
+			"write-deadline clamp has drifted from what a restore itself ever attempts; raise or lower "+
+			"resolumeRecoveryMaxLayers (resolumerecovery.go) to match",
+			resolumeRecoveryMaxLayers, resolume.MaxRestoreLayers)
+	}
+}
+
+// TestResolumeRecoveryRestoreDeadlineScalesAndClamps: the write deadline
+// scales with the composition's own layer count (never a fixed number
+// unrelated to what a restore actually needs) and is clamped at
+// resolumeRecoveryMaxLayers rather than growing without limit for an
+// unusually large composition. Breaking: the clamp `if layerCount >
+// resolumeRecoveryMaxLayers { layerCount = resolumeRecoveryMaxLayers }`
+// removed — confirmed this test's clamp assertion goes red (the deadline
+// for 500 extra layers grew unbounded instead of matching the deadline at
+// exactly resolumeRecoveryMaxLayers), then restored.
+func TestResolumeRecoveryRestoreDeadlineScalesAndClamps(t *testing.T) {
+	one := resolumeRecoveryRestoreDeadline(1)
+	two := resolumeRecoveryRestoreDeadline(2)
+	if two <= one {
+		t.Fatalf("resolumeRecoveryRestoreDeadline(2) = %s, want more than resolumeRecoveryRestoreDeadline(1) = %s — the deadline must scale with layer count", two, one)
+	}
+	atCeiling := resolumeRecoveryRestoreDeadline(resolumeRecoveryMaxLayers)
+	beyondCeiling := resolumeRecoveryRestoreDeadline(resolumeRecoveryMaxLayers + 500)
+	if beyondCeiling != atCeiling {
+		t.Fatalf("resolumeRecoveryRestoreDeadline(%d+500) = %s, want it clamped to resolumeRecoveryRestoreDeadline(%d) = %s",
+			resolumeRecoveryMaxLayers, beyondCeiling, resolumeRecoveryMaxLayers, atCeiling)
 	}
 }
 
@@ -683,7 +725,7 @@ func TestResolumeActionOutcomeStateCarriesObservationVocabularyNotOutcomeWord(t 
 	// confirmed: the one outcome this package can honestly state a real
 	// pkg/observation state for (StateCurrent — the confirming evidence was
 	// read strictly after dispatch, TRACK-D-D3-SPEC.md section 4.1).
-	req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-state-confirmed", `{"id":"col-1"}`), token)
+	req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-state-confirmed", `{"column":"col-1","deck":"deck-1"}`), token)
 	doRawRequest(t, api.Handler, req)
 
 	rec, err := setup.st.GetCommand(context.Background(), mustLookUpResolumeCommandID(t, setup.st, "key-state-confirmed"))
@@ -716,7 +758,7 @@ func TestResolumeActionOutcomeStateCarriesObservationVocabularyNotOutcomeWord(t 
 	// to back ANY word for this outcome — OutcomeState must be genuinely
 	// absent, never the outcome word "refused" (not a pkg/observation
 	// state at all).
-	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-state-refused", `{"id":"deck-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-state-refused", `{"deck":"deck-1"}`), token)
 	doRawRequest(t, api.Handler, req2)
 
 	rec2, err := setup.st.GetCommand(context.Background(), mustLookUpResolumeCommandID(t, setup.st, "key-state-refused"))
