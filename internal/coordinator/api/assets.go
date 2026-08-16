@@ -248,19 +248,24 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 
 	maxUpload := h.deps.AssetMaxUploadBytes
 
-	// The coordinator's own httpapi.NewServer sets ReadTimeout: 10s
-	// (internal/coordinator/httpapi/server.go), which bounds the ENTIRE
-	// time this handler has to read the request body. An asset upload can
-	// legitimately take far longer than that on a slow link, so this
-	// extends THIS connection's own read deadline past it, sized from the
-	// same budget showmeshctl's own client computes its timeout from
-	// (assetstore.UploadBudget) — stream.go's resetWriteDeadline is the
-	// identical pattern for the write side of this exact two-timeouts
-	// problem. The error is deliberately ignored, matching that
-	// function's own posture: an http.ResponseWriter with no deadline
-	// support (e.g. a test's httptest.ResponseRecorder) simply has none to
-	// extend.
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(assetstore.UploadBudget(maxUpload)))
+	// httpapi.NewServer sets ReadTimeout AND WriteTimeout to 10s, and both
+	// bound this handler. Both are extended here, sized from the same
+	// budget showmeshctl derives its own client timeout from.
+	//
+	// The write half is the non-obvious one and was a shipped defect. Go
+	// arms the write deadline inside conn.readRequest, at roughly the
+	// moment the request HEADERS were read, so it expires while a large
+	// body is still arriving. Extending only the read deadline gives an
+	// upload that is staged, hashed, registered and audited, and then
+	// fails on the response flush: the operator is told a transport error
+	// for a request that fully succeeded, and the retry reproduces it.
+	//
+	// The errors are ignored, matching stream.go's resetWriteDeadline: a
+	// ResponseWriter with no deadline support has none to extend.
+	uploadDeadline := time.Now().Add(assetstore.UploadBudget(maxUpload))
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(uploadDeadline)
+	_ = rc.SetWriteDeadline(uploadDeadline)
 
 	// Bounds the ENTIRE request body — form fields plus the file part —
 	// before any multipart parsing begins, matching
@@ -369,6 +374,10 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 		h.writeInternalError(w, now, "write asset", writeErr)
 		return
 	}
+
+	// ADR-028 decision 7: sync runs on upload and on a timer, never at
+	// showtime. Without this the new asset waits out a whole sync interval.
+	h.deps.AssetSyncNudger.Nudge()
 
 	jsonWrite(w, mapAssetResponse(now, created))
 }

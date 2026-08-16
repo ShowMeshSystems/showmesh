@@ -123,6 +123,75 @@ func TestReplaceNodeAssetInventoryIsDeleteThenInsert(t *testing.T) {
 	}
 }
 
+// TestReplaceNodeAssetInventoryIncompleteReportLeavesInventoryUntouched is
+// P4a: a node whose asset directory goes transiently unreadable publishes
+// complete:false with no items. That must NOT be read as "the node now
+// holds nothing" — before this fix, ReplaceNodeAssetInventory always ran
+// delete-then-insert regardless of Complete, so an incomplete report (agent
+// evidence of a READ failure) silently erased evidence of what the node
+// actually holds, and assetsync would then see nothing held and re-dispatch
+// every expected asset until the mount returned.
+func TestReplaceNodeAssetInventoryIncompleteReportLeavesInventoryUntouched(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	firstItems := []NodeAssetInventoryRecord{
+		{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq", SizeBytes: 100, VerifiedAt: time.Now().UTC()},
+	}
+	if err := st.ReplaceNodeAssetInventory(ctx, "render-01", firstItems,
+		NodeAssetReportRecord{ReportedAt: time.Now().UTC(), Complete: true}); err != nil {
+		t.Fatalf("seed complete report: %v", err)
+	}
+
+	// A later report arrives incomplete and empty — the agent could not
+	// finish enumerating its own directory, not evidence it holds nothing.
+	incompleteAt := time.Now().UTC().Add(time.Minute)
+	if err := st.ReplaceNodeAssetInventory(ctx, "render-01", nil, NodeAssetReportRecord{
+		ReportedAt: incompleteAt, Complete: false, Reason: "asset directory temporarily unreadable",
+	}); err != nil {
+		t.Fatalf("incomplete replace: %v", err)
+	}
+
+	inv, err := st.GetNodeAssetInventory(ctx, "render-01")
+	if err != nil {
+		t.Fatalf("get inventory: %v", err)
+	}
+	if len(inv) != 1 || inv[0].ContentHash != "sha256:aaa" {
+		t.Fatalf("inventory after an incomplete report = %+v, want the PRIOR complete report's inventory left untouched", inv)
+	}
+
+	got, err := st.GetNodeAssetReport(ctx, "render-01")
+	if err != nil {
+		t.Fatalf("get report: %v", err)
+	}
+	if got.Complete {
+		t.Errorf("Complete = true, want false: the report row itself must still reflect the latest (incomplete) report")
+	}
+	if !got.ReportedAt.Equal(incompleteAt) {
+		t.Errorf("ReportedAt = %v, want %v", got.ReportedAt, incompleteAt)
+	}
+	if got.Reason != "asset directory temporarily unreadable" {
+		t.Errorf("Reason = %q, want the incomplete report's own reason", got.Reason)
+	}
+
+	// A THIRD, complete report is still a normal wholesale replacement —
+	// this fix must not have disabled deletion permanently.
+	thirdItems := []NodeAssetInventoryRecord{
+		{ContentHash: "sha256:ccc", RuntimeFilename: "New.fseq", SizeBytes: 300, VerifiedAt: time.Now().UTC()},
+	}
+	if err := st.ReplaceNodeAssetInventory(ctx, "render-01", thirdItems,
+		NodeAssetReportRecord{ReportedAt: incompleteAt.Add(time.Minute), Complete: true}); err != nil {
+		t.Fatalf("third (complete) replace: %v", err)
+	}
+	inv, err = st.GetNodeAssetInventory(ctx, "render-01")
+	if err != nil {
+		t.Fatalf("get inventory after third replace: %v", err)
+	}
+	if len(inv) != 1 || inv[0].ContentHash != "sha256:ccc" {
+		t.Fatalf("inventory after a subsequent COMPLETE report = %+v, want exactly [sha256:ccc]: a complete report must still wholesale-replace", inv)
+	}
+}
+
 // TestReplaceNodeAssetInventoryUpsertsReportFields proves the report row's
 // Complete/Reason/ReportedAt reflect the latest call, not the first —
 // necessary for a node that failed a walk once and later succeeds (or vice

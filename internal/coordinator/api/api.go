@@ -262,6 +262,31 @@ type Dependencies struct {
 	// computation every manifest response rests on. A value <= 0 is
 	// replaced by [defaultAssetManifestInventoryInterval].
 	AssetInventoryInterval time.Duration
+
+	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see
+	// [AssetSyncNudger]'s own doc comment. In practice the real value is
+	// *assetsync.Service, wired by coordinator.go. A nil field is replaced
+	// by [noAssetSyncNudger], under which Nudge is a no-op: an upload or a
+	// show activation degrades to waiting out the service's own interval,
+	// matching this struct's standing "an unwired dependency is not this
+	// API failing" posture.
+	AssetSyncNudger AssetSyncNudger
+
+	// AssetSyncEnabled mirrors *assetsync.Service.Enabled()
+	// (cfg.AssetContentBaseURL != ""), threaded through for the identical
+	// "this package does not read the environment or config package state
+	// on its own" reason [FPPEndpointsEnvVarSet] documents. Consumed by
+	// assetmanifest.go's not_ready reason: config.Config.
+	// AssetContentBaseURL's own doc comment and assetsync/sync.go's startup
+	// log line both promise that an unset base URL is stated as the reason
+	// no node can be confirmed ready, and this field is what makes that
+	// true rather than an unkept promise. The zero value (false) is the
+	// same "nothing told this API otherwise" posture as every other unwired
+	// dependency here — a test or embedder that has not wired this in gets
+	// the disabled-sync note appended to every not_ready reason, which is
+	// the conservative reading when this coordinator has not said
+	// otherwise.
+	AssetSyncEnabled bool
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -329,8 +354,19 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetInventoryInterval <= 0 {
 		d.AssetInventoryInterval = defaultAssetManifestInventoryInterval
 	}
+	if d.AssetSyncNudger == nil {
+		d.AssetSyncNudger = noAssetSyncNudger{}
+	}
 	return d
 }
+
+// noAssetSyncNudger is [Dependencies.AssetSyncNudger]'s nil-safe default:
+// Nudge does nothing, which is exactly the pre-nudge behavior (wait out
+// [assetsync.Service]'s own interval) — matching [noFPPPollNudger]'s
+// identical shape one field over.
+type noAssetSyncNudger struct{}
+
+func (noAssetSyncNudger) Nudge() {}
 
 // defaultAssetManifestInventoryInterval mirrors
 // internal/coordinator/config's own defaultAssetInventoryInterval (2

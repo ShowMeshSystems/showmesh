@@ -395,6 +395,11 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every node's expected asset set just changed. Without this the fleet
+	// waits out a whole sync interval before anything starts fetching the
+	// new show's assets.
+	h.deps.AssetSyncNudger.Nudge()
+
 	jsonWrite(w, mapShowActiveConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowActiveConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))

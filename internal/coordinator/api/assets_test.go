@@ -309,6 +309,34 @@ func TestPostAssetUploadDifferentBytesSupersedesPreviousCurrent(t *testing.T) {
 	if currentCount != 1 {
 		t.Errorf("expected exactly one CURRENT row after supersession, got %d", currentCount)
 	}
+
+	// Read supersession back through the WIRE, not only out of the store.
+	// Both upload responses above describe freshly created rows, which are
+	// always current, so they cannot tell a real `current` field from a
+	// hardcoded true; only listing after the fact can.
+	_, listBody := doRequest(t, api.Handler, "GET", "/api/v1/assets?show=halloween-2026&sequence=opening", auth)
+	var listed struct {
+		Assets []v1AssetForTest `json:"assets"`
+	}
+	if err := json.Unmarshal(listBody, &listed); err != nil {
+		t.Fatalf("decode list response: %v\nbody: %s", err, listBody)
+	}
+	if len(listed.Assets) != 2 {
+		t.Fatalf("listed %d assets, want 2", len(listed.Assets))
+	}
+	byID := map[string]v1AssetForTest{}
+	for _, a := range listed.Assets {
+		byID[a.ID] = a
+	}
+	if byID[first.Asset.ID].Current {
+		t.Error("the superseded asset renders current = true on the wire, want false")
+	}
+	if !byID[second.Asset.ID].Current {
+		t.Error("the current asset renders current = false on the wire, want true")
+	}
+	if byID[first.Asset.ID].SupersededAt == nil {
+		t.Error("the superseded asset has a null supersededAt on the wire")
+	}
 }
 
 // --- validation ---
@@ -480,6 +508,12 @@ func TestPostAssetUploadFileFieldWithNoFilenameRefuses(t *testing.T) {
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	// The status alone is not enough: removing the guard produces a 500 that
+	// this test would still read as "refused". The detail is what proves the
+	// refusal named the right problem.
+	if !bytes.Contains(body, []byte("must be an uploaded file with a filename")) {
+		t.Fatalf("refusal does not name the missing filename; body: %s", body)
 	}
 }
 
@@ -751,14 +785,19 @@ func TestPostAssetUploadRequiresAssetWriteScope(t *testing.T) {
 
 // --- the timeout budget: two sides of one contract (spec section 6) ---
 
-// TestPostAssetUploadSurvivesServerReadTimeout is this seam's own version
-// of stream.go's TestStreamSurvivesServerWriteTimeout: a real
-// *http.Server with a short ReadTimeout, and an upload deliberately paced
-// slower than it, proving the handler's own SetReadDeadline extension
-// (assets.go's handlePostAssetUpload) is what keeps the connection alive
-// long enough to finish — not the server's ReadTimeout, which would
-// otherwise kill it partway through.
-func TestPostAssetUploadSurvivesServerReadTimeout(t *testing.T) {
+// TestPostAssetUploadSurvivesServerReadAndWriteTimeouts is this seam's own
+// version of stream.go's TestStreamSurvivesServerWriteTimeout: a real
+// *http.Server with a short ReadTimeout AND a short WriteTimeout, and an
+// upload paced slower than both, proving handlePostAssetUpload's own two
+// deadline extensions are what keep the connection alive.
+//
+// WriteTimeout is set here deliberately. An earlier version of this test
+// left it at zero, so it passed against a handler that extended only the
+// read deadline, while a real coordinator (which does set WriteTimeout)
+// staged, hashed, registered and audited the upload and then failed the
+// response flush, telling the operator a transport error for a request
+// that had fully succeeded.
+func TestPostAssetUploadSurvivesServerReadAndWriteTimeouts(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
@@ -768,7 +807,11 @@ func TestPostAssetUploadSurvivesServerReadTimeout(t *testing.T) {
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
 
 	ts := httptest.NewUnstartedServer(api.Handler)
-	ts.Config.ReadTimeout = 100 * time.Millisecond // shorter than this upload's own pacing below, deliberately
+	// Both shorter than this upload's own pacing below, deliberately. The
+	// write deadline is armed when the headers are read, so it expires
+	// mid-body just as the read deadline does.
+	ts.Config.ReadTimeout = 100 * time.Millisecond
+	ts.Config.WriteTimeout = 100 * time.Millisecond
 	ts.Start()
 	defer ts.Close()
 
@@ -802,11 +845,53 @@ func TestPostAssetUploadSurvivesServerReadTimeout(t *testing.T) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		t.Fatalf("upload paced past the server's ReadTimeout failed: %v", err)
+		t.Fatalf("upload paced past the server read and write timeouts failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (an upload slower than ReadTimeout must still succeed); body: %s", resp.StatusCode, respBody)
+	}
+}
+
+// countingNudger records how many times an out-of-band sync was requested.
+type countingNudger struct{ n int }
+
+func (c *countingNudger) Nudge() { c.n++ }
+
+// The nudge call sites are the whole point of AssetSyncNudger existing: the
+// method shipped once with a no-op default and no caller at all, so an
+// upload or an activation waited out a full sync interval. These assert the
+// call, not the field.
+func TestAssetSyncIsNudgedOnUploadAndOnActivation(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	nudger := &countingNudger{}
+	deps := assetsTestDeps(t, svc, st)
+	deps.AssetSyncNudger = nudger
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	if resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("bytes"), auth); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+	if nudger.n != 1 {
+		t.Fatalf("nudges after upload = %d, want 1: a new asset must not wait out a sync interval", nudger.n)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config/show.active",
+		bytes.NewReader([]byte(`{"show":"halloween-2026"}`)))
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("activate: status = %d, body: %s", resp.StatusCode, body)
+	}
+	if nudger.n != 2 {
+		t.Fatalf("nudges after activation = %d, want 2: every node's expected set just changed", nudger.n)
 	}
 }

@@ -2,6 +2,7 @@ package assetsync
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -120,12 +121,30 @@ func newTestService(t *testing.T, st *store.Store, pub Publisher) *Service {
 	return svc
 }
 
+// seedEmptyCompleteReport seeds nodeID's FIRST-EVER inventory report: empty
+// and complete, simulating an agent that has scanned its own (empty) asset
+// directory at least once. P4b: syncNode now routes through the same
+// ComputeNodeManifest a manifest read uses, and a node with NO report at
+// all reads Unknown/NeverReported — nothing is dispatched to a node syncNode
+// cannot currently read (§1 rule 4's "complete: true has to be earned" cuts
+// both ways: no report is also not permission to assume ready-to-receive).
+// Every dispatch-behavior test below needs this seeded first, or syncNode
+// dispatches nothing and the test is measuring the wrong thing.
+func seedEmptyCompleteReport(t *testing.T, st *store.Store, nodeID string, at time.Time) {
+	t.Helper()
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID, nil,
+		store.NodeAssetReportRecord{ReportedAt: at, Complete: true}); err != nil {
+		t.Fatalf("seed empty complete report for %q: %v", nodeID, err)
+	}
+}
+
 func TestServiceDispatchesMissingAsset(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "halloween-2026", "Halloween 2026")
 	putActiveShow(t, st, "halloween-2026")
 	declareNode(t, st, "render-01")
 	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
 
 	pub := &fakePublisher{}
 	svc := newTestService(t, st, pub)
@@ -155,6 +174,13 @@ func TestServiceDispatchesMissingAsset(t *testing.T) {
 	}
 	if cmd.Params["contentHash"] != "sha256:aaa" || cmd.Params["filename"] != "Opening.fseq" {
 		t.Errorf("Params = %+v, want contentHash=sha256:aaa filename=Opening.fseq", cmd.Params)
+	}
+	// D5: sizeBytes decodes through JSON as float64, and the agent's own
+	// parseAssetFetchParams refuses anything below 1 — an unasserted or
+	// zero sizeBytes here would make every asset fetch on every node fail
+	// permanently without this test noticing.
+	if sb, ok := cmd.Params["sizeBytes"].(float64); !ok || sb != 1024 {
+		t.Errorf("Params[sizeBytes] = %v (%T), want float64(1024)", cmd.Params["sizeBytes"], cmd.Params["sizeBytes"])
 	}
 	wantURL := "https://coordinator.example/api/v1/assets/" + cmd.Params["assetId"].(string) + "/content"
 	if cmd.Params["url"] != wantURL {
@@ -197,6 +223,7 @@ func TestServicePerNodeBudgetLimitsConcurrentDispatch(t *testing.T) {
 	createAsset(t, st, "halloween-2026", "seq-a", store.AssetTargetKindNode, "render-01", "sha256:aaa", "A.fseq")
 	createAsset(t, st, "halloween-2026", "seq-b", store.AssetTargetKindNode, "render-01", "sha256:bbb", "B.fseq")
 	createAsset(t, st, "halloween-2026", "seq-c", store.AssetTargetKindNode, "render-01", "sha256:ccc", "C.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
 
 	pub := &fakePublisher{}
 	svc := newTestService(t, st, pub)
@@ -213,6 +240,7 @@ func TestServiceDoesNotRedispatchAlreadyInFlight(t *testing.T) {
 	putActiveShow(t, st, "halloween-2026")
 	declareNode(t, st, "render-01")
 	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
 
 	pub := &fakePublisher{}
 	svc := newTestService(t, st, pub)
@@ -230,6 +258,7 @@ func TestServiceReconcilesInFlightOnPostDispatchConfirmation(t *testing.T) {
 	putActiveShow(t, st, "halloween-2026")
 	declareNode(t, st, "render-01")
 	rec := createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
 
 	pub := &fakePublisher{}
 	svc := newTestService(t, st, pub)
@@ -275,18 +304,25 @@ func TestServiceExpiredInFlightIsEventuallyRedispatched(t *testing.T) {
 	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
 
 	pub := &fakePublisher{}
-	svc := newTestService(t, st, pub)
+	svc := newTestService(t, st, pub) // 1-minute inventoryInterval -> 3-minute staleness window
 
 	now := time.Now()
 	svc.now = func() time.Time { return now }
+	seedEmptyCompleteReport(t, st, "render-01", now)
 	svc.tick(context.Background())
 	if n := pub.callCount(); n != 1 {
 		t.Fatalf("callCount() after first tick = %d, want 1", n)
 	}
 
-	// Advance well past inFlightExpiry for a 1024-byte asset (assetstore.
-	// UploadBudget's grace alone is 30s) without any confirming report.
-	now = now.Add(2 * time.Hour)
+	// Advance past inFlightExpiry for a 1024-byte asset (assetstore.
+	// UploadBudget's grace alone is 30s) without any confirming report, but
+	// stay WELL WITHIN the 3-minute staleness window (StalenessWindow of
+	// this service's 1-minute inventoryInterval): this proves the in-flight
+	// EXPIRY mechanism specifically. Advancing past the staleness window too
+	// would make the node's own report go stale, which (correctly, per
+	// P4b) also suppresses redispatch — a different mechanism this test is
+	// not the one to exercise.
+	now = now.Add(45 * time.Second)
 	svc.tick(context.Background())
 
 	if n := pub.callCount(); n != 2 {
@@ -300,6 +336,7 @@ func TestServiceDispatchFailureIsNotCountedInFlight(t *testing.T) {
 	putActiveShow(t, st, "halloween-2026")
 	declareNode(t, st, "render-01")
 	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
 
 	pub := &fakePublisher{err: context.DeadlineExceeded}
 	svc := newTestService(t, st, pub)
@@ -317,6 +354,166 @@ func TestServiceDispatchFailureIsNotCountedInFlight(t *testing.T) {
 	svc.tick(context.Background())
 	if n := pub.callCount(); n != 2 {
 		t.Fatalf("callCount() = %d, want 2: a failed dispatch must be retried on the next tick", n)
+	}
+}
+
+// --- P4b: syncNode routes through the same readiness function a manifest
+// read uses, and dispatches nothing when that verdict is unknown for any
+// cause ---
+
+// TestServiceNeverReportedNodeDispatchesNothing is P4b's core claim: before
+// this fix, syncNode dispatched to a node regardless of whether it had ever
+// reported at all. A node with zero evidence is a node syncNode cannot
+// currently read, and "you cannot know what is missing from a node you
+// cannot read" applies to silence exactly as much as to a stale or
+// incomplete report.
+func TestServiceNeverReportedNodeDispatchesNothing(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	// Deliberately no seeded report at all.
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.tick(context.Background())
+
+	if n := pub.callCount(); n != 0 {
+		t.Fatalf("callCount() = %d, want 0: a node that has never reported must not be dispatched to", n)
+	}
+}
+
+// TestServiceTransientIncompleteReportDoesNotCauseRedispatchStorm is P4's
+// own end-to-end scenario, both halves together: a node already holding
+// everything goes transiently unreadable (complete:false, no items) for
+// several ticks. Before the fix: (a) store.replaceNodeAssetInventory
+// (P4a) deleted the node's held rows on the very first incomplete report,
+// and (b) syncNode (P4b) then saw nothing held and re-dispatched every
+// expected asset on every tick until the outage ended — "two at a time,
+// every tick" per the review's own description. Neither may happen now.
+func TestServiceTransientIncompleteReportDoesNotCauseRedispatchStorm(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	rec := createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01",
+		[]store.NodeAssetInventoryRecord{{ContentHash: rec.ContentHash, RuntimeFilename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes, VerifiedAt: time.Now()}},
+		store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true},
+	); err != nil {
+		t.Fatalf("seed initial complete report: %v", err)
+	}
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.tick(context.Background())
+	if n := pub.callCount(); n != 0 {
+		t.Fatalf("callCount() before any incompleteness = %d, want 0: the node already holds everything", n)
+	}
+
+	// The node's asset directory goes transiently unreadable.
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: time.Now().Add(time.Second), Complete: false, Reason: "asset directory temporarily unreadable"},
+	); err != nil {
+		t.Fatalf("seed incomplete report: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		svc.tick(context.Background())
+	}
+	if n := pub.callCount(); n != 0 {
+		t.Fatalf("callCount() across 3 ticks during the outage = %d, want 0", n)
+	}
+
+	inv, err := st.GetNodeAssetInventory(context.Background(), "render-01")
+	if err != nil {
+		t.Fatalf("get inventory: %v", err)
+	}
+	if len(inv) != 1 || inv[0].ContentHash != rec.ContentHash {
+		t.Fatalf("inventory during the outage = %+v, want the PRIOR complete report's inventory left untouched", inv)
+	}
+}
+
+// TestServiceReconcileInFlightIgnoresPreDispatchReport pins D1:
+// reconcileInFlight's call site must apply FetchConfirmed's post-dispatch
+// fence, not "held[...]" alone. FetchConfirmed itself is well tested as a
+// pure function, but every OTHER test in this file only ever seeds a
+// confirming report AFTER the dispatch, so mutating the call site to plain
+// held[...] would leave them all green. Here a report dated BEFORE the
+// dispatch already lists the hash (content-addressed dedup, ADR-028, makes
+// a coincidentally pre-existing hash realistic) — that must NOT confirm
+// this particular dispatch.
+func TestServiceReconcileInFlightIgnoresPreDispatchReport(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	rec := createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+
+	dispatchedAt := time.Now()
+	svc.now = func() time.Time { return dispatchedAt }
+	seedEmptyCompleteReport(t, st, "render-01", dispatchedAt.Add(-2*time.Second))
+	svc.tick(context.Background())
+
+	if n := pub.callCount(); n != 1 {
+		t.Fatalf("callCount() after dispatch = %d, want 1", n)
+	}
+	svc.mu.Lock()
+	if len(svc.inFlight) != 1 {
+		svc.mu.Unlock()
+		t.Fatalf("in-flight count after dispatch = %d, want 1", len(svc.inFlight))
+	}
+	svc.mu.Unlock()
+
+	// A report dated BEFORE dispatchedAt already lists the hash.
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01",
+		[]store.NodeAssetInventoryRecord{{ContentHash: rec.ContentHash, RuntimeFilename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes, VerifiedAt: dispatchedAt.Add(-time.Second)}},
+		store.NodeAssetReportRecord{ReportedAt: dispatchedAt.Add(-time.Second), Complete: true},
+	); err != nil {
+		t.Fatalf("seed pre-dispatch report: %v", err)
+	}
+
+	svc.tick(context.Background())
+
+	svc.mu.Lock()
+	inFlightAfter := len(svc.inFlight)
+	svc.mu.Unlock()
+	if inFlightAfter != 1 {
+		t.Fatalf("in-flight count after a PRE-DISPATCH report tick = %d, want still 1: a report from BEFORE the dispatch is not evidence THIS dispatch succeeded", inFlightAfter)
+	}
+}
+
+// TestServiceFleetWideBudgetLimitsTotalConcurrentDispatch pins D4:
+// maxInFlightTotal is structurally unreachable in every other test in this
+// file because they all use exactly one node. Five nodes with two missing
+// assets each (10 attempts, none of which individually exceeds
+// maxInFlightPerNode) must still cap at maxInFlightTotal across the whole
+// fleet in one tick.
+func TestServiceFleetWideBudgetLimitsTotalConcurrentDispatch(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+
+	const nodeCount = 5
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("render-%02d", i)
+		declareNode(t, st, nodeID)
+		createAsset(t, st, "halloween-2026", "seq-a", store.AssetTargetKindNode, nodeID, "sha256:"+nodeID+"-a", "A.fseq")
+		createAsset(t, st, "halloween-2026", "seq-b", store.AssetTargetKindNode, nodeID, "sha256:"+nodeID+"-b", "B.fseq")
+		seedEmptyCompleteReport(t, st, nodeID, time.Now())
+	}
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.tick(context.Background())
+
+	if n := pub.callCount(); n != maxInFlightTotal {
+		t.Fatalf("callCount() = %d, want exactly maxInFlightTotal (%d): 5 nodes x 2 missing assets each must still cap at the fleet-wide ceiling", n, maxInFlightTotal)
 	}
 }
 

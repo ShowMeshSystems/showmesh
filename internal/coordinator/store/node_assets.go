@@ -62,20 +62,35 @@ var ErrNodeAssetReportNotFound = errors.New("store: node asset report not found"
 // upsert lands in the same transaction as the delete-then-insert: a reader
 // must never see a fresh report timestamp paired with a stale or
 // half-replaced inventory, or vice versa.
+//
+// The delete-then-insert only runs when report.Complete is true. An
+// incomplete report (the agent could not fully enumerate its own asset
+// directory — spec §4.2) is NOT evidence the node holds nothing: it is
+// evidence the node could not be read. Clearing node_asset_inventory on an
+// incomplete report was the P4 defect — a node whose asset directory went
+// transiently unreadable would publish complete:false with an empty items
+// slice, this method would delete every held row it knew about, and
+// assetsync would see nothing held and re-dispatch every expected asset on
+// every tick until the mount returned. The report row itself is always
+// upserted, complete or not, so "the node is struggling" is visible
+// evidence rather than being lost along with the inventory it must now
+// leave untouched.
 func replaceNodeAssetInventory(ctx context.Context, q querier, nodeID string, items []NodeAssetInventoryRecord, report NodeAssetReportRecord, now time.Time) error {
 	if nodeID == "" {
 		return fmt.Errorf("store: replace node asset inventory: nodeID is empty")
 	}
 
-	if _, err := q.ExecContext(ctx, `DELETE FROM node_asset_inventory WHERE node_id = ?`, nodeID); err != nil {
-		return fmt.Errorf("store: replace node asset inventory %q: delete: %w", nodeID, err)
-	}
-	for _, item := range items {
-		if _, err := q.ExecContext(ctx, `
-			INSERT INTO node_asset_inventory (node_id, content_hash, runtime_filename, size_bytes, verified_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, nodeID, item.ContentHash, item.RuntimeFilename, item.SizeBytes, timeToDB(item.VerifiedAt)); err != nil {
-			return fmt.Errorf("store: replace node asset inventory %q: insert %q: %w", nodeID, item.ContentHash, err)
+	if report.Complete {
+		if _, err := q.ExecContext(ctx, `DELETE FROM node_asset_inventory WHERE node_id = ?`, nodeID); err != nil {
+			return fmt.Errorf("store: replace node asset inventory %q: delete: %w", nodeID, err)
+		}
+		for _, item := range items {
+			if _, err := q.ExecContext(ctx, `
+				INSERT INTO node_asset_inventory (node_id, content_hash, runtime_filename, size_bytes, verified_at)
+				VALUES (?, ?, ?, ?, ?)
+			`, nodeID, item.ContentHash, item.RuntimeFilename, item.SizeBytes, timeToDB(item.VerifiedAt)); err != nil {
+				return fmt.Errorf("store: replace node asset inventory %q: insert %q: %w", nodeID, item.ContentHash, err)
+			}
 		}
 	}
 
@@ -97,15 +112,18 @@ func replaceNodeAssetInventory(ctx context.Context, q querier, nodeID string, it
 
 // ReplaceNodeAssetInventory replaces nodeID's entire node_asset_inventory
 // with items (delete-then-insert, per spec §3) and upserts its
-// node_asset_reports row, all in one transaction. A node's own agent is
-// this method's only intended caller (on every sync operation and on
-// SHOWMESH_ASSET_INVENTORY_INTERVAL, per spec §4.2): this is a wholesale
-// replacement of what the node reports RIGHT NOW, never an incremental
-// merge, so a file the node no longer holds silently disappears from its
-// inventory on the very next report — exactly mirroring
-// [Store.ReplaceObservations]'s per-source pruning contract for the
-// identical reason (a stale ghost row is worse than a momentarily empty
-// one, and this call always carries the node's own complete current view).
+// node_asset_reports row, all in one transaction — but ONLY when
+// report.Complete is true; see [replaceNodeAssetInventory]'s doc comment for
+// why an incomplete report leaves node_asset_inventory untouched. A node's
+// own agent is this method's only intended caller (on every sync operation
+// and on SHOWMESH_ASSET_INVENTORY_INTERVAL, per spec §4.2): a COMPLETE
+// report is a wholesale replacement of what the node holds RIGHT NOW, never
+// an incremental merge, so a file the node no longer holds silently
+// disappears from its inventory on the very next complete report — exactly
+// mirroring [Store.ReplaceObservations]'s per-source pruning contract for
+// the identical reason (a stale ghost row is worse than a momentarily empty
+// one, and a COMPLETE call always carries the node's own complete current
+// view).
 func (s *Store) ReplaceNodeAssetInventory(ctx context.Context, nodeID string, items []NodeAssetInventoryRecord, report NodeAssetReportRecord) error {
 	guardNotInTx(ctx, "Store.ReplaceNodeAssetInventory")
 	tx, err := s.db.BeginTx(ctx, nil)

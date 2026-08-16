@@ -2,6 +2,8 @@ package assetsync
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -228,16 +230,26 @@ func TestComputeNodeManifestNeverReported(t *testing.T) {
 	}
 }
 
+// W1: inventory is deliberately NON-EMPTY (and does not match expected, so
+// it would render as Extra if the stale-report short-circuit were skipped).
+// The original version of this test passed inventory=nil, which made
+// "len(m.Extra) != 0" trivially always false regardless of whether the
+// stale-report check actually ran before populating Extra — a mutation
+// that removed or reordered that check would still pass. A real inventory
+// makes the assertion mean what it says: what a stale report claims a node
+// HOLDS is exactly as unreliable as what it claims a node LACKS.
 func TestComputeNodeManifestStaleReportNeverRendersNotReady(t *testing.T) {
 	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
 	expected := ExpectedSet{Assets: []ExpectedAsset{{AssetID: "a1", ContentHash: "sha256:aaa"}}}
 	report := &store.NodeAssetReportRecord{ReportedAt: time.Now().Add(-time.Hour), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:unexpected", RuntimeFilename: "Leftover.fseq"}}
 
 	// reportFresh=false: even though the report is Complete and holds
-	// nothing (so a naive comparison would call this not_ready), a stale
-	// report must render unknown, never not_ready — a stale report is not
-	// evidence of absence.
-	m := ComputeNodeManifest("render-01", active, expected, report, false, nil)
+	// nothing EXPECTED (so a naive comparison would call this not_ready,
+	// and inventory here even has something UNEXPECTED that would render as
+	// Extra), a stale report must render unknown, never not_ready — a stale
+	// report is not evidence of absence.
+	m := ComputeNodeManifest("render-01", active, expected, report, false, inventory)
 	if m.State != ManifestUnknown || m.UnknownCause != UnknownCauseStaleReport {
 		t.Fatalf("ComputeNodeManifest() = %+v, want State=unknown Cause=stale_report", m)
 	}
@@ -291,6 +303,34 @@ func TestComputeNodeManifestNotReadyNamesMissing(t *testing.T) {
 	}
 }
 
+// TestComputeNodeManifestGapAloneMakesNotReady pins W2: manifest.go's
+// "len(missing) > 0 || len(expected.Gaps) > 0" was only ever exercised from
+// the api PACKAGE's own tests (TestNodeAssetManifestGapNamesUncoveredSequence),
+// so running `go test ./internal/coordinator/assetsync/...` alone reported
+// success on a broken readiness rule. Every expected asset is HELD here
+// (Missing is empty) and only Gaps is non-empty, isolating the "||" from
+// the "missing" half entirely.
+func TestComputeNodeManifestGapAloneMakesNotReady(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{
+		Assets: []ExpectedAsset{{AssetID: "a1", ContentHash: "sha256:aaa", Filename: "Opening.fseq", SequenceID: "opening"}},
+		Gaps:   []SurfaceGap{{SequenceID: "closing", SurfaceIDs: []string{"garage-surface"}}},
+	}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq"}}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, true, inventory)
+	if m.State != ManifestNotReady {
+		t.Fatalf("ComputeNodeManifest() State = %q, want %q: zero missing assets but a non-empty Gaps must still be not_ready", m.State, ManifestNotReady)
+	}
+	if len(m.Missing) != 0 {
+		t.Errorf("Missing = %+v, want empty: every expected asset is held", m.Missing)
+	}
+	if len(m.Gaps) != 1 || m.Gaps[0].SequenceID != "closing" {
+		t.Errorf("Gaps = %+v, want exactly one entry naming %q", m.Gaps, "closing")
+	}
+}
+
 func TestComputeNodeManifestExtraReportedNeverError(t *testing.T) {
 	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
 	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
@@ -302,5 +342,143 @@ func TestComputeNodeManifestExtraReportedNeverError(t *testing.T) {
 	}
 	if len(m.Extra) != 1 || m.Extra[0].ContentHash != "sha256:unexpected" {
 		t.Fatalf("ComputeNodeManifest().Extra = %+v, want one entry naming the unexpected hash", m.Extra)
+	}
+}
+
+// --- D2: surfaceIDsForNode's show-AND-node filter ---
+
+// TestSurfaceIDsForNodeFiltersByShowAndNode pins D2: dropping either the
+// show clause or the node clause in surfaceIDsForNode leaves the suite
+// green, because every OTHER fixture in this file uses exactly one show and
+// one surface. Three surfaces are seeded — a different node in this show, a
+// different show for this node, and this exact (show, node) pair — and only
+// the third may come back. This is the case ADR-027 exists for: Halloween's
+// surfaces must never leak into Christmas' manifest, or vice versa.
+func TestSurfaceIDsForNodeFiltersByShowAndNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putShow(t, st, "christmas-2026", "Christmas 2026")
+	declareNode(t, st, "render-01")
+	declareNode(t, st, "render-02")
+
+	putSurface(t, st, "other-node-this-show", "halloween-2026", "render-02")
+	putSurface(t, st, "this-node-other-show", "christmas-2026", "render-01")
+	putSurface(t, st, "this-node-this-show", "halloween-2026", "render-01")
+
+	got, err := surfaceIDsForNode(context.Background(), st, "halloween-2026", "render-01")
+	if err != nil {
+		t.Fatalf("surfaceIDsForNode() error = %v", err)
+	}
+	if len(got) != 1 || got[0] != "this-node-this-show" {
+		t.Fatalf("surfaceIDsForNode(halloween-2026, render-01) = %v, want exactly [this-node-this-show]", got)
+	}
+}
+
+// --- D3: showSequenceIDs's superseded_at filter ---
+
+// seedRawSupersededAsset inserts an assets row directly against the SQLite
+// file, bypassing store.CreateAsset entirely. store.CreateAsset's own
+// supersede-then-insert step always inserts a replacement for the exact
+// tuple it supersedes, in the SAME transaction (assets.go's createAsset doc
+// comment) — there is no delete for an asset (TRACK-E-SESSION-SPEC.md §9),
+// so a (show, sequence, target) tuple CreateAsset has ever touched keeps
+// exactly one current row forever. A sequence can therefore never be
+// reduced to "superseded rows only, nothing current, anywhere" through the
+// public Store API alone. This helper constructs exactly that state
+// directly so showSequenceIDs's superseded_at filter — defensive code for a
+// delete/prune capability this project does not have yet — is actually
+// exercised by a test rather than being untestable dead code.
+func seedRawSupersededAsset(t *testing.T, dbPath string, rec store.AssetRecord, supersededAt time.Time) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite connection: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	createdAt := supersededAt.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO assets (
+			id, show_id, sequence_id, target_kind, target_id, media_type, content_hash,
+			runtime_filename, size_bytes, backend, storage_key, created_at,
+			created_by_principal_id, created_by_principal_name, superseded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, rec.ID, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, rec.MediaType, rec.ContentHash,
+		rec.RuntimeFilename, rec.SizeBytes, rec.Backend, rec.StorageKey, createdAt,
+		"test-principal", "Test Principal", supersededAt.UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert raw superseded asset: %v", err)
+	}
+}
+
+// openTestStoreAt is openTestStore plus the temp dir it opened the store
+// in, so D3's test can reach the same SQLite file through a second raw
+// connection.
+func openTestStoreAt(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st, dir
+}
+
+// TestShowSequenceIDsExcludesFullySupersededSequence pins D3: dropping
+// showSequenceIDs's "if rec.SupersededAt != nil { continue }" leaves the
+// suite green, because [seen] already dedups a sequence's current-plus-
+// superseded rows to one entry regardless of that filter — the filter only
+// matters for a sequence with NO current row anywhere, which is otherwise
+// unreachable (see seedRawSupersededAsset's doc comment). "retired"'s only
+// row is seeded superseded with nothing replacing it; "opening" is a real
+// current asset via CreateAsset (which itself supersedes an earlier upload
+// for the same tuple), proving the dedup half too. Without the filter,
+// "retired" would manufacture a permanent gap for any node with a surface
+// in this show.
+func TestShowSequenceIDsExcludesFullySupersededSequence(t *testing.T) {
+	st, dir := openTestStoreAt(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	declareNode(t, st, "render-02")
+	declareNode(t, st, "render-03")
+	putSurface(t, st, "far-surface", "halloween-2026", "render-03")
+
+	dbPath := filepath.Join(dir, "showmesh.db") // store.go's own unexported dbFileName
+	seedRawSupersededAsset(t, dbPath, store.AssetRecord{
+		ID: "retired-1", ShowID: "halloween-2026", SequenceID: "retired",
+		TargetKind: store.AssetTargetKindNode, TargetID: "render-02",
+		MediaType: "fseq", ContentHash: "sha256:old-retired", RuntimeFilename: "Retired.fseq",
+		SizeBytes: 100, Backend: "volume", StorageKey: "sha256:old-retired",
+	}, time.Now())
+
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-02", "sha256:old-opening", "Opening.fseq")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-02", "sha256:new-opening", "Opening.fseq")
+
+	ids, err := showSequenceIDs(context.Background(), st, "halloween-2026")
+	if err != nil {
+		t.Fatalf("showSequenceIDs() error = %v", err)
+	}
+	count := map[string]int{}
+	for _, id := range ids {
+		count[id]++
+	}
+	if count["retired"] != 0 {
+		t.Errorf("showSequenceIDs() = %v, want NOT to include %q: its only row is superseded with nothing current anywhere", ids, "retired")
+	}
+	if count["opening"] != 1 {
+		t.Errorf("showSequenceIDs() names %q %d times, want exactly once (current AND superseded rows share the sequence)", "opening", count["opening"])
+	}
+
+	// The consequence spec §4.1 point 3 cares about: a fully-superseded
+	// sequence must never manufacture a gap for a surfaced node with zero
+	// coverage of it.
+	expected, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "render-03")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v", err)
+	}
+	for _, gap := range expected.Gaps {
+		if gap.SequenceID == "retired" {
+			t.Fatalf("Gaps = %+v, want no gap named %q: a permanent gap must not be manufactured for a sequence whose only asset was superseded", expected.Gaps, "retired")
+		}
 	}
 }

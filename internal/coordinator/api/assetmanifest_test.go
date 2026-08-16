@@ -355,6 +355,64 @@ func TestNodeAssetManifestNotReadyNamesMissingAsset(t *testing.T) {
 	}
 }
 
+// --- P2: the sync-disabled reason reaches the manifest ---
+
+// TestNodeAssetManifestNotReadyStatesSyncDisabled pins P2:
+// config.Config.AssetContentBaseURL's own doc comment and
+// assetsync/sync.go's startup log line both promise that an unset content
+// base URL is stated as the reason no node can be confirmed ready — nothing
+// plumbed that promise through until this fix. assetManifestTestDeps never
+// sets AssetSyncEnabled, so its zero value (false) applies here, and a
+// not_ready node's reason must name the disabled sync.
+func TestNodeAssetManifestNotReadyStatesSyncDisabled(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowActive(t, api, token, "halloween-2026")
+	uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed empty report: %v", err)
+	}
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if decoded.Manifest.State != "not_ready" {
+		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
+	}
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "SHOWMESH_ASSET_CONTENT_BASE_URL") {
+		t.Fatalf("reason = %v, want it to name the disabled asset sync (AssetSyncEnabled defaults to false)", decoded.Manifest.Reason)
+	}
+}
+
+// TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled is
+// TestNodeAssetManifestNotReadyStatesSyncDisabled's counterpart: with
+// AssetSyncEnabled explicitly true, the not_ready reason must NOT claim
+// sync is disabled — this fix states a fact, not a fixed suffix.
+func TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AssetSyncEnabled = true
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	mustPutShowActive(t, api, token, "halloween-2026")
+	uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed empty report: %v", err)
+	}
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if decoded.Manifest.State != "not_ready" {
+		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
+	}
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "SHOWMESH_ASSET_CONTENT_BASE_URL") {
+		t.Fatalf("reason = %q, want it NOT to mention the disabled-sync note when AssetSyncEnabled is true", *decoded.Manifest.Reason)
+	}
+}
+
 // --- ready ---
 
 func TestNodeAssetManifestReady(t *testing.T) {
@@ -489,8 +547,56 @@ func TestListAssetManifestReturnsEveryDeclaredNode(t *testing.T) {
 	}
 }
 
+// --- P1: Dependencies.AssetSyncNudger has a nil-safe default and a wired
+// value is never silently overwritten ---
+
+// spyAssetSyncNudger records every Nudge() call — this file's own stand-in
+// for *assetsync.Service, which this package must not import for behavior
+// (see assetmanifest.go's compile-time assertion for the real type's own
+// pin).
+type spyAssetSyncNudger struct{ calls int }
+
+func (s *spyAssetSyncNudger) Nudge() { s.calls++ }
+
+// TestDependenciesAssetSyncNudgerDefaultsToNoOp proves withDefaults gives a
+// nil AssetSyncNudger a working, panic-free no-op — the same "an unwired
+// dependency is not this API failing" posture every other field in this
+// struct gets. Revert noAssetSyncNudger (or the nil check in withDefaults)
+// and this panics on the nil method call instead of passing.
+func TestDependenciesAssetSyncNudgerDefaultsToNoOp(t *testing.T) {
+	deps := Dependencies{}.withDefaults()
+	if deps.AssetSyncNudger == nil {
+		t.Fatal("withDefaults() left AssetSyncNudger nil, want a no-op default")
+	}
+	deps.AssetSyncNudger.Nudge() // must not panic
+}
+
+// TestDependenciesAssetSyncNudgerWiredValuePreserved proves withDefaults
+// never overwrites an already-wired AssetSyncNudger — this is what makes
+// coordinator.go's "AssetSyncNudger: assetSync" wiring line actually reach
+// a caller rather than being silently replaced by the no-op default.
+func TestDependenciesAssetSyncNudgerWiredValuePreserved(t *testing.T) {
+	spy := &spyAssetSyncNudger{}
+	deps := Dependencies{AssetSyncNudger: spy}.withDefaults()
+	deps.AssetSyncNudger.Nudge()
+	if spy.calls != 1 {
+		t.Fatalf("spy.calls = %d, want 1: withDefaults must preserve an already-wired AssetSyncNudger, not replace it with the no-op default", spy.calls)
+	}
+}
+
 // --- an unwired AssetManifests dependency degrades honestly, never panics ---
 
+// TestAssetManifestUnwiredStoreRendersUnknownNotPanic is P3's own
+// regression test: before the fix, GET /assets/manifest with AssetManifests
+// unwired rendered an EMPTY node list — "nothing is wrong" rather than
+// "I cannot tell" — which made `showmeshctl assets manifest --require-ready`
+// exit 0 for a coordinator that could not actually answer the question.
+// Discovery is wired independently of AssetManifests (production always
+// wires both against the same *store.Store, but this struct keeps them as
+// two fields on purpose — see AssetManifests' own doc comment), so the
+// fleet route can still enumerate declared nodes and must render each one
+// "unknown" with a reason, the SAME verdict the single-node route already
+// gives one node at a time.
 func TestAssetManifestUnwiredStoreRendersUnknownNotPanic(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -519,7 +625,13 @@ func TestAssetManifestUnwiredStoreRendersUnknownNotPanic(t *testing.T) {
 	if err := json.Unmarshal(listBody, &list); err != nil {
 		t.Fatalf("decode list: %v\nbody: %s", err, listBody)
 	}
-	if len(list.Nodes) != 0 {
-		t.Errorf("nodes = %+v, want empty (this coordinator cannot enumerate declared nodes' manifests without a wired store)", list.Nodes)
+	if len(list.Nodes) != 1 {
+		t.Fatalf("nodes = %+v, want exactly 1 (render-01, from Discovery, which stays wired even though AssetManifests does not)", list.Nodes)
+	}
+	if list.Nodes[0].Node != "render-01" || list.Nodes[0].State != "unknown" {
+		t.Errorf("nodes[0] = %+v, want node=render-01 state=unknown", list.Nodes[0])
+	}
+	if list.Nodes[0].Reason == nil || *list.Nodes[0].Reason == "" {
+		t.Error("nodes[0].reason is nil/empty with no AssetManifests store wired — an unanswerable question must say so, never render as nothing wrong")
 	}
 }

@@ -405,6 +405,21 @@ func Run() int {
 		// silently disagree about which number they mean.
 		AssetManifests:         st,
 		AssetInventoryInterval: cfg.AssetInventoryInterval,
+		// AssetSyncNudger wires the SAME *assetsync.Service constructed
+		// above straight in: its Nudge method already satisfies
+		// api.AssetSyncNudger with no adapter needed (the identical
+		// property fppRunnerNudger's own doc comment notes for
+		// *collector.Runner one field over). This is what makes an upload
+		// or a show activation trigger a sync pass immediately instead of
+		// waiting out cfg.AssetSyncInterval (up to 5 minutes) — the
+		// capability existed and was tested but had no production caller
+		// until this line.
+		AssetSyncNudger: assetSync,
+		// AssetSyncEnabled mirrors assetSync.Enabled() (cfg.
+		// AssetContentBaseURL != ""), read from the SAME already-constructed
+		// Service rather than re-deriving the emptiness check here, so this
+		// can never disagree with what Service.Run itself decided.
+		AssetSyncEnabled: assetSync.Enabled(),
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must

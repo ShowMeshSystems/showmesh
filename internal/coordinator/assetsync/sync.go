@@ -192,32 +192,22 @@ func (s *Service) tick(ctx context.Context) {
 	}
 }
 
-// syncNode closes one node's gap against showID: read what it should
-// hold, read what it last reported holding, reconcile any outstanding
-// dispatch against that evidence, and dispatch a fetch for whatever is
-// still missing and not already in flight.
+// syncNode closes one node's gap against showID: reconcile any outstanding
+// dispatch against the node's raw report evidence, then dispatch a fetch
+// for whatever [ComputeNodeManifest] — reached only through
+// buildNodeManifestForActiveShow, per assetsync/doc.go's "ComputeNodeManifest
+// is the ONLY function in this codebase permitted to decide whether a node
+// is ready" — says is actually missing.
 func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
-	expected, err := ExpectedAssetsForNode(ctx, s.st, showID, nodeID)
-	if err != nil {
-		s.logger.Error("asset sync: failed to compute expected assets", "node_id", nodeID, "error", err)
-		return
-	}
-	if len(expected.Assets) == 0 {
-		// Nothing registered for this node at all yet; a Gap (§4.1 point 3)
-		// names a sequence with no asset ANYWHERE, so there is nothing this
-		// service could fetch for one either.
-		return
-	}
-
 	report, err := s.st.GetNodeAssetReport(ctx, nodeID)
 	var reportPtr *store.NodeAssetReportRecord
 	switch {
 	case err == nil:
 		reportPtr = &report
 	case errors.Is(err, store.ErrNodeAssetReportNotFound):
-		// Never reported: nothing to reconcile against, and every expected
-		// asset is dispatched below regardless (a node that has never
-		// reported has, by construction, never confirmed holding anything).
+		// Never reported: nothing to reconcile against — reconcileInFlight
+		// below is a no-op for a nil report, exactly like ComputeNodeManifest's
+		// own UnknownCauseNeverReported case.
 	default:
 		s.logger.Error("asset sync: failed to read node asset report", "node_id", nodeID, "error", err)
 		return
@@ -237,13 +227,37 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 		held[item.ContentHash] = true
 	}
 
+	// reconcileInFlight's post-dispatch fence ([FetchConfirmed]) is
+	// deliberately independent of ComputeNodeManifest's staleness window
+	// below: it asks "did a report AFTER this dispatch confirm it", which is
+	// well-defined even off a report ComputeNodeManifest would call stale or
+	// incomplete — an old report can still post-date an old dispatch.
 	s.reconcileInFlight(nodeID, reportPtr, held)
 
-	for _, asset := range expected.Assets {
-		if held[asset.ContentHash] {
-			continue
-		}
-		s.maybeDispatch(ctx, nodeID, asset)
+	// P4b: this used to re-derive "what's missing" from expected/held
+	// directly, with no freshness or completeness check — exactly the
+	// precedence.go defect this package's own doc comment warns against,
+	// one file over. active is ALREADY the resolved active show (tick's own
+	// job); buildNodeManifestForActiveShow is the same function BuildNodeManifest
+	// calls, so this dispatches against the identical verdict the manifest
+	// API renders, never a second opinion.
+	m, err := buildNodeManifestForActiveShow(ctx, s.st, s.now(), s.inventoryInterval, nodeID, ActiveShow{Configured: true, ShowID: showID})
+	if err != nil {
+		s.logger.Error("asset sync: failed to build node manifest", "node_id", nodeID, "error", err)
+		return
+	}
+	if m.State != ManifestNotReady {
+		// Ready: nothing to dispatch. Unknown (never reported, stale, or the
+		// report itself said complete:false): you cannot know what is
+		// missing from a node you cannot read, so this dispatches nothing —
+		// the other half of P4's fix.
+		return
+	}
+	for _, missing := range m.Missing {
+		s.maybeDispatch(ctx, nodeID, ExpectedAsset{
+			AssetID: missing.AssetID, SequenceID: missing.SequenceID,
+			ContentHash: missing.ContentHash, Filename: missing.Filename, SizeBytes: missing.SizeBytes,
+		})
 	}
 }
 

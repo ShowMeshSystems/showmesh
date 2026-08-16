@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,12 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// assetSyncServiceSatisfiesAssetSyncNudger is a compile-time assertion that
+// *assetsync.Service already satisfies [AssetSyncNudger] with no adapter
+// needed — the identical property [storeSatisfiesCommandStore] (api.go)
+// notes for *store.Store.
+var _ AssetSyncNudger = (*assetsync.Service)(nil)
 
 // This file is Track E seam E5's own HTTP surface: GET /assets/manifest
 // (every declared node) and GET /nodes/{nodeId}/assets (one node).
@@ -34,7 +41,12 @@ func (h *handlers) handleAssetManifest(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 
 	if h.deps.AssetManifests == nil {
-		jsonWrite(w, v1.AssetManifestResponse{ServerTime: formatTime(now), Nodes: []v1.NodeAssetManifest{}})
+		out, err := h.unwiredAssetManifestNodes(r.Context())
+		if err != nil {
+			h.writeInternalError(w, now, "list declared nodes", err)
+			return
+		}
+		jsonWrite(w, v1.AssetManifestResponse{ServerTime: formatTime(now), Nodes: out})
 		return
 	}
 
@@ -45,9 +57,35 @@ func (h *handlers) handleAssetManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]v1.NodeAssetManifest, 0, len(manifests))
 	for _, m := range manifests {
-		out = append(out, mapNodeAssetManifest(m))
+		out = append(out, mapNodeAssetManifest(m, h.deps.AssetSyncEnabled))
 	}
 	jsonWrite(w, v1.AssetManifestResponse{ServerTime: formatTime(now), Nodes: out})
+}
+
+// unwiredAssetManifestNodes is [handleAssetManifest]'s AssetManifests==nil
+// path: it still enumerates every declared node (through
+// [Dependencies.Discovery], independently wired) and renders each as
+// "unknown" with [unwiredAssetManifestReason], the SAME verdict
+// [handleNodeAssetManifest] already gives one node at a time. Before this,
+// the fleet route rendered an EMPTY node list instead — "nothing is wrong"
+// rather than "I cannot tell" — which made `showmeshctl assets manifest
+// --require-ready` exit 0 for a coordinator that could not actually answer
+// the question. An empty result here now means only "this coordinator has
+// no declared nodes to report on", never "everything is fine".
+func (h *handlers) unwiredAssetManifestNodes(ctx context.Context) ([]v1.NodeAssetManifest, error) {
+	decls, err := h.deps.Discovery.ListNodeDeclarations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reason := unwiredAssetManifestReason
+	out := make([]v1.NodeAssetManifest, 0, len(decls))
+	for _, d := range decls {
+		out = append(out, v1.NodeAssetManifest{
+			Node: d.NodeID, State: string(assetsync.ManifestUnknown), Reason: &reason,
+			Missing: []v1.MissingAsset{}, Gaps: []v1.AssetGap{}, Extra: []v1.ExtraAsset{},
+		})
+	}
+	return out, nil
 }
 
 // --- GET /nodes/{nodeId}/assets ---
@@ -78,7 +116,7 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 		h.writeInternalError(w, now, "build node asset manifest", err)
 		return
 	}
-	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m)})
+	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSyncEnabled)})
 }
 
 // --- mapping: assetsync.NodeManifest -> v1 wire types ---
@@ -94,7 +132,16 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 // Missing/Gaps data this response already carries into one sentence. It
 // is presentation of assetsync's own output, not a second opinion about
 // what is missing.
-func mapNodeAssetManifest(m assetsync.NodeManifest) v1.NodeAssetManifest {
+//
+// syncEnabled is [Dependencies.AssetSyncEnabled]: when false and State is
+// NotReady, notReadyReason appends [assetSyncDisabledNote] — the promise
+// config.Config.AssetContentBaseURL's own doc comment and assetsync/sync.go's
+// startup log line both make ("the asset manifest states it as the reason
+// no node can be confirmed ready"), unplumbed until now. State itself is
+// unaffected: a node with an unset content base URL is still genuinely
+// not_ready, never ready and never a different state, per this seam's own
+// "do not change its state" instruction.
+func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool) v1.NodeAssetManifest {
 	out := v1.NodeAssetManifest{
 		Node:  m.NodeID,
 		State: string(m.State),
@@ -129,7 +176,7 @@ func mapNodeAssetManifest(m assetsync.NodeManifest) v1.NodeAssetManifest {
 		// "the zero time when State is Unknown... there is no evidence an
 		// Unknown verdict rests on, so there is nothing to date it by."
 	case assetsync.ManifestNotReady:
-		reason := notReadyReason(missing, gaps)
+		reason := notReadyReason(missing, gaps, syncEnabled)
 		out.Reason = &reason
 		observedAt := formatTime(m.ObservedAt)
 		out.ObservedAt = &observedAt
@@ -141,16 +188,27 @@ func mapNodeAssetManifest(m assetsync.NodeManifest) v1.NodeAssetManifest {
 	return out
 }
 
-// notReadyReason summarizes ALREADY-COMPUTED missing/gap counts into one
-// operator-facing sentence — see mapNodeAssetManifest's own doc comment
-// for why this exists at the wire layer instead of in assetsync.
-func notReadyReason(missing []v1.MissingAsset, gaps []v1.AssetGap) string {
+// assetSyncDisabledNote is notReadyReason's appended sentence when
+// SHOWMESH_ASSET_CONTENT_BASE_URL is unset — see [mapNodeAssetManifest]'s
+// syncEnabled doc. It states the missing assets will never arrive over the
+// network, not merely that they are currently absent, matching
+// assetsync/sync.go's own Run-disabled log line in substance.
+const assetSyncDisabledNote = "asset sync is disabled (SHOWMESH_ASSET_CONTENT_BASE_URL is not set): this coordinator will never deliver these assets to the node over the network"
+
+// notReadyReason summarizes ALREADY-COMPUTED missing/gap counts, plus
+// [assetSyncDisabledNote] when syncEnabled is false, into one operator-facing
+// sentence — see mapNodeAssetManifest's own doc comment for why this exists
+// at the wire layer instead of in assetsync.
+func notReadyReason(missing []v1.MissingAsset, gaps []v1.AssetGap, syncEnabled bool) string {
 	var parts []string
 	if n := len(missing); n > 0 {
 		parts = append(parts, fmt.Sprintf("missing %d expected asset(s)", n))
 	}
 	if n := len(gaps); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d sequence(s) with no coverage on this node at all", n))
+	}
+	if !syncEnabled {
+		parts = append(parts, assetSyncDisabledNote)
 	}
 	return strings.Join(parts, "; ")
 }
