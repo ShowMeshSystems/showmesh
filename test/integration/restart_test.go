@@ -208,8 +208,17 @@ func TestRetainedHeartbeatReplayNeverReadsHealthy(t *testing.T) {
 	for time.Now().Before(deadline) {
 		status, body := coord2.getRaw(t, "/api/v1/nodes/"+nodeID)
 		if status == http.StatusOK {
-			v, ok := coord2.findNode(t, nodeID)
-			if ok && v.Evidence.Heartbeat.State != "not_collected" {
+			// Decode the SAME bytes just fetched rather than issuing a
+			// second round trip (coord2.findNode would do its own GET):
+			// two independent requests can straddle the not_collected ->
+			// unknown_age transition, so the gate below and
+			// rawBodyAtFirstSighting must come from one observation.
+			var resp v1.NodeResponse
+			if err := json.Unmarshal(body, &resp); err != nil {
+				t.Fatalf("decode GET /api/v1/nodes/%s: %v; body: %s", nodeID, err, body)
+			}
+			v := resp.Node
+			if v.Evidence.Heartbeat.State != "not_collected" {
 				if !sawHealthEvidence {
 					rawBodyAtFirstSighting = body
 				}
