@@ -854,6 +854,109 @@ func TestPostAssetUploadSurvivesServerReadAndWriteTimeouts(t *testing.T) {
 	}
 }
 
+// slowAssetBackend wraps a real assetstore.Backend, delaying every reader
+// it opens so a real *http.Server's WriteTimeout can be forced to matter
+// without a multi-megabyte body or racing an OS socket buffer to fill
+// (LESSONS.md: "construct [an overflow] structurally; do not race a
+// kernel"). Put and Stat are unmodified — only what
+// handleGetAssetContent reads from is slow.
+type slowAssetBackend struct {
+	assetstore.Backend
+	perReadDelay time.Duration
+	chunkBytes   int
+}
+
+func (b slowAssetBackend) Open(ctx context.Context, key string) (io.ReadSeekCloser, int64, error) {
+	rc, size, err := b.Backend.Open(ctx, key)
+	if err != nil {
+		return nil, 0, err
+	}
+	return &slowReadSeekCloser{ReadSeekCloser: rc, perReadDelay: b.perReadDelay, chunkBytes: b.chunkBytes}, size, nil
+}
+
+// slowReadSeekCloser sleeps before every Read and caps how many bytes it
+// returns, so a small body still forces many slow Read calls regardless of
+// the caller's own buffer size.
+type slowReadSeekCloser struct {
+	io.ReadSeekCloser
+	perReadDelay time.Duration
+	chunkBytes   int
+}
+
+func (s *slowReadSeekCloser) Read(p []byte) (int, error) {
+	time.Sleep(s.perReadDelay)
+	if len(p) > s.chunkBytes {
+		p = p[:s.chunkBytes]
+	}
+	return s.ReadSeekCloser.Read(p)
+}
+
+// TestGetAssetContentSurvivesServerWriteTimeout is
+// TestPostAssetUploadSurvivesServerReadAndWriteTimeouts' download twin: a
+// real *http.Server with a short WriteTimeout, and a body served slower
+// than it via slowAssetBackend, proving handleGetAssetContent's own write
+// deadline extension is what keeps the connection alive. Before that
+// extension existed, http.ServeContent had only httpapi's 10s WriteTimeout
+// for the ENTIRE body regardless of size, so any transfer slower than that
+// dropped the connection mid-body.
+func TestGetAssetContentSurvivesServerWriteTimeout(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	backend, err := assetstore.NewVolumeBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("new volume backend: %v", err)
+	}
+	deps := showObjectsTestDeps(svc, st)
+	deps.Assets = st
+	deps.AssetBackend = slowAssetBackend{Backend: backend, perReadDelay: 40 * time.Millisecond, chunkBytes: 4}
+	deps.AssetMaxUploadBytes = 1 << 20
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	// 40 bytes at 4 bytes/read and 40ms/read paces the download to roughly
+	// 400ms — well past the 100ms WriteTimeout below, deliberately.
+	content := bytes.Repeat([]byte("z"), 40)
+	uploadResp, uploadBody := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", content, auth)
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body: %s", uploadResp.StatusCode, uploadBody)
+	}
+	var uploaded v1AssetResponseForTest
+	if err := json.Unmarshal(uploadBody, &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v\nbody: %s", err, uploadBody)
+	}
+
+	ts := httptest.NewUnstartedServer(api.Handler)
+	ts.Config.WriteTimeout = 100 * time.Millisecond
+	ts.Start()
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/assets/"+uploaded.Asset.ID+"/content", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	getResp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("download paced past the server write timeout failed: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	got, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a download slower than WriteTimeout must still succeed); body: %s", getResp.StatusCode, got)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("body = %d bytes, want %d bytes matching the uploaded content", len(got), len(content))
+	}
+}
+
 // countingNudger records how many times an out-of-band sync was requested.
 type countingNudger struct{ n int }
 

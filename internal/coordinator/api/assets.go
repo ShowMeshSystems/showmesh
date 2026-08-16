@@ -449,6 +449,16 @@ func (h *handlers) handleGetAssetContent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// httpapi.NewServer's WriteTimeout (10s) is armed when the request
+	// headers are read and bounds the whole response, not just its first
+	// byte — see handlePostAssetUpload's identical extension for the
+	// upload side of this same contract. Without this, any transfer past
+	// this project's own 1 MiB/s floor (assetstore.MinTransferBytesPerSecond)
+	// fails mid-body with a dropped connection after the asset was found
+	// and opened successfully.
+	writeDeadline := time.Now().Add(assetstore.UploadBudget(rec.SizeBytes))
+	_ = http.NewResponseController(w).SetWriteDeadline(writeDeadline)
+
 	rc, size, err := h.deps.AssetBackend.Open(r.Context(), rec.StorageKey)
 	if err != nil {
 		h.writeInternalError(w, now, fmt.Sprintf("open stored asset %q", id), err)
