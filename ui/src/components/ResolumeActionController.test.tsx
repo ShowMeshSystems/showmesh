@@ -229,6 +229,51 @@ describe('ResolumeActionController', () => {
       })
   })
 
+  // Review finding B4: the clip picker used to key its <option value> on
+  // the (duplicate) NAME, so selecting the SECOND "Snow" collapsed to the
+  // first one at onChange time — the dispatched `layer` (and thus which
+  // clip actually launches) always named the FIRST duplicate's layer
+  // regardless of which option the operator picked. Selecting the SECOND
+  // option here and asserting the dispatched `layer` is "Layer B" (the
+  // second clip's own layer, never "Layer A") is the regression guard:
+  // before the fix (Picker's Clip usage without optionValue="key", and
+  // `clips.find(c => c.value === clip)`), this assertion goes red because
+  // the dispatch names "Layer A" no matter which duplicate was selected.
+  it('dispatches the SECOND duplicate clip actually selected, not the first', async () => {
+    const composition = makeResolumeCompositionResponse({
+      layers: [
+        makeResolumeCompositionLayer({ id: 'layer-1', index: 0, name: 'Layer A' }),
+        makeResolumeCompositionLayer({ id: 'layer-2', index: 1, name: 'Layer B' }),
+      ],
+      decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Deck 1' })],
+      clips: [
+        makeResolumeCompositionClip({ id: 'clip-1', name: 'Snow', deckId: 'deck-1', layerIndex: 0 }),
+        makeResolumeCompositionClip({ id: 'clip-2', name: 'Snow', deckId: 'deck-1', layerIndex: 1 }),
+      ],
+    })
+    launchResolumeClip.mockResolvedValue(makeResolumeActionResult({ outcome: 'confirmed' }))
+    render(
+      <ModelContext.Provider value={adminModel}>
+        <ResolumeActionController actions={ALL_ACTIONS} composition={composition} />
+      </ModelContext.Provider>,
+    )
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'launchClip')
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Deck' }),
+      screen.getByRole('option', { name: /^Deck 1/ }),
+    )
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Clip' }),
+      screen.getByRole('option', { name: /Layer B/ }),
+    )
+    await userEvent.click(screen.getByRole('button', { name: /go/i }))
+
+    await waitFor(() =>
+      expect(launchResolumeClip).toHaveBeenCalledWith({ clip: 'Snow', deck: 'Deck 1', layer: 'Layer B' }),
+    )
+  })
+
   // Review finding 8: two decks sharing a name used to be reverse-looked-
   // up by `.find(d => d.value === deck)`, which silently returns the
   // FIRST match — so picking the SECOND same-named deck still scoped the

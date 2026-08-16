@@ -48,15 +48,20 @@ function Picker({
   onChange: (value: string) => void
   disabled?: boolean
   /**
-   * Review finding 8: two decks CAN share a name, and an HTML <select>
-   * cannot distinguish two <option>s with the identical `value` — by the
-   * time onChange fires, the duplicate is already collapsed to one
-   * string. The deck picker keys its option `value` on the object's own
-   * (always-unique) id instead, so a duplicate deck name is still
-   * SELECTABLE distinctly even though its disambiguated LABEL is what
-   * makes the collision visible. Every other picker keeps sending the
-   * name directly (ADR-037), since none of them are reverse-looked-up to
-   * scope another list the way deck is.
+   * Review finding 8 (decks), review finding B4 (clips): two entries in
+   * the SAME scope can share a name, and an HTML <select> cannot
+   * distinguish two <option>s with the identical `value` — by the time
+   * onChange fires, the duplicate is already collapsed to one string. The
+   * deck and clip pickers key their option `value` on the object's own
+   * (always-unique) id instead, so a duplicate name is still SELECTABLE
+   * distinctly even though its disambiguated LABEL is what makes the
+   * collision visible. Both callers then resolve that id back to the
+   * name the wire actually wants (ADR-037: a reference is a name, never
+   * an id) by looking the id up in the SAME options list, never by
+   * re-matching on `value`, which is exactly the collapse this option
+   * exists to avoid. Every other picker (layer, column) keeps sending
+   * the name directly, since neither is reverse-looked-up the way deck
+   * and clip are.
    */
   optionValue?: 'value' | 'key'
 }) {
@@ -86,6 +91,12 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
   // wants, and that resolution is by id (always unique), never by a name
   // that might collide.
   const [deck, setDeck] = useState('')
+  // Review finding B4: `clip` holds the SELECTED CLIP'S ID, not its name —
+  // see Picker's own comment on `optionValue`. Two clips in the same scope
+  // (deck or persistent) can share a name, and `value` collapses that
+  // collision in the <select> itself; keying on the always-unique `key`
+  // (and resolving it back to a name below) is what keeps the SECOND
+  // duplicate actually selectable.
   const [clip, setClip] = useState('')
   const [persistent, setPersistent] = useState(false)
   const [layer, setLayer] = useState('')
@@ -113,18 +124,27 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
         // `params.layer` disambiguates a clip name shared by more than one
         // clip in this scope (ADR-037) — sent automatically whenever the
         // selected clip's own name is a duplicate, matching build contract
-        // §2.3's "the UI mirroring server-side validation."
-        const selected = clips.find((c) => c.value === clip)
+        // §2.3's "the UI mirroring server-side validation." Looked up by
+        // `key` (the clip's own id), never by `value` (its name): with two
+        // same-named clips in this scope, `clip` state and `c.value` both
+        // read that shared name, so a `value` match always resolves to
+        // whichever of the two clips happens to come first, silently
+        // launching the wrong one (review finding B4).
+        const selected = clips.find((c) => c.key === clip)
         // `exactOptionalPropertyTypes`: an absent key, not a `deck:
         // undefined`/`persistent: undefined` key, is what "not set"
         // means on this wire shape (ADR-037's own exclusivity rule) —
         // matching ShowActionDetail.tsx's identical conditional-spread
-        // pattern for the same reason.
+        // pattern for the same reason. `clip` itself is this clip's ID
+        // (Picker's own optionValue="key" below), so the wire dispatch —
+        // which must carry the ADR-037 NAME, never a raw object id — sends
+        // `selected.value`, not the raw `clip` state.
+        if (selected === undefined) return
         run(() =>
           launchResolumeClip({
-            clip,
+            clip: selected.value,
             ...(persistent ? { persistent: true } : { deck: selectedDeckName }),
-            ...(selected?.duplicateName ? { layer: selected.layerName } : {}),
+            ...(selected.duplicateName ? { layer: selected.layerName } : {}),
           }),
         )
         return
@@ -221,7 +241,7 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
             />
             Persistent clip (lives outside any deck)
           </label>
-          <Picker label="Clip" options={clips} value={clip} onChange={setClip} />
+          <Picker label="Clip" options={clips} value={clip} onChange={setClip} optionValue="key" />
           {clips.some((c) => c.ambiguous) && (
             <p className="text-muted" role="status">
               One or more clips in this list are ambiguous — Resolume has more than one clip

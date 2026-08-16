@@ -8,6 +8,7 @@ import {
   makeModel,
   makeResolumeCompositionClip,
   makeResolumeCompositionDeck,
+  makeResolumeCompositionLayer,
   makeResolumeCompositionResponse,
 } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
@@ -223,10 +224,23 @@ describe('ShowActionDetail (Resolume authoring)', () => {
   // `clip: "Snow"` with no `layer` — ambiguous again the moment the macro
   // runs. ResolumeActionController.tsx already got this right; this form
   // must agree.
+  //
+  // Review finding B4: the picked clip used to be recovered by re-matching
+  // `form.resolumeClip` (the NAME) against `resolumeClips`, which always
+  // resolves to whichever of the two same-named clips comes first — so
+  // picking the SECOND "Snow" option here still saved the FIRST clip's
+  // own layer. Two explicitly named layers (rather than relying on one
+  // clip falling back to a generated "layer 2" label) make the assertion
+  // below unambiguous: `allClipOptions[1]` is the clip on "Layer B", and
+  // `ref.layer` must name it exactly, never "Layer A".
   it('saves the disambiguating layer when the picked clip name is shared by another clip on this deck', async () => {
     getResolumeComposition.mockResolvedValue(
       makeResolumeCompositionResponse({
         decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main', nameGenerated: false })],
+        layers: [
+          makeResolumeCompositionLayer({ id: 'layer-1', index: 0, name: 'Layer A', nameGenerated: false }),
+          makeResolumeCompositionLayer({ id: 'layer-2', index: 1, name: 'Layer B', nameGenerated: false }),
+        ],
         clips: [
           makeResolumeCompositionClip({ id: 'clip-1', name: 'Snow', deckId: 'deck-1', layerIndex: 0 }),
           makeResolumeCompositionClip({ id: 'clip-2', name: 'Snow', deckId: 'deck-1', layerIndex: 1 }),
@@ -277,8 +291,11 @@ describe('ShowActionDetail (Resolume authoring)', () => {
     await waitFor(() => expect(putShowAction).toHaveBeenCalled())
     const [, payload] = putShowAction.mock.calls[0] as [string, { target: { ref?: Record<string, unknown> } }]
     expect(payload.target.ref?.clip).toBe('Snow')
-    expect(payload.target.ref?.layer).toBeDefined()
-    expect(payload.target.ref?.layer).not.toBe('')
+    // The SECOND option (allClipOptions[1]) was picked above — its own
+    // layer is "Layer B", never "Layer A" (the first duplicate's layer,
+    // which review finding B4's bug always saved regardless of which
+    // option was actually selected).
+    expect(payload.target.ref?.layer).toBe('Layer B')
   })
 
   // Review finding 8: an HTML <select> cannot distinguish two <option>s

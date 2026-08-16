@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getShowAction, getShowActionRevisions, putShowAction, type ConfigRevisionMeta } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
@@ -183,10 +183,19 @@ function formFromPayload(payload: ConfigShowAction): FormState {
  * Layer B)" in the picker saved a bare `clip: "Snow"` with no `layer`,
  * so the picker showed the disambiguation and the saved macro discarded
  * it — ambiguous again the moment it runs.
+ *
+ * `resolumeClipId` (review finding B4): the picker's own selected clip
+ * ID, looked up here by `key`, never by re-matching `form.resolumeClip`
+ * (the NAME) against `resolumeClips`. Two clips can share a name, and a
+ * name-based lookup always resolves to whichever of them happens to come
+ * first in the list — silently attaching the FIRST duplicate's
+ * `layerName` even when the operator picked the second, which persists a
+ * `show.action` revision that disambiguates to the wrong clip.
  */
 function buildPayload(
   form: FormState,
   resolumeClips: readonly ClipPickerOption[],
+  resolumeClipId: string,
 ): { payload: ConfigShowAction } | { error: string } {
   if (form.show.trim() === '') return { error: 'Show is required.' }
   if (form.label.trim() === '') return { error: 'Label is required.' }
@@ -251,8 +260,10 @@ function buildPayload(
         // `ref.layer` disambiguates a clip name shared by more than one
         // clip in this scope (ADR-037) — sent automatically whenever the
         // selected clip's own name is a duplicate, matching
-        // ResolumeActionController.tsx's identical rule.
-        const selectedClip = resolumeClips.find((c) => c.value === form.resolumeClip.trim())
+        // ResolumeActionController.tsx's identical rule. Looked up by id
+        // (see this function's own doc comment on `resolumeClipId`), never
+        // by name.
+        const selectedClip = resolumeClips.find((c) => c.key === resolumeClipId)
         if (selectedClip?.duplicateName) ref.layer = selectedClip.layerName
         break
       }
@@ -426,12 +437,33 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
   // below, kept in sync by the effect after it.
   const [resolumeDeckId, setResolumeDeckId] = useState('')
 
+  // Review finding B4: the SAME id-keyed pattern as resolumeDeckId, one
+  // level down — the clip picker's own <select> must key on the clip's
+  // id, never its (possibly duplicate, within this scope) name, or the
+  // second of two same-named clips is never independently selectable.
+  // `form.resolumeClip` keeps holding the NAME (what buildPayload sends
+  // and what an existing action's stored ref carries); `resolumeClipId`
+  // is UI-only state driving the picker, kept in sync by the effect
+  // after it and threaded into buildPayload so the SAVED `layer`
+  // disambiguator comes from the clip actually picked, not from
+  // whichever same-named clip a name lookup happens to find first.
+  const [resolumeClipId, setResolumeClipId] = useState('')
+
   const resolumeColumns = columnOptions(resolumeComposition, resolumeDeckId === '' ? null : resolumeDeckId)
-  const resolumeClips = form.resolumePersistent
-    ? clipOptions(resolumeComposition, { persistent: true })
-    : resolumeDeckId === ''
-      ? []
-      : clipOptions(resolumeComposition, { deckId: resolumeDeckId })
+  // useMemo (not a plain const): resolumeClipId's own resolution effect
+  // below depends on this array, and a fresh array reference on every
+  // render (the plain-const shape every other derived list here uses)
+  // would re-run that effect on every render rather than only when the
+  // scope actually changes.
+  const resolumeClips = useMemo(
+    () =>
+      form.resolumePersistent
+        ? clipOptions(resolumeComposition, { persistent: true })
+        : resolumeDeckId === ''
+          ? []
+          : clipOptions(resolumeComposition, { deckId: resolumeDeckId }),
+    [resolumeComposition, form.resolumePersistent, resolumeDeckId],
+  )
 
   useEffect(() => {
     if (isNew) return
@@ -439,11 +471,12 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    // A newly-navigated-to action's deck id is unknown until resolved
-    // (below) against ITS OWN composition state — clearing it here stops
-    // the previously-viewed action's id from leaking into this one while
-    // that resolution is pending.
+    // A newly-navigated-to action's deck and clip ids are unknown until
+    // resolved (below) against ITS OWN composition state — clearing them
+    // here stops the previously-viewed action's ids from leaking into
+    // this one while that resolution is pending.
     setResolumeDeckId('')
+    setResolumeClipId('')
     Promise.all([getShowAction(existingId), getShowActionRevisions(existingId)])
       .then(([config, revisionsResp]) => {
         if (cancelled) return
@@ -477,6 +510,24 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
     })
   }, [resolumeComposition, form.resolumeDeck])
 
+  // Resolves `resolumeClipId` from the stored clip NAME the identical
+  // way the effect above resolves `resolumeDeckId` — best-effort only
+  // when that name is itself ambiguous within this scope (two clips
+  // sharing it): this picks the first match, purely for what the picker
+  // shows pre-populated. An explicit pick through the picker's own
+  // onChange always sets both the id and the name together and is never
+  // overwritten here (the `current !== ''` guard) — that explicit pick is
+  // what makes selecting the SECOND of two same-named clips actually
+  // save the right one; this effect only pre-populates a valid-looking
+  // selection for an action nobody has touched yet.
+  useEffect(() => {
+    if (form.resolumeClip === '') return
+    setResolumeClipId((current) => {
+      if (current !== '') return current
+      return resolumeClips.find((c) => c.value === form.resolumeClip)?.key ?? current
+    })
+  }, [resolumeClips, form.resolumeClip])
+
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
     const id = isNew ? newId.trim() : existingId
@@ -484,7 +535,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
       setSaveError('An action id is required.')
       return
     }
-    const built = buildPayload(form, resolumeClips)
+    const built = buildPayload(form, resolumeClips, resolumeClipId)
     if ('error' in built) {
       setSaveError(built.error)
       return
@@ -812,23 +863,29 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                   <input
                     type="checkbox"
                     checked={form.resolumePersistent}
-                    onChange={(e) =>
+                    onChange={(e) => {
                       setForm({ ...form, resolumePersistent: e.target.checked, resolumeClip: '' })
-                    }
+                      setResolumeClipId('')
+                    }}
                   />
                   Persistent clip (lives outside any deck)
                 </label>
                 <label className="form-field">
                   Clip
                   <select
-                    value={form.resolumeClip}
-                    onChange={(e) => setForm({ ...form, resolumeClip: e.target.value })}
+                    value={resolumeClipId}
+                    onChange={(e) => {
+                      const id = e.target.value
+                      const name = resolumeClips.find((c) => c.key === id)?.value ?? ''
+                      setResolumeClipId(id)
+                      setForm({ ...form, resolumeClip: name })
+                    }}
                   >
                     <option value="" disabled>
                       Choose one
                     </option>
                     {resolumeClips.map((c) => (
-                      <option key={c.key} value={c.value}>
+                      <option key={c.key} value={c.key}>
                         {c.label}
                         {c.nameGenerated ? ' (generated)' : ''}
                       </option>
