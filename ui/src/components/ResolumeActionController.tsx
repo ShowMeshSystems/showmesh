@@ -40,12 +40,25 @@ function Picker({
   value,
   onChange,
   disabled = false,
+  optionValue = 'value',
 }: {
   label: string
   options: readonly PickerOption[]
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  /**
+   * Review finding 8: two decks CAN share a name, and an HTML <select>
+   * cannot distinguish two <option>s with the identical `value` — by the
+   * time onChange fires, the duplicate is already collapsed to one
+   * string. The deck picker keys its option `value` on the object's own
+   * (always-unique) id instead, so a duplicate deck name is still
+   * SELECTABLE distinctly even though its disambiguated LABEL is what
+   * makes the collision visible. Every other picker keeps sending the
+   * name directly (ADR-037), since none of them are reverse-looked-up to
+   * scope another list the way deck is.
+   */
+  optionValue?: 'value' | 'key'
 }) {
   return (
     <label className="form-field">
@@ -55,7 +68,7 @@ function Picker({
           Choose one
         </option>
         {options.map((o) => (
-          <option key={o.key} value={o.value}>
+          <option key={o.key} value={optionValue === 'key' ? o.key : o.value}>
             {o.label}
             {o.nameGenerated ? ' (generated)' : ''}
           </option>
@@ -67,6 +80,11 @@ function Picker({
 
 export function ResolumeActionController({ actions, composition }: ResolumeActionControllerProps) {
   const [actionName, setActionName] = useState<string>('')
+  // Review finding 8: `deck` holds the SELECTED DECK'S ID, not its name —
+  // see Picker's own comment on `optionValue`. `selectedDeckName` below is
+  // the one place that id is resolved back to the name the wire actually
+  // wants, and that resolution is by id (always unique), never by a name
+  // that might collide.
   const [deck, setDeck] = useState('')
   const [clip, setClip] = useState('')
   const [persistent, setPersistent] = useState(false)
@@ -79,12 +97,13 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
 
   const decks = deckOptions(composition)
   const layers = layerOptions(composition)
-  const columns = columnOptions(composition, deck === '' ? null : (decks.find((d) => d.value === deck)?.key ?? null))
+  const selectedDeckName = decks.find((d) => d.key === deck)?.value ?? ''
+  const columns = columnOptions(composition, deck === '' ? null : deck)
   const clips = persistent
     ? clipOptions(composition, { persistent: true })
     : deck === ''
       ? []
-      : clipOptions(composition, { deckId: decks.find((d) => d.value === deck)?.key ?? '' })
+      : clipOptions(composition, { deckId: deck })
 
   function handleGo(): void {
     if (submitting) return
@@ -104,7 +123,7 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
         run(() =>
           launchResolumeClip({
             clip,
-            ...(persistent ? { persistent: true } : { deck }),
+            ...(persistent ? { persistent: true } : { deck: selectedDeckName }),
             ...(selected?.duplicateName ? { layer: selected.layerName } : {}),
           }),
         )
@@ -116,11 +135,11 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
         return
       case 'launchColumn':
         if (column === '' || deck === '') return
-        run(() => launchResolumeColumn(column, deck))
+        run(() => launchResolumeColumn(column, selectedDeckName))
         return
       case 'selectDeck':
         if (deck === '') return
-        run(() => selectResolumeDeck(deck))
+        run(() => selectResolumeDeck(selectedDeckName))
         return
       case 'blackout':
         run(() => blackoutResolume())
@@ -179,7 +198,14 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
       </label>
 
       {(actionName === 'launchClip' || actionName === 'launchColumn' || actionName === 'selectDeck') && (
-        <Picker label="Deck" options={decks} value={deck} onChange={setDeck} disabled={actionName === 'launchClip' && persistent} />
+        <Picker
+          label="Deck"
+          options={decks}
+          value={deck}
+          onChange={setDeck}
+          optionValue="key"
+          disabled={actionName === 'launchClip' && persistent}
+        />
       )}
 
       {actionName === 'launchClip' && (
@@ -245,7 +271,7 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
           up to a minute.
         </p>
       )}
-      {state.kind === 'result' && <ResolumeActionOutcome result={state.result} />}
+      {state.kind === 'result' && <ResolumeActionOutcome result={state.result} composition={composition} />}
       {state.kind === 'error' && (
         <p role="alert" className="text-error">
           {state.message}

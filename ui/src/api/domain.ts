@@ -225,14 +225,11 @@ export interface Model {
   macroRuns: MacroRunSummary[]
   /**
    * Track D seam D-4: every configured Resolume instance, exactly as
-   * `Snapshot.resolume` carries them — at most one today
-   * (`SHOWMESH_RESOLUME_ID`), and an empty array on a coordinator with
-   * none configured, never null. Replaced wholesale on every snapshot
-   * (like `fpp`), and upserted in place by `resolume.changed` frames —
-   * see store.ts's applyResolumeChanged. There is no
-   * `resolume.observations.changed` delta variant (build contract §4: "no
-   * delta narrowing was built"), so unlike `fpp`, every observation rides
-   * every frame.
+   * `Snapshot.resolume` carries them — an empty array on a coordinator
+   * with none configured, never null. Replaced wholesale on every
+   * snapshot and upserted in place by `resolume.changed` frames (see
+   * store.ts's applyResolumeChanged). No delta variant exists, so unlike
+   * `fpp`, every observation rides every frame.
    */
   resolume: ResolumeInstance[]
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */

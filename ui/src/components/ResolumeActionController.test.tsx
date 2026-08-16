@@ -93,7 +93,10 @@ describe('ResolumeActionController', () => {
     renderController(composition)
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'launchClip')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), 'Deck 1')
+    // Review finding 8: the deck <select>'s own option value is now the
+    // deck's id, never its (possibly ambiguous) name — select by the
+    // rendered option element, matching what an operator actually clicks.
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), screen.getByRole('option', { name: /^Deck 1/ }))
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Clip' }), 'Snow')
     await userEvent.click(screen.getByRole('button', { name: /go/i }))
 
@@ -134,7 +137,7 @@ describe('ResolumeActionController', () => {
     renderController(composition)
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'selectDeck')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), 'Deck 2')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), screen.getByRole('option', { name: /^Deck 2/ }))
     await userEvent.click(screen.getByRole('button', { name: /go/i }))
 
     await waitFor(() => expect(selectResolumeDeck).toHaveBeenCalledWith('Deck 2'))
@@ -149,7 +152,7 @@ describe('ResolumeActionController', () => {
     renderController(composition)
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'launchColumn')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), 'Deck 1')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), screen.getByRole('option', { name: /^Deck 1/ }))
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Column' }), 'Column 1')
     await userEvent.click(screen.getByRole('button', { name: /go/i }))
 
@@ -210,7 +213,12 @@ describe('ResolumeActionController', () => {
     // anything in it at all, exactly as an operator would experience it.
     return userEvent
       .selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'launchClip')
-      .then(() => userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), 'Deck 1'))
+      .then(() =>
+        userEvent.selectOptions(
+          screen.getByRole('combobox', { name: 'Deck' }),
+          screen.getByRole('option', { name: /^Deck 1/ }),
+        ),
+      )
       .then(() => {
         const clipSelect = screen.getByRole('combobox', { name: 'Clip' })
         const optionTexts = Array.from(clipSelect.querySelectorAll('option'))
@@ -219,6 +227,41 @@ describe('ResolumeActionController', () => {
         expect(optionTexts).toHaveLength(2)
         expect(new Set(optionTexts).size).toBe(2) // the two option LABELS are distinguishable
       })
+  })
+
+  // Review finding 8: two decks sharing a name used to be reverse-looked-
+  // up by `.find(d => d.value === deck)`, which silently returns the
+  // FIRST match — so picking the SECOND same-named deck still scoped the
+  // clip list to the first one's clips. The deck picker now keys its
+  // option value on the deck's own id, so the two decks are independently
+  // selectable and each correctly scopes its own clip list.
+  it('scopes the clip list to the SECOND of two same-named decks when it is the one picked', async () => {
+    const composition = makeResolumeCompositionResponse({
+      decks: [
+        makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main', nameGenerated: false }),
+        makeResolumeCompositionDeck({ id: 'deck-2', name: 'Main', nameGenerated: false }),
+      ],
+      clips: [
+        makeResolumeCompositionClip({ id: 'clip-1', name: 'First Deck Clip', deckId: 'deck-1' }),
+        makeResolumeCompositionClip({ id: 'clip-2', name: 'Second Deck Clip', deckId: 'deck-2' }),
+      ],
+    })
+    renderController(composition)
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Action' }), 'launchClip')
+    const deckOptions = screen.getAllByRole('option', { name: /^Main/ })
+    expect(deckOptions).toHaveLength(2)
+    // The two same-named decks are disambiguated in their LABELS...
+    expect(new Set(deckOptions.map((o) => o.textContent)).size).toBe(2)
+    // ...and independently selectable: picking the second one scopes the
+    // clip list to ITS clip, never the first deck's.
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Deck' }), deckOptions[1] as HTMLElement)
+
+    const clipSelect = screen.getByRole('combobox', { name: 'Clip' })
+    const clipTexts = Array.from(clipSelect.querySelectorAll('option'))
+      .map((o) => o.textContent ?? '')
+      .filter((t) => t !== 'Choose one')
+    expect(clipTexts).toEqual(['Second Deck Clip'])
   })
 
   // Acceptance criterion 4: a generated label is visually distinguishable

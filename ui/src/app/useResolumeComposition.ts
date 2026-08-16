@@ -22,6 +22,7 @@ import { describeApiError } from './session'
 import type { ResolumeCompositionResponse } from './types'
 
 export type ResolumeCompositionState =
+  | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'not_stored'; reason: string }
   | { kind: 'forbidden'; reason: string }
@@ -29,10 +30,22 @@ export type ResolumeCompositionState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; composition: ResolumeCompositionResponse }
 
-export function useResolumeComposition(reloadKey: string | null): ResolumeCompositionState {
-  const [state, setState] = useState<ResolumeCompositionState>({ kind: 'loading' })
+/**
+ * `enabled` (review finding 7): a caller that only sometimes needs the
+ * composition — ShowActionDetail.tsx only when the operator has picked
+ * the `resolume` integration — passes `false` to skip the fetch
+ * entirely, rather than issuing a `config:write`-gated request on every
+ * mount regardless of what the form is even for. Defaults to `true`,
+ * preserving ResolumeView.tsx's own always-fetch behaviour.
+ */
+export function useResolumeComposition(reloadKey: string | null, enabled = true): ResolumeCompositionState {
+  const [state, setState] = useState<ResolumeCompositionState>(enabled ? { kind: 'loading' } : { kind: 'idle' })
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ kind: 'idle' })
+      return
+    }
     let cancelled = false
     setState({ kind: 'loading' })
 
@@ -62,7 +75,7 @@ export function useResolumeComposition(reloadKey: string | null): ResolumeCompos
     return () => {
       cancelled = true
     }
-  }, [reloadKey])
+  }, [reloadKey, enabled])
 
   return state
 }

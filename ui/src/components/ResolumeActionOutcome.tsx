@@ -1,26 +1,20 @@
-import type { ResolumeActionResult } from '../app/types'
+import type { ResolumeActionResult, ResolumeCompositionResponse } from '../app/types'
+import { sanitizeResolumeValueString } from '../app/resolumeComposition'
 
-// The Resolume sibling of FPPCommandOutcome.tsx, reusing that component's
-// own rules (build contract §2.3: "reuse FPPCommandOutcome's patterns
-// rather than writing a second outcome renderer") over a DIFFERENT,
-// five-word vocabulary (ResolumeActionResult.outcome) rather than FPP's
-// two: "confirmed", "unconfirmed", "unconfirmable", "refused", "failed",
-// and the one accepted empty-string replay race, rendered as pending —
-// never silently treated as either (ADR-003).
-//
-// `unconfirmable` renders as neither success nor failure (ADR-029: "an
-// action whose effect cannot be observed reports as unconfirmable ...
-// never as success" — a step that always reports success is worse than no
-// step, because the operator stops reading it). `refused` and `failed`
-// are visually distinct from each other too: a refusal never reached
-// Resolume at all (a clip's deck was not selected, an unresolvable
-// reference, an audit-write fail-closed refusal), while a failure means
-// dispatch was attempted and the attempt itself failed.
+// The Resolume sibling of FPPCommandOutcome.tsx (build contract §2.3),
+// over ResolumeActionResult.outcome's own five-word vocabulary plus the
+// accepted empty-string replay race, rendered as pending (ADR-003).
+// `unconfirmable` renders as neither success nor failure (ADR-029).
 export interface ResolumeActionOutcomeProps {
   result: ResolumeActionResult
+  composition: ResolumeCompositionResponse | null
 }
 
-export function ResolumeActionOutcome({ result }: ResolumeActionOutcomeProps) {
+export function ResolumeActionOutcome({ result, composition }: ResolumeActionOutcomeProps) {
+  // Review finding 3: outcomeReason is server-built and can embed a raw
+  // Arena object id (deckSelectionRefusal's formatRef) — sanitize before
+  // ever rendering it, matching every other Resolume string surface.
+  const outcomeReason = sanitizeResolumeValueString(result.outcomeReason, composition)
   return (
     <div role="status" className="resolume-action-outcome">
       {result.replay && (
@@ -30,26 +24,26 @@ export function ResolumeActionOutcome({ result }: ResolumeActionOutcomeProps) {
         </p>
       )}
       {result.outcome === 'confirmed' && (
-        <p className="resolume-action-outcome__confirmed">Confirmed: {result.outcomeReason}</p>
+        <p className="resolume-action-outcome__confirmed">Confirmed: {outcomeReason}</p>
       )}
       {result.outcome === 'unconfirmed' && (
         <p role="alert" className="resolume-action-outcome__unconfirmed">
-          Unconfirmed: {result.outcomeReason}
+          Unconfirmed: {outcomeReason}
         </p>
       )}
       {result.outcome === 'unconfirmable' && (
         <p className="resolume-action-outcome__unconfirmable">
-          Unconfirmable — neither success nor failure: {result.outcomeReason}
+          Unconfirmable — neither success nor failure: {outcomeReason}
         </p>
       )}
       {result.outcome === 'refused' && (
         <p role="alert" className="resolume-action-outcome__refused">
-          Refused — nothing was dispatched to Resolume: {result.outcomeReason}
+          Refused — nothing was dispatched to Resolume: {outcomeReason}
         </p>
       )}
       {result.outcome === 'failed' && (
         <p role="alert" className="resolume-action-outcome__failed">
-          Failed: {result.outcomeReason}
+          Failed: {outcomeReason}
         </p>
       )}
       {result.outcome === '' && (

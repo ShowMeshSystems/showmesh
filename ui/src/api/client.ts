@@ -132,8 +132,17 @@ const SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS = 55_000 // internal/coordinator/
 const RESOLUME_ACTION_CLIENT_MARGIN_MS = 25_000
 export const RESOLUME_ACTION_REQUEST_TIMEOUT_MS =
   SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS + RESOLUME_ACTION_CLIENT_MARGIN_MS
-/** Reconciliation target for [RESOLUME_ACTION_REQUEST_TIMEOUT_MS] — see [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS]'s identical role. */
-export const MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS = SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS
+/**
+ * Reconciliation target for [RESOLUME_ACTION_REQUEST_TIMEOUT_MS] — see
+ * [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS]'s identical role, including the
+ * server deadline PLUS [CLIENT_TIMEOUT_MARGIN_MS] for the round trip
+ * itself, matching `cmd_resolume_action_test.go`'s own
+ * `serverWriteDeadline + roundTripMargin` floor. A bound equal to the
+ * server deadline alone means the server can still be answering when this
+ * client has already given up.
+ */
+export const MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS =
+  SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
  * The manual restore (`POST /resolume/recovery/restore`) can dispatch up

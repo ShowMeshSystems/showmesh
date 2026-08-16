@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResolumeView } from './ResolumeView'
 import { ModelContext } from '../app/ModelContext'
+import { ApiError, ForbiddenError } from '../api/errors'
 import {
   makeEvidence,
   makeModel,
@@ -167,6 +168,50 @@ describe('ResolumeView', () => {
     await screen.findByText(/No ambiguous clips/i)
   })
 
+  // Review finding 4: ambiguousClips(null) is [] exactly like a genuinely
+  // empty composition, so "No ambiguous clips ... every clip can be
+  // resolved by name" used to render while still loading, on a 403, and
+  // before anything had been uploaded — an operator authoring macros
+  // ahead of a show would read a false all-clear. None of these four
+  // states may ever show that sentence.
+  describe('the ambiguous-clips panel never claims absence it does not know', () => {
+    it('while the composition is still loading', async () => {
+      getResolumeComposition.mockReturnValue(new Promise(() => {})) // never resolves
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', { composition: { name: 'Christmas 25' } })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('heading', { name: 'Ambiguous clips' })
+      expect(screen.queryByText(/No ambiguous clips/i)).not.toBeInTheDocument()
+    })
+
+    it('on a 403 reading the composition', async () => {
+      getResolumeComposition.mockRejectedValue(new ForbiddenError('this principal’s role does not include "config:write"'))
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', { composition: { name: 'Christmas 25' } })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await waitFor(() => expect(getResolumeComposition).toHaveBeenCalled())
+      expect(screen.queryByText(/No ambiguous clips/i)).not.toBeInTheDocument()
+    })
+
+    it('before anything has been uploaded (not_stored)', async () => {
+      getResolumeComposition.mockRejectedValue(new ApiError('no Resolume composition has been uploaded yet', 404))
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', { composition: { name: 'Christmas 25' } })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await waitFor(() => expect(getResolumeComposition).toHaveBeenCalled())
+      expect(screen.queryByText(/No ambiguous clips/i)).not.toBeInTheDocument()
+    })
+  })
+
   // Acceptance criterion 8: a recovery layer whose state is "unknown"
   // renders its reason, and never as dark or blank.
   it('renders a recovery layer state of "unknown" with its own reason, never blank', async () => {
@@ -196,6 +241,72 @@ describe('ResolumeView', () => {
 
     await screen.findByText('unknown')
     expect(screen.getByText('never observed since this coordinator started')).toBeInTheDocument()
+  })
+
+  // Review finding 3: the recovery record's own "unknown" reason, and the
+  // last restore report's per-layer skip/failure reason, are both
+  // server-built free text that can embed a formatRef-style raw id
+  // exactly like ResolumeActionResult.outcomeReason does — "suspected" by
+  // the review at ResolumeView.tsx's own recovery-record line, never
+  // actually driven before. Both get the same real formatRef shape here.
+  const REAL_REASON_WITH_ID = 'this clip belongs to Deck 2 (id 2000000000002), and that deck is not selected'
+
+  it('sanitizes a raw Arena object id out of the recovery record reason', async () => {
+    getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
+    getResolumeRecovery.mockResolvedValue(
+      makeResolumeRecoveryResponse({
+        record: [
+          {
+            layer: 'Layer 1',
+            layerNameGenerated: false,
+            state: 'unknown',
+            reason: REAL_REASON_WITH_ID,
+          },
+        ],
+      }),
+    )
+    listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+    const instance = makeResolumeInstance('resolume-1')
+    renderView(makeModel({ resolume: [instance] }))
+
+    await screen.findByText('unknown')
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/\bid 2000000000002\b/)
+    expect(text).toContain('Deck 2')
+  })
+
+  it('sanitizes a raw Arena object id out of the last restore report reason', async () => {
+    getResolumeComposition.mockRejectedValue(new ApiError('nothing stored', 404))
+    getResolumeRecovery.mockResolvedValue(
+      makeResolumeRecoveryResponse({
+        lastRestore: {
+          startedAt: '2026-08-16T00:00:00Z',
+          finishedAt: '2026-08-16T00:00:05Z',
+          trigger: 'manual',
+          outcome: 'partial',
+          principal: 'operator',
+          omittedLayerCount: 0,
+          layers: [
+            {
+              layer: 'Layer 1',
+              layerNameGenerated: false,
+              result: 'skipped',
+              reason: REAL_REASON_WITH_ID,
+            },
+          ],
+        },
+      }),
+    )
+    listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+    const instance = makeResolumeInstance('resolume-1')
+    renderView(makeModel({ resolume: [instance] }))
+
+    await screen.findByText('Last restore')
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/\bid 2000000000002\b/)
+    expect(text).toContain('Deck 2')
   })
 
   it('renders the controller once actions load, listing every registered action', async () => {

@@ -7,9 +7,15 @@ import {
   ambiguousClips,
   resolumeObservationLabel,
   sanitizeResolumeEvidence,
+  sanitizeResolumeValueString,
 } from '../app/resolumeComposition'
 import { resolumeCompositionOrNull, useResolumeComposition } from '../app/useResolumeComposition'
-import type { ResolumeAction, ResolumeRecoveryResponse, ResolumeRecoveryRestoreReport } from '../app/types'
+import type {
+  ResolumeAction,
+  ResolumeCompositionResponse,
+  ResolumeRecoveryResponse,
+  ResolumeRecoveryRestoreReport,
+} from '../app/types'
 import { EvidenceValue } from '../components/EvidenceValue'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { ScopedButton } from '../components/ScopedButton'
@@ -51,7 +57,13 @@ type RecoveryState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; recovery: ResolumeRecoveryResponse }
 
-function RestoreReportView({ report }: { report: ResolumeRecoveryRestoreReport }) {
+function RestoreReportView({
+  report,
+  composition,
+}: {
+  report: ResolumeRecoveryRestoreReport
+  composition: ResolumeCompositionResponse | null
+}) {
   return (
     <div className="panel" role="status">
       <dl className="field-list">
@@ -86,7 +98,9 @@ function RestoreReportView({ report }: { report: ResolumeRecoveryRestoreReport }
               </td>
               <td>{layer.clip ?? '—'}</td>
               <td>{layer.actionOutcome ?? '—'}</td>
-              <td>{layer.reason ?? '—'}</td>
+              {/* Review finding 3: reason is server-built free text and can
+                  embed a raw Arena object id — sanitize before rendering. */}
+              <td>{layer.reason === undefined ? '—' : sanitizeResolumeValueString(layer.reason, composition)}</td>
             </tr>
           ))}
         </tbody>
@@ -319,38 +333,66 @@ export function ResolumeView() {
           <h3 className="section-title">Ambiguous clips</h3>
           <PanelErrorBoundary panelLabel="Ambiguous clips">
             <section className="panel">
-              {ambiguous.length === 0 ? (
-                <p className="text-muted">
-                  No ambiguous clips in the stored composition — every clip's (deck-or-persistent,
-                  layer, label) triple is unique and can be resolved by name.
+              {/* Review finding 4: ambiguousClips(null) is [] just like a
+                  genuinely empty composition, so an absence claim here must
+                  gate on compositionState.kind — the same states the
+                  inventory panel above already handles — never on
+                  `ambiguous.length === 0` alone, which is also true while
+                  loading, on a 403/401, or before anything is uploaded. */}
+              {compositionState.kind === 'loading' && <p className="text-muted">Loading…</p>}
+              {compositionState.kind === 'not_stored' && (
+                <p className="text-muted" role="status">
+                  {compositionState.reason}
                 </p>
-              ) : (
-                <>
-                  <p className="text-muted" role="status">
-                    These clips share the same layer and label as another clip, so no reference —
-                    including one naming their layer — can ever resolve them. Rename one of each
-                    colliding pair in Resolume and re-upload the composition file.
-                  </p>
-                  <table className="config-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Layer</th>
-                        <th>Deck</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ambiguous.map((clip) => (
-                        <tr key={clip.id}>
-                          <td>{clip.name}</td>
-                          <td>{clip.layerName}</td>
-                          <td>{clip.deckName ?? 'persistent'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
               )}
+              {compositionState.kind === 'forbidden' && (
+                <p className="panel panel--warning" role="alert">
+                  {compositionState.reason}
+                </p>
+              )}
+              {compositionState.kind === 'unauthorized' && (
+                <p className="panel panel--warning" role="alert">
+                  {compositionState.reason}
+                </p>
+              )}
+              {compositionState.kind === 'error' && (
+                <p className="panel panel--error" role="alert">
+                  {compositionState.message}
+                </p>
+              )}
+              {compositionState.kind === 'loaded' &&
+                (ambiguous.length === 0 ? (
+                  <p className="text-muted">
+                    No ambiguous clips in the stored composition — every clip's (deck-or-persistent,
+                    layer, label) triple is unique and can be resolved by name.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-muted" role="status">
+                      These clips share the same layer and label as another clip, so no reference —
+                      including one naming their layer — can ever resolve them. Rename one of each
+                      colliding pair in Resolume and re-upload the composition file.
+                    </p>
+                    <table className="config-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Layer</th>
+                          <th>Deck</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ambiguous.map((clip) => (
+                          <tr key={clip.id}>
+                            <td>{clip.name}</td>
+                            <td>{clip.layerName}</td>
+                            <td>{clip.deckName ?? 'persistent'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                ))}
             </section>
           </PanelErrorBoundary>
 
@@ -388,7 +430,9 @@ export function ResolumeView() {
                                 or blank (D-3a criterion 14). */}
                             <ResolumeRecoveryLayerStateBadge state={entry.state} />
                             {entry.state === 'unknown' && entry.reason !== undefined && (
-                              <div className="evidence__reason">{entry.reason}</div>
+                              <div className="evidence__reason">
+                                {sanitizeResolumeValueString(entry.reason, composition)}
+                              </div>
                             )}
                           </td>
                           <td>{entry.clip ?? '—'}</td>
@@ -403,7 +447,7 @@ export function ResolumeView() {
                   {recoveryState.recovery.lastRestore === null ? (
                     <p className="text-muted">No restore has run yet.</p>
                   ) : (
-                    <RestoreReportView report={recoveryState.recovery.lastRestore} />
+                    <RestoreReportView report={recoveryState.recovery.lastRestore} composition={composition} />
                   )}
 
                   {restoreError !== null && (

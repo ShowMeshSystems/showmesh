@@ -602,18 +602,9 @@ export class ApiStore {
     }
   }
 
-  // -- Track D seam D-4: Resolume as an observability resource (seam E)
-  // and the seven-action vocabulary (D-3/seam B) --------------------------
-  //
-  // listResolumeInstances/getResolumeInstance/listResolumeActions are
-  // plain side-calls (never touch `this.model`), matching every open-read
-  // pass-through above. `model.resolume` itself is populated from the
-  // snapshot/`resolume.changed` stream, not from these — the Resolume view
-  // calls listResolumeInstances directly only where it wants a fetch
-  // independent of the live model (none of D-4's own views do; it is
-  // exposed because ADR-014 requires the API surface itself to stay
-  // reachable with no UI, and this store is the one place that surface is
-  // wrapped for the browser).
+  // -- Track D seam D-4: Resolume observability (seam E) and the
+  // seven-action vocabulary (D-3/seam B). Plain side-calls; `model.resolume`
+  // is populated from the snapshot/`resolume.changed` stream, not these. --
 
   /** `GET /api/v1/resolume/instances`. Open read (`observation:read` under closed reads); never throws on 401/403 when reads are open. */
   async listResolumeInstances(): Promise<SchemaResolumeInstancesResponse> {
@@ -650,21 +641,10 @@ export class ApiStore {
 
   /**
    * `POST /api/v1/resolume/actions` (D-3/seam B, ADR-024, ADR-037) — the
-   * Resolume sibling of [dispatchFPPCommand]. Mints a fresh idempotency
-   * key per call via `randomUUIDv4()`, exactly like every other command
-   * dispatch in this store, never caller-supplied. Uses
-   * RESOLUME_ACTION_REQUEST_TIMEOUT_MS, not the instance-wide default —
-   * this coordinator can hold the response open for its own ~55s write
-   * deadline before answering (client.ts's own doc comment), and a
-   * shorter client budget would make the coordinator's own honest
-   * "unconfirmed" outcome unreachable, exactly the Step 7 seam C defect
-   * this project already paid for once on the FPP side.
-   *
-   * Returns `result` as-is — including its own five-word `outcome`, never
-   * inferred from this call's own success (ADR-029: "an action whose
-   * effect cannot be observed reports as unconfirmable ... never as
-   * success"). Every caller renders it honestly through
-   * ResolumeActionOutcome, never a bare "done" on a 200 alone.
+   * Resolume sibling of [dispatchFPPCommand]. Mints its own idempotency key;
+   * uses RESOLUME_ACTION_REQUEST_TIMEOUT_MS, not the instance-wide default.
+   * Returns `result.outcome` as-is, never inferred from this call's HTTP
+   * success (ADR-029).
    */
   private async dispatchResolumeAction(request: ResolumeActionDispatchArgs): Promise<SchemaResolumeActionResult> {
     const controller = this.beginSideCall()
@@ -1567,11 +1547,9 @@ export class ApiStore {
         return
       }
       case 'resolume.changed': {
-        // Track D seam D-4 (build contract §1.7): mirrors `fpp.changed`
-        // exactly — this event carries the instance's COMPLETE current
-        // representation (every observation, all 114 of them, per §4's own
-        // 37,343-byte measurement), never a delta. There is no
-        // `resolume.observations.changed` variant.
+        // Track D seam D-4: mirrors `fpp.changed` exactly — this event
+        // carries the instance's COMPLETE current representation, never a
+        // delta. There is no `resolume.observations.changed` variant.
         const payload = tryParse<{ serverTime: string; instance: SchemaResolumeInstance }>(frame.data)
         if (payload === null || gen !== this.generation) return
         this.applyResolumeChanged(payload.instance, payload.serverTime)

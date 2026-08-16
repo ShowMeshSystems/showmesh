@@ -163,7 +163,10 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
   // action's OWN integration is not on ConfigObjectSummary (id/label/
   // revision only) — this fetches each referenced action's full payload,
   // once per distinct id, and caches the answer here.
-  const [actionIntegrations, setActionIntegrations] = useState<Record<string, ActionIntegration>>({})
+  // `null` means the lookup was tried and failed (unknown id, 403, transport
+  // error, or an in-progress free-text edit) — it is still recorded so the
+  // id is never retried, which is what bounds the effect below.
+  const [actionIntegrations, setActionIntegrations] = useState<Record<string, ActionIntegration | null>>({})
 
   useEffect(() => {
     if (!readGate.allowed) return
@@ -236,16 +239,20 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
       unknownIds.map((id) =>
         getShowAction(id)
           .then((resp) => [id, resp.payload.target.integration] as const)
-          .catch(() => null),
+          .catch(() => [id, null] as const),
       ),
     ).then((results) => {
       if (cancelled) return
       setActionIntegrations((prev) => {
+        let changed = false
         const next = { ...prev }
-        for (const result of results) {
-          if (result !== null) next[result[0]] = result[1]
+        for (const [id, integration] of results) {
+          if (!(id in next)) {
+            next[id] = integration
+            changed = true
+          }
         }
-        return next
+        return changed ? next : prev
       })
     })
     return () => {

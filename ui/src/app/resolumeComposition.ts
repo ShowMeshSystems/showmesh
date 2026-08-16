@@ -181,12 +181,22 @@ function disambiguate<T>(
 
 export function deckOptions(composition: ResolumeCompositionResponse | null): PickerOption[] {
   if (composition === null) return []
+  // Review finding 8: two decks CAN share a name (an operator-authored
+  // collision, not just the generated "Deck <n>" form, which is already
+  // unique per position) — disambiguate by position in this response's own
+  // decks list, the same convention layerOptions/columnOptions use for
+  // their own index. This label alone does not make the reference itself
+  // resolvable (ADR-037: a name-only reference to two same-named decks is
+  // still ambiguous on the wire, and the server still refuses it) — it
+  // only lets the operator SEE the collision before picking, matching
+  // every other picker in this file.
+  const withPosition = composition.decks.map((d, i) => ({ ...d, position: i + 1 }))
   return disambiguate(
-    composition.decks,
+    withPosition,
     (d) => d.id,
     (d) => d.name,
     (d) => d.nameGenerated,
-    () => null, // decks are never disambiguated further -- ADR-037 decision 4's decks list is already the whole set
+    (d) => `deck ${d.position}`,
   )
 }
 
