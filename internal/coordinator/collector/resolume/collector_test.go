@@ -1406,6 +1406,41 @@ func TestCompositionUploadTriggersSurveyWithoutWaitingForAnythingElse(t *testing
 	}
 }
 
+// TestIdentityObservationEmitsForDeckMismatch is the owner review finding
+// 1 regression guard (2026-08-16): identityObservation used to return
+// ok=false for IdentityDeckMismatch, on the theory that omitting the
+// observation left resolume.composition.identified "untouched". It does
+// not: survey's other resolume-survey rows are delivered complete=true in
+// the same batch, so an omitted row is pruned, not preserved — deleting
+// the evidence instead of leaving it. This fails if the observation is
+// ever skipped again.
+func TestIdentityObservationEmitsForDeckMismatch(t *testing.T) {
+	c := newTestCollector(t, "http://127.0.0.1:1", Options{})
+	identity := IdentityResult{
+		Outcome:         IdentityDeckMismatch,
+		Reason:          "the selected deck changed while this identity check was running, so the missing clips are not evidence of a stale composition",
+		ExpectedDeck:    IdentitySampleClip{ID: 2000000000001},
+		ActualDeckKnown: true,
+		ActualDeck:      2000000000002,
+		ActualDeckName:  "Deck Two",
+	}
+
+	obs := c.identityObservation(identity, false, time.Now())
+	if obs.Absence != "" {
+		t.Fatalf("identityObservation(deck mismatch) Absence = %q, want empty — the observation must be emitted as a real value, never skipped", obs.Absence)
+	}
+	s, ok := obs.Value.(string)
+	if !ok || !contains(s, "deck_mismatch:") {
+		t.Fatalf("identityObservation(deck mismatch) Value = %v, want a string carrying \"deck_mismatch:\"", obs.Value)
+	}
+	if !contains(s, "2000000000001") {
+		t.Errorf("identityObservation(deck mismatch) Value = %q, want it to name the expected deck (id 2000000000001)", s)
+	}
+	if !contains(s, "Deck Two") {
+		t.Errorf("identityObservation(deck mismatch) Value = %q, want it to name the actual selected deck (Deck Two)", s)
+	}
+}
+
 func TestReadinessAndIdentityStringsCarryNoInternalCitation(t *testing.T) {
 	for _, path := range operatorFacingStringGuardFiles {
 		path := path

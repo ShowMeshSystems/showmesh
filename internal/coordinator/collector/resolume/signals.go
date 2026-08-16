@@ -64,10 +64,13 @@ func ClipTransportTypeSignal(id ObjectID) observation.SignalID {
 	return observation.SignalID(fmt.Sprintf("resolume.clip.%s.transporttype", id))
 }
 
-// staticSignals is every signal ID this package declares that does NOT carry
-// a variable object id, validated once at init. The four per-object functions
-// above are validated per-call instead, in collector.go.
-var staticSignals = []observation.SignalID{
+// AllSignals is every signal ID this package declares that does NOT carry a
+// variable object id, validated once at init below. The four per-object
+// functions above are validated per-call instead, in collector.go. Exported
+// (mirroring internal/coordinator/collector/fpp.AllSignals) so a consumer
+// can synthesize not-yet-polled placeholders from an authoritative list
+// rather than a second, hand-maintained copy of it.
+var AllSignals = []observation.SignalID{
 	SignalReachable,
 	SignalProduct,
 	SignalCompositionName,
@@ -79,7 +82,7 @@ var staticSignals = []observation.SignalID{
 // init validates every static signal constant so a malformed signal ID fails
 // at package load rather than at the first poll.
 func init() {
-	for _, sig := range staticSignals {
+	for _, sig := range AllSignals {
 		if err := observation.ValidateSignalID(sig); err != nil {
 			panic(fmt.Sprintf("resolume: invalid signal ID declared by this package: %v", err))
 		}
