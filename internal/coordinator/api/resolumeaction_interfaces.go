@@ -5,25 +5,23 @@ import (
 	"time"
 )
 
-// This file declares this package's own consumer-side view of Track D
-// seam D-3/A's action engine (internal/coordinator/collector/resolume,
-// built concurrently by a different builder against
-// docs/build/TRACK-D-D3-SPEC.md sections 2-4) — the same pattern
-// interfaces.go already established for [FPPInstanceView]/[FPPLister] and
-// [EventRecord]/[EventReader]: this package does not import a producer
-// package that is being built in parallel, or that this package does not
-// own the production wiring of; it declares the narrow shape it needs, and
-// a later wiring task (or a thin adapter, if D-3/A's real return types do
-// not already satisfy this shape verbatim) joins the two.
+// This file declares this package's own consumer-side view of
+// internal/coordinator/collector/resolume's action engine, the same
+// pattern interfaces.go already uses for [FPPInstanceView]/[FPPLister] and
+// [EventRecord]/[EventReader]: this interface names the narrow shape this
+// package needs from that dispatch engine without this file importing it,
+// and a wiring adapter elsewhere joins the two. Other files in this
+// package do import that producer directly, for label rendering and a
+// shared duration constant — this file's own consumer-side shape stays
+// independent of that regardless.
 //
-// This package's own job (D-3/B) ends at "decode the wire request,
-// authorize it, record it durably per ADR-024 decision 11, hand it to
+// This package's own job ends at "decode the wire request, authorize it,
+// record it durably per ADR-024 decision 11, hand it to
 // [ResolumeActionDispatcher.Dispatch], and render the wire response
 // honestly." Everything about HOW an action is dispatched — the derived
-// per-action deadline, the pre-dispatch baseline, the deck refusal
-// (TRACK-D-D3-SPEC.md section 3.4), composition-identity gating (section
-// 3.6), and confirmation itself — is D-3/A's, reached only through this
-// interface.
+// per-action deadline, the pre-dispatch baseline, the deck refusal,
+// composition-identity gating, and confirmation itself — is reached only
+// through this interface.
 
 // ResolumeActionParamKind is the wire JSON type one action parameter's
 // value must decode as — a ShowMesh object reference (a string), a
@@ -177,6 +175,15 @@ type ResolumeActionResult struct {
 	// before returning).
 	DispatchedAt *time.Time
 	ResolvedAt   *time.Time
+
+	// ResolvedID is the Resolume object id the ADR-037 name reference
+	// resolved to — "" for blackout, which addresses nothing, and for a
+	// request refused before any name was resolved at all. ADR-037
+	// removes the id from what an operator types, not from the record: it
+	// stays visible here for debugging, so an audit reader can answer
+	// "which object did this dispatch actually address" even after a
+	// rename makes that no longer obvious from the name alone.
+	ResolvedID string
 }
 
 // ResolumeActionDispatcher is what this package needs from D-3/A's action

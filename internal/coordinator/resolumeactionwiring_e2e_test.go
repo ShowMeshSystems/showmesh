@@ -274,6 +274,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 			Outcome       string  `json:"outcome"`
 			OutcomeReason string  `json:"outcomeReason"`
 			DispatchedAt  *string `json:"dispatchedAt"`
+			ResolvedID    string  `json:"resolvedId"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -287,6 +288,12 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 	}
 	if resp.Result.DispatchedAt == nil {
 		t.Error("dispatchedAt is null on a confirmed outcome")
+	}
+	// Review finding 8: the object id this launchClip actually addressed
+	// stays visible in the response, even though the request that reached
+	// it never named one.
+	if resp.Result.ResolvedID != e2eClipID {
+		t.Errorf("resolvedId = %q, want %q (the object id \"E2E Clip\" resolved to)", resp.Result.ResolvedID, e2eClipID)
 	}
 
 	// The proof: the real HTTP request this seam was supposed to issue
@@ -627,6 +634,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		Result struct {
 			Outcome             string `json:"outcome"`
 			AttributionDegraded bool   `json:"attributionDegraded"`
+			ResolvedID          string `json:"resolvedId"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &blackoutResp); err != nil {
@@ -637,6 +645,9 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	}
 	if !blackoutResp.Result.AttributionDegraded {
 		t.Errorf("blackout (exempt) attributionDegraded = false, want true (it proceeded on a failing audit store)")
+	}
+	if blackoutResp.Result.ResolvedID != "" {
+		t.Errorf("blackout resolvedId = %q, want absent — blackout addresses nothing to resolve an id for", blackoutResp.Result.ResolvedID)
 	}
 	foundDisconnectAll := false
 	for _, r := range arena.requestLog() {

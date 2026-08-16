@@ -3843,14 +3843,19 @@ components:
         `action: "launchClip"`: launches (connects) a clip named by
         `params.clip`, scoped to exactly one of `params.deck` (a deck
         clip) or `params.persistent: true` (a persistent clip, which lives
-        outside any deck and carries no `deck`) — neither or both is
-        refused as `400`. `params.layer` disambiguates a clip name that
-        occurs more than once; when it does not match any candidate the
-        candidate set narrows to zero, never falling back to the
-        unfiltered set. A clip reference whose own deck is not currently
-        selected is refused with `200` and `result.outcome: "refused"`
-        (never a stale-reference error and never a silent deck change) —
-        see ResolumeActionResult.outcome.
+        outside any deck and carries no `deck`) — `params` below encodes
+        that exclusivity structurally, so a client generated from this
+        contract never constructs the other shapes. A coordinator that
+        receives one anyway (neither or both) does not reject it with
+        `400`: it answers `200` with `result.outcome: "refused"`, exactly
+        like any other unresolvable reference — see
+        ResolumeActionResult.outcome. `params.layer` disambiguates a clip
+        name that occurs more than once; when it does not match any
+        candidate the candidate set narrows to zero, never falling back to
+        the unfiltered set. A clip reference whose own deck is not
+        currently selected is refused with `200` and
+        `result.outcome: "refused"` too (never a stale-reference error and
+        never a silent deck change).
       required: [action, idempotencyKey, params]
       properties:
         action:
@@ -3883,6 +3888,13 @@ components:
                 True when `clip` names a persistent clip (no `deck`
                 allowed). Absent or false means a deck clip, and `deck`
                 is then required.
+          oneOf:
+            - required: [deck]
+              not:
+                required: [persistent]
+            - required: [persistent]
+              not:
+                required: [deck]
     ResolumeClearLayerActionRequest:
       type: object
       description: '`action: "clearLayer"`: clears (disconnects) a layer''s active clip, named by `params.layer`.'
@@ -4097,6 +4109,14 @@ components:
         resolvedAt:
           type: [string, "null"]
           format: date-time
+        resolvedId:
+          type: string
+          description: >-
+            The Resolume object id this action's own name reference
+            resolved to, kept visible for debugging (ADR-037 removes the
+            id from what an operator types, not from the record). Absent
+            for `blackout`, which addresses nothing, and for a refusal
+            reached before any name was resolved.
     Problem:
       type: object
       description: >-

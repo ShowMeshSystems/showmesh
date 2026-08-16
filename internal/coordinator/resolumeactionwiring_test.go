@@ -201,9 +201,9 @@ func TestAdapterActionsParamsVocabularyMatchesTheShippedWireContract(t *testing.
 	}
 }
 
-// --- buildResolumeActionParams / resolveWireObjectID: the two things this
-// adapter DOES decide (pure boundary translation, see resolumeactionwiring.go's
-// own top comment). ---
+// --- buildResolumeActionParams: the one thing this adapter DOES decide
+// (pure boundary translation, see resolumeactionwiring.go's own top
+// comment). ---
 
 // buildTestTrackedComposition is this file's own small fixture: one deck,
 // one layer, one deck clip on it — just enough for buildResolumeActionParams'
@@ -287,9 +287,9 @@ func TestBuildResolumeActionParamsLaunchClipRefusesUnknownName(t *testing.T) {
 	}
 }
 
-// TestBuildResolumeActionParamsLaunchClipDeckAndPersistentBothRefuse is
-// TRACK-D-SEAM-B-NAMES-SPEC.md §2.1's own rule, exercised through this
-// file's own translation layer rather than only against resolume.ResolveClip
+// TestBuildResolumeActionParamsLaunchClipDeckAndPersistentBothRefuse
+// exercises the deck/persistent exclusivity rule through this file's own
+// translation layer, rather than only against resolume.ResolveClip
 // directly.
 func TestBuildResolumeActionParamsLaunchClipDeckAndPersistentBothRefuse(t *testing.T) {
 	tc := buildTestTrackedComposition(t)
