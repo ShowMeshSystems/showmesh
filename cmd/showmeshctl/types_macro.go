@@ -61,10 +61,11 @@ type showActionMQTTExpect struct {
 	DeadlineSeconds int     `json:"deadlineSeconds,omitempty"`
 }
 
-// showActionTarget is show.action.target (STEP-9-SPEC.md section 5.3):
-// Integration plus either the fpp fields or the mqtt fields directly,
-// never nested a second level under an "fpp"/"mqtt" key — matching the
-// server's own flattened wire shape exactly.
+// showActionTarget is show.action.target (STEP-9-SPEC.md section 5.3,
+// extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for "resolume"):
+// Integration plus either the fpp, mqtt, or resolume fields directly,
+// never nested a second level under an "fpp"/"mqtt"/"resolume" key —
+// matching the server's own flattened wire shape exactly.
 type showActionTarget struct {
 	Integration string `json:"integration"`
 
@@ -77,6 +78,12 @@ type showActionTarget struct {
 	Broker  string                 `json:"broker,omitempty"`
 	Publish *showActionMQTTPublish `json:"publish,omitempty"`
 	Expect  *showActionMQTTExpect  `json:"expect,omitempty"`
+
+	// resolume-only. Action is one of the seven Track D D-3 action names;
+	// Ref carries ADR-037's named-reference vocabulary (clip, deck, layer,
+	// column, persistent, bypassed, master) — never a Resolume object id.
+	Action string         `json:"action,omitempty"`
+	Ref    map[string]any `json:"ref,omitempty"`
 }
 
 // showAction is the "show.action" configuration kind's decoded payload

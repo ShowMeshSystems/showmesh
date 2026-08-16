@@ -220,6 +220,25 @@ type Dependencies struct {
 	// stream announces no resolume.changed — matching this struct's
 	// standing "an unwired dependency is not this API failing" posture.
 	Resolume ResolumeLister
+
+	// ResolumeReferences is Track D seam C's own write-time reference
+	// resolver (ADR-037), reached only through
+	// [config.ResolumeReferenceResolver] — see that interface's own doc
+	// comment (internal/coordinator/config/showaction.go) for why config
+	// declares it rather than importing
+	// internal/coordinator/collector/resolume directly. Consumed by
+	// handlePutShowAction (showconfig.go) to validate a resolume
+	// show.action's ref against the coordinator's currently stored
+	// composition, independent of whether a live Resolume instance is even
+	// configured (the stored composition and the live collector are
+	// separate concerns — see resolumeCompositionWiring's own doc comment
+	// in internal/coordinator). A nil field is replaced by
+	// [noResolumeReferenceResolver]: every write of a resolume show.action
+	// is refused with config.ErrResolumeCompositionNotUploaded's own
+	// sentence, the honest answer for a coordinator with nothing wired to
+	// resolve against — matching this struct's standing "an unwired
+	// dependency is not this API failing" posture.
+	ResolumeReferences config.ResolumeReferenceResolver
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -273,7 +292,35 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
 	}
+	if d.ResolumeReferences == nil {
+		d.ResolumeReferences = noResolumeReferenceResolver{}
+	}
 	return d
+}
+
+// noResolumeReferenceResolver is [Dependencies.ResolumeReferences]'s
+// nil-safe default: every method reports
+// [config.ErrResolumeCompositionNotUploaded], the same answer a real
+// resolver gives when nothing has ever been uploaded — an unwired
+// dependency and a genuinely empty one are indistinguishable from a
+// caller's point of view, which is correct: neither has anything to
+// resolve against.
+type noResolumeReferenceResolver struct{}
+
+func (noResolumeReferenceResolver) ResolveClip(config.ResolumeClipReference) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveLayer(string) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveColumn(string, string) error {
+	return config.ErrResolumeCompositionNotUploaded
+}
+
+func (noResolumeReferenceResolver) ResolveDeck(string) error {
+	return config.ErrResolumeCompositionNotUploaded
 }
 
 // noResolumeLister is [Dependencies.Resolume]'s nil-safe default:

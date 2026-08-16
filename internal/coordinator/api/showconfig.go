@@ -291,23 +291,40 @@ func currentFPPEndpoints(ctx context.Context, fpp FPPLister) ([]config.FPPEndpoi
 	return out, nil
 }
 
-// showActionExists reports whether id names a show.action object with an
-// active revision — [config.DecodeShowMacroPayload]'s resolveAction
-// callback (STEP-9-SPEC.md section 5.4: "step.action must resolve to an
-// existing show.action object and the write is rejected if it does not").
-// A store error is treated as "does not resolve": this callback has no way
-// to report an internal error separately from "not found" through the
-// bool config.DecodeShowMacroPayload declares, so a transient store
-// failure here surfaces as a validation refusal on this ONE step rather
-// than crashing or silently accepting an unverifiable reference — a
-// caller retries the write once the store answers again.
-func (h *handlers) showActionExists(ctx context.Context) func(actionID string) bool {
-	return func(actionID string) bool {
+// showActionLookup reports whether id names a show.action object with an
+// active revision and, when it does, that action's own target.integration
+// — [config.DecodeShowMacroPayload]'s resolveAction callback (STEP-9-
+// SPEC.md section 5.4: "step.action must resolve to an existing
+// show.action object and the write is rejected if it does not";
+// TRACK-D-SEAM-C-MACRO-SPEC.md section 2.3: the integration is what lets
+// that decoder enforce the Resolume localFallback rule at write time
+// rather than fetching it a second way). A store error, or a payload this
+// function cannot decode enough to read target.integration from, is
+// treated as "does not resolve": this callback has no way to report an
+// internal error separately from "not found" through the (string, bool)
+// config.DecodeShowMacroPayload declares, so a transient failure here
+// surfaces as a validation refusal on this ONE step rather than crashing
+// or silently accepting an unverifiable reference — a caller retries the
+// write once the store answers again.
+func (h *handlers) showActionLookup(ctx context.Context) func(actionID string) (string, bool) {
+	return func(actionID string) (string, bool) {
 		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, actionID)
-		if err != nil {
-			return false
+		if err != nil || obj.CurrentRevision == 0 {
+			return "", false
 		}
-		return obj.CurrentRevision > 0
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, actionID, obj.CurrentRevision)
+		if err != nil {
+			return "", false
+		}
+		var head struct {
+			Target struct {
+				Integration string `json:"integration"`
+			} `json:"target"`
+		}
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+			return "", false
+		}
+		return head.Target.Integration, true
 	}
 }
 
@@ -332,7 +349,7 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry)
+	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences)
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -371,7 +388,7 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionExists(r.Context()))
+	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionLookup(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -469,6 +486,7 @@ func mapConfigShowActionTarget(t config.ShowActionTarget) v1.ConfigShowActionTar
 		Integration: t.Integration,
 		InstanceID:  t.InstanceID, Primitive: t.Primitive, Params: t.Params,
 		Broker: t.Broker,
+		Action: t.Action, Ref: t.Ref,
 	}
 	if t.Publish != nil {
 		out.Publish = &v1.ConfigShowActionMQTTPublish{

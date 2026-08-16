@@ -4649,19 +4649,22 @@ components:
       type: object
       description: >-
         The STORED/READ shape of show.action.target (STEP-9-SPEC.md
-        section 5.3): integration plus either the fpp fields or the mqtt
-        fields directly, never nested a second level under an "fpp"/"mqtt"
-        key. Only integration is required here; which of the remaining
-        fields is present depends on integration's own value, enforced by
-        this coordinator's write-time validation rather than by this
-        schema. publish, when present, is always the resolved
-        ConfigShowActionMQTTPublish shape. To submit a target, use
-        ConfigShowActionTargetWrite instead.
+        section 5.3, extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for
+        "resolume"): integration plus either the fpp, mqtt, or resolume
+        fields directly, never nested a second level under an
+        "fpp"/"mqtt"/"resolume" key. Only integration is required here;
+        which of the remaining fields is present depends on integration's
+        own value, enforced by this coordinator's write-time validation
+        rather than by this schema. publish, when present, is always the
+        resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's
+        named-reference vocabulary (clip, deck, layer, column, persistent,
+        bypassed, master) — never a Resolume object id. To submit a
+        target, use ConfigShowActionTargetWrite instead.
       required: [integration]
       properties:
         integration:
           type: string
-          enum: [fpp, mqtt]
+          enum: [fpp, mqtt, resolume]
         instanceId:
           type: string
           minLength: 1
@@ -4678,6 +4681,21 @@ components:
           $ref: "#/components/schemas/ConfigShowActionMQTTPublish"
         expect:
           $ref: "#/components/schemas/ConfigShowActionMQTTExpect"
+        action:
+          type: string
+          description: >-
+            resolume-only: one of the seven Track D D-3 action names
+            (launchClip, clearLayer, blackout, launchColumn, selectDeck,
+            setLayerBypass, setLayerMaster).
+          minLength: 1
+        ref:
+          type: object
+          description: >-
+            resolume-only: ADR-037's named-reference vocabulary for this
+            action. Every key is a reference or a value from a closed,
+            per-action list, enforced by this coordinator's write-time
+            validation rather than by this schema.
+          additionalProperties: true
     ConfigShowActionTargetWrite:
       type: object
       description: >-
@@ -4690,7 +4708,7 @@ components:
       properties:
         integration:
           type: string
-          enum: [fpp, mqtt]
+          enum: [fpp, mqtt, resolume]
         instanceId:
           type: string
           minLength: 1
@@ -4707,6 +4725,12 @@ components:
           $ref: "#/components/schemas/ConfigShowActionMQTTPublishWrite"
         expect:
           $ref: "#/components/schemas/ConfigShowActionMQTTExpect"
+        action:
+          type: string
+          minLength: 1
+        ref:
+          type: object
+          additionalProperties: true
     ConfigShowAction:
       type: object
       description: >-
@@ -5055,7 +5079,7 @@ components:
           type: integer
         integration:
           type: string
-          enum: [fpp, mqtt]
+          enum: [fpp, mqtt, resolume]
         safetyClass:
           type: string
           enum: [none, blackout, stop, powerOff]

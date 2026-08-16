@@ -140,6 +140,8 @@ func (e *Executor) dispatchStep(ctx context.Context, run store.MacroRunRecord, s
 		return e.dispatchFPPStep(ctx, run, step, action, issuer)
 	case config.ShowActionIntegrationMQTT:
 		return e.dispatchMQTTStep(ctx, run, step, action, issuer)
+	case config.ShowActionIntegrationResolume:
+		return e.dispatchResolumeStep(ctx, run, step, action, issuer)
 	default:
 		// Unreachable given write-time validation
 		// (config.DecodeShowActionPayload rejects any integration other
