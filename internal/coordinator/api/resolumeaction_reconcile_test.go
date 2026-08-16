@@ -112,7 +112,7 @@ func TestReconcileStrandedResolumeActionsMakesTheReplayRaceUnreachablePermanentl
 	// and calling Dispatch leaves behind (resolumeaction.go's own
 	// handleDispatchResolumeAction never writes DispatchedAt until AFTER
 	// Dispatch returns).
-	strandResolumeCommand(t, setup.st, "stranded-resolume-2", "resolume.launch_clip", `{"id":"clip-1"}`, nil)
+	strandResolumeCommand(t, setup.st, "stranded-resolume-2", "resolume.launch_clip", `{"clip":"clip-1","deck":"deck-1"}`, nil)
 
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
@@ -120,7 +120,7 @@ func TestReconcileStrandedResolumeActionsMakesTheReplayRaceUnreachablePermanentl
 
 	// Before reconciliation: replaying the stranded key reproduces the
 	// accepted blank race.
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-stranded-resolume-2", `{"id":"clip-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-stranded-resolume-2", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp1, body1 := doRawRequest(t, api.Handler, req1)
 	if resp1.StatusCode != http.StatusOK {
 		t.Fatalf("pre-reconciliation replay status = %d, want 200; body: %s", resp1.StatusCode, body1)
@@ -137,7 +137,7 @@ func TestReconcileStrandedResolumeActionsMakesTheReplayRaceUnreachablePermanentl
 
 	// After reconciliation: the SAME key now replays a resolved,
 	// non-blank outcome — this row can never again answer "".
-	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-stranded-resolume-2", `{"id":"clip-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-stranded-resolume-2", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("post-reconciliation replay status = %d, want 200; body: %s", resp2.StatusCode, body2)

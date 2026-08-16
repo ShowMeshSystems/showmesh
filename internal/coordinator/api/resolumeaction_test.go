@@ -94,21 +94,28 @@ func (f *fakeResolumeActionDispatcher) lastCtxDeadline() (deadline time.Time, ok
 	return call.ctx.Deadline()
 }
 
-// standardResolumeActionDescriptors is TRACK-D-D3-SPEC.md section 2's
-// seven-action vocabulary and section 5.2's safety-class table, exactly as
+// standardResolumeActionDescriptors is TRACK-D-SEAM-B-NAMES-SPEC.md section
+// 2's reference vocabulary (ADR-037, superseding TRACK-D-D3-SPEC.md
+// section 2's raw "id") and section 5.2's safety-class table, exactly as
 // this seam's own report describes them — this package's own tests do not
 // depend on D-3/A's real registry to exist; they fix this vocabulary
 // themselves, matching it against the spec directly.
 func standardResolumeActionDescriptors() []ResolumeActionDescriptor {
-	idParam := ResolumeActionParam{Name: "id", Kind: ResolumeActionParamString, Required: true}
+	clipParam := ResolumeActionParam{Name: "clip", Kind: ResolumeActionParamString, Required: true}
+	deckOptional := ResolumeActionParam{Name: "deck", Kind: ResolumeActionParamString, Required: false}
+	deckRequired := ResolumeActionParam{Name: "deck", Kind: ResolumeActionParamString, Required: true}
+	layerOptional := ResolumeActionParam{Name: "layer", Kind: ResolumeActionParamString, Required: false}
+	layerRequired := ResolumeActionParam{Name: "layer", Kind: ResolumeActionParamString, Required: true}
+	persistentParam := ResolumeActionParam{Name: "persistent", Kind: ResolumeActionParamBool, Required: false}
+	columnParam := ResolumeActionParam{Name: "column", Kind: ResolumeActionParamString, Required: true}
 	return []ResolumeActionDescriptor{
-		{Name: "launchClip", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "clearLayer", Params: []ResolumeActionParam{idParam}, AuditExempt: true, CoordinatorRequired: true},
+		{Name: "launchClip", Params: []ResolumeActionParam{clipParam, deckOptional, layerOptional, persistentParam}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "clearLayer", Params: []ResolumeActionParam{layerRequired}, AuditExempt: true, CoordinatorRequired: true},
 		{Name: "blackout", Params: nil, AuditExempt: true, CoordinatorRequired: true},
-		{Name: "launchColumn", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "selectDeck", Params: []ResolumeActionParam{idParam}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "setLayerBypass", Params: []ResolumeActionParam{idParam, {Name: "bypassed", Kind: ResolumeActionParamBool, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
-		{Name: "setLayerMaster", Params: []ResolumeActionParam{idParam, {Name: "master", Kind: ResolumeActionParamNumber, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "launchColumn", Params: []ResolumeActionParam{columnParam, deckRequired}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "selectDeck", Params: []ResolumeActionParam{deckRequired}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "setLayerBypass", Params: []ResolumeActionParam{layerRequired, {Name: "bypassed", Kind: ResolumeActionParamBool, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
+		{Name: "setLayerMaster", Params: []ResolumeActionParam{layerRequired, {Name: "master", Kind: ResolumeActionParamNumber, Required: true}}, AuditExempt: false, CoordinatorRequired: true},
 	}
 }
 
@@ -296,7 +303,7 @@ func TestResolumeActionOutcomeVocabularyAlwaysRendersAsTwoHundred(t *testing.T) 
 			operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 			token := mustIssueToken(t, setup.svc, operator.ID)
 
-			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-"+string(tc.outcome), `{"id":"col-1"}`), token)
+			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-"+string(tc.outcome), `{"column":"col-1","deck":"deck-1"}`), token)
 			resp, body := doRawRequest(t, api.Handler, req)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200 for outcome %q (never an HTTP error); body: %s", resp.StatusCode, tc.outcome, body)
@@ -369,12 +376,12 @@ func TestResolumeActionParamsAbsentNullEmptyRule(t *testing.T) {
 		body string
 	}{
 		{"required param absent", resolumeActionBody("launchClip", "key-1", `{}`)},
-		{"required param null", resolumeActionBody("launchClip", "key-1", `{"id":null}`)},
-		{"required string param empty", resolumeActionBody("launchClip", "key-1", `{"id":""}`)},
+		{"required param null", resolumeActionBody("launchClip", "key-1", `{"clip":null}`)},
+		{"required string param empty", resolumeActionBody("launchClip", "key-1", `{"clip":""}`)},
 		{"params object itself null", `{"action":"launchClip","idempotencyKey":"key-1","params":null}`},
-		{"unknown key", resolumeActionBody("launchClip", "key-1", `{"id":"clip-1","bogus":true}`)},
-		{"zero-param action given params", resolumeActionBody("blackout", "key-1", `{"id":"whatever"}`)},
-		{"wrong type for bool param", resolumeActionBody("setLayerBypass", "key-1", `{"id":"layer-1","bypassed":"yes"}`)},
+		{"unknown key", resolumeActionBody("launchClip", "key-1", `{"clip":"clip-1","bogus":true}`)},
+		{"zero-param action given params", resolumeActionBody("blackout", "key-1", `{"clip":"whatever"}`)},
+		{"wrong type for bool param", resolumeActionBody("setLayerBypass", "key-1", `{"layer":"layer-1","bypassed":"yes"}`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,7 +412,7 @@ func TestResolumeActionReplaySameKeyDispatchesOnlyOnce(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	body := resolumeActionBody("launchColumn", "key-replay", `{"id":"col-1"}`)
+	body := resolumeActionBody("launchColumn", "key-replay", `{"column":"col-1","deck":"deck-1"}`)
 	req1 := newResolumeActionRequest(t, body, token)
 	resp1, body1 := doRawRequest(t, api.Handler, req1)
 	if resp1.StatusCode != http.StatusOK {
@@ -434,12 +441,12 @@ func TestResolumeActionReplayDifferentActionIsConflict(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-conflict", `{"id":"col-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-conflict", `{"column":"col-1","deck":"deck-1"}`), token)
 	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-conflict", `{"id":"deck-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-conflict", `{"deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
@@ -456,12 +463,12 @@ func TestResolumeActionReplayDifferentParamsIsConflict(t *testing.T) {
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"id":"clip-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"id":"clip-2"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-params", `{"clip":"clip-2","deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)
@@ -506,7 +513,7 @@ func TestResolumeActionNonExemptFailsClosedWhenAuditFails(t *testing.T) {
 
 	installFailAuditTrigger(t, setup.storeDir)
 
-	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-non-exempt", `{"id":"clip-1"}`), token)
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-non-exempt", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (launchClip is NOT exempt; ADR-024 decision 11's default fail-closed rule); body: %s", resp.StatusCode, body)
@@ -683,7 +690,7 @@ func TestResolumeActionOutcomeStateCarriesObservationVocabularyNotOutcomeWord(t 
 	// confirmed: the one outcome this package can honestly state a real
 	// pkg/observation state for (StateCurrent — the confirming evidence was
 	// read strictly after dispatch, TRACK-D-D3-SPEC.md section 4.1).
-	req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-state-confirmed", `{"id":"col-1"}`), token)
+	req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "key-state-confirmed", `{"column":"col-1","deck":"deck-1"}`), token)
 	doRawRequest(t, api.Handler, req)
 
 	rec, err := setup.st.GetCommand(context.Background(), mustLookUpResolumeCommandID(t, setup.st, "key-state-confirmed"))
@@ -716,7 +723,7 @@ func TestResolumeActionOutcomeStateCarriesObservationVocabularyNotOutcomeWord(t 
 	// to back ANY word for this outcome — OutcomeState must be genuinely
 	// absent, never the outcome word "refused" (not a pkg/observation
 	// state at all).
-	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-state-refused", `{"id":"deck-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "key-state-refused", `{"deck":"deck-1"}`), token)
 	doRawRequest(t, api.Handler, req2)
 
 	rec2, err := setup.st.GetCommand(context.Background(), mustLookUpResolumeCommandID(t, setup.st, "key-state-refused"))

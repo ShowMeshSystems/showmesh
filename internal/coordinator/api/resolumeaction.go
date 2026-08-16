@@ -347,11 +347,15 @@ func quotedResolumeActionNames(descriptors []ResolumeActionDescriptor) string {
 }
 
 // decodeResolumeActionParams implements the identical absent/null/empty
-// rule decodeFPPCommandParams (fppcommand_primitives.go) enforces for FPP,
-// narrowed to this vocabulary's own property: every declared parameter is
-// REQUIRED (see [ResolumeActionParam]'s own doc comment), so there is no
-// Default branch to apply — an absent or null required parameter is
-// always a 400.
+// rule decodeFPPCommandParams (fppcommand_primitives.go) enforces for FPP:
+// an absent OPTIONAL parameter (def.Required == false) is left out of the
+// returned map entirely — never defaulted to a value here, since what an
+// absence means is a resolution rule its caller applies (see
+// [ResolumeActionParam]'s own doc comment) — while an absent REQUIRED
+// parameter is always a 400. An explicit null is refused for every
+// declared parameter regardless of Required: absent and null are two
+// different things on this wire, and "optional" only ever means "may be
+// absent," never "null is acceptable."
 func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]json.RawMessage) (map[string]any, *v1.Problem) {
 	rawParams, hasParams := top["params"]
 	if hasParams && isJSONNull(rawParams) {
@@ -392,7 +396,9 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	// comment (Step 8 review finding 14) for why this must run before the
 	// per-parameter loop: a misspelled required parameter must be reported
 	// as an unrecognized key, not as the correctly-spelled one being
-	// absent.
+	// absent. The refusal also names the expected keys (ADR-037: with "id"
+	// retired, a caller who still sends it must be told what replaced it,
+	// not just that it was rejected).
 	var unknown []string
 	for k := range fields {
 		if !known[k] {
@@ -401,9 +407,14 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
+		expected := make([]string, 0, len(desc.Params))
+		for _, def := range desc.Params {
+			expected = append(expected, def.Name)
+		}
+		sort.Strings(expected)
 		p := invalidParameterProblem(fmt.Sprintf(
 			"params contains unrecognized key(s) for action %q: %s (a typo'd parameter name is refused rather than "+
-				"silently ignored)", desc.Name, strings.Join(unknown, ", ")))
+				"silently ignored; this action expects: %s)", desc.Name, strings.Join(unknown, ", "), strings.Join(expected, ", ")))
 		return nil, &p
 	}
 
@@ -412,11 +423,16 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 		raw, present := fields[def.Name]
 		switch {
 		case !present:
+			if !def.Required {
+				// Absent and optional: left out of the map entirely, never
+				// defaulted here — see this function's own doc comment.
+				continue
+			}
 			p := invalidParameterProblem(fmt.Sprintf("params.%s is required and was not provided", def.Name))
 			return nil, &p
 		case isJSONNull(raw):
 			p := invalidParameterProblem(fmt.Sprintf(
-				"params.%s is required and must not be null (an explicit null is not the same as an omitted field)", def.Name))
+				"params.%s must not be null (an explicit null is not the same as an omitted field)", def.Name))
 			return nil, &p
 		default:
 			val, err := decodeResolumeActionParamValue(def, raw)

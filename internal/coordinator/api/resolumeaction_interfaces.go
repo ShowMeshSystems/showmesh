@@ -51,11 +51,15 @@ const (
 )
 
 // ResolumeActionParam describes one named parameter one action's "params"
-// object may carry. Every parameter in this seven-action vocabulary is
-// required — spec section 2 has no action with an optional parameter and a
-// default to fall back to — so, unlike fppcommand_primitives.go's
-// fppParamDef, this type carries no Default field: an absent required
-// parameter is always a 400, never silently defaulted.
+// object may carry. ADR-037 seam B added this vocabulary's first optional
+// parameters ("layer", "persistent", and launchClip's conditionally
+// required "deck"): unlike fppcommand_primitives.go's fppParamDef, this
+// type still carries no Default field, because an absent optional
+// parameter here is never silently filled with a value — it is simply
+// absent from the normalized map [decodeResolumeActionParams] returns, and
+// what an absent reference field means (e.g. "persistent" absent implies
+// false) is a resolution rule the caller applies, not a decode-time
+// default.
 type ResolumeActionParam struct {
 	Name     string
 	Kind     ResolumeActionParamKind
