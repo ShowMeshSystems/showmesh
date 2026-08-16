@@ -98,6 +98,23 @@ const (
 	// why that is deliberate, not a gap.
 	envTestMQTTBurstPublisherUsername = "SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME"
 	envTestMQTTBurstPublisherPassword = "SHOWMESH_TEST_MQTT_BURST_PUBLISHER_PASSWORD"
+
+	// envAssetSyncInterval and envAssetInventoryInterval are, unlike
+	// envHeartbeatOverride/envStalenessOverride above, the SAME names the
+	// coordinator (SHOWMESH_ASSET_SYNC_INTERVAL) and the agent
+	// (SHOWMESH_ASSET_INVENTORY_INTERVAL) read as their own real
+	// production config — Track E needed no separate test-only override
+	// mechanism because these two already are ordinary env-configured
+	// durations. scripts/test-integration.sh exports small values for
+	// both (see that script's own comment for the ratio reasoning);
+	// startAgent/startCoordinatorWithConfig forward whatever is in THIS
+	// process's own environment into every subprocess by default, mirroring
+	// envHeartbeatOverride's identical forwarding one field over, so the
+	// coordinator's and every agent's idea of the inventory cadence agree
+	// unless a test explicitly asks for something else via
+	// coordinatorConfig.assetInventoryInterval.
+	envAssetSyncInterval      = "SHOWMESH_ASSET_SYNC_INTERVAL"
+	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -432,6 +449,14 @@ type agentConfig struct {
 	// provisioned credential transparently — see startAgent.
 	mqttUsername string
 	mqttPassword string
+
+	// assetDir is Track E seam E3/E6's own SHOWMESH_ASSET_DIR: the
+	// node-local directory this agent downloads assets into and enumerates
+	// on every inventory publish. Left empty, the agent falls back to its
+	// own "./assets" relative default — every asset-focused test in this
+	// package sets this explicitly to a t.TempDir() subdirectory so it
+	// knows exactly where to look for (or corrupt) a node's held bytes.
+	assetDir string
 }
 
 // testAgent wraps one real showmesh-agent subprocess: a genuine OS process
@@ -480,11 +505,17 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	if raw := os.Getenv(envHeartbeatOverride); raw != "" {
 		env = append(env, envHeartbeatOverride+"="+raw)
 	}
+	if raw := os.Getenv(envAssetInventoryInterval); raw != "" {
+		env = append(env, envAssetInventoryInterval+"="+raw)
+	}
 	if cfg.capabilities != "" {
 		env = append(env, "SHOWMESH_NODE_CAPABILITIES="+cfg.capabilities)
 	}
 	if cfg.label != "" {
 		env = append(env, "SHOWMESH_NODE_LABEL="+cfg.label)
+	}
+	if cfg.assetDir != "" {
+		env = append(env, "SHOWMESH_ASSET_DIR="+cfg.assetDir)
 	}
 
 	cmd := exec.Command(agentBinPath)
@@ -723,6 +754,40 @@ type coordinatorConfig struct {
 	// gets the suite's normal working credential.
 	mqttUsername string
 	mqttPassword string
+
+	// --- Track E seam E3/E4/E5/E6: the asset store (ADR-028) ---
+
+	// assetDir forwards SHOWMESH_ASSET_DIR when non-empty — the volume
+	// backend's root. Left empty, the coordinator falls back to its own
+	// "<DataDir>/assets" default; asset tests that need to reach into the
+	// content-addressed layout directly (to corrupt a blob, or to confirm
+	// nothing was staged) set this explicitly so the path is known rather
+	// than reconstructed.
+	assetDir string
+
+	// assetContentBaseURL forwards SHOWMESH_ASSET_CONTENT_BASE_URL when
+	// non-empty. Left empty (the default), the sync service does not run
+	// at all — see that env var's own doc comment in
+	// internal/coordinator/config. A test that wants a node to actually
+	// fetch bytes over the network sets this to this coordinator's OWN
+	// http://host:port (derived from the SAME httpAddr this config
+	// allocates — see startAssetCoordinator in assets_test.go) or to a
+	// stoppable proxy in front of it.
+	assetContentBaseURL string
+
+	// assetSyncInterval and assetInventoryInterval forward
+	// SHOWMESH_ASSET_SYNC_INTERVAL/SHOWMESH_ASSET_INVENTORY_INTERVAL when
+	// non-zero; left zero, startCoordinatorWithConfig forwards whatever
+	// scripts/test-integration.sh already exported into THIS process's own
+	// environment (see envAssetSyncInterval/envAssetInventoryInterval's own
+	// doc comment) rather than the real multi-minute production defaults.
+	assetSyncInterval      time.Duration
+	assetInventoryInterval time.Duration
+
+	// assetMaxUploadBytes forwards SHOWMESH_ASSET_MAX_UPLOAD_BYTES when
+	// non-zero; left zero, the coordinator uses its own
+	// assetstore.DefaultMaxUploadBytes (2 GiB) default.
+	assetMaxUploadBytes int64
 }
 
 // testCoordinator wraps one real showmesh-coordinator subprocess — a
@@ -842,6 +907,25 @@ func startCoordinatorWithConfig(t *testing.T, cfg coordinatorConfig) *testCoordi
 	}
 	if cfg.streamSubscriberBuffer > 0 {
 		env = append(env, fmt.Sprintf("SHOWMESH_TEST_STREAM_SUBSCRIBER_BUFFER=%d", cfg.streamSubscriberBuffer))
+	}
+	if cfg.assetDir != "" {
+		env = append(env, "SHOWMESH_ASSET_DIR="+cfg.assetDir)
+	}
+	if cfg.assetContentBaseURL != "" {
+		env = append(env, "SHOWMESH_ASSET_CONTENT_BASE_URL="+cfg.assetContentBaseURL)
+	}
+	if cfg.assetSyncInterval > 0 {
+		env = append(env, "SHOWMESH_ASSET_SYNC_INTERVAL="+cfg.assetSyncInterval.String())
+	} else if raw := os.Getenv(envAssetSyncInterval); raw != "" {
+		env = append(env, envAssetSyncInterval+"="+raw)
+	}
+	if cfg.assetInventoryInterval > 0 {
+		env = append(env, "SHOWMESH_ASSET_INVENTORY_INTERVAL="+cfg.assetInventoryInterval.String())
+	} else if raw := os.Getenv(envAssetInventoryInterval); raw != "" {
+		env = append(env, envAssetInventoryInterval+"="+raw)
+	}
+	if cfg.assetMaxUploadBytes > 0 {
+		env = append(env, fmt.Sprintf("SHOWMESH_ASSET_MAX_UPLOAD_BYTES=%d", cfg.assetMaxUploadBytes))
 	}
 
 	cmd := exec.Command(coordinatorBinPath)
