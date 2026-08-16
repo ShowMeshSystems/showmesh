@@ -22,6 +22,12 @@ import (
 // http.DefaultClient, which other packages or tests might also depend on.
 var assetHTTPClient = &http.Client{}
 
+// readBackAssetFunc is readBackAsset's package variable form, matching
+// assetHTTPClient's pattern: a test can substitute it to prove the call
+// site actually invokes a post-write read-back rather than trusting the
+// in-memory download hash.
+var readBackAssetFunc = readBackAsset
+
 // assetFetchOperation is the OperationFunc for "asset.fetch": download a
 // file from a coordinator-issued URL into this node's asset directory,
 // verify its content hash, and only then make it available under its
@@ -188,7 +194,7 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 	// re-hash it from disk, rather than trusting the in-memory hash computed
 	// during download — see OperationResult's doc comment on why Confirmed
 	// must rest on evidence collected after the write.
-	confirmed, readBackSize := readBackAsset(finalPath, contentHash)
+	confirmed, readBackSize := readBackAssetFunc(finalPath, contentHash)
 
 	return OperationResult{
 		Confirmed:  confirmed,
@@ -319,11 +325,14 @@ type heldAsset struct {
 }
 
 // hashCacheEntry is what enumerateAssets caches per file so an unchanged
-// file is not re-hashed on every inventory tick.
+// file is not re-hashed on every inventory tick. verifiedAt is the time the
+// hash was actually computed, carried forward on a cache hit so VerifiedAt
+// never advances without a real verification behind it.
 type hashCacheEntry struct {
-	size    int64
-	modTime time.Time
-	hash    string
+	size       int64
+	modTime    time.Time
+	hash       string
+	verifiedAt time.Time
 }
 
 // enumerateAssets walks dir (non-recursively: assets live flat under dir,
@@ -355,11 +364,13 @@ func enumerateAssets(dir string, cache map[string]hashCacheEntry, now func() tim
 
 		path := filepath.Join(dir, entry.Name())
 		if cached, ok := cache[path]; ok && cached.size == info.Size() && cached.modTime.Equal(info.ModTime()) {
+			// Cache hit: no hash was computed this tick, so VerifiedAt must
+			// carry forward the time of the last real verification, not now.
 			assets = append(assets, heldAsset{
 				ContentHash: cached.hash,
 				Filename:    entry.Name(),
 				SizeBytes:   info.Size(),
-				VerifiedAt:  now(),
+				VerifiedAt:  cached.verifiedAt,
 			})
 			continue
 		}
@@ -370,12 +381,13 @@ func enumerateAssets(dir string, cache map[string]hashCacheEntry, now func() tim
 			// rather than silently omitting this file from the report.
 			return nil, false, fmt.Sprintf("could not hash %q: %v", entry.Name(), err)
 		}
-		cache[path] = hashCacheEntry{size: info.Size(), modTime: info.ModTime(), hash: hash}
+		verifiedAt := now()
+		cache[path] = hashCacheEntry{size: info.Size(), modTime: info.ModTime(), hash: hash, verifiedAt: verifiedAt}
 		assets = append(assets, heldAsset{
 			ContentHash: hash,
 			Filename:    entry.Name(),
 			SizeBytes:   info.Size(),
-			VerifiedAt:  now(),
+			VerifiedAt:  verifiedAt,
 		})
 	}
 

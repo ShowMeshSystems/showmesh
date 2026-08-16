@@ -114,6 +114,113 @@ func TestAssetFetchOperationHappyPath(t *testing.T) {
 	if len(stagingEntries) != 0 {
 		t.Fatalf("staging dir has %d leftover entries, want 0 after a successful fetch", len(stagingEntries))
 	}
+
+	// sizeBytes must be what the read-back actually found on disk, not a
+	// value carried over from the in-memory download — kills a mutant that
+	// reports success without ever looking at the written file.
+	info, err := os.Stat(finalPath)
+	if err != nil {
+		t.Fatalf("Stat(finalPath): %v", err)
+	}
+	gotSize, ok := result.Value.(map[string]any)["sizeBytes"]
+	if !ok {
+		t.Fatalf("result.Value has no sizeBytes key: %+v", result.Value)
+	}
+	if gotSize != info.Size() {
+		t.Fatalf("result.Value[sizeBytes] = %v, want the on-disk size %d", gotSize, info.Size())
+	}
+}
+
+// TestAssetFetchOperationCallsReadBackAssetFunc proves op.run's confirmation
+// actually goes through readBackAssetFunc rather than the call site being
+// unpinned: it substitutes a spy that records whether it was invoked and on
+// what path, and would stay green even if readBackAssetFunc's *definition*
+// were fixed but the call site quietly stopped calling it.
+func TestAssetFetchOperationCallsReadBackAssetFunc(t *testing.T) {
+	content := []byte("bytes used to prove the read-back call site is pinned")
+	hash := sha256Hash(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	op := assetFetchOperation{dir: dir}
+	clock := &fakeClock{t: time.Now()}
+
+	var calledWithPath string
+	var called bool
+	original := readBackAssetFunc
+	readBackAssetFunc = func(path, wantHash string) (bool, int64) {
+		called = true
+		calledWithPath = path
+		return original(path, wantHash)
+	}
+	t.Cleanup(func() { readBackAssetFunc = original })
+
+	params := fetchParams(srv, "/asset", "asset-1", hash, "Thriller.fseq", len(content))
+	result, err := op.run(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil", err)
+	}
+	if !called {
+		t.Fatal("readBackAssetFunc was never invoked: confirmation is not pinned to a genuine read-back")
+	}
+	wantPath := filepath.Join(dir, "Thriller.fseq")
+	if calledWithPath != wantPath {
+		t.Fatalf("readBackAssetFunc called with path %q, want %q", calledWithPath, wantPath)
+	}
+	if !result.Confirmed {
+		t.Fatalf("Confirmed = false, want true")
+	}
+}
+
+// TestReadBackAssetDirectly is a unit test of readBackAsset itself,
+// independent of op.run: a matching file confirms with the file's real size,
+// a tampered file reports unconfirmed, and a missing file reports
+// unconfirmed with size 0.
+func TestReadBackAssetDirectly(t *testing.T) {
+	content := []byte("bytes read back directly, not through op.run")
+	hash := sha256Hash(content)
+
+	t.Run("match", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "asset.bin")
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		confirmed, size := readBackAsset(path, hash)
+		if !confirmed {
+			t.Fatal("confirmed = false, want true for matching content")
+		}
+		if size != int64(len(content)) {
+			t.Fatalf("size = %d, want %d", size, len(content))
+		}
+	})
+
+	t.Run("tampered", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "asset.bin")
+		if err := os.WriteFile(path, []byte("different bytes entirely"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		confirmed, _ := readBackAsset(path, hash)
+		if confirmed {
+			t.Fatal("confirmed = true, want false for tampered content")
+		}
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		dir := t.TempDir()
+		confirmed, size := readBackAsset(filepath.Join(dir, "does-not-exist.bin"), hash)
+		if confirmed {
+			t.Fatal("confirmed = true, want false for a missing file")
+		}
+		if size != 0 {
+			t.Fatalf("size = %d, want 0 for a missing file", size)
+		}
+	})
 }
 
 // TestAssetFetchOperationHashMismatchDiscardsAndFails proves a content hash
@@ -538,6 +645,36 @@ func TestEnumerateAssetsRehashesOnChange(t *testing.T) {
 	}
 	if second[0].ContentHash != sha256Hash([]byte("version two, deliberately a different length")) {
 		t.Fatalf("ContentHash = %q, want the freshly computed hash", second[0].ContentHash)
+	}
+}
+
+// TestEnumerateAssetsCacheHitDoesNotAdvanceVerifiedAt proves a cache hit
+// (unchanged size and modTime) reports the VerifiedAt of the real hash
+// computation, not the time of the current call: VerifiedAt means "when this
+// node last computed and confirmed ContentHash" (mqttproto.AssetInventoryEntry),
+// and a cache hit computes nothing.
+func TestEnumerateAssetsCacheHitDoesNotAdvanceVerifiedAt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "show.fseq"), []byte("unchanged content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cache := map[string]hashCacheEntry{}
+	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
+
+	first, complete, _ := enumerateAssets(dir, cache, clock.now)
+	if !complete || len(first) != 1 {
+		t.Fatalf("first enumerateAssets() = %+v, complete=%v, want 1 entry, complete=true", first, complete)
+	}
+	firstVerifiedAt := first[0].VerifiedAt
+
+	clock.advance(time.Hour)
+	second, complete, _ := enumerateAssets(dir, cache, clock.now)
+	if !complete || len(second) != 1 {
+		t.Fatalf("second enumerateAssets() = %+v, complete=%v, want 1 entry, complete=true", second, complete)
+	}
+	if !second[0].VerifiedAt.Equal(firstVerifiedAt) {
+		t.Fatalf("VerifiedAt = %v after a cache hit, want unchanged %v: a cache hit computed no verification", second[0].VerifiedAt, firstVerifiedAt)
 	}
 }
 

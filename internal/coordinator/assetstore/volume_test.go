@@ -182,31 +182,42 @@ func TestVolumeBackendPutAtExactlyTheLimitSucceeds(t *testing.T) {
 	}
 }
 
-// enospcWriter fails every Write with syscall.ENOSPC, standing in for a
-// full disk without touching a real filesystem.
-type enospcWriter struct{}
+// diskFullWriter fails every Write with a given errno, standing in for a
+// full or over-quota disk without touching a real filesystem.
+type diskFullWriter struct{ errno error }
 
-func (enospcWriter) Write(p []byte) (int, error) { return 0, syscall.ENOSPC }
-func (enospcWriter) Close() error                { return nil }
+func (w diskFullWriter) Write(p []byte) (int, error) { return 0, w.errno }
+func (diskFullWriter) Close() error                  { return nil }
 
 // TestVolumeBackendClassifiesDiskFull is the ENOSPC/EDQUOT classification
-// acceptance criterion. Breaking the errors.Is(copyErr, syscall.ENOSPC)
-// check in Put (e.g. returning the raw wrapped error instead of
-// ErrNoSpace) turns this test red.
+// acceptance criterion, tabled over both errnos: breaking either half of
+// Put's errors.Is(copyErr, syscall.ENOSPC) || errors.Is(copyErr,
+// syscall.EDQUOT) check turns the corresponding case red.
 func TestVolumeBackendClassifiesDiskFull(t *testing.T) {
-	b := newTestBackend(t)
-	ctx := context.Background()
-
-	orig := openStagingFile
-	openStagingFile = func(string) (io.WriteCloser, error) { return enospcWriter{}, nil }
-	t.Cleanup(func() { openStagingFile = orig })
-
-	_, err := b.Put(ctx, strings.NewReader("more bytes than an ENOSPC writer can hold"), 1<<20)
-	if !errors.Is(err, ErrNoSpace) {
-		t.Fatalf("Put against a full backend returned %v, want ErrNoSpace", err)
+	tests := []struct {
+		name  string
+		errno error
+	}{
+		{name: "ENOSPC", errno: syscall.ENOSPC},
+		{name: "EDQUOT", errno: syscall.EDQUOT},
 	}
-	if got := countFinalBlobs(t, b.root); got != 0 {
-		t.Fatalf("a full-disk Put left %d committed blobs, want 0", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestBackend(t)
+			ctx := context.Background()
+
+			orig := openStagingFile
+			openStagingFile = func(string) (io.WriteCloser, error) { return diskFullWriter{errno: tt.errno}, nil }
+			t.Cleanup(func() { openStagingFile = orig })
+
+			_, err := b.Put(ctx, strings.NewReader("more bytes than a full writer can hold"), 1<<20)
+			if !errors.Is(err, ErrNoSpace) {
+				t.Fatalf("Put against a full backend (%s) returned %v, want ErrNoSpace", tt.name, err)
+			}
+			if got := countFinalBlobs(t, b.root); got != 0 {
+				t.Fatalf("a full-disk Put (%s) left %d committed blobs, want 0", tt.name, got)
+			}
+		})
 	}
 }
 
@@ -310,6 +321,34 @@ func TestVolumeBackendRejectsPathTraversalKeys(t *testing.T) {
 	}
 	if _, err := b.Stat(ctx, malicious); err == nil {
 		t.Fatal("Stat accepted a path-traversal key and would have described a file outside root")
+	}
+}
+
+// TestVolumeBackendPathForKeyRejectsKeysFailingOneGuardOnly pins
+// pathForKey's two checks (length and lowercase-hex) independently. The
+// existing path-traversal fixture trips both at once, so removing either
+// check alone would leave that test passing. Calling pathForKey directly
+// (rather than through Open/Stat) is deliberate: going through Open would
+// let a missing-file error mask a validation that was silently bypassed,
+// which is exactly the coincidental-pass this test exists to rule out.
+func TestVolumeBackendPathForKeyRejectsKeysFailingOneGuardOnly(t *testing.T) {
+	b := newTestBackend(t)
+
+	tests := []struct {
+		name string
+		key  string
+	}{
+		// Correct length, fails isLowerHex only.
+		{name: "uppercase hex", key: sha256Prefix + strings.Repeat("A", sha256HexLen)},
+		// Passes isLowerHex, fails the length check only.
+		{name: "short lowercase hex", key: sha256Prefix + strings.Repeat("a", sha256HexLen-1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := b.pathForKey(tt.key); err == nil {
+				t.Fatalf("pathForKey(%q) succeeded, want rejection", tt.key)
+			}
+		})
 	}
 }
 
