@@ -68,6 +68,22 @@ type ResolumeRecoveryRestoreResponse struct {
 	Restore    ResolumeRecoveryRestoreReport `json:"restore"`
 }
 
+// ResolumeRecoveryChangedEvent is the payload of a
+// "resolumeRecovery.changed" SSE event (build contract §1.7): the
+// resource's own rendered wire representation, minus ServerTime (stamped
+// separately, alongside Seq, at broadcast time — every other change-stream
+// resource in this package follows the identical split). No delta event
+// kind exists for this resource, matching resolume.changed's own posture.
+type ResolumeRecoveryChangedEvent struct {
+	Seq                   uint64                         `json:"seq"`
+	ServerTime            string                         `json:"serverTime"`
+	AutoRestoreEnabled    bool                           `json:"autoRestoreEnabled"`
+	AutoRestoreConfigured bool                           `json:"autoRestoreConfigured"`
+	SettleDelaySeconds    float64                        `json:"settleDelaySeconds"`
+	Record                []ResolumeRecoveryRecordEntry  `json:"record"`
+	LastRestore           *ResolumeRecoveryRestoreReport `json:"lastRestore"`
+}
+
 // ConfigResolumeRecoveryPayload is the "resolume.recovery" configuration
 // kind's decoded payload (build contract §1.1): the body PUT
 // /config/resolume.recovery accepts, and the "payload" member of GET

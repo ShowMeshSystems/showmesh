@@ -127,6 +127,30 @@ func mapResolumeRecoveryRestoreReport(rep ResolumeRecoveryRestoreReportView) v1.
 	}
 }
 
+// resolumeRecoveryChangedEventProjection builds a "resolumeRecovery.changed"
+// event's own substantive fields, WITHOUT Seq/ServerTime — stream.go's
+// pendingFrame.materialize stamps those, exactly as
+// macroRunChangedEventProjection's identical split already does for
+// macroRun.changed. Used as [Hub.updateRendered]'s change-detection key
+// too: byte-identical JSON on two consecutive render passes means nothing
+// about the toggle, the record, or the last restore has changed, so no
+// frame is sent — the quiet-system property build contract §1.7 requires.
+func resolumeRecoveryChangedEventProjection(enabled, configured bool, settleSeconds float64, record []ResolumeRecoveryRecordEntryView, lastReport *ResolumeRecoveryRestoreReportView) v1.ResolumeRecoveryChangedEvent {
+	entries := make([]v1.ResolumeRecoveryRecordEntry, 0, len(record))
+	for _, e := range record {
+		entries = append(entries, mapResolumeRecoveryRecordEntry(e))
+	}
+	var lastRestore *v1.ResolumeRecoveryRestoreReport
+	if lastReport != nil {
+		mapped := mapResolumeRecoveryRestoreReport(*lastReport)
+		lastRestore = &mapped
+	}
+	return v1.ResolumeRecoveryChangedEvent{
+		AutoRestoreEnabled: enabled, AutoRestoreConfigured: configured, SettleDelaySeconds: settleSeconds,
+		Record: entries, LastRestore: lastRestore,
+	}
+}
+
 // --- GET/PUT /api/v1/config/resolume.recovery: the toggle ----------------
 //
 // Mirrors config.go's handleGetFPPEndpointsConfig/handlePutFPPEndpointsConfig
