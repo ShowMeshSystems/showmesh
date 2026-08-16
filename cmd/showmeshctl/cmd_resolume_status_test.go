@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// This file is Track D seam E's own showmeshctl test suite: "resolume
-// status", over GET /resolume/instances and GET /resolume/instances/{id}.
+// This file is the showmeshctl test suite for "resolume status", over GET
+// /resolume/instances and GET /resolume/instances/{id}.
 
 // TestCmdResolumeStatusListPrintsInstance is acceptance criterion 11's
 // positive case: an instance is configured, and its health, composition,
@@ -112,12 +112,20 @@ func TestCmdResolumeStatusOneNotFound(t *testing.T) {
 }
 
 // TestCmdResolumeStatusJSONOutput proves --output json round-trips the raw
-// decoded response rather than the text table.
+// decoded response rather than the text table. Owner review finding 6
+// (2026-08-16): the original version of this test asserted `"instances"`
+// against an EMPTY fixture, a key encoding/json always emits for a
+// resolumeInstancesResponse regardless of whether printJSON actually did
+// anything — the assertion could not fail. This drives a non-empty
+// fixture and asserts a value that only a real decode-then-re-encode
+// could have produced.
 func TestCmdResolumeStatusJSONOutput(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
-		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","instances":[]}`)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","instances":[
+			{"instanceId":"resolume","health":"healthy","observations":[],"composition":{"name":"Holiday Test Show"}}
+		]}`)
 	}))
 	defer ts.Close()
 
@@ -126,8 +134,8 @@ func TestCmdResolumeStatusJSONOutput(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"instances"`) {
-		t.Errorf("json output = %q, want it to contain an \"instances\" key", stdout.String())
+	if !strings.Contains(stdout.String(), "Holiday Test Show") {
+		t.Errorf("json output = %q, want it to contain the fixture's composition name", stdout.String())
 	}
 }
 

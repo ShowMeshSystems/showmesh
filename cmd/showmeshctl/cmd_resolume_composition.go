@@ -266,8 +266,7 @@ Subcommands:
                 clear a layer, blackout, ...), or list the vocabulary
   status        show the configured Resolume instance: its health, its
                 loaded composition, and every resolume.* observation
-                (GET /resolume/instances) — Track D seam E's own
-                observability surface, no HTTP request to Resolume itself
+                (GET /resolume/instances), no HTTP request to Resolume itself
 
 Run "showmeshctl resolume composition --help", "showmeshctl resolume
 action --help", or "showmeshctl resolume status --help" for their own

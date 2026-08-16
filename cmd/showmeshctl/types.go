@@ -326,19 +326,19 @@ type snapshot struct {
 	Resolume       []resolumeInstance `json:"resolume"`
 }
 
-// resolumeInstanceComposition is ResolumeInstance.composition: the
-// composition ShowMesh holds as configuration (ADR-032), never a live read
-// of Arena. Null before any composition has ever been uploaded.
+// resolumeInstanceComposition is ResolumeInstance.composition: which show
+// is loaded, from the composition ShowMesh holds as configuration
+// (ADR-032), never a live read of Arena. Null before any composition has
+// ever been uploaded. Name only — owner ruling, 2026-08-16: this route is
+// an open read, and revision/activatedAt (administrative provenance) stay
+// on the gated `resolume composition show` (GET /config/resolume/composition).
 type resolumeInstanceComposition struct {
-	Name        string    `json:"name"`
-	Revision    int64     `json:"revision"`
-	ActivatedAt time.Time `json:"activatedAt"`
+	Name string `json:"name"`
 }
 
-// resolumeInstance is the ResolumeInstance shape (Track D seam E): an
-// element of GET /resolume/instances, the body of GET
-// /resolume/instances/{id}, and the payload of a resolume.changed stream
-// event.
+// resolumeInstance is the ResolumeInstance shape: an element of GET
+// /resolume/instances, the body of GET /resolume/instances/{id}, and the
+// payload of a resolume.changed stream event.
 type resolumeInstance struct {
 	InstanceID   string                       `json:"instanceId"`
 	Health       string                       `json:"health"`

@@ -9,11 +9,10 @@ import (
 	"time"
 )
 
-// This file is Track D seam E's own showmeshctl surface: `resolume status`,
-// over GET /resolume/instances and GET /resolume/instances/{instanceId}.
-// ADR-030: the CLI is the "the show is broken and the UI is down" path, and
-// this seam is the one that would otherwise skip it because the Operator UI
-// surface (D-4) comes later. This is a read: it mints no new exit code.
+// This file is the showmeshctl surface for `resolume status`, over GET
+// /resolume/instances and GET /resolume/instances/{instanceId}. ADR-030:
+// the CLI is the "the show is broken and the UI is down" path. This is a
+// read: it mints no new exit code.
 
 // cmdResolumeStatus implements "showmeshctl resolume status [instance-id]",
 // mirroring cmdFPP's list-or-one shape.
