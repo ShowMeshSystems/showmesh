@@ -10,10 +10,12 @@ import (
 // pattern interfaces.go already uses for [FPPInstanceView]/[FPPLister] and
 // [EventRecord]/[EventReader]: this interface names the narrow shape this
 // package needs from that dispatch engine without this file importing it,
-// and a wiring adapter elsewhere joins the two. Other files in this
-// package do import that producer directly, for label rendering and a
-// shared duration constant — this file's own consumer-side shape stays
-// independent of that regardless.
+// and a wiring adapter elsewhere joins the two. No file in this package
+// imports that producer directly (resolumeinstances_test.go's
+// TestPackageNeverImportsACollector enforces it structurally): label
+// rendering calls pkg/resolumecomp instead, and the dispatch-budget
+// constant is a duplicated literal reconciled against the producer from a
+// TEST file, not a shared constant.
 //
 // This package's own job ends at "decode the wire request, authorize it,
 // record it durably per ADR-024 decision 11, hand it to

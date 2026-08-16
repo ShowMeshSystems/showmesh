@@ -14,7 +14,6 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
@@ -592,10 +591,10 @@ func mapResolumeCompositionSummary(payload resolumeCompositionStoredPayload) v1.
 	}
 	decks := make([]v1.ResolumeCompositionDeckSummary, 0, len(c.Decks))
 	for i, d := range c.Decks {
-		// position is 1-based (ADR-037 decision 4, resolume.DeckLabel), the
-		// deck's own order in this response's own list — never recomputed
-		// from anything but that position.
-		name, generated := resolume.DeckLabel(i+1, d.Name)
+		// position is 1-based (ADR-037 decision 4, resolumecomp.DeckLabel),
+		// the deck's own order in this response's own list — never
+		// recomputed from anything but that position.
+		name, generated := resolumecomp.DeckLabel(i+1, d.Name)
 		decks = append(decks, v1.ResolumeCompositionDeckSummary{
 			ID:            d.ID,
 			Name:          name,
@@ -657,7 +656,7 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 
 	layers := make([]v1.ResolumeCompositionLayer, 0, len(c.Layers))
 	for _, l := range c.Layers {
-		name, generated := resolume.LayerLabel(l.Index, l.Name)
+		name, generated := resolumecomp.LayerLabel(l.Index, l.Name)
 		layers = append(layers, v1.ResolumeCompositionLayer{
 			ID:              l.ID,
 			Index:           l.Index,
@@ -671,10 +670,10 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 	for _, col := range c.Columns {
 		// Columns never carry an authored name at all (resolumecomp.Column
 		// has no Name field), so this is always generated — see
-		// [resolume.ColumnLabel]'s own doc comment.
+		// [resolumecomp.ColumnLabel]'s own doc comment.
 		columns = append(columns, v1.ResolumeCompositionColumn{
 			ID: col.ID, DeckID: col.DeckID, Index: col.Index,
-			Name: resolume.ColumnLabel(col.Index), NameGenerated: true,
+			Name: resolumecomp.ColumnLabel(col.Index), NameGenerated: true,
 		})
 	}
 
@@ -682,15 +681,15 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 
 	clips := make([]v1.ResolumeCompositionClip, 0, len(c.Clips))
 	for _, clip := range c.Clips {
-		name, generated := resolume.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
+		name, generated := resolumecomp.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
 		clips = append(clips, mapResolumeCompositionClip(clip, name, generated, ambiguous[clip.ID]))
 	}
 
 	persistentClips := make([]v1.ResolumeCompositionClip, 0, len(c.PersistentClips))
 	for i, clip := range c.PersistentClips {
-		// position is 1-based (resolume.PersistentClipLabel), this clip's
-		// own order in this response's own persistentClips list.
-		name, generated := resolume.PersistentClipLabel(i+1, clip.Name)
+		// position is 1-based (resolumecomp.PersistentClipLabel), this
+		// clip's own order in this response's own persistentClips list.
+		name, generated := resolumecomp.PersistentClipLabel(i+1, clip.Name)
 		persistentClips = append(persistentClips, mapResolumeCompositionClip(clip, name, generated, ambiguous[clip.ID]))
 	}
 
@@ -713,8 +712,8 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 // "deckId,omitempty" field: empty for a persistent clip (never sent at
 // all, per ADR-032 decision 6 — see [v1.ResolumeCompositionClip]'s own
 // doc comment), non-empty for a deck clip. name/generated are ADR-037
-// decision 4's already-computed label (resolume.ClipLabel or
-// resolume.PersistentClipLabel, chosen by the caller per clip kind — a
+// decision 4's already-computed label (resolumecomp.ClipLabel or
+// resolumecomp.PersistentClipLabel, chosen by the caller per clip kind — a
 // deck clip's generated form needs its layer/column index, a persistent
 // clip's needs its list position, and neither is available from clip
 // alone), never recomputed here a second way.
@@ -736,31 +735,31 @@ func mapResolumeCompositionClip(clip resolumecomp.Clip, name string, generated, 
 
 // resolumeClipAmbiguity computes, keyed by each clip's own id, the
 // (deck-or-persistent, layer, label) triple two clips must not share (see
-// [resolume.AmbiguousClipIDs]) — over BOTH c.Clips and c.PersistentClips
+// [resolumecomp.AmbiguousClipIDs]) — over BOTH c.Clips and c.PersistentClips
 // together: deck.ID is always non-empty for a deck clip and always "" for
 // a persistent one, so the two collections never collide in the key space.
 func resolumeClipAmbiguity(c *resolumecomp.Composition) map[string]bool {
 	// A clip whose layerIndex does not resolve to any tracked layer gets a
 	// key unique to it — two such clips are never thereby known to share a
-	// layer, mirroring resolveDeckClip's own identical rule in the resolume
-	// package.
+	// layer, mirroring the resolve package's own identical rule for a live
+	// dispatch.
 	unknownLayerSeq := 0
 	layerKey := func(layerIndex int) string {
-		if label, known := resolume.LayerLabelByIndex(c.Layers, layerIndex); known {
+		if label, known := resolumecomp.LayerLabelByIndex(c.Layers, layerIndex); known {
 			return label
 		}
 		unknownLayerSeq++
 		return fmt.Sprintf("\x00unknown-%d", unknownLayerSeq)
 	}
 
-	entries := make(map[string]resolume.ClipTripleKey, len(c.Clips)+len(c.PersistentClips))
+	entries := make(map[string]resolumecomp.ClipTripleKey, len(c.Clips)+len(c.PersistentClips))
 	for _, clip := range c.Clips {
-		label, _ := resolume.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
-		entries[clip.ID] = resolume.ClipTripleKey{Deck: clip.DeckID, Layer: layerKey(clip.LayerIndex), Label: label}
+		label, _ := resolumecomp.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
+		entries[clip.ID] = resolumecomp.ClipTripleKey{Deck: clip.DeckID, Layer: layerKey(clip.LayerIndex), Label: label}
 	}
 	for i, clip := range c.PersistentClips {
-		label, _ := resolume.PersistentClipLabel(i+1, clip.Name)
-		entries[clip.ID] = resolume.ClipTripleKey{Layer: layerKey(clip.LayerIndex), Label: label}
+		label, _ := resolumecomp.PersistentClipLabel(i+1, clip.Name)
+		entries[clip.ID] = resolumecomp.ClipTripleKey{Layer: layerKey(clip.LayerIndex), Label: label}
 	}
-	return resolume.AmbiguousClipIDs(entries)
+	return resolumecomp.AmbiguousClipIDs(entries)
 }

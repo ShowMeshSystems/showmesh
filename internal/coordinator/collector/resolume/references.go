@@ -8,140 +8,21 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
-// This file holds the label vocabulary every operator-facing surface
-// renders an object as, and the pure resolve step that turns a named
-// reference into the ObjectID Resolume is still addressed by on the wire.
-// Every function here takes only a *TrackedComposition and issues no HTTP
-// request.
-
-// --- Labels ------------------------------------------------------------
+// This file holds the pure resolve step that turns a named reference into
+// the ObjectID Resolume is still addressed by on the wire. Every function
+// here takes only a *TrackedComposition and issues no HTTP request.
 //
-// One function per object kind; every caller uses these, never a second
-// labeller. Compared byte-for-byte, case-sensitive: the measured
-// composition contains a layer authored as "Peak + Under " (a trailing
-// space) and a clip name containing a full-width vertical bar, so trimming
-// would silently address the wrong object.
-
-// LayerLabel returns a layer's operator-facing label from its own 0-based
-// index and authored name: the name when non-empty, otherwise the
-// generated "Layer <n>" form from its 1-based position. generated reports
-// which case this is, so a caller never presents an invented label as one
-// the operator chose.
-func LayerLabel(index int, name string) (label string, generated bool) {
-	if name != "" {
-		return name, false
-	}
-	return fmt.Sprintf("Layer %d", index+1), true
-}
-
-// ColumnLabel returns a column's generated label from its own 0-based
-// index. Columns never carry an authored name at all (resolumecomp.Column
-// has no Name field — the .avc format does not give one), so this is
-// always generated.
-func ColumnLabel(index int) string {
-	return fmt.Sprintf("Column %d", index+1)
-}
-
-// DeckLabel returns a deck's operator-facing label from its 1-based
-// position among [TrackedComposition.Decks] and its authored name: the
-// name when non-empty, otherwise the generated "Deck <n>" form. position is
-// a caller-supplied ordinal, never recomputed from anything this function
-// reads itself, so every caller ranking decks agrees on the same numbering.
-func DeckLabel(position int, name string) (label string, generated bool) {
-	if name != "" {
-		return name, false
-	}
-	return fmt.Sprintf("Deck %d", position), true
-}
-
-// ClipLabel returns a deck clip's operator-facing label from its own
-// 0-based layerIndex/columnIndex and authored name: the name when
-// non-empty, otherwise the generated "Clip L<n>C<m>" form. These indices
-// are the file's own semantic values (matching [TrackedClip.LayerIndex]'s
-// own doc comment), never a slice position.
-func ClipLabel(layerIndex, columnIndex int, name string) (label string, generated bool) {
-	if name != "" {
-		return name, false
-	}
-	return fmt.Sprintf("Clip L%dC%d", layerIndex+1, columnIndex+1), true
-}
-
-// PersistentClipLabel returns a persistent clip's operator-facing label
-// from its 1-based position among [TrackedComposition.PersistentClips] and
-// its authored name: the name when non-empty, otherwise the generated
-// "Persistent clip <n>" form.
-func PersistentClipLabel(position int, name string) (label string, generated bool) {
-	if name != "" {
-		return name, false
-	}
-	return fmt.Sprintf("Persistent clip %d", position), true
-}
-
-// LayerLabelByIndex resolves layerIndex (a clip's own layerIndex attribute,
-// matching [resolumecomp.Layer.Index]) to that layer's own [LayerLabel]
-// among layers, for a caller working directly against a parsed
-// [resolumecomp.Composition] rather than a built [TrackedComposition] — the
-// composition read surface (internal/coordinator/api) is exactly that
-// caller. known is false when no layer has that index; like
-// [clipLayerLabel], the caller must never treat two such clips as sharing
-// a layer just because both are unresolved.
-//
-// A duplicate index keeps the LAST match, agreeing with
-// BuildTrackedComposition's own layerIndexToID (idmap.go), which is a
-// plain map write and so keeps the last one seen too.
-func LayerLabelByIndex(layers []resolumecomp.Layer, layerIndex int) (label string, known bool) {
-	for _, l := range layers {
-		if l.Index == layerIndex {
-			label, _ = LayerLabel(l.Index, l.Name)
-			known = true
-		}
-	}
-	return label, known
-}
-
-// --- Ambiguity -----------------------------------------------------------
-//
-// Measured against the operator's real composition: seven (deck, layer,
-// label) triples on one deck alone are shared by more than one clip,
-// covering 16 of 36 clips, and two of the four persistent clips share a
-// label too. A clip whose triple collides with another's cannot be told
-// apart by any reference, including one naming its own layer, since the
-// colliding clips already agree on it too.
-
-// ClipTripleKey is the (deck, layer, label) tuple two distinct clips must
-// not share. Deck is "" for a persistent clip (mirroring
-// [TrackedPersistentClip]'s own "no DeckID field at all" rule) — a
-// persistent clip's key is really (persistent, layer, label), and using ""
-// rather than a real deck id is what keeps it from ever colliding with a
-// deck clip's key, since a real deck id is never empty.
-type ClipTripleKey struct {
-	Deck  string
-	Layer string
-	Label string
-}
-
-// AmbiguousClipIDs reports, for every id in entries, whether its
-// [ClipTripleKey] is shared by another entry. Both [resolveDeckClip] and
-// the composition read surface build their own id/key pairs from their own
-// data model (an [ObjectID] resolved against a [TrackedComposition], or a
-// raw resolumecomp.Clip.ID string) and call this one function, rather than
-// each independently deciding what "shares a triple" means.
-func AmbiguousClipIDs[K comparable](entries map[K]ClipTripleKey) map[K]bool {
-	counts := make(map[ClipTripleKey]int, len(entries))
-	for _, k := range entries {
-		counts[k]++
-	}
-	out := make(map[K]bool, len(entries))
-	for id, k := range entries {
-		out[id] = counts[k] > 1
-	}
-	return out
-}
+// The label vocabulary itself ([resolumecomp.LayerLabel] and friends) lives
+// in pkg/resolumecomp: it is pure over that package's own parsed types, and
+// the composition read surface (internal/coordinator/api) needs the same
+// functions without importing this collector package. This file calls
+// those functions rather than keeping its own copies, so there is exactly
+// one implementation of each label.
 
 // labelEquals is every reference comparison in this file's one call site:
-// exact, byte-for-byte, case-sensitive. See this file's own top comment for
-// the trailing-space and full-width-character examples that rule out
-// trimming or normalizing either side.
+// exact, byte-for-byte, case-sensitive. pkg/resolumecomp's own labels.go
+// carries the trailing-space and full-width-character examples that rule
+// out trimming or normalizing either side.
 func labelEquals(reference, label string) bool {
 	return reference == label
 }
@@ -149,10 +30,10 @@ func labelEquals(reference, label string) bool {
 // --- Deck and layer: flat candidate sets -----------------------------------
 
 // ResolveDeck resolves reference against every deck in tc by
-// [DeckLabel], returning the one matching deck's [ObjectID]. Zero or more
-// than one match is a refusal naming the label and, for an ambiguous
-// match, every candidate's position (ADR-037 decision 5: ambiguity is an
-// error, never a coin flip).
+// [resolumecomp.DeckLabel], returning the one matching deck's [ObjectID].
+// Zero or more than one match is a refusal naming the label and, for an
+// ambiguous match, every candidate's position (ADR-037 decision 5:
+// ambiguity is an error, never a coin flip).
 func ResolveDeck(tc *TrackedComposition, reference string) (ObjectID, error) {
 	decks := tc.Decks()
 	var matched []struct {
@@ -160,7 +41,7 @@ func ResolveDeck(tc *TrackedComposition, reference string) (ObjectID, error) {
 		position int
 	}
 	for i, d := range decks {
-		label, _ := DeckLabel(i+1, d.Name)
+		label, _ := resolumecomp.DeckLabel(i+1, d.Name)
 		if labelEquals(reference, label) {
 			matched = append(matched, struct {
 				id       ObjectID
@@ -185,14 +66,14 @@ func ResolveDeck(tc *TrackedComposition, reference string) (ObjectID, error) {
 }
 
 // ResolveLayer resolves reference against every layer in tc by
-// [LayerLabel], returning the one matching layer's [ObjectID]. Zero or more
-// than one match is a refusal naming the label and, for an ambiguous
-// match, every candidate's position.
+// [resolumecomp.LayerLabel], returning the one matching layer's [ObjectID].
+// Zero or more than one match is a refusal naming the label and, for an
+// ambiguous match, every candidate's position.
 func ResolveLayer(tc *TrackedComposition, reference string) (ObjectID, error) {
 	layers := tc.Layers()
 	var matched []TrackedLayer
 	for _, l := range layers {
-		label, _ := LayerLabel(l.Index, l.Name)
+		label, _ := resolumecomp.LayerLabel(l.Index, l.Name)
 		if labelEquals(reference, label) {
 			matched = append(matched, l)
 		}
@@ -217,8 +98,8 @@ func ResolveLayer(tc *TrackedComposition, reference string) (ObjectID, error) {
 
 // ResolveColumn resolves deckReference against [ResolveDeck] first — a
 // failure there is reported as a deck failure, never collapsed into "column
-// not found" — then resolves columnReference against [ColumnLabel] within
-// that deck alone.
+// not found" — then resolves columnReference against
+// [resolumecomp.ColumnLabel] within that deck alone.
 func ResolveColumn(tc *TrackedComposition, deckReference, columnReference string) (ObjectID, error) {
 	deckID, err := ResolveDeck(tc, deckReference)
 	if err != nil {
@@ -230,7 +111,7 @@ func ResolveColumn(tc *TrackedComposition, deckReference, columnReference string
 		if c.DeckID != deckID {
 			continue
 		}
-		if labelEquals(columnReference, ColumnLabel(c.Index)) {
+		if labelEquals(columnReference, resolumecomp.ColumnLabel(c.Index)) {
 			matched = append(matched, c)
 		}
 	}
@@ -274,7 +155,7 @@ type ClipReference struct {
 func clipLayerLabel(tc *TrackedComposition, layerID *ObjectID) (label string, known bool) {
 	if layerID != nil {
 		if l, ok := tc.LayerByID(*layerID); ok {
-			label, _ := LayerLabel(l.Index, l.Name)
+			label, _ := resolumecomp.LayerLabel(l.Index, l.Name)
 			return label, true
 		}
 	}
@@ -320,7 +201,7 @@ func resolveDeckClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error
 		if c.DeckID != deckID {
 			continue
 		}
-		label, _ := ClipLabel(c.LayerIndex, c.ColumnIndex, c.Name)
+		label, _ := resolumecomp.ClipLabel(c.LayerIndex, c.ColumnIndex, c.Name)
 		if !labelEquals(ref.Clip, label) {
 			continue
 		}
@@ -340,7 +221,7 @@ func resolveDeckClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error
 func resolvePersistentClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error) {
 	var matched []clipCandidate
 	for i, c := range tc.PersistentClips() {
-		label, _ := PersistentClipLabel(i+1, c.Name)
+		label, _ := resolumecomp.PersistentClipLabel(i+1, c.Name)
 		if !labelEquals(ref.Clip, label) {
 			continue
 		}

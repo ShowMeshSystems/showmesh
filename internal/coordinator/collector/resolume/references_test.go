@@ -7,64 +7,18 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
-// This file is references.go's own test suite: the label vocabulary and
-// the resolve functions against [TrackedComposition] fixtures.
-// parseTestComposition (idmap_test.go) supplies the real, named fixture
-// (pkg/resolumecomp's testdata/complete.avc); a handful of tests below
-// build a small literal resolumecomp.Composition instead, when the
-// scenario is not already present in that fixture.
-
-// --- Label functions ---------------------------------------------------
-
-func TestLayerLabelAuthoredVsGenerated(t *testing.T) {
-	if label, generated := LayerLabel(0, "Peak Only"); label != "Peak Only" || generated {
-		t.Errorf("LayerLabel(0, %q) = (%q, %v), want (%q, false)", "Peak Only", label, generated, "Peak Only")
-	}
-	if label, generated := LayerLabel(4, ""); label != "Layer 5" || !generated {
-		t.Errorf("LayerLabel(4, \"\") = (%q, %v), want (%q, true)", label, generated, "Layer 5")
-	}
-}
-
-func TestColumnLabelIsAlwaysGenerated(t *testing.T) {
-	if got := ColumnLabel(0); got != "Column 1" {
-		t.Errorf("ColumnLabel(0) = %q, want %q", got, "Column 1")
-	}
-	if got := ColumnLabel(3); got != "Column 4" {
-		t.Errorf("ColumnLabel(3) = %q, want %q", got, "Column 4")
-	}
-}
-
-func TestDeckLabelAuthoredVsGenerated(t *testing.T) {
-	if label, generated := DeckLabel(1, "Main"); label != "Main" || generated {
-		t.Errorf("DeckLabel(1, %q) = (%q, %v), want (%q, false)", "Main", label, generated, "Main")
-	}
-	if label, generated := DeckLabel(2, ""); label != "Deck 2" || !generated {
-		t.Errorf("DeckLabel(2, \"\") = (%q, %v), want (%q, true)", label, generated, "Deck 2")
-	}
-}
-
-func TestClipLabelAuthoredVsGenerated(t *testing.T) {
-	if label, generated := ClipLabel(0, 0, "Snowflakes"); label != "Snowflakes" || generated {
-		t.Errorf("ClipLabel(0,0,%q) = (%q, %v), want (%q, false)", "Snowflakes", label, generated, "Snowflakes")
-	}
-	if label, generated := ClipLabel(1, 2, ""); label != "Clip L2C3" || !generated {
-		t.Errorf("ClipLabel(1,2,\"\") = (%q, %v), want (%q, true)", label, generated, "Clip L2C3")
-	}
-}
-
-func TestPersistentClipLabelAuthoredVsGenerated(t *testing.T) {
-	if label, generated := PersistentClipLabel(1, "Persistent A"); label != "Persistent A" || generated {
-		t.Errorf("PersistentClipLabel(1,%q) = (%q, %v), want (%q, false)", "Persistent A", label, generated, "Persistent A")
-	}
-	if label, generated := PersistentClipLabel(3, ""); label != "Persistent clip 3" || !generated {
-		t.Errorf("PersistentClipLabel(3,\"\") = (%q, %v), want (%q, true)", label, generated, "Persistent clip 3")
-	}
-}
+// This file is references.go's own test suite: the resolve functions
+// against [TrackedComposition] fixtures. The label vocabulary itself
+// (LayerLabel and friends) is pkg/resolumecomp's own responsibility and is
+// tested there; parseTestComposition (idmap_test.go) supplies the real,
+// named fixture (pkg/resolumecomp's testdata/complete.avc), and a handful
+// of tests below build a small literal resolumecomp.Composition instead,
+// when the scenario is not already present in that fixture.
 
 // TestLayerLabelByIndexAgreesWithBuildTrackedCompositionOnDuplicateIndex is
 // review finding 9: BuildTrackedComposition's own layerIndexToID is a plain
-// map write and so keeps the LAST layer for a duplicate index; this
-// function must agree, not silently pick the first.
+// map write and so keeps the LAST layer for a duplicate index; pkg/resolumecomp's
+// LayerLabelByIndex must agree, not silently pick the first.
 func TestLayerLabelByIndexAgreesWithBuildTrackedCompositionOnDuplicateIndex(t *testing.T) {
 	comp := &resolumecomp.Composition{
 		Layers: []resolumecomp.Layer{
@@ -86,9 +40,9 @@ func TestLayerLabelByIndexAgreesWithBuildTrackedCompositionOnDuplicateIndex(t *t
 	if !ok {
 		t.Fatalf("LayerByID(%v): not found", *clip.LayerID)
 	}
-	wantLabel, _ := LayerLabel(resolvedLayer.Index, resolvedLayer.Name)
+	wantLabel, _ := resolumecomp.LayerLabel(resolvedLayer.Index, resolvedLayer.Name)
 
-	gotLabel, known := LayerLabelByIndex(comp.Layers, 0)
+	gotLabel, known := resolumecomp.LayerLabelByIndex(comp.Layers, 0)
 	if !known {
 		t.Fatalf("LayerLabelByIndex(...,0) known = false, want true")
 	}
@@ -97,13 +51,6 @@ func TestLayerLabelByIndexAgreesWithBuildTrackedCompositionOnDuplicateIndex(t *t
 	}
 	if gotLabel != "Second" {
 		t.Errorf("LayerLabelByIndex(...,0) = %q, want %q (BuildTrackedComposition keeps the LAST layer for a duplicate index)", gotLabel, "Second")
-	}
-}
-
-func TestLayerLabelByIndexUnknownIndexReportsNotKnown(t *testing.T) {
-	comp := &resolumecomp.Composition{Layers: []resolumecomp.Layer{{ID: "101", Index: 0, Name: "First"}}}
-	if _, known := LayerLabelByIndex(comp.Layers, 99); known {
-		t.Error("LayerLabelByIndex(...,99) known = true, want false — no layer has that index")
 	}
 }
 
@@ -426,23 +373,6 @@ func TestResolveClipAmbiguousOnTheSameLayerRefusesWithRenamingNotLayerAdvice(t *
 	}
 	if !strings.Contains(err.Error(), "rename") {
 		t.Errorf("refusal = %q, want it to say renaming is the remedy", err.Error())
-	}
-}
-
-// TestAmbiguousClipIDsMarksSharedTriplesOnly is acceptance criterion 13's
-// core logic, independent of either caller's own data model.
-func TestAmbiguousClipIDsMarksSharedTriplesOnly(t *testing.T) {
-	entries := map[string]ClipTripleKey{
-		"401": {Deck: "1", Layer: "Peak Only", Label: "Text Block"},
-		"402": {Deck: "1", Layer: "Peak Only", Label: "Text Block"},
-		"501": {Deck: "1", Layer: "Other Layer", Label: "Unique Clip"},
-	}
-	got := AmbiguousClipIDs(entries)
-	if !got["401"] || !got["402"] {
-		t.Errorf("got = %+v, want \"401\" and \"402\" both true (shared triple)", got)
-	}
-	if got["501"] {
-		t.Errorf("got = %+v, want \"501\" false (unique triple)", got)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
@@ -551,6 +552,33 @@ func TestStandardResolumeActionDescriptorsFixtureSafetyClassMatchesSpec(t *testi
 			t.Errorf("action %q: AuditExempt = %v, want %v (spec section 5.2: only blackout and clearLayer are exempt)",
 				d.Name, d.AuditExempt, wantExempt[d.Name])
 		}
+	}
+}
+
+// TestResolumeActionMaxDispatchDurationEqualsRegistryMax is the fix for the
+// defect CLAUDE.md names explicitly for this task: resolumeActionMaxDispatchDuration
+// is a duplicated literal, not read from resolume.MaxDispatchDuration
+// (internal/coordinator/collector/resolume, action.go) directly — this
+// package's own production code does not import that package (see
+// resolumeActionMaxDispatchDuration's own doc comment for why). This is a
+// TEST file, and a test importing the producer to check a literal against
+// it creates no production coupling at all — the same "test that fails if
+// a client budget is ever set below the server's maximum" CLAUDE.md asks
+// for, applied to the api<->resolume boundary specifically
+// (TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget below is
+// the SEPARATE test for the api<->showmeshctl boundary, which cannot do
+// this because that program is genuinely forbidden from importing either
+// package).
+//
+// Before trusting this test: temporarily changed resolumeActionMaxDispatchDuration
+// to 39*time.Second (one second below resolume.MaxDispatchDuration) and
+// reran — failed immediately, naming both values. Reverted afterward.
+func TestResolumeActionMaxDispatchDurationEqualsRegistryMax(t *testing.T) {
+	if resolumeActionMaxDispatchDuration != resolume.MaxDispatchDuration {
+		t.Fatalf("resolumeActionMaxDispatchDuration (%s) != resolume.MaxDispatchDuration (%s) — this package's "+
+			"own dispatch-budget sizing has drifted from D-3/A's real, structurally-enforced deadline sum; "+
+			"raise or lower resolumeActionMaxDispatchDuration (resolumeaction.go) to match",
+			resolumeActionMaxDispatchDuration, resolume.MaxDispatchDuration)
 	}
 }
 

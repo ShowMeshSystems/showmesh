@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
@@ -106,10 +105,17 @@ const resolumeActionWriteDeadlineMargin = 5 * time.Second
 // itself, end to end — the pre-dispatch baseline phase, the write, and
 // confirmation — and is handed to Dispatch as an actual context deadline
 // (see this file's own call site), not merely consulted here as an upper
-// bound to build a write deadline from. Read directly from
-// resolume.MaxDispatchDuration rather than a duplicated literal, so the two
-// cannot drift apart.
-const resolumeActionMaxDispatchDuration = resolume.MaxDispatchDuration
+// bound to build a write deadline from.
+//
+// This package's own production code does not import
+// internal/coordinator/collector/resolume (see interfaces.go's own doc
+// comment on why), so this is a duplicated literal rather than a shared
+// constant — 40s, matching resolume.MaxDispatchDuration (action.go:
+// MaxBaselinePhaseBudget + MaxWritePhaseBudget + MaxActionConfirmDeadline =
+// 5s + 5s + 30s). TestResolumeActionMaxDispatchDurationEqualsRegistryMax
+// (resolumeaction_test.go) reconciles the two from a TEST file, which
+// creates no production coupling.
+const resolumeActionMaxDispatchDuration = 40 * time.Second
 
 // resolumeActionHTTPWriteDeadline bounds this endpoint's own HTTP write
 // deadline (set before the request body is even read, so before this
