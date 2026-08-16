@@ -141,6 +141,8 @@ Commands:
   resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
+  resolume status [id]                 show the configured Resolume instance's health, loaded
+                                        composition, and every resolume.* observation
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

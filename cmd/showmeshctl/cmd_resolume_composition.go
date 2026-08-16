@@ -246,6 +246,8 @@ func cmdResolume(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return cmdResolumeComposition(rest, stdout, stderr, clock)
 	case "action":
 		return cmdResolumeAction(rest, stdout, stderr, clock)
+	case "status":
+		return cmdResolumeStatus(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume: unknown subcommand %q\n\n", sub)
 		printResolumeUsage(stderr)
@@ -262,9 +264,14 @@ Subcommands:
                 reference to a Resolume object resolves through
   action        dispatch one of the seven Resolume actions (launch a clip,
                 clear a layer, blackout, ...), or list the vocabulary
+  status        show the configured Resolume instance: its health, its
+                loaded composition, and every resolume.* observation
+                (GET /resolume/instances) — Track D seam E's own
+                observability surface, no HTTP request to Resolume itself
 
-Run "showmeshctl resolume composition --help" or
-"showmeshctl resolume action --help" for their own subcommands.
+Run "showmeshctl resolume composition --help", "showmeshctl resolume
+action --help", or "showmeshctl resolume status --help" for their own
+subcommands and flags.
 `)
 }
 
