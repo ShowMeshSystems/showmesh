@@ -825,6 +825,33 @@ func TestResolumeCompositionAmbiguousClipsAreFlagged(t *testing.T) {
 	}
 }
 
+// TestResolumeCompositionAmbiguityNeverGroupsTwoUnresolvedLayerClips is
+// review finding 2 extended to the composition read surface: two clips
+// sharing a deck and a name, but whose own layerIndex does not resolve to
+// any tracked layer, are NOT thereby marked as sharing a triple — this
+// package has no evidence their real layers agree.
+func TestResolumeCompositionAmbiguityNeverGroupsTwoUnresolvedLayerClips(t *testing.T) {
+	comp := &resolumecomp.Composition{
+		Name:   "Unresolved Layer Fixture",
+		Decks:  []resolumecomp.Deck{{ID: "1", Name: "Main"}},
+		Layers: []resolumecomp.Layer{{ID: "101", Index: 0, Name: "Layer A"}},
+		Clips: []resolumecomp.Clip{
+			// LayerIndex 98 and 99 both fail to resolve against the one
+			// declared layer (index 0).
+			{ID: "801", DeckID: "1", LayerIndex: 98, ColumnIndex: 0, Name: "Ghost"},
+			{ID: "802", DeckID: "1", LayerIndex: 99, ColumnIndex: 0, Name: "Ghost"},
+		},
+	}
+	payload := resolumeCompositionStoredPayload{Composition: comp}
+	resp := mapResolumeCompositionResponse(testNow, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{Revision: 1}, payload)
+
+	for _, clip := range resp.Clips {
+		if clip.Ambiguous {
+			t.Errorf("clip %s (%s): Ambiguous = true, want false — two unresolved-layer clips must never be treated as sharing one", clip.ID, clip.Name)
+		}
+	}
+}
+
 // --- 7: a second upload creates a second revision rather than mutating
 // the first. ---
 

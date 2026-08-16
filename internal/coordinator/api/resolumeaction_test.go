@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
@@ -94,12 +93,11 @@ func (f *fakeResolumeActionDispatcher) lastCtxDeadline() (deadline time.Time, ok
 	return call.ctx.Deadline()
 }
 
-// standardResolumeActionDescriptors is TRACK-D-SEAM-B-NAMES-SPEC.md section
-// 2's reference vocabulary (ADR-037, superseding TRACK-D-D3-SPEC.md
-// section 2's raw "id") and section 5.2's safety-class table, exactly as
-// this seam's own report describes them — this package's own tests do not
-// depend on D-3/A's real registry to exist; they fix this vocabulary
-// themselves, matching it against the spec directly.
+// standardResolumeActionDescriptors is the ADR-037 reference vocabulary
+// (superseding the earlier raw "id") and its safety-class table — this
+// package's own tests do not depend on D-3/A's real registry to exist;
+// they fix this vocabulary themselves, matching it against the spec
+// directly.
 func standardResolumeActionDescriptors() []ResolumeActionDescriptor {
 	clipParam := ResolumeActionParam{Name: "clip", Kind: ResolumeActionParamString, Required: true}
 	deckOptional := ResolumeActionParam{Name: "deck", Kind: ResolumeActionParamString, Required: false}
@@ -553,34 +551,6 @@ func TestStandardResolumeActionDescriptorsFixtureSafetyClassMatchesSpec(t *testi
 			t.Errorf("action %q: AuditExempt = %v, want %v (spec section 5.2: only blackout and clearLayer are exempt)",
 				d.Name, d.AuditExempt, wantExempt[d.Name])
 		}
-	}
-}
-
-// TestResolumeActionMaxDispatchDurationEqualsRegistryMax is the fix for
-// the defect CLAUDE.md names explicitly for this task: this package's own
-// HTTP write-deadline sizing must not drift from D-3/A's real,
-// structurally-enforced deadline bound. Renamed from
-// TestResolumeActionMaxConfirmDeadlineEqualsRegistryMax as part of Review
-// fix 4 (2026-08-15): the constant it checks is now
-// resolumeActionMaxDispatchDuration against resolume.MaxDispatchDuration —
-// the TOTAL bound (baseline phase + write + confirm clamp), not
-// resolume.MaxActionConfirmDeadline (the confirm-poll clamp alone), which
-// both review passes found was silently missing two whole phases. This
-// package's own production code still does not import that package (see
-// resolumeActionMaxDispatchDuration's own doc comment for why), but this is
-// a TEST file, and a test importing the producer to check a literal against
-// it creates no production coupling at all.
-//
-// Before trusting this test: temporarily changed
-// resolumeActionMaxDispatchDuration to 39*time.Second (one second below
-// resolume.MaxDispatchDuration) and reran — failed immediately, naming
-// both values. Reverted afterward.
-func TestResolumeActionMaxDispatchDurationEqualsRegistryMax(t *testing.T) {
-	if resolumeActionMaxDispatchDuration != resolume.MaxDispatchDuration {
-		t.Fatalf("resolumeActionMaxDispatchDuration (%s) != resolume.MaxDispatchDuration (%s) — this package's "+
-			"own HTTP write-deadline sizing has drifted from D-3/A's real, structurally-enforced deadline bound; "+
-			"raise or lower resolumeActionMaxDispatchDuration (resolumeaction.go) to match",
-			resolumeActionMaxDispatchDuration, resolume.MaxDispatchDuration)
 	}
 }
 

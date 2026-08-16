@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -752,21 +751,30 @@ func printResolumeCompositionDetail(w io.Writer, resp resolumeCompositionRespons
 	printResolumeClipsTable(w, resp.PersistentClips)
 }
 
-// resolumeAmbiguousClipGroup is one (scope, layer, label) triple
-// printAmbiguousClips found two or more clips sharing.
-type resolumeAmbiguousClipGroup struct {
-	scope, layer, label string
-	ids                 []string
+// resolumeAmbiguousClipRow is one clip resp already reported Ambiguous,
+// flattened for display and sorting. Nothing here recomputes which clips
+// collide — Clip.Ambiguous is the server's own answer, read directly; a
+// sort is a total order, not a second implementation of the grouping rule.
+type resolumeAmbiguousClipRow struct {
+	id, deck, layer, name string
+	deckOrder, layerIndex int
 }
 
-// printAmbiguousClips is the ADR-037 amendment's (2026-08-16) own "do not
-// bury it" requirement: an operator who never scrolls must still see that
-// some clips cannot be bound by name at all, grouped by the exact triple
-// that makes them indistinguishable — adding a "layer" to a reference does
-// not help a clip in one of these groups, because the group already
-// agrees on its own layer too. Prints nothing when there is nothing to
-// report.
+// printAmbiguousClips lists every clip resp marked Ambiguous, sorted by
+// deck, then layer, then name, so an operator who never scrolls still sees
+// them. Prints nothing when there is nothing to report.
 func printAmbiguousClips(w io.Writer, resp resolumeCompositionResponse) {
+	deckOrderAndLabel := func(id *string) (order int, label string) {
+		if id == nil {
+			return len(resp.Decks), "the persistent clips"
+		}
+		for i, d := range resp.Decks {
+			if d.ID == *id {
+				return i, fmt.Sprintf("deck %q", formatGeneratedName(d.Name, d.NameGenerated))
+			}
+		}
+		return len(resp.Decks), "an unknown deck"
+	}
 	layerLabel := func(index int) string {
 		for _, l := range resp.Layers {
 			if l.Index == index {
@@ -775,35 +783,18 @@ func printAmbiguousClips(w io.Writer, resp resolumeCompositionResponse) {
 		}
 		return "an unknown layer"
 	}
-	deckLabel := func(id *string) string {
-		if id == nil {
-			return "the persistent clips"
-		}
-		for _, d := range resp.Decks {
-			if d.ID == *id {
-				return fmt.Sprintf("deck %q", formatGeneratedName(d.Name, d.NameGenerated))
-			}
-		}
-		return "an unknown deck"
-	}
 
-	groups := map[string]*resolumeAmbiguousClipGroup{}
-	var order []string
+	var rows []resolumeAmbiguousClipRow
 	addClip := func(clip resolumeClip) {
 		if !clip.Ambiguous {
 			return
 		}
-		scope := deckLabel(clip.DeckID)
-		layer := layerLabel(clip.LayerIndex)
-		label := formatGeneratedName(clip.Name, clip.NameGenerated)
-		key := scope + "\x00" + layer + "\x00" + label
-		g, ok := groups[key]
-		if !ok {
-			g = &resolumeAmbiguousClipGroup{scope: scope, layer: layer, label: label}
-			groups[key] = g
-			order = append(order, key)
-		}
-		g.ids = append(g.ids, clip.ID)
+		order, deck := deckOrderAndLabel(clip.DeckID)
+		rows = append(rows, resolumeAmbiguousClipRow{
+			id: clip.ID, deck: deck, deckOrder: order,
+			layer: layerLabel(clip.LayerIndex), layerIndex: clip.LayerIndex,
+			name: formatGeneratedName(clip.Name, clip.NameGenerated),
+		})
 	}
 	for _, clip := range resp.Clips {
 		addClip(clip)
@@ -811,19 +802,28 @@ func printAmbiguousClips(w io.Writer, resp resolumeCompositionResponse) {
 	for _, clip := range resp.PersistentClips {
 		addClip(clip)
 	}
-	if len(order) == 0 {
+	if len(rows) == 0 {
 		return
 	}
-	sort.Strings(order)
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].deckOrder != rows[j].deckOrder {
+			return rows[i].deckOrder < rows[j].deckOrder
+		}
+		if rows[i].layerIndex != rows[j].layerIndex {
+			return rows[i].layerIndex < rows[j].layerIndex
+		}
+		return rows[i].name < rows[j].name
+	})
 
 	_, _ = fmt.Fprintln(w, "\nAMBIGUOUS CLIPS — these cannot be addressed by name at all, not even by adding a")
-	_, _ = fmt.Fprintln(w, `"layer": every clip in a group below already shares one. Rename all but one clip`)
-	_, _ = fmt.Fprintln(w, "in each group, in Resolume, and re-upload the composition to make them addressable.")
-	for _, key := range order {
-		g := groups[key]
-		_, _ = fmt.Fprintf(w, "  %s, layer %q, name %q: %d clips (ids: %s)\n",
-			g.scope, g.layer, g.label, len(g.ids), strings.Join(g.ids, ", "))
+	_, _ = fmt.Fprintln(w, `"layer": each one already shares its own with another clip of the same name. Rename`)
+	_, _ = fmt.Fprintln(w, "all but one in each such group, in Resolume, and re-upload to make them addressable.")
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "  ID\tDECK\tLAYER\tNAME")
+	for _, r := range rows {
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", r.id, r.deck, r.layer, r.name)
 	}
+	_ = tw.Flush()
 }
 
 // printResolumeCompositionIDMap renders the id map's structural relations

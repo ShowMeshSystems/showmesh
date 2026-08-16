@@ -679,26 +679,33 @@ func mapResolumeCompositionClip(clip resolumecomp.Clip, name string, generated, 
 	}
 }
 
-// resolumeClipAmbiguity computes ADR-037's 2026-08-16 amendment: every
-// clip's own (deck-or-persistent, layer, label) triple, keyed by the
-// clip's own id, over BOTH c.Clips and c.PersistentClips together —
-// deck.ID is always non-empty for a deck clip and always "" for a
-// persistent one, so the two collections never collide in the returned
-// map's key space without this function needing to call
-// [resolume.AmbiguousClipIDs] twice.
+// resolumeClipAmbiguity computes, keyed by each clip's own id, the
+// (deck-or-persistent, layer, label) triple two clips must not share (see
+// [resolume.AmbiguousClipIDs]) — over BOTH c.Clips and c.PersistentClips
+// together: deck.ID is always non-empty for a deck clip and always "" for
+// a persistent one, so the two collections never collide in the key space.
 func resolumeClipAmbiguity(c *resolumecomp.Composition) map[string]bool {
+	// A clip whose layerIndex does not resolve to any tracked layer gets a
+	// key unique to it — two such clips are never thereby known to share a
+	// layer, mirroring resolveDeckClip's own identical rule in the resolume
+	// package.
+	unknownLayerSeq := 0
+	layerKey := func(layerIndex int) string {
+		if label, known := resolume.LayerLabelByIndex(c.Layers, layerIndex); known {
+			return label
+		}
+		unknownLayerSeq++
+		return fmt.Sprintf("\x00unknown-%d", unknownLayerSeq)
+	}
+
 	entries := make(map[string]resolume.ClipTripleKey, len(c.Clips)+len(c.PersistentClips))
 	for _, clip := range c.Clips {
 		label, _ := resolume.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
-		entries[clip.ID] = resolume.ClipTripleKey{
-			Deck: clip.DeckID, Layer: resolume.LayerLabelByIndex(c.Layers, clip.LayerIndex), Label: label,
-		}
+		entries[clip.ID] = resolume.ClipTripleKey{Deck: clip.DeckID, Layer: layerKey(clip.LayerIndex), Label: label}
 	}
 	for i, clip := range c.PersistentClips {
 		label, _ := resolume.PersistentClipLabel(i+1, clip.Name)
-		entries[clip.ID] = resolume.ClipTripleKey{
-			Layer: resolume.LayerLabelByIndex(c.Layers, clip.LayerIndex), Label: label,
-		}
+		entries[clip.ID] = resolume.ClipTripleKey{Layer: layerKey(clip.LayerIndex), Label: label}
 	}
 	return resolume.AmbiguousClipIDs(entries)
 }

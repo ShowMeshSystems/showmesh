@@ -138,6 +138,37 @@ func TestOpenAPIResolumeActionOutcomeVocabularyResponsesMatchSchema(t *testing.T
 	}
 }
 
+// TestOpenAPIResolumeActionLaunchClipMissingBothDeckAndPersistentIsRefusedNotRejected
+// is review finding 3: openapi.yaml's own ResolumeLaunchClipActionRequest.params
+// carries a oneOf that a well-formed client never violates (finding 4), but a
+// coordinator that receives the violation anyway does NOT reject it with 400 —
+// it answers 200 with result.outcome: "refused", the same as any other
+// unresolvable reference. This body is deliberately schema-invalid (finding
+// 4's own oneOf), so only the RESPONSE is checked against its schema here.
+func TestOpenAPIResolumeActionLaunchClipMissingBothDeckAndPersistentIsRefusedNotRejected(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.results["launchClip"] = ResolumeActionResult{
+		Outcome: ResolumeOutcomeRefused, Reason: "a clip reference must name the deck the clip lives on", Dispatched: false,
+	}
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-neither", `{"clip":"Snow"}`), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (refused is an ordinary outcome, never a 400); body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "ResolumeActionResponse", body)
+
+	m := decodeMap(t, body)
+	result, _ := m["result"].(map[string]any)
+	if result["outcome"] != "refused" {
+		t.Errorf("result.outcome = %v, want %q", result["outcome"], "refused")
+	}
+}
+
 // TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse
 // proves the 503 fail-closed refusal (launchClip, not exempt) validates
 // against the shared Problem schema and carries the new

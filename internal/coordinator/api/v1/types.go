@@ -1015,22 +1015,18 @@ type ResolumeCompositionColumn struct {
 // Resolume's REST API, varies per clip, and is not present in the
 // composition file at all, so inventing a name for an index here would be
 // exactly the mistake ADR-032's own bench capture warns against.
-// Name and NameGenerated are ADR-037 decision 4, extended to clips: Name is
-// the clip's own authored name when non-empty, otherwise a generated form —
-// "Clip L<layerIndex+1>C<columnIndex+1>" for a deck clip, "Persistent clip
-// <n>" (1-based position among [ResolumeCompositionResponse.PersistentClips])
-// for a persistent one — matching [ResolumeCompositionLayer.Name]'s
-// identical rule.
+// Name is never blank: the clip's own authored name when non-empty,
+// otherwise a generated form — "Clip L<layerIndex+1>C<columnIndex+1>" for
+// a deck clip, "Persistent clip <n>" (1-based position among
+// [ResolumeCompositionResponse.PersistentClips]) for a persistent one —
+// with NameGenerated saying which.
 //
-// Ambiguous is the ADR-037 amendment (2026-08-16): true when this clip's
-// own (deck-or-persistent, layer, label) triple is shared by another clip
-// in this composition, which means no [ClipReference] — including one
-// naming this clip's own layer — can ever resolve it, because the
+// Ambiguous is true when this clip's own (deck-or-persistent, layer,
+// label) triple is shared by another clip, meaning no reference —
+// including one naming its own layer — can ever resolve it, since the
 // colliding clips already agree on their own layer too. Measured against
 // the operator's real composition: 16 of 36 clips on one deck alone.
-// Always present, never omitted when false (CLAUDE.md's absent-evidence
-// rule): a client must be able to tell "checked, not ambiguous" from a
-// field it forgot to render.
+// Always present, never omitted when false.
 type ResolumeCompositionClip struct {
 	ID                 string `json:"id"`
 	DeckID             string `json:"deckId,omitempty"`
