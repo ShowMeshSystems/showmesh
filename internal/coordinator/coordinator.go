@@ -254,6 +254,14 @@ func Run() int {
 	// starts.
 	resolumeCompositionWire := newResolumeCompositionWiring(ctx, st, logger)
 
+	// Track D seam C: the write-time reference resolver
+	// (config.ResolumeReferenceResolver), built over
+	// resolumeCompositionWire.store directly above — unconditionally, like
+	// that store itself, so a resolume show.action can be authored and
+	// validated whether or not a live Resolume instance is configured
+	// (resolumereferencewiring.go's own doc comment).
+	resolumeReferences := newResolumeReferenceResolverAdapter(resolumeCompositionWire.store)
+
 	// Track D seam D-2/C: the Resolume Arena REST/WebSocket collector
 	// (internal/coordinator/collector/resolume), constructed here —
 	// BEFORE apiDeps, for the identical reason fppRunner itself just was —
@@ -426,6 +434,12 @@ func Run() int {
 		// names explicitly: every action compiled, passed its own tests,
 		// and reached nothing.
 		ResolumeActions: resolumeActions,
+		// ResolumeReferences is Track D seam C's own write-time reference
+		// resolver, built above unconditionally (resolumeReferences) —
+		// unlike resolumeActions, this is never gated on cfg.ResolumeURL,
+		// because show.action write validation must work whether or not a
+		// live Resolume instance is configured.
+		ResolumeReferences: resolumeReferences,
 		// Resolume: resolumeInstanceLister (resolumewiring.go) reads whatever
 		// the D-2/C collector has already persisted, gated on
 		// resolumeConfiguredID exactly like ResolumeID above — the same
@@ -508,9 +522,17 @@ func Run() int {
 		Identity: identitySvc,
 		Dispatch: macroDispatcher,
 		Brokers:  integrationBrokers,
-		Notify:   notifyHub,
-		Clock:    time.Now,
-		Logger:   logger,
+		// ResolumeActions is the SAME value apiDeps.ResolumeActions holds
+		// (wired above, under the identical cfg.ResolumeURL != "" gate
+		// resolumeWire.collector is built under) — Track D seam C's own
+		// "one dispatch path" rule: a macro's Resolume step and the HTTP
+		// endpoint dispatch through the identical
+		// api.ResolumeActionDispatcher, never two independently-wired
+		// copies of it.
+		ResolumeActions: apiDeps.ResolumeActions,
+		Notify:          notifyHub,
+		Clock:           time.Now,
+		Logger:          logger,
 	}, macro.Options{})
 	apiDeps.Macros = macroExecutor
 

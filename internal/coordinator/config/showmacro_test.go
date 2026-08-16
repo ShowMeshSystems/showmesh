@@ -5,15 +5,33 @@ import (
 	"testing"
 )
 
-func alwaysResolves(string) bool { return true }
-func neverResolves(string) bool  { return false }
+func alwaysResolves(string) (string, bool) { return ShowActionIntegrationFPP, true }
+func neverResolves(string) (string, bool)  { return "", false }
 
-func resolvesOnly(ids ...string) func(string) bool {
+func resolvesOnly(ids ...string) func(string) (string, bool) {
 	set := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		set[id] = true
 	}
-	return func(id string) bool { return set[id] }
+	return func(id string) (string, bool) {
+		if set[id] {
+			return ShowActionIntegrationFPP, true
+		}
+		return "", false
+	}
+}
+
+// resolvesAsIntegration is [alwaysResolves] narrowed to a single action id,
+// reporting a caller-chosen integration — used by the Resolume localFallback
+// test (TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback)
+// to prove section 2.3's rule without a real show.action store.
+func resolvesAsIntegration(id, integration string) func(string) (string, bool) {
+	return func(actionID string) (string, bool) {
+		if actionID == id {
+			return integration, true
+		}
+		return "", false
+	}
 }
 
 func validMacroStepJSON(id, action, extra string) string {
@@ -405,4 +423,59 @@ func TestDecodeShowMacroPayloadUnknownTopLevelKeyRejected(t *testing.T) {
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key error for typo'd \"step\", got %+v", verr)
 	}
+}
+
+// TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback
+// is TRACK-D-SEAM-C-MACRO-SPEC.md acceptance criterion 5: a step whose
+// action is a Resolume action, declared with any localFallback.class other
+// than "coordinator-required", is refused at write time — every Resolume
+// action is coordinator-required (ADR-016), a controlled device holds no
+// fallback of its own.
+//
+// Broken and confirmed to fail: removed the
+// `integration == ShowActionIntegrationResolume` guard in
+// decodeShowMacroStep so every class was accepted regardless of
+// integration; this test's "none-rejected" and "silence-rejected"
+// sub-tests both failed to see the expected error, and the "coordinator-
+// required-accepted" sub-test still passed, confirming the assertion is
+// load-bearing on the guard rather than on a decode ordering accident.
+// Restored afterward.
+func TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback(t *testing.T) {
+	mk := func(class string) string {
+		return validMacroJSON(fmt.Sprintf(`{"id": "s1", "action": "resolume-blackout", "localFallback": {"class": %q, "reason": "because"}}`, class))
+	}
+	resolver := resolvesAsIntegration("resolume-blackout", ShowActionIntegrationResolume)
+
+	t.Run("coordinator-required-accepted", func(t *testing.T) {
+		p, verr := DecodeShowMacroPayload(mk("coordinator-required"), resolver)
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if p.Steps[0].LocalFallback.Class != ShowMacroLocalFallbackCoordinatorRequired {
+			t.Fatalf("unexpected localFallback class: %+v", p.Steps[0].LocalFallback)
+		}
+	})
+	t.Run("none-rejected", func(t *testing.T) {
+		_, verr := DecodeShowMacroPayload(mk("none"), resolver)
+		if verr == nil || verr.Field != "steps[0].localFallback.class" {
+			t.Fatalf("expected steps[0].localFallback.class error, got %+v", verr)
+		}
+	})
+	t.Run("silence-rejected", func(t *testing.T) {
+		_, verr := DecodeShowMacroPayload(mk("silence"), resolver)
+		if verr == nil || verr.Field != "steps[0].localFallback.class" {
+			t.Fatalf("expected steps[0].localFallback.class error, got %+v", verr)
+		}
+	})
+
+	// A non-Resolume action keeps every class legal, proving the rule is
+	// scoped to Resolume steps rather than tightened for every step.
+	t.Run("fpp-step-none-still-accepted", func(t *testing.T) {
+		fppResolver := resolvesAsIntegration("fpp-action", ShowActionIntegrationFPP)
+		raw := validMacroJSON(`{"id": "s1", "action": "fpp-action", "localFallback": {"class": "none", "reason": "because"}}`)
+		_, verr := DecodeShowMacroPayload(raw, fppResolver)
+		if verr != nil {
+			t.Fatalf("unexpected error for a non-Resolume step: %+v", verr)
+		}
+	})
 }

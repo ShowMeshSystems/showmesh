@@ -291,24 +291,90 @@ func currentFPPEndpoints(ctx context.Context, fpp FPPLister) ([]config.FPPEndpoi
 	return out, nil
 }
 
-// showActionExists reports whether id names a show.action object with an
-// active revision — [config.DecodeShowMacroPayload]'s resolveAction
-// callback (STEP-9-SPEC.md section 5.4: "step.action must resolve to an
-// existing show.action object and the write is rejected if it does not").
-// A store error is treated as "does not resolve": this callback has no way
-// to report an internal error separately from "not found" through the
-// bool config.DecodeShowMacroPayload declares, so a transient store
-// failure here surfaces as a validation refusal on this ONE step rather
-// than crashing or silently accepting an unverifiable reference — a
-// caller retries the write once the store answers again.
-func (h *handlers) showActionExists(ctx context.Context) func(actionID string) bool {
-	return func(actionID string) bool {
+// showActionLookup reports whether id names a show.action object with an
+// active revision and, when it does, that action's own target.integration
+// — [config.DecodeShowMacroPayload]'s resolveAction callback. The
+// integration is what lets that decoder enforce the Resolume localFallback
+// rule at write time rather than fetching it a second way. A store error,
+// or a payload this function cannot decode enough to read
+// target.integration from, is treated as "does not resolve": a transient
+// failure surfaces as a validation refusal on this ONE step rather than
+// crashing or silently accepting an unverifiable reference.
+func (h *handlers) showActionLookup(ctx context.Context) func(actionID string) (string, bool) {
+	return func(actionID string) (string, bool) {
 		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, actionID)
-		if err != nil {
-			return false
+		if err != nil || obj.CurrentRevision == 0 {
+			return "", false
 		}
-		return obj.CurrentRevision > 0
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, actionID, obj.CurrentRevision)
+		if err != nil {
+			return "", false
+		}
+		var head struct {
+			Target struct {
+				Integration string `json:"integration"`
+			} `json:"target"`
+		}
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+			return "", false
+		}
+		return head.Target.Integration, true
 	}
+}
+
+// ProblemTypeShowActionResolumeIntegrationBlockedByMacroFallback is
+// [showActionResolumeIntegrationBlockedProblem]'s own type URI.
+const ProblemTypeShowActionResolumeIntegrationBlockedByMacroFallback = ProblemBaseURI + "show-action-resolume-blocked-by-macro-fallback"
+
+// showActionResolumeIntegrationBlockedProblem refuses a show.action write
+// that would make it a Resolume action while a stored macro step still
+// references it with a localFallback.class other than
+// "coordinator-required" — symmetric with the write-time guard on the
+// macro side (config.DecodeShowMacroPayload). Revisions are immutable, so
+// the fix is refusing this write, never rewriting the macro.
+func showActionResolumeIntegrationBlockedProblem(actionID, macroID, stepID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeShowActionResolumeIntegrationBlockedByMacroFallback,
+		Title:  "Action refused: a stored macro step declares the wrong local fallback for a Resolume action",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"action %q cannot become a resolume action: show.macro %q step %q references it with a localFallback.class "+
+				"other than \"coordinator-required\"; fix that step first",
+			actionID, macroID, stepID),
+	}
+}
+
+// findMacroStepBlockingResolumeIntegration scans every stored show.macro
+// for a step that names actionID with a localFallback.class other than
+// "coordinator-required" — the write-ordering hole
+// config.DecodeShowMacroPayload's own guard cannot close on its own: that
+// guard only runs when the MACRO is written, so an action authored as
+// "fpp", referenced by a macro with a non-coordinator-required fallback,
+// and then rewritten to "resolume" bypasses it entirely.
+func (h *handlers) findMacroStepBlockingResolumeIntegration(ctx context.Context, actionID string) (macroID, stepID string, blocked bool, err error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.ShowMacroConfigKind)
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowMacroConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return "", "", false, err
+		}
+		var payload config.ShowMacroPayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return "", "", false, err
+		}
+		for _, step := range payload.Steps {
+			if step.Action == actionID && step.LocalFallback.Class != config.ShowMacroLocalFallbackCoordinatorRequired {
+				return obj.ID, step.ID, true, nil
+			}
+		}
+	}
+	return "", "", false, nil
 }
 
 func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
@@ -332,10 +398,22 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry)
+	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences)
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
+	}
+
+	if payload.Target.Integration == config.ShowActionIntegrationResolume {
+		macroID, stepID, blocked, err := h.findMacroStepBlockingResolumeIntegration(r.Context(), id)
+		if err != nil {
+			h.writeInternalError(w, now, "check stored macros for a blocking local fallback", err)
+			return
+		}
+		if blocked {
+			writeProblem(w, h.logger, now, showActionResolumeIntegrationBlockedProblem(id, macroID, stepID))
+			return
+		}
 	}
 
 	payloadJSON, err := config.EncodeShowActionPayload(payload)
@@ -371,7 +449,7 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionExists(r.Context()))
+	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionLookup(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -469,6 +547,7 @@ func mapConfigShowActionTarget(t config.ShowActionTarget) v1.ConfigShowActionTar
 		Integration: t.Integration,
 		InstanceID:  t.InstanceID, Primitive: t.Primitive, Params: t.Params,
 		Broker: t.Broker,
+		Action: t.Action, Ref: t.Ref,
 	}
 	if t.Publish != nil {
 		out.Publish = &v1.ConfigShowActionMQTTPublish{

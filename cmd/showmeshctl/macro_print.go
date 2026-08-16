@@ -66,6 +66,11 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 					t.Expect.Kind, t.Expect.Topic, valueStr, t.Expect.DeadlineSeconds)
 			}
 		}
+	case "resolume":
+		_, _ = fmt.Fprintf(w, "  Action:      %s\n", t.Action)
+		if len(t.Ref) > 0 {
+			_, _ = fmt.Fprintf(w, "  Ref:         %v\n", t.Ref)
+		}
 	default:
 		_, _ = fmt.Fprintf(w, "  (unrecognized integration %q)\n", t.Integration)
 	}

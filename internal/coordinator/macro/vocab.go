@@ -69,6 +69,31 @@ const (
 	mqttStateRestartInterrupted = "restart_interrupted"
 )
 
+// OutcomeState values this package itself produces for a Resolume step
+// (store.MacroRunStepRecord.OutcomeState): a rename of D-3/A's own
+// five-value ActionOutcomeState vocabulary, mirroring mqttState* above.
+const (
+	resolumeStateConfirmed     = "confirmed"
+	resolumeStateUnconfirmed   = "unconfirmed"
+	resolumeStateUnconfirmable = "unconfirmable"
+	resolumeStateRefused       = "refused"
+	resolumeStateFailed        = "failed"
+
+	// resolumeStateNotConfigured is produced only when no live Resolume
+	// instance is configured on this coordinator at all
+	// (Dependencies.ResolumeActions is nil) — distinct from
+	// resolumeStateRefused, which means Dispatch itself ran and refused.
+	resolumeStateNotConfigured = "not_configured"
+
+	// resolumeStateRestartInterrupted mirrors mqttStateRestartInterrupted's
+	// identical meaning one section up, produced only by the startup
+	// reconciler (reconcile_step.go): a dispatch audit entry exists for
+	// this step's own idempotency key, so dispatch began before the prior
+	// process stopped existing, but nothing records whether it reached
+	// Resolume or resolved before the crash.
+	resolumeStateRestartInterrupted = "restart_interrupted"
+)
+
 // mqttResponseQoS is the QoS this package subscribes at when waiting for
 // an mqtt action's response. 1 (at-least-once) matches the QoS this
 // project already uses for command-shaped MQTT traffic elsewhere

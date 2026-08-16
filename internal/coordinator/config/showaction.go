@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -213,12 +214,177 @@ var showSafetyClasses = map[string]bool{
 	ShowSafetyClassPowerOff: true,
 }
 
-// The two members of show.action.target.integration this step supports
-// (STEP-9-SPEC.md section 5.3).
+// The three members of show.action.target.integration.
 const (
-	ShowActionIntegrationFPP  = "fpp"
-	ShowActionIntegrationMQTT = "mqtt"
+	ShowActionIntegrationFPP      = "fpp"
+	ShowActionIntegrationMQTT     = "mqtt"
+	ShowActionIntegrationResolume = "resolume"
 )
+
+// The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
+// duplicated here by value rather than by import: this package must not
+// import that package or internal/coordinator/api.
+const (
+	ShowActionResolumeLaunchClip     = "launchClip"
+	ShowActionResolumeClearLayer     = "clearLayer"
+	ShowActionResolumeBlackout       = "blackout"
+	ShowActionResolumeLaunchColumn   = "launchColumn"
+	ShowActionResolumeSelectDeck     = "selectDeck"
+	ShowActionResolumeSetLayerBypass = "setLayerBypass"
+	ShowActionResolumeSetLayerMaster = "setLayerMaster"
+)
+
+// showActionResolumeActionNames is every accepted resolume action, sorted,
+// for an error naming what is supported (mirroring registry.WireActions'
+// identical role for the fpp branch).
+var showActionResolumeActionNames = []string{
+	ShowActionResolumeBlackout,
+	ShowActionResolumeClearLayer,
+	ShowActionResolumeLaunchClip,
+	ShowActionResolumeLaunchColumn,
+	ShowActionResolumeSelectDeck,
+	ShowActionResolumeSetLayerBypass,
+	ShowActionResolumeSetLayerMaster,
+}
+
+var showActionResolumeActions = map[string]bool{
+	ShowActionResolumeLaunchClip:     true,
+	ShowActionResolumeClearLayer:     true,
+	ShowActionResolumeBlackout:       true,
+	ShowActionResolumeLaunchColumn:   true,
+	ShowActionResolumeSelectDeck:     true,
+	ShowActionResolumeSetLayerBypass: true,
+	ShowActionResolumeSetLayerMaster: true,
+}
+
+// resolumeActionDeclaredSafetyClass mirrors
+// internal/coordinator/collector/resolume's own safety-class
+// classification. clearLayer is blackout, not none: both make the wall
+// darker, and ShowMesh never refuses that.
+// TestResolumeActionSafetyClassMatchesResolumeRegistry reconciles this
+// table against that package's own registry so the two cannot diverge.
+var resolumeActionDeclaredSafetyClass = map[string]string{
+	ShowActionResolumeBlackout:       ShowSafetyClassBlackout,
+	ShowActionResolumeClearLayer:     ShowSafetyClassBlackout,
+	ShowActionResolumeLaunchClip:     ShowSafetyClassNone,
+	ShowActionResolumeLaunchColumn:   ShowSafetyClassNone,
+	ShowActionResolumeSelectDeck:     ShowSafetyClassNone,
+	ShowActionResolumeSetLayerBypass: ShowSafetyClassNone,
+	ShowActionResolumeSetLayerMaster: ShowSafetyClassNone,
+}
+
+// ResolumeActionDeclaredSafetyClass exposes resolumeActionDeclaredSafetyClass
+// to a test that reconciles it against
+// internal/coordinator/collector/resolume's own registry (that test lives
+// in an external config_test package, which CAN import both without a
+// cycle — this package itself never may).
+func ResolumeActionDeclaredSafetyClass(action string) (string, bool) {
+	c, ok := resolumeActionDeclaredSafetyClass[action]
+	return c, ok
+}
+
+// ResolumeActionNames returns every resolume action this package declares
+// a safety class for — the keys of resolumeActionDeclaredSafetyClass
+// itself, not the separate showActionResolumeActionNames vocabulary list,
+// so a reconciliation test comparing this against resolume's own registry
+// is actually comparing the map under test, not a second list that could
+// drift from it unnoticed.
+func ResolumeActionNames() []string {
+	out := make([]string, 0, len(resolumeActionDeclaredSafetyClass))
+	for name := range resolumeActionDeclaredSafetyClass {
+		out = append(out, name)
+	}
+	return out
+}
+
+// resolumeRefKind is one target.ref value's required wire JSON type.
+type resolumeRefKind int
+
+const (
+	resolumeRefString resolumeRefKind = iota
+	resolumeRefBool
+	resolumeRefNumber
+)
+
+// resolumeRefParam describes one named key target.ref may carry for one
+// action.
+type resolumeRefParam struct {
+	Name     string
+	Kind     resolumeRefKind
+	Required bool
+}
+
+// resolumeActionRefVocabulary is each action's own named-reference
+// vocabulary, duplicated by value from
+// internal/coordinator/resolumeactionwiring.go's identical
+// resolumeActionParamVocabulary. "deck" is launchClip's own conditional
+// key (required unless "persistent" is true): declared optional here and
+// enforced by validateResolumeRefConditionals.
+var resolumeActionRefVocabulary = map[string][]resolumeRefParam{
+	ShowActionResolumeLaunchClip: {
+		{Name: "clip", Kind: resolumeRefString, Required: true},
+		{Name: "deck", Kind: resolumeRefString, Required: false},
+		{Name: "layer", Kind: resolumeRefString, Required: false},
+		{Name: "persistent", Kind: resolumeRefBool, Required: false},
+	},
+	ShowActionResolumeClearLayer: {
+		{Name: "layer", Kind: resolumeRefString, Required: true},
+	},
+	ShowActionResolumeBlackout: {},
+	ShowActionResolumeLaunchColumn: {
+		{Name: "column", Kind: resolumeRefString, Required: true},
+		{Name: "deck", Kind: resolumeRefString, Required: true},
+	},
+	ShowActionResolumeSelectDeck: {
+		{Name: "deck", Kind: resolumeRefString, Required: true},
+	},
+	ShowActionResolumeSetLayerBypass: {
+		{Name: "layer", Kind: resolumeRefString, Required: true},
+		{Name: "bypassed", Kind: resolumeRefBool, Required: true},
+	},
+	ShowActionResolumeSetLayerMaster: {
+		{Name: "layer", Kind: resolumeRefString, Required: true},
+		{Name: "master", Kind: resolumeRefNumber, Required: true},
+	},
+}
+
+// ErrResolumeCompositionNotUploaded is what a [ResolumeReferenceResolver]
+// method returns when no composition has ever been uploaded. Declared here
+// rather than imported from internal/coordinator/collector/resolume, so
+// this package's own error vocabulary does not depend on that package's;
+// an implementation translates that package's own ErrCompositionNotUploaded
+// to this sentinel at the boundary.
+var ErrResolumeCompositionNotUploaded = errors.New("resolume: no composition has been uploaded to this coordinator yet")
+
+// ResolumeClipReference is launchClip's own reference vocabulary, mirroring
+// internal/coordinator/collector/resolume's ClipReference field for field
+// so an implementation of [ResolumeReferenceResolver] can pass it straight
+// through without a second translation.
+type ResolumeClipReference struct {
+	Clip       string
+	Deck       string
+	Persistent bool
+	Layer      string
+}
+
+// ResolumeReferenceResolver resolves a named reference against this
+// coordinator's currently stored composition, following the same pattern
+// [FPPPrimitiveRegistry] already established: declared here, at the
+// consumer, implemented over internal/coordinator/collector/resolume
+// somewhere that may import both, never in this package. It exposes no
+// Resolume object id to this package (ADR-037): every method returns only
+// an error, never an id.
+//
+// nil means resolved; [ErrResolumeCompositionNotUploaded] means nothing
+// has ever been uploaded; any other error's Error() text already names
+// the label (not found) or every candidate (ambiguous), and an
+// implementation returns it unchanged.
+type ResolumeReferenceResolver interface {
+	ResolveClip(ref ResolumeClipReference) error
+	ResolveLayer(name string) error
+	ResolveColumn(deck, column string) error
+	ResolveDeck(name string) error
+}
 
 // The five members of show.action.target.expect.kind (STEP-9-SPEC.md
 // section 7.3).
@@ -293,6 +459,13 @@ type ShowActionTarget struct {
 	Broker  string                 `json:"broker,omitempty"`
 	Publish *ShowActionMQTTPublish `json:"publish,omitempty"`
 	Expect  *ShowActionMQTTExpect  `json:"expect,omitempty"`
+
+	// resolume-only. Empty/nil when Integration is "fpp" or "mqtt". Action
+	// is one of the seven ShowActionResolume* names; Ref carries seam B's
+	// named-reference vocabulary verbatim (clip, deck, layer, column,
+	// persistent, bypassed, master) — never an object id (ADR-037).
+	Action string         `json:"action,omitempty"`
+	Ref    map[string]any `json:"ref,omitempty"`
 }
 
 // ShowActionMQTTPublish is show.action.target.publish.
@@ -358,13 +531,16 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 }
 
 // DecodeShowActionPayload parses and validates raw against STEP-9-SPEC.md
-// section 5.3's rules. endpoints is the caller's currently-configured FPP
-// endpoint list (Config.FPPEndpoints or the store-authoritative
-// equivalent); brokers is the caller's declared integration broker set
-// (see integrationbrokers.go); registry resolves and validates an FPP
-// primitive's own parameter vocabulary and safety class. None of the three
-// is fetched by this package — see this file's own top doc comment.
-func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry) (ShowActionPayload, *ValidationError) {
+// section 5.3's rules, and the resolume branch's own rules. endpoints is
+// the caller's currently-configured FPP endpoint list (Config.FPPEndpoints
+// or the store-authoritative equivalent); brokers is the caller's declared
+// integration broker set (see integrationbrokers.go); registry resolves
+// and validates an FPP primitive's own parameter vocabulary and safety
+// class; resolver resolves
+// a resolume target's seam B reference against the currently stored
+// composition. None of the four is fetched by this package — see this
+// file's own top doc comment.
+func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver) (ShowActionPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowActionPayload{}, verr
@@ -418,10 +594,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 		target, verr = decodeFPPTarget(targetFields, safetyClass, endpoints, registry)
 	case ShowActionIntegrationMQTT:
 		target, verr = decodeMQTTTarget(targetFields, brokers)
+	case ShowActionIntegrationResolume:
+		target, verr = decodeResolumeTarget(targetFields, safetyClass, resolver)
 	default:
 		verr = &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.integration",
-			Detail: "integration must be \"fpp\" or \"mqtt\"",
+			Detail: "integration must be \"fpp\", \"mqtt\", or \"resolume\"",
 		}
 	}
 	if verr != nil {
@@ -677,6 +855,251 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 	}
 
 	return ShowActionMQTTExpect{Kind: kind, Topic: topic, Value: value, DeadlineSeconds: deadline}, nil
+}
+
+// decodeResolumeTarget decodes and validates target.integration ==
+// "resolume": reject an unrecognized action, reject unknown ref keys,
+// apply the conditional rules, resolve every reference against the
+// currently stored composition, then enforce the safety class.
+func decodeResolumeTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string, resolver ResolumeReferenceResolver) (ShowActionTarget, *ValidationError) {
+	action, verr := decodeRequiredString(targetFields, "action", "target.action")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	if !showActionResolumeActions[action] {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.action",
+			Detail: fmt.Sprintf("action must be one of %s", strings.Join(showActionResolumeActionNames, ", ")),
+		}
+	}
+
+	refFields, verr := decodeResolumeTargetRefFields(targetFields, action)
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+
+	ref, verr := decodeResolumeRef(action, refFields)
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+
+	if verr := resolveResolumeRef(action, ref, resolver); verr != nil {
+		return ShowActionTarget{}, verr
+	}
+
+	registeredClass, ok := resolumeActionDeclaredSafetyClass[action]
+	if !ok {
+		// Unreachable given showActionResolumeActions' own membership check
+		// above, answered rather than left to compare against "" if the two
+		// ever disagree.
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.action",
+			Detail: fmt.Sprintf("action %q has no registered safety class", action),
+		}
+	}
+	if registeredClass != declaredSafetyClass {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeSafetyClassMismatch, Field: "safetyClass",
+			Detail: fmt.Sprintf("safetyClass %q does not match resolume action %q's own required safety class %q", declaredSafetyClass, action, registeredClass),
+		}
+	}
+
+	return ShowActionTarget{Integration: ShowActionIntegrationResolume, Action: action, Ref: ref}, nil
+}
+
+// decodeResolumeTargetRefFields reads target.ref for action. Required and
+// non-null for every action whose own vocabulary is non-empty; for
+// blackout (the one zero-key action) it must be absent or an empty
+// object — requiring a key that can only ever be empty made a stored
+// blackout action unable to be read back and re-PUT, since encoding an
+// empty ref map drops the key (json:"ref,omitempty") and the decoder then
+// saw it as missing.
+func decodeResolumeTargetRefFields(targetFields map[string]json.RawMessage, action string) (map[string]json.RawMessage, *ValidationError) {
+	vocab := resolumeActionRefVocabulary[action]
+	raw, present := targetFields["ref"]
+	if !present {
+		if len(vocab) == 0 {
+			return map[string]json.RawMessage{}, nil
+		}
+		return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: "target.ref", Detail: "target.ref is required"}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: "target.ref", Detail: "target.ref must not be null"}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "target.ref", Detail: "target.ref must be a JSON object"}
+	}
+	if len(vocab) == 0 && len(fields) > 0 {
+		keys := make([]string, 0, len(fields))
+		for k := range fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldUnknownKey, Field: "target.ref",
+			Detail: fmt.Sprintf("action %q takes no ref keys, but ref named: %s", action, strings.Join(keys, ", ")),
+		}
+	}
+	return fields, nil
+}
+
+// decodeResolumeRef decodes and validates target.ref against action's own
+// vocabulary: an unrecognized key is rejected first, naming what this
+// action accepts, before any per-key decode.
+func decodeResolumeRef(action string, fields map[string]json.RawMessage) (map[string]any, *ValidationError) {
+	params := resolumeActionRefVocabulary[action]
+
+	known := make(map[string]bool, len(params))
+	for _, p := range params {
+		known[p.Name] = true
+	}
+	var unknown []string
+	for k := range fields {
+		if !known[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		expected := make([]string, 0, len(params))
+		for _, p := range params {
+			expected = append(expected, p.Name)
+		}
+		sort.Strings(expected)
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldUnknownKey, Field: "target.ref",
+			Detail: fmt.Sprintf("ref contains unrecognized key(s) for action %q: %s (this action accepts: %s)",
+				action, strings.Join(unknown, ", "), formatExpectedKeys(expected)),
+		}
+	}
+
+	out := make(map[string]any, len(params))
+	for _, p := range params {
+		raw, present := fields[p.Name]
+		field := "target.ref." + p.Name
+		switch {
+		case !present:
+			if p.Required {
+				return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: field, Detail: fmt.Sprintf("%s is required", field)}
+			}
+		case isJSONNull(raw):
+			return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
+		default:
+			val, verr := decodeResolumeRefValue(p, raw, field)
+			if verr != nil {
+				return nil, verr
+			}
+			out[p.Name] = val
+		}
+	}
+
+	if verr := validateResolumeRefConditionals(action, out); verr != nil {
+		return nil, verr
+	}
+
+	return out, nil
+}
+
+func formatExpectedKeys(expected []string) string {
+	if len(expected) == 0 {
+		return "(none — this action takes no ref keys)"
+	}
+	return strings.Join(expected, ", ")
+}
+
+// decodeResolumeRefValue decodes one present, non-null ref value against
+// its own declared kind.
+func decodeResolumeRefValue(p resolumeRefParam, raw json.RawMessage, field string) (any, *ValidationError) {
+	switch p.Kind {
+	case resolumeRefString:
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a string", field)}
+		}
+		if s == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must not be empty", field)}
+		}
+		return s, nil
+	case resolumeRefBool:
+		var b bool
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a boolean", field)}
+		}
+		return b, nil
+	case resolumeRefNumber:
+		var f float64
+		if err := json.Unmarshal(raw, &f); err != nil {
+			return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a number", field)}
+		}
+		return f, nil
+	default:
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: "unsupported ref value kind"}
+	}
+}
+
+// validateResolumeRefConditionals applies launchClip's own conditional rule
+// (ADR-032 decision 6): "deck" is required unless "persistent" is true,
+// and forbidden when it is. No other action in this vocabulary has a
+// conditional key.
+func validateResolumeRefConditionals(action string, ref map[string]any) *ValidationError {
+	if action != ShowActionResolumeLaunchClip {
+		return nil
+	}
+	_, hasDeck := ref["deck"]
+	persistent, _ := ref["persistent"].(bool)
+	switch {
+	case persistent && hasDeck:
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.ref.deck",
+			Detail: `target.ref.deck must not be present when target.ref.persistent is true`,
+		}
+	case !persistent && !hasDeck:
+		return &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "target.ref.deck",
+			Detail: `target.ref.deck is required unless target.ref.persistent is true`,
+		}
+	}
+	return nil
+}
+
+// resolveResolumeRef resolves action's own reference fields out of ref
+// against resolver. blackout resolves nothing (it addresses every tracked
+// layer, not a named one). Every non-nil error — not found, ambiguous, or
+// [ErrResolumeCompositionNotUploaded] — is reported through the same
+// Code, ValidationCodeFieldUnknownReference, told apart for the operator
+// by Detail's own text rather than by a client branching on a second Code.
+func resolveResolumeRef(action string, ref map[string]any, resolver ResolumeReferenceResolver) *ValidationError {
+	var err error
+	switch action {
+	case ShowActionResolumeBlackout:
+		return nil
+	case ShowActionResolumeLaunchClip:
+		clip, _ := ref["clip"].(string)
+		deck, _ := ref["deck"].(string)
+		layer, _ := ref["layer"].(string)
+		persistent, _ := ref["persistent"].(bool)
+		err = resolver.ResolveClip(ResolumeClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
+	case ShowActionResolumeClearLayer, ShowActionResolumeSetLayerBypass, ShowActionResolumeSetLayerMaster:
+		layer, _ := ref["layer"].(string)
+		err = resolver.ResolveLayer(layer)
+	case ShowActionResolumeLaunchColumn:
+		deck, _ := ref["deck"].(string)
+		column, _ := ref["column"].(string)
+		err = resolver.ResolveColumn(deck, column)
+	case ShowActionResolumeSelectDeck:
+		deck, _ := ref["deck"].(string)
+		err = resolver.ResolveDeck(deck)
+	default:
+		// Unreachable given showActionResolumeActions' own membership check
+		// in decodeResolumeTarget, answered rather than silently resolving
+		// nothing if the two ever disagree.
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: "target.action", Detail: fmt.Sprintf("no resolution rule for action %q", action)}
+	}
+	if err == nil {
+		return nil
+	}
+	return &ValidationError{Code: ValidationCodeFieldUnknownReference, Field: "target.ref", Detail: err.Error()}
 }
 
 func fppInstanceConfigured(id string, endpoints []FPPEndpoint) bool {

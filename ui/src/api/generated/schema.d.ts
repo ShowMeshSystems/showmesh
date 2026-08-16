@@ -1554,10 +1554,10 @@ export interface components {
             value?: string;
             deadlineSeconds?: number;
         };
-        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp fields or the mqtt fields directly, never nested a second level under an "fpp"/"mqtt" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. To submit a target, use ConfigShowActionTargetWrite instead. */
+        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
         ConfigShowActionTarget: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -1566,11 +1566,17 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublish"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
+            /** @description resolume-only: one of the seven Track D D-3 action names (launchClip, clearLayer, blackout, launchColumn, selectDeck, setLayerBypass, setLayerMaster). */
+            action?: string;
+            /** @description resolume-only: ADR-037's named-reference vocabulary for this action. Every key is a reference or a value from a closed, per-action list, enforced by this coordinator's write-time validation rather than by this schema. */
+            ref?: {
+                [key: string]: unknown;
+            };
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */
         ConfigShowActionTargetWrite: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -1579,6 +1585,10 @@ export interface components {
             broker?: string;
             publish?: components["schemas"]["ConfigShowActionMQTTPublishWrite"];
             expect?: components["schemas"]["ConfigShowActionMQTTExpect"];
+            action?: string;
+            ref?: {
+                [key: string]: unknown;
+            };
         };
         /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
         ConfigShowAction: {
@@ -1706,7 +1716,7 @@ export interface components {
             actionObjectId: string;
             actionRevision: number;
             /** @enum {string} */
-            integration: "fpp" | "mqtt";
+            integration: "fpp" | "mqtt" | "resolume";
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             /** @enum {string} */
