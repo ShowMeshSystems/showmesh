@@ -28,6 +28,11 @@ const (
 	SchemaNodeCmdV1       = "showmesh.node.cmd/v1"
 	SchemaNodeResultV1    = "showmesh.node.result/v1"
 	SchemaNodeAgentEchoV1 = "showmesh.node.agent.echo/v1"
+
+	// SchemaNodeAssetInventoryV1 is Track E's addition: the schema for
+	// [AssetInventoryPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/assets.
+	SchemaNodeAssetInventoryV1 = "showmesh.node.asset.inventory/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -479,6 +484,64 @@ type AgentEchoPayload struct {
 	AppliedAt time.Time `json:"appliedAt"`
 }
 
+// AssetInventoryEntry is one asset a node reports holding, inside
+// [AssetInventoryPayload].
+type AssetInventoryEntry struct {
+	// ContentHash is "sha256:<hex>", matching ADR-028 decision 1's identity
+	// scheme.
+	ContentHash string `json:"contentHash"`
+
+	// Filename is the runtime filename this asset is stored under on the
+	// node's local disk — never part of any identity or lookup key (ADR-028:
+	// three different artifacts can share one filename), carried here purely
+	// so a consumer can display or cross-reference it.
+	Filename string `json:"filename"`
+
+	SizeBytes int64 `json:"sizeBytes"`
+
+	// VerifiedAt is when this node last computed and confirmed ContentHash
+	// for this file, on the node's own clock.
+	VerifiedAt time.Time `json:"verifiedAt"`
+}
+
+// AssetInventoryPayload is the payload of the showmesh.node.asset.inventory/v1
+// schema, published RETAINED to a node's observed/assets topic
+// ([ObservedTopic], [ObservedDeliveryPolicy]): what this node's local asset
+// directory actually holds, as of the report's own construction.
+//
+// Complete IS THE LICENCE THIS PROJECT'S COORDINATOR USES TO ASSERT AN ASSET
+// IS ABSENT FROM A NODE, so it has to be earned by the publisher: it must be
+// false, with a specific Reason, whenever the directory could not be fully
+// enumerated (could not be read, did not exist, or any file's hash could not
+// be computed) — never true off a partial walk. A wrong true here is
+// indistinguishable, downstream, from a coordinator manufacturing absence
+// from ambiguous evidence, which this project has already shipped and fixed
+// once in a different subsystem.
+type AssetInventoryPayload struct {
+	Complete bool   `json:"complete"`
+	Reason   string `json:"reason"`
+
+	// Assets is nil-safe: this package's own encoder emits "assets":null
+	// for a nil slice and "assets":[] for an explicit empty one, matching
+	// CmdPayload.Params's own no-omitempty rule for the same reason — a
+	// consumer should be able to tell "nothing enumerated because Complete
+	// is false" apart from "enumerated successfully, found nothing" if a
+	// future caller ever needs to.
+	Assets []AssetInventoryEntry `json:"assets"`
+}
+
+// Validate reports whether p is well-formed: Reason must be non-empty
+// whenever Complete is false, mirroring ResultPayload.Reason's identical
+// "required whenever there is no plain success" rule one layer up. A
+// Complete:true payload with no Reason is the expected shape and is not an
+// error.
+func (p AssetInventoryPayload) Validate() error {
+	if !p.Complete && p.Reason == "" {
+		return fmt.Errorf("%w: reason (required whenever complete is false)", ErrPayloadMissingField)
+	}
+	return nil
+}
+
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent
 // "payload" key, which unmarshals to a zero-length json.RawMessage) or is
@@ -614,6 +677,29 @@ func DecodeResultPayload(env Envelope) (ResultPayload, error) {
 	return p, nil
 }
 
+// DecodeAssetInventoryPayload decodes env.Payload as an
+// [AssetInventoryPayload]. It returns an [*UnsupportedSchemaError] if
+// env.Schema is not [SchemaNodeAssetInventoryV1], an error wrapping
+// [ErrPayloadEmpty] if env.Payload is empty or null, and an error wrapping
+// [ErrPayloadMissingField] (via [AssetInventoryPayload.Validate]) if Reason
+// is missing while Complete is false.
+func DecodeAssetInventoryPayload(env Envelope) (AssetInventoryPayload, error) {
+	if env.Schema != SchemaNodeAssetInventoryV1 {
+		return AssetInventoryPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeAssetInventoryV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return AssetInventoryPayload{}, fmt.Errorf("mqttproto: decode asset inventory payload: %w", err)
+	}
+	var p AssetInventoryPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return AssetInventoryPayload{}, fmt.Errorf("mqttproto: decode asset inventory payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return AssetInventoryPayload{}, fmt.Errorf("mqttproto: decode asset inventory payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -688,4 +774,12 @@ func NewResultEnvelope(now func() time.Time, nodeID string, payload ResultPayloa
 // [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
 func NewAgentEchoEnvelope(now func() time.Time, nodeID string, payload AgentEchoPayload) (Envelope, error) {
 	return newEnvelope(now, SchemaNodeAgentEchoV1, nodeID, payload)
+}
+
+// NewAssetInventoryEnvelope builds a complete, schema-tagged [Envelope]
+// carrying payload for nodeID, stamping MessageID and SentAt (see
+// [newEnvelope] and [NewHelloEnvelope]'s doc comment on the uniform nodeID
+// argument).
+func NewAssetInventoryEnvelope(now func() time.Time, nodeID string, payload AssetInventoryPayload) (Envelope, error) {
+	return newEnvelope(now, SchemaNodeAssetInventoryV1, nodeID, payload)
 }

@@ -94,6 +94,22 @@ func Run() int {
 	// comments for why this exists at all.
 	heartbeatConnected := make(chan struct{}, 1)
 
+	// A staging file left behind by a previous, interrupted process run is
+	// never a partially-usable asset; sweep it before anything else touches
+	// AssetDir. Not fatal: an agent that cannot clean its own staging area
+	// still has a real, possibly-usable set of already-verified assets, and
+	// exiting over it would be exactly the kind of avoidable stoppage this
+	// project's system goal forbids.
+	if err := sweepAssetStaging(cfg.AssetDir); err != nil {
+		logger.Warn("failed to sweep asset staging directory at startup", "asset_dir", cfg.AssetDir, "error", err)
+	}
+
+	// assetFetchTrigger is buffered for the same non-blocking-send reason as
+	// heartbeatConnected: command.go signals it after a completed
+	// asset.fetch, and the inventory goroutine below may not have started
+	// selecting on it yet.
+	assetFetchTrigger := make(chan struct{}, 1)
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -101,7 +117,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
 	if err != nil {
@@ -117,6 +133,14 @@ func Run() int {
 		runHeartbeat(sigCtx, conn, cfg.NodeID, bootID, startedAt, time.Now, ticker.C, heartbeatConnected, logger)
 	}()
 
+	assetInventoryDone := make(chan struct{})
+	go func() {
+		defer close(assetInventoryDone)
+		ticker := time.NewTicker(cfg.AssetInventoryInterval)
+		defer ticker.Stop()
+		runAssetInventory(sigCtx, conn, cfg.NodeID, cfg.AssetDir, time.Now, ticker.C, assetFetchTrigger, logger)
+	}()
+
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
@@ -127,10 +151,11 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat loop also selects on sigCtx.Done() and exits on its own;
-	// wait for it so it cannot race the final offline publish below with a
-	// heartbeat publish still in flight.
+	// The heartbeat and asset inventory loops also select on sigCtx.Done()
+	// and exit on their own; wait for both so neither can race the final
+	// offline publish below with a publish still in flight.
 	<-heartbeatDone
+	<-assetInventoryDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

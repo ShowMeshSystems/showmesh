@@ -166,17 +166,20 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 	}, nil
 }
 
-// newOperationRegistry returns this agent's entire command allowlist: one
-// entry, "agent.echo". Per ARCHITECTURE section 10.4 ("agents accept only
-// allowlisted operations"), this map itself IS the enforcement mechanism —
-// [CommandHandler.HandleMessage] refuses any Action that is not a key
-// here, never executes it, and never silently ignores it. Adding a second
-// allowlisted operation later means adding a second entry to this map, not
+// newOperationRegistry returns this agent's entire command allowlist:
+// "agent.echo" and "asset.fetch". Per ARCHITECTURE section 10.4 ("agents
+// accept only allowlisted operations"), this map itself IS the enforcement
+// mechanism — [CommandHandler.HandleMessage] refuses any Action that is not
+// a key here, never executes it, and never silently ignores it. assetDir and
+// assetAPIToken configure "asset.fetch" (see assets.go); adding a further
+// allowlisted operation later means adding a further entry to this map, not
 // building a second enforcement path.
-func newOperationRegistry() map[string]OperationFunc {
+func newOperationRegistry(assetDir, assetAPIToken string) map[string]OperationFunc {
 	state := &agentEchoState{}
+	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	return map[string]OperationFunc{
-		"agent.echo": state.apply,
+		"agent.echo":  state.apply,
+		"asset.fetch": fetch.run,
 	}
 }
 
@@ -319,22 +322,32 @@ type CommandHandler struct {
 	cache  *idempotencyCache
 	now    func() time.Time
 	logger *slog.Logger
+
+	// assetFetchTrigger, when non-nil, is signalled (non-blockingly, like
+	// mqtt.go's heartbeatConnected) after a genuinely-executed "asset.fetch"
+	// completes, so assetinventory.go's publisher can republish immediately
+	// instead of waiting for its next tick — the seam's own "confirmation
+	// needs evidence that post-dates the action" requirement applied to a
+	// sync, not just a single command.
+	assetFetchTrigger chan<- struct{}
 }
 
 // newCommandHandler builds a CommandHandler for nodeID, wiring
-// [newOperationRegistry]'s allowlist and a fresh [idempotencyCache]. It
-// takes no Publisher: mqtt.go constructs a fresh *mqttConn per connection
+// [newOperationRegistry]'s allowlist (configured with assetDir and
+// assetAPIToken for "asset.fetch") and a fresh [idempotencyCache]. It takes
+// no Publisher: mqtt.go constructs a fresh *mqttConn per connection
 // (matching how advertise.go and heartbeat.go already do), so
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID string, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
-		nodeID: nodeID,
-		ops:    newOperationRegistry(),
-		cache:  newIdempotencyCache(agentIdempotencyCacheCapacity),
-		now:    now,
-		logger: logger,
+		nodeID:            nodeID,
+		ops:               newOperationRegistry(assetDir, assetAPIToken),
+		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
+		now:               now,
+		logger:            logger,
+		assetFetchTrigger: assetFetchTrigger,
 	}
 }
 
@@ -383,7 +396,10 @@ func newCommandHandler(nodeID string, now func() time.Time, logger *slog.Logger)
 //     replayed/awaited result) was "agent.echo": also publish the
 //     retained observed/agent/echo signal — this is what makes the
 //     outcome become an observation like every other signal in this
-//     system, per this seam's own requirement.
+//     system, per this seam's own requirement. When it was "asset.fetch"
+//     instead: signal h.assetFetchTrigger (if set) so
+//     assetinventory.go's publisher republishes immediately, rather than
+//     waiting for its next tick.
 //
 // cmd.RequestedRevision is decoded (it is part of CmdPayload) but this
 // sequence never reads or enforces it — see
@@ -522,6 +538,17 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			// ObservedAt (when the read-back evidence was collected) — see
 			// OperationResult's doc comment on why the two are distinct.
 			h.publishAgentEcho(ctx, publisher, v, opResult.ExecutedAt)
+		}
+	}
+	if cmd.Action == "asset.fetch" && h.assetFetchTrigger != nil {
+		select {
+		case h.assetFetchTrigger <- struct{}{}:
+		default:
+			// A publish is already pending (or nothing is listening yet);
+			// see mqtt.go's identical heartbeatConnected send for why a
+			// dropped duplicate trigger here is correct, not lossy in any
+			// way that matters — the inventory publisher only needs to know
+			// "a fetch completed since I last checked," not how many.
 		}
 	}
 }

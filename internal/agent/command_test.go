@@ -3,6 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -193,7 +197,7 @@ func decodeEchoFromCall(t *testing.T, call recordedPublish) mqttproto.AgentEchoP
 // every other signal in this system" requirement.
 func TestHandleMessageAgentEchoConfirmed(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -560,7 +564,7 @@ func TestHandleMessageMalformedPayloadDropsWithNoPublish(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger, buf := capturingLogger()
-			h := newCommandHandler(testNodeID, clock.now, logger)
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, clock.now, logger)
 			pub := newFakePublisher()
 
 			h.HandleMessage(context.Background(), pub, topic, tt.payload)
@@ -592,7 +596,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newCommandHandler(testNodeID, clock.now, discardLogger())
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, clock.now, discardLogger())
 			pub := newFakePublisher()
 
 			cmd := baseEchoCmd("cmd-1", "idem-"+tt.name)
@@ -623,7 +627,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 // unaddressable-message case in this file.
 func TestHandleMessageWrongTopicKindDropped(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
-	h := newCommandHandler(testNodeID, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -711,4 +715,71 @@ func TestIdempotencyCacheEvictsOldestOverCapacity(t *testing.T) {
 	// in-flight entry. Nothing after this point depends on cache state, so
 	// the further FIFO churn this causes is harmless here.
 	c.complete("a", mqttproto.ResultPayload{CommandID: "a-reclaimed-after-eviction"})
+}
+
+// TestHandleMessageAssetFetchEndToEnd proves "asset.fetch" is reachable
+// through the real allowlist (newOperationRegistry via newCommandHandler,
+// not a swapped-in test op): a real HandleMessage call against a real
+// httptest server downloads, verifies, and installs the asset, reports
+// OutcomeConfirmed with evidence, and signals the asset inventory trigger
+// channel — the wiring command.go adds for this seam, in one place.
+func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
+	content := []byte("end-to-end asset content")
+	hash := sha256Hash(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	trigger := make(chan struct{}, 1)
+	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
+	h := newCommandHandler(testNodeID, dir, "", trigger, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := mqttproto.CmdPayload{
+		CommandID:      "cmd-asset-1",
+		IdempotencyKey: "idem-asset-1",
+		Action:         "asset.fetch",
+		Target:         mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Params: map[string]any{
+			"assetId":     "asset-1",
+			"contentHash": hash,
+			"filename":    "Thriller.fseq",
+			"sizeBytes":   float64(len(content)),
+			"url":         srv.URL + "/asset",
+		},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "principal-1", PrincipalName: "operator"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1 (result only; asset.fetch has no retained echo-style observation of its own)", len(calls))
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want %q; reason = %q", result.Outcome, mqttproto.OutcomeConfirmed, result.Reason)
+	}
+	if result.Evidence == nil || result.Evidence.Signal != "node.asset.held" {
+		t.Fatalf("Evidence = %+v, want Signal %q", result.Evidence, "node.asset.held")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "Thriller.fseq"))
+	if err != nil {
+		t.Fatalf("reading final asset: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("final asset content = %q, want %q", got, content)
+	}
+
+	select {
+	case <-trigger:
+	default:
+		t.Fatalf("assetFetchTrigger was not signalled after a completed asset.fetch")
+	}
 }
