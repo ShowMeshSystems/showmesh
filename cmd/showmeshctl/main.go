@@ -68,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSurface(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
+	case "assets":
+		return cmdAssets(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -155,6 +157,15 @@ Commands:
   resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
+  assets list [--show <id>] [--node <id>] [--sequence <id>]
+                           enumerate asset metadata
+  assets get <assetId>    show one asset's full metadata
+  assets upload            stream a file into the asset store (write, requires
+                           asset:write; --show --sequence --media-type
+                           --target-kind [--target] --file)
+  assets fetch <assetId> --out <path>
+                           download one asset's bytes, verifying the content
+                           hash before the file lands at --out
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

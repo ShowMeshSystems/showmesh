@@ -2252,6 +2252,260 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /assets:
+    get:
+      operationId: listAssets
+      summary: Enumerate asset metadata (Track E seam E3/E4, ADR-028)
+      description: >-
+        Metadata only — bytes never live in SQLite (ADR-028 decision 4).
+        Optionally narrowed with `?show=`, `?sequence=`, and/or `?node=`.
+        `?node=` returns node-TARGETED assets only, never show-wide ones —
+        the manifest (a different, not-yet-built surface) is what answers
+        "what should this node hold" by combining both; this is one
+        question, never the other. Never gated by asset:write: reads stay
+        open by default (ADR-024), matching every other Track E config
+        kind's readAnyGuard(show:macro:run OR config:write) posture.
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to this show id.
+        - name: sequence
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to this logical sequence id.
+        - name: node
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Narrow the list to CURRENT assets targeted at this node
+            specifically — never a show-wide asset, even one that node
+            would also need.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: uploadAsset
+      summary: Upload one asset's bytes and register its metadata (Track E seam E3/E4, ADR-028)
+      description: >-
+        Requires `asset:write` (admin only). `multipart/form-data`: the
+        `show`, `sequence`, `mediaType`, `targetKind`, and (for
+        `targetKind: "node"`) `target` fields MUST arrive before the
+        `file` part — a `file` part that arrives first is refused, naming
+        that requirement, so every field is already known before this
+        coordinator streams a single byte to its backend. The bytes are
+        staged, hashed, and only THEN is the metadata row (plus its audit
+        entry) written, in one transaction — an interrupted upload
+        registers nothing (ADR-030).
+
+        `targetKind` is required with no default; `targetKind: "node"`
+        requires a non-empty `target` naming a DECLARED node (`400`
+        `asset-target-required` when it is missing). `show` must name an
+        existing `show` object; `sequence` uses the same slug rule every
+        other Track E object id uses; `mediaType` is one of `fseq`,
+        `audio`, `media`.
+
+        Re-uploading IDENTICAL bytes for an identity that already exists
+        is idempotent: `200` with the existing asset, no new row.
+        Uploading DIFFERENT bytes for the same (show, sequence, target)
+        creates a new asset and marks the previous one superseded, in the
+        same transaction — a filename is never part of this identity
+        (ADR-028 decision 1): three different targets' artifacts for one
+        xLights sequence may share one filename without colliding.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/AssetUploadRequest"
+      responses:
+        "200":
+          description: OK. The registered (or, on an idempotent re-upload, the pre-existing) asset.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponse"
+        "400":
+          description: >-
+            Invalid or missing field (`invalid-parameter`), or
+            `targetKind: "node"` with no `target`
+            (`asset-target-required`) — see `detail` for which.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `asset:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          description: >-
+            The uploaded file exceeds this coordinator's own upload size
+            bound (`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`). Nothing was
+            stored. Shares `type` `payload-too-large` with the identical
+            refusal on `POST /config/resolume/composition` — one class,
+            one URI.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "507":
+          description: >-
+            This coordinator's asset storage ran out of space while
+            staging the upload (`storage-full`). Nothing was registered.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /assets/{id}:
+    get:
+      operationId: getAsset
+      summary: One asset's metadata (Track E seam E3/E4)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /assets/{id}/content:
+    get:
+      operationId: getAssetContent
+      summary: One asset's bytes (Track E seam E3/E4)
+      description: >-
+        Gated by `node:read`, not the show:macro:run/config:write posture
+        every other Track E route on this surface uses — this is the
+        route an AGENT authenticates against to fetch its own bytes, and
+        node:read is what an agent credential already holds. Supports
+        `Range` (via the standard HTTP mechanism), so an interrupted
+        transfer can resume. `ETag` is the asset's own content hash,
+        quoted. Before serving, this coordinator compares the stored
+        blob's actual on-disk size against the asset's own recorded size:
+        on a mismatch it fails with `500` naming the asset rather than
+        serving a truncated or corrupted body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Standard HTTP byte-range request, e.g. "bytes=0-1023".
+      responses:
+        "200":
+          description: OK. The complete asset bytes.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+            ETag:
+              schema:
+                type: string
+              description: The asset's content hash, quoted.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial Content, honoring a `Range` request header.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          description: >-
+            An internal error, OR (see `detail`) the stored blob's
+            on-disk size disagrees with its recorded size: a corrupted or
+            truncated asset is reported, never served.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -4469,6 +4723,8 @@ components:
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
             - https://showmesh.dev/problems/payload-too-large
             - https://showmesh.dev/problems/resolume-action-refused-audit-unavailable
+            - https://showmesh.dev/problems/storage-full
+            - https://showmesh.dev/problems/asset-target-required
         title:
           type: string
         status:
@@ -5573,3 +5829,108 @@ components:
         source:
           type: string
           enum: [api]
+    Asset:
+      type: object
+      description: >-
+        One row of the coordinator's asset metadata store (Track E seam
+        E3/E4, ADR-028): an artifact's identity, never its bytes.
+        `target` mirrors the store's own TargetID — empty when
+        `targetKind` is "show". `runtimeFilename` is preserved but carries
+        no identity of its own: two different Asset values may share the
+        same `runtimeFilename` (ADR-028 decision 1 — a filename is not an
+        asset identity).
+      additionalProperties: false
+      required:
+        [id, show, sequence, targetKind, target, mediaType, contentHash,
+         runtimeFilename, sizeBytes, createdAt, createdByPrincipalId,
+         createdByPrincipalName, supersededAt, current]
+      properties:
+        id:
+          type: string
+        show:
+          type: string
+        sequence:
+          type: string
+        targetKind:
+          type: string
+          enum: [node, show]
+        target:
+          type: string
+          description: A declared node id, or empty when targetKind is "show".
+        mediaType:
+          type: string
+          enum: [fseq, audio, media]
+        contentHash:
+          type: string
+          description: "sha256:<hex>"
+        runtimeFilename:
+          type: string
+        sizeBytes:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        supersededAt:
+          type: [string, "null"]
+          format: date-time
+          description: Null for the CURRENT asset serving its (show, sequence, targetKind, target) tuple.
+        current:
+          type: boolean
+          description: True exactly when supersededAt is null.
+    AssetResponse:
+      type: object
+      description: The body of POST /assets and GET /assets/{id}.
+      additionalProperties: false
+      required: [serverTime, asset]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        asset:
+          $ref: "#/components/schemas/Asset"
+    AssetsListResponse:
+      type: object
+      description: The body of GET /assets.
+      additionalProperties: false
+      required: [serverTime, assets]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Asset"
+    AssetUploadRequest:
+      type: object
+      description: >-
+        POST /assets' multipart/form-data body. show, sequence, mediaType,
+        and targetKind are required on every request; target is required
+        only when targetKind is "node" (not expressible in this schema
+        alone — see the operation's own description). Every field part
+        MUST arrive before the file part.
+      additionalProperties: false
+      required: [file, show, sequence, mediaType, targetKind]
+      properties:
+        file:
+          type: string
+          format: binary
+        show:
+          type: string
+          minLength: 1
+        sequence:
+          type: string
+          minLength: 1
+        mediaType:
+          type: string
+          enum: [fseq, audio, media]
+        targetKind:
+          type: string
+          enum: [node, show]
+        target:
+          type: string
+          description: Required, and must name a declared node, when targetKind is "node".

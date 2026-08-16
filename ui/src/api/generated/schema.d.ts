@@ -772,6 +772,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate asset metadata (Track E seam E3/E4, ADR-028)
+         * @description Metadata only — bytes never live in SQLite (ADR-028 decision 4). Optionally narrowed with `?show=`, `?sequence=`, and/or `?node=`. `?node=` returns node-TARGETED assets only, never show-wide ones — the manifest (a different, not-yet-built surface) is what answers "what should this node hold" by combining both; this is one question, never the other. Never gated by asset:write: reads stay open by default (ADR-024), matching every other Track E config kind's readAnyGuard(show:macro:run OR config:write) posture.
+         */
+        get: operations["listAssets"];
+        put?: never;
+        /**
+         * Upload one asset's bytes and register its metadata (Track E seam E3/E4, ADR-028)
+         * @description Requires `asset:write` (admin only). `multipart/form-data`: the `show`, `sequence`, `mediaType`, `targetKind`, and (for `targetKind: "node"`) `target` fields MUST arrive before the `file` part — a `file` part that arrives first is refused, naming that requirement, so every field is already known before this coordinator streams a single byte to its backend. The bytes are staged, hashed, and only THEN is the metadata row (plus its audit entry) written, in one transaction — an interrupted upload registers nothing (ADR-030).
+         *     `targetKind` is required with no default; `targetKind: "node"` requires a non-empty `target` naming a DECLARED node (`400` `asset-target-required` when it is missing). `show` must name an existing `show` object; `sequence` uses the same slug rule every other Track E object id uses; `mediaType` is one of `fseq`, `audio`, `media`.
+         *     Re-uploading IDENTICAL bytes for an identity that already exists is idempotent: `200` with the existing asset, no new row. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction — a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
+         */
+        post: operations["uploadAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One asset's metadata (Track E seam E3/E4) */
+        get: operations["getAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assets/{id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One asset's bytes (Track E seam E3/E4)
+         * @description Gated by `node:read`, not the show:macro:run/config:write posture every other Track E route on this surface uses — this is the route an AGENT authenticates against to fetch its own bytes, and node:read is what an agent credential already holds. Supports `Range` (via the standard HTTP mechanism), so an interrupted transfer can resume. `ETag` is the asset's own content hash, quoted. Before serving, this coordinator compares the stored blob's actual on-disk size against the asset's own recorded size: on a mismatch it fails with `500` naming the asset rather than serving a truncated or corrupted body.
+         */
+        get: operations["getAssetContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1482,7 +1545,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
             title: string;
             status: number;
             detail: string;
@@ -1925,6 +1988,58 @@ export interface components {
             createdByPrincipalName: string | null;
             /** @enum {string} */
             source: "api";
+        };
+        /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID — empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 — a filename is not an asset identity). */
+        Asset: {
+            id: string;
+            show: string;
+            sequence: string;
+            /** @enum {string} */
+            targetKind: "node" | "show";
+            /** @description A declared node id, or empty when targetKind is "show". */
+            target: string;
+            /** @enum {string} */
+            mediaType: "fseq" | "audio" | "media";
+            /** @description sha256:<hex> */
+            contentHash: string;
+            runtimeFilename: string;
+            sizeBytes: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /**
+             * Format: date-time
+             * @description Null for the CURRENT asset serving its (show, sequence, targetKind, target) tuple.
+             */
+            supersededAt: string | null;
+            /** @description True exactly when supersededAt is null. */
+            current: boolean;
+        };
+        /** @description The body of POST /assets and GET /assets/{id}. */
+        AssetResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            asset: components["schemas"]["Asset"];
+        };
+        /** @description The body of GET /assets. */
+        AssetsListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            assets: components["schemas"]["Asset"][];
+        };
+        /** @description POST /assets' multipart/form-data body. show, sequence, mediaType, and targetKind are required on every request; target is required only when targetKind is "node" (not expressible in this schema alone — see the operation's own description). Every field part MUST arrive before the file part. */
+        AssetUploadRequest: {
+            /** Format: binary */
+            file: string;
+            show: string;
+            sequence: string;
+            /** @enum {string} */
+            mediaType: "fseq" | "audio" | "media";
+            /** @enum {string} */
+            targetKind: "node" | "show";
+            /** @description Required, and must name a declared node, when targetKind is "node". */
+            target?: string;
         };
     };
     responses: {
@@ -3520,6 +3635,186 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    listAssets: {
+        parameters: {
+            query?: {
+                /** @description Narrow the list to this show id. */
+                show?: string;
+                /** @description Narrow the list to this logical sequence id. */
+                sequence?: string;
+                /** @description Narrow the list to CURRENT assets targeted at this node specifically — never a show-wide asset, even one that node would also need. */
+                node?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    uploadAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["AssetUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The registered (or, on an idempotent re-upload, the pre-existing) asset. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetResponse"];
+                };
+            };
+            /** @description Invalid or missing field (`invalid-parameter`), or `targetKind: "node"` with no `target` (`asset-target-required`) — see `detail` for which. */
+            400: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `asset:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description The uploaded file exceeds this coordinator's own upload size bound (`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`). Nothing was stored. Shares `type` `payload-too-large` with the identical refusal on `POST /config/resolume/composition` — one class, one URI. */
+            413: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /** @description This coordinator's asset storage ran out of space while staging the upload (`storage-full`). Nothing was registered. */
+            507: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAssetContent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Standard HTTP byte-range request, e.g. "bytes=0-1023". */
+                Range?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. The complete asset bytes. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    /** @description The asset's content hash, quoted. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial Content, honoring a `Range` request header. */
+            206: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description An internal error, OR (see `detail`) the stored blob's on-disk size disagrees with its recorded size: a corrupted or truncated asset is reported, never served. */
+            500: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
 }

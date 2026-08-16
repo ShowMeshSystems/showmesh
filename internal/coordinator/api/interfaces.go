@@ -379,3 +379,21 @@ type DeclarationStore interface {
 	// discovery run itself is allowed to call.
 	RecordNodeDiscoverySeen(ctx context.Context, nodeID, runID string, seenAt time.Time) error
 }
+
+// AssetStore is Track E seam E3/E4's asset metadata store, as this package
+// needs it (ADR-028): looking up one asset by id and listing by filter.
+// Satisfied directly by *store.Store (its GetAsset/ListAssets methods),
+// matching [DeclarationStore]'s "the real dependency already has this
+// method set" pattern.
+//
+// The WRITE half (CreateAsset) is deliberately NOT a method here, for the
+// identical reason [ConfigStore]'s doc comment gives for its own write
+// half: it is composed directly against a live [store.Tx] inside
+// [identity.Service.AuditedWrite]'s closure (assets.go), because ADR-024
+// decision 11's same-transaction rule needs that exact boundary — bytes
+// are staged and hashed BEFORE any row exists, and the metadata row and its
+// audit entry land in one transaction or none of them do.
+type AssetStore interface {
+	GetAsset(ctx context.Context, id string) (store.AssetRecord, error)
+	ListAssets(ctx context.Context, filter store.AssetFilter) ([]store.AssetRecord, error)
+}

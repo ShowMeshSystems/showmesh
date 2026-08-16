@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -211,6 +213,27 @@ type Dependencies struct {
 	// unsupported, matching this struct's standing "an unwired dependency
 	// is not this API failing" posture.
 	ResolumeActions ResolumeActionDispatcher
+
+	// Assets is Track E seam E3/E4's asset metadata read half — see
+	// [AssetStore]'s own doc comment for why its write half is composed
+	// against Identity.AuditedWrite instead of a method here. A nil field
+	// is replaced by [noAssetStore], under which every read reports "not
+	// found"/empty, matching this struct's standing "an unwired dependency
+	// is not this API failing" posture.
+	Assets AssetStore
+
+	// AssetBackend stores and serves asset bytes, content-addressed by
+	// sha256 (ADR-028 decision 4) — see assetstore.Backend. A nil field is
+	// replaced by [noAssetBackend], under which POST /assets refuses
+	// loudly (matching every other unwired write dependency's posture) and
+	// GET /assets/{id}/content reports the blob not found.
+	AssetBackend assetstore.Backend
+
+	// AssetMaxUploadBytes bounds a single asset upload (SHOWMESH_ASSET_MAX_UPLOAD_BYTES).
+	// A value <= 0 is replaced by [assetstore.DefaultMaxUploadBytes] —
+	// the same "nothing told this API otherwise" posture as every other
+	// unwired/unset numeric dependency in this struct.
+	AssetMaxUploadBytes int64
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -221,6 +244,11 @@ type Dependencies struct {
 // drifts from this interface, this line fails to compile rather than the
 // drift surfacing only once someone tries to wire the two together.
 var _ CommandStore = (*store.Store)(nil)
+
+// storeSatisfiesAssetStore is [AssetStore]'s identical compile-time
+// assertion — *store.Store's GetAsset/ListAssets already satisfy it with
+// no adapter needed.
+var _ AssetStore = (*store.Store)(nil)
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -260,6 +288,15 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.ResolumeActions == nil {
 		d.ResolumeActions = noResolumeActionDispatcher{}
+	}
+	if d.Assets == nil {
+		d.Assets = noAssetStore{}
+	}
+	if d.AssetBackend == nil {
+		d.AssetBackend = noAssetBackend{}
+	}
+	if d.AssetMaxUploadBytes <= 0 {
+		d.AssetMaxUploadBytes = assetstore.DefaultMaxUploadBytes
 	}
 	return d
 }
@@ -442,6 +479,45 @@ func (noMacroRunner) ListRuns(context.Context, MacroRunFilter) ([]store.MacroRun
 
 func (noMacroRunner) SnapshotRuns(context.Context) ([]store.MacroRunRecord, error) {
 	return nil, nil
+}
+
+// noAssetStore is [Dependencies.Assets]'s nil-safe default. GetAsset
+// answers [store.ErrAssetNotFound] and ListAssets answers empty-and-
+// successful — a coordinator with no AssetStore wired in has registered no
+// assets, which is the honest answer for both reads, matching
+// [noCommandStore]'s identical posture for its own read methods.
+type noAssetStore struct{}
+
+func (noAssetStore) GetAsset(context.Context, string) (store.AssetRecord, error) {
+	return store.AssetRecord{}, store.ErrAssetNotFound
+}
+
+func (noAssetStore) ListAssets(context.Context, store.AssetFilter) ([]store.AssetRecord, error) {
+	return nil, nil
+}
+
+// errAssetBackendNotConfigured is [noAssetBackend.Put]'s uniform failure,
+// matching [errCommandStoreNotConfigured]'s identical posture: a write
+// dependency nobody has wired in refuses loudly rather than fabricating a
+// blob that was never staged.
+var errAssetBackendNotConfigured = errors.New("api: no assetstore.Backend was wired into this API's Dependencies")
+
+// noAssetBackend is [Dependencies.AssetBackend]'s nil-safe default. Put
+// refuses loudly (a write); Open/Stat answer [assetstore.ErrNotFound] — a
+// coordinator with no backend wired in holds no blob under any key, which
+// is the honest answer for those two reads.
+type noAssetBackend struct{}
+
+func (noAssetBackend) Put(context.Context, io.Reader, int64) (assetstore.Blob, error) {
+	return assetstore.Blob{}, errAssetBackendNotConfigured
+}
+
+func (noAssetBackend) Open(context.Context, string) (io.ReadSeekCloser, int64, error) {
+	return nil, 0, assetstore.ErrNotFound
+}
+
+func (noAssetBackend) Stat(context.Context, string) (int64, error) {
+	return 0, assetstore.ErrNotFound
 }
 
 // scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
@@ -908,6 +984,27 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.active", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActive))
 	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
 	mux.HandleFunc("GET /api/v1/config/show.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActiveRevisions))
+
+	// --- Track E: the asset store ---
+	//
+	// Seam E3/E4 (ADR-028). POST is a multipart upload behind asset:write
+	// (admin only, identity/types.go) via writeGuard, exactly like every
+	// other write in this package — CSRF and scope enforcement come free
+	// from that one guard. GET (list, one, and its bytes) all stay open by
+	// default: reads never require asset:write. Listing and single-asset
+	// reads use readAnyGuard(showConfigReadScopes, ...), the identical
+	// posture every other Track E config kind uses, because an asset row
+	// is exactly that: configuration metadata, not telemetry. The content
+	// route uses the plain node:read scope instead — it is what an AGENT
+	// authenticates with to fetch its own bytes (TRACK-E-SESSION-SPEC.md
+	// section 5.2's asset.fetch operation), and node:read is what an agent
+	// credential already holds; requiring show:macro:run/config:write here
+	// would make every node fetch need a principal shaped for a human
+	// operator instead of a machine one.
+	mux.HandleFunc("POST /api/v1/assets", h.writeGuard(&scopeAssetWrite, h.handlePostAssetUpload))
+	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
+	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
+	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.
