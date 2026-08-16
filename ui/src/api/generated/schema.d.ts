@@ -245,6 +245,7 @@ export interface paths {
          *       | `fpp.observations.changed` | `FPPObservationsChangedEvent` | `?deltas=1` connections only |
          *       | `event.recorded` | `EventRecordedEvent` | every connection |
          *       | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
+         *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for these six types, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -413,6 +414,47 @@ export interface paths {
          *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition — see GET /resolume/actions' own `auditExempt` field.
          */
         post: operations["dispatchResolumeAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolume as a first-class observability resource (Track D seam E)
+         * @description Everything ShowMesh already holds for its configured Resolume instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its `resolume.*` observations and the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. No request to Resolume is ever made serving this route. Gated by `observation:read` — the same guard `GET /observations` uses, since this is telemetry, not configuration, unlike `GET /config/resolume/composition` (which uses `config:write`).
+         *     An unconfigured coordinator returns `200` with an empty `instances` array, never `null` and never a `404` — "nothing is configured" is a fact about the deployment, not an error.
+         */
+        get: operations["listResolumeInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/instances/{instanceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One Resolume instance (Track D seam E)
+         * @description Unlike the list route, no match here — including on an unconfigured coordinator — is the ordinary resource-not-found shape, matching `GET /fpp/{instanceId}`'s identical posture for a bare, single-resource GET.
+         */
+        get: operations["getResolumeInstance"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -846,6 +888,34 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
+        /** @description The composition ShowMesh holds as configuration for this instance (ADR-032), never a live read of Arena. Mirrors the reduced summary ResolumeCompositionUploadResponse/ResolumeCompositionResponse already carry (name, revision, activatedAt). */
+        ResolumeInstanceComposition: {
+            name: string;
+            revision: number;
+            /** Format: date-time */
+            activatedAt: string;
+        };
+        /** @description One configured Resolume Arena instance's current representation (Track D seam E). Mirrors FPPInstance's conventions: observations is never null, and composition is null before any composition has ever been uploaded. */
+        ResolumeInstance: {
+            instanceId: string;
+            /** @enum {string} */
+            health: "healthy" | "degraded" | "failed" | "unknown" | "suppressed";
+            /** @description Ordered by signal, ascending, and this ordering is guaranteed. */
+            observations: components["schemas"]["Evidence"][];
+            composition: components["schemas"]["ResolumeInstanceComposition"] | null;
+        };
+        ResolumeInstancesResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @description At most one element today (SHOWMESH_RESOLUME_ID). An unconfigured coordinator returns an empty array, never null. */
+            instances: components["schemas"]["ResolumeInstance"][];
+        };
+        /** @description See NodeResponse; the same rule applies identically here. */
+        ResolumeInstanceResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            instance: components["schemas"]["ResolumeInstance"];
+        };
         /**
          * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) — a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies — the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape — required fields, enums, numeric bounds — as real JSON Schema, not as prose a generator cannot see.
          *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant — see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
@@ -982,6 +1052,8 @@ export interface components {
             collectors: components["schemas"]["CollectorStatus"][];
             /** @description Step 9: every in-flight macro run, plus a bounded window of recently finished ones (STEP-9-SPEC.md section 6.6). Fatal to omit per ADR-020 decision 3: the change stream emits no id, so a client connecting for the first time during an in-flight run has no other way to learn the run exists. */
             macroRuns: components["schemas"]["MacroRunSummary"][];
+            /** @description Track D seam E: every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
+            resolume: components["schemas"]["ResolumeInstance"][];
         };
         /** @description A principal's own non-secret identity (ADR-024). */
         PrincipalSummary: {
@@ -1365,6 +1437,13 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
+        };
+        /** @description The payload of a resolume.changed event (Track D seam E). */
+        ResolumeChangedEvent: {
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            instance: components["schemas"]["ResolumeInstance"];
         };
         EventRecordedEvent: {
             seq: number;
@@ -2603,6 +2682,59 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    listResolumeInstances: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstanceResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     listFPPEndpointsConfigRevisions: {

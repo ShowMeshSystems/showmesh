@@ -711,6 +711,7 @@ paths:
           | `fpp.observations.changed` | `FPPObservationsChangedEvent` | `?deltas=1` connections only |
           | `event.recorded` | `EventRecordedEvent` | every connection |
           | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
+          | `resolume.changed` | `ResolumeChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -1422,6 +1423,76 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /resolume/instances:
+    get:
+      operationId: listResolumeInstances
+      summary: Resolume as a first-class observability resource (Track D seam E)
+      description: >-
+        Everything ShowMesh already holds for its configured Resolume
+        instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its
+        `resolume.*` observations and the composition ShowMesh holds as
+        configuration (ADR-032), never a live read of Arena. No request to
+        Resolume is ever made serving this route. Gated by
+        `observation:read` — the same guard `GET /observations` uses, since
+        this is telemetry, not configuration, unlike
+        `GET /config/resolume/composition` (which uses `config:write`).
+
+        An unconfigured coordinator returns `200` with an empty
+        `instances` array, never `null` and never a `404` — "nothing is
+        configured" is a fact about the deployment, not an error.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeInstancesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /resolume/instances/{instanceId}:
+    get:
+      operationId: getResolumeInstance
+      summary: One Resolume instance (Track D seam E)
+      description: >-
+        Unlike the list route, no match here — including on an
+        unconfigured coordinator — is the ordinary resource-not-found
+        shape, matching `GET /fpp/{instanceId}`'s identical posture for a
+        bare, single-resource GET.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeInstanceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/fpp.endpoints/revisions:
     get:
       operationId: listFPPEndpointsConfigRevisions
@@ -2668,6 +2739,69 @@ components:
           format: date-time
         instance:
           $ref: "#/components/schemas/FPPInstance"
+    ResolumeInstanceComposition:
+      type: object
+      description: >-
+        The composition ShowMesh holds as configuration for this instance
+        (ADR-032), never a live read of Arena. Mirrors the reduced summary
+        ResolumeCompositionUploadResponse/ResolumeCompositionResponse
+        already carry (name, revision, activatedAt).
+      required: [name, revision, activatedAt]
+      properties:
+        name:
+          type: string
+        revision:
+          type: integer
+        activatedAt:
+          type: string
+          format: date-time
+    ResolumeInstance:
+      type: object
+      description: >-
+        One configured Resolume Arena instance's current representation
+        (Track D seam E). Mirrors FPPInstance's conventions: observations
+        is never null, and composition is null before any composition has
+        ever been uploaded.
+      required: [instanceId, health, observations, composition]
+      properties:
+        instanceId:
+          type: string
+        health:
+          type: string
+          enum: [healthy, degraded, failed, unknown, suppressed]
+        observations:
+          type: array
+          description: Ordered by signal, ascending, and this ordering is guaranteed.
+          items:
+            $ref: "#/components/schemas/Evidence"
+        composition:
+          oneOf:
+            - $ref: "#/components/schemas/ResolumeInstanceComposition"
+            - type: "null"
+    ResolumeInstancesResponse:
+      type: object
+      required: [serverTime, instances]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instances:
+          type: array
+          description: >-
+            At most one element today (SHOWMESH_RESOLUME_ID). An
+            unconfigured coordinator returns an empty array, never null.
+          items:
+            $ref: "#/components/schemas/ResolumeInstance"
+    ResolumeInstanceResponse:
+      type: object
+      description: See NodeResponse; the same rule applies identically here.
+      required: [serverTime, instance]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instance:
+          $ref: "#/components/schemas/ResolumeInstance"
     FPPCommandRequest:
       description: >-
         The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8,
@@ -3114,7 +3248,8 @@ components:
     Snapshot:
       type: object
       required:
-        [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns]
+        [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns,
+         resolume]
       properties:
         serverTime:
           type: string
@@ -3156,6 +3291,14 @@ components:
             has no other way to learn the run exists.
           items:
             $ref: "#/components/schemas/MacroRunSummary"
+        resolume:
+          type: array
+          description: >-
+            Track D seam E: every configured Resolume instance, rendered
+            exactly as GET /resolume/instances renders it. Never null: an
+            unconfigured coordinator reports an empty array.
+          items:
+            $ref: "#/components/schemas/ResolumeInstance"
     PrincipalSummary:
       type: object
       description: A principal's own non-secret identity (ADR-024).
@@ -4177,6 +4320,18 @@ components:
           format: date-time
         instance:
           $ref: "#/components/schemas/FPPInstance"
+    ResolumeChangedEvent:
+      type: object
+      description: The payload of a resolume.changed event (Track D seam E).
+      required: [seq, serverTime, instance]
+      properties:
+        seq:
+          type: integer
+        serverTime:
+          type: string
+          format: date-time
+        instance:
+          $ref: "#/components/schemas/ResolumeInstance"
     EventRecordedEvent:
       type: object
       required: [seq, serverTime, event]
