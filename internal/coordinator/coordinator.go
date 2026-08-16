@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
@@ -216,6 +217,16 @@ func Run() int {
 	// contract rather than duplicating its condition.
 	assetSync := assetsync.NewService(st, bm, logger, cfg.AssetContentBaseURL, cfg.AssetInventoryInterval)
 
+	// The volume backend owns the asset bytes; SQLite holds only their
+	// metadata (ADR-028). A backend that cannot be opened is fatal, because
+	// the alternative is an upload surface that accepts a request and has
+	// nowhere to put it.
+	assetBackend, assetBackendErr := assetstore.NewVolumeBackend(cfg.AssetDir)
+	if assetBackendErr != nil {
+		logger.Error("failed to open the asset store directory", "dir", cfg.AssetDir, "error", assetBackendErr)
+		return 1
+	}
+
 	// fppRunner is constructed here — BEFORE apiDeps, not after it the way
 	// this file had every other FPP collector wiring line ordered before
 	// the 2026-08-13 post-dispatch poll nudge — so apiDeps.Nudger
@@ -377,6 +388,14 @@ func Run() int {
 		// api.ConfigStore directly (see that interface's doc comment), no
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
+		// Track E: *store.Store satisfies api.AssetStore directly, the same
+		// way it satisfies Config above. AssetBackend and AssetMaxUploadBytes
+		// are the upload handler's two other halves; the byte limit lives in
+		// config rather than in the handler so the CLI can derive its own
+		// transfer budget from the same number.
+		Assets:              st,
+		AssetBackend:        assetBackend,
+		AssetMaxUploadBytes: cfg.AssetMaxUploadBytes,
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must
