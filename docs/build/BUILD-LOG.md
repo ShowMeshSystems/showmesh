@@ -52,7 +52,7 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > ---
 >
-> **TRACK D, 2026-08-15: D-3 IS BUILT, REVIEWED AND CLOSED. ShowMesh can now act on Resolume.** Seven actions over REST by object id, each confirmed on evidence that post-dates its own dispatch, each behind the `resolume:action` scope, each declared `coordinator-required`, with `showmeshctl` coverage and the OpenAPI contract conformance-tested. **The next action is the crash-recovery seam, now specified as [D-3a](TRACK-D-D3A-CRASH-RECOVERY-SPEC.md) and not built**: Arena is gone, ShowMesh says so, and the playing layers are restored once Arena is back. **Three decisions in its §7 need the owner before it is buildable**, and one of them is larger than the seam's name suggests: gating the restore on Show Mode makes this the seam that builds ADR-033's mode. **D-4, the Operator UI, is partly blocked on the wire-id question below**, because the UI's action controls have to name a clip somehow and rendering Arena's raw object id to the operator is what ADR-029 and ADR-030 both push against.
+> **TRACK D, 2026-08-15: D-3 IS BUILT, REVIEWED AND CLOSED. ShowMesh can now act on Resolume.** Seven actions over REST by object id, each confirmed on evidence that post-dates its own dispatch, each behind the `resolume:action` scope, each declared `coordinator-required`, with `showmeshctl` coverage and the OpenAPI contract conformance-tested. **The next action is the crash-recovery seam, now specified as [D-3a](TRACK-D-D3A-CRASH-RECOVERY-SPEC.md) and not built**: Arena is gone, ShowMesh says so, and the playing layers are restored once Arena is back. **Its §7 decisions were answered by the owner on 2026-08-15, six more were answered on 2026-08-16 as §10, and all are folded into the spec, so D-3a is buildable as written.** Note that a **Show Mode** gate on the restore was considered and **rejected** by the owner (§7.2): this seam does not build ADR-033's mode and must not read a mode value. An earlier version of this block said the opposite and was wrong. **The build order is ADR-037 seam B, then D-3a, then D-4** (owner, 2026-08-16), because both later items are operator-facing and rendering Arena's raw object id to the operator is what ADR-029 and ADR-030 both push against.
 >
 > **D-2 AND D-3 HAVE NOW RUN AGAINST A REAL ARENA**, on the owner's explicit authorisation to drive and crash it, 2026-08-15. Thirteen checks passed and none failed; the full record with exact outputs is [docs/bench/TRACK-D-LIVE-VERIFICATION.md](../bench/TRACK-D-LIVE-VERIFICATION.md) §6. **The qualifier that must travel with every one of those results: this was the development laptop, which is not the playout machine**, so it is real evidence about ShowMesh's behaviour and no evidence at all about how Arena behaves on the show host. The remaining checks, and a repeat on the playout machine, are still outstanding.
 >
@@ -74,7 +74,7 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > **Two AST guards the package should have had since D-1.** No positional addressing and no OSC, both enforced structurally rather than by the doc comment that stated them. The D-1 review flagged the gap; writes are what made it worth closing, because a positional path is the most likely wrong thing a future builder adds. Both are AST-based rather than greps for the reason the existing `GET /composition` guard already wrote down: the package's own prose states these rules, so a grep fails the build on the comment documenting the rule. The OSC guard deliberately does not match the word "position", because `idmap.go` legitimately resolves positional attributes out of the composition file into ids, which is exactly what ADR-032 asks for.
 >
-> **One question is open and belongs to the owner**, recorded as §9 of the D-3 specification. The wire `id` is Arena's own numeric object id parsed out of the `.avc`, while the contract describes it as a ShowMesh reference resolving through the stored id map. Resolving a raw Resolume id against a map keyed on raw Resolume ids is not an indirection, and ADR-029's point is that rebinding once keeps every macro correct: as built, re-authoring the composition changes ids and every stored binding starts silently refusing. Both reviewers reached it independently. Either D-3 scoped "reference" to mean the id out of the file and nobody recorded that, or the reference layer is missing and belongs with the Show object in D-4 or Track E. **Nothing was changed in the code pending the answer.**
+> **That question is answered: [ADR-037](../decisions/ADR-037-resolume-references-are-names-not-ids.md) (owner decision, 2026-08-15) makes every operator-facing Resolume reference a name, never an object id.** The wire `id` D-3 shipped is Arena's own numeric object id parsed out of the `.avc`; resolving a raw Resolume id against a map keyed on raw Resolume ids is not an indirection, and re-authoring the composition mints new ids, so every stored binding would start silently refusing. Both reviewers reached it independently. Per the ADR's own status line, decision 7 is implemented and decisions 1 through 6 and 8 are not. **Implementing ADR-037 is Track D's next build item alongside D-3a**, and D-4's naming problem resolves through it.
 >
 > ---
 >
@@ -251,6 +251,56 @@ The generalizable shape, worth carrying past this record: **an argument that deg
 Separately, the probe is ready to run against the real FPP player whenever the owner has bench time. That is what moves RES-002 from L1 to L2, and RES-002 is the highest-risk research record in the project.
 
 The third-party product name discussed under "Conflicts found" in the audio session entry below had been removed from the working copy of `docs/reference-installation.md` but remained in the git history of the initial commit, and therefore on the remote, because removing a line from the working tree does not remove it from history. History was rewritten on 2026-08-10 to carry the neutral wording from the initial commit onward, every reachable object was re-scanned to confirm no blob or commit message still contains it, and the result was force-pushed. All commit hashes changed at that point; anything referencing a pre-rewrite hash is stale.
+
+---
+
+## 2026-08-16 (Track D seam D-3a reviewed before building it, and six owner decisions)
+
+**Goal:** review Track D's open items and the D-3a crash-recovery specification, find every question a builder would have to guess at, and get them answered before a build session opens. No code.
+
+**Completed:** the specification was read against the adapter as built rather than on its own terms, which is what produced the sharpest finding below. Six questions went to the owner and all six came back the same day. `docs/build/TRACK-D-D3A-CRASH-RECOVERY-SPEC.md` now carries them as §10, with each answer also folded into the section it governs (§1, §3, §5, §7.1, §7.3, §9, and five new acceptance criteria). Nothing was built.
+
+**One owner question from the previous session had been answered in the document and never said back to him**, which is why he asked it again: whether driving a Resolume host that is not the coordinator needs a helper app on that host. It does not, §7a has the measurement, and the answer is now in his hands rather than only in the file. **Recording an answer is not delivering it.**
+
+**Decisions made**, all owner, all 2026-08-16, all recorded in D-3a §10:
+
+- **The restore covers what ShowMesh drove and states its own coverage honestly** (§10.1). No periodic survey, no widening of D-2's steady-state footprint. The owner's reason is that a timecode-driven timeline should resume on its own when LTC keeps rolling; **that is an assumption and travels as one**, and it goes into RES-001's matrix as a D0 case rather than being asserted here.
+- **ADR-037 seam B lands before D-3a, which lands before D-4** (§10.2).
+- **The recovery toggle's UI switch ships in D-3a**, not deferred to D-4 (§10.3). This resolved a contradiction inside the specification, where criterion 9 required dashboard visibility while §9 excluded all UI work.
+- **The recovery principal is built in and cannot be deleted, disabled, or stripped of scope** (§10.4). The toggle is the one off switch.
+- **Recovery bypasses the transition-survey throttle, behind a settle delay of 5 to 10 seconds** (§10.5). The bypass changes when the survey may run, never how many requests it makes.
+- **A watchdog stays out of core and stays buildable elsewhere** (§10.6, amending §1). Revisit after the November Resolume upgrade; if it is ever built it is its own repository. Three properties keep it a small external program and all three already exist.
+
+**The finding that changed the seam's scope, because it is a shape worth recognising.** §3 of the specification described the survey source as "event-driven, so this can be hours old". Read against `collector.go` and `resolumewiring.go` it is sharper than that: a survey runs on a WebSocket connect, an explicit request, a liveness transition, and a composition upload, and **a WebSocket change message triggers only a `/product` nudge, never a survey**. The live verification had already measured the consequence without anyone drawing it out: the survey ran once at startup and never repeated across 180 seconds. Combined with Track D's own path one, where **LTC launches the timeline clips and ShowMesh does not**, the recovery record as specified would hold nothing at all for the timeline. **A specification that describes its own dependency approximately hides its own scope.** The document was written from the seam's point of view; the correction came from reading the thing it depends on.
+
+**Two stale claims corrected.** The Current state block still said that gating the restore on Show Mode makes D-3a the seam that builds ADR-033's mode, which the owner had already rejected in §7.2 on 2026-08-15; a builder following CLAUDE.md's instruction to read Current state first would have built Show Mode for no reason. **A correction that adds the new fact without deleting the old one leaves both.** The Track D document's status line still listed D-3a's three decisions as outstanding.
+
+**Questions raised with the owner:** all six above, all answered. One was asked badly enough that the answer came back about a different subject: the survey-throttle question was read as the auto-relaunch question, which is a fair reading of how it was worded. Restated in plainer terms, it was answered directly, and the misread turned into the watchdog decision in §10.6.
+
+**Deferred:** everything. No build. D0's timecode matrix gains the "does the timeline resume through a Resolume restart" case, which is now load-bearing for §10.1 rather than a curiosity.
+
+**Verification gates:** none run. This session touched only `docs/`.
+
+---
+
+## 2026-08-15 (Multi-track orchestration codified, and the state block caught up with Track D)
+
+**Goal:** review overall progress across the tracks, codify the rules for unattended multi-track orchestration sessions, and correct the Current state block where it had fallen behind Track D's own documents.
+
+**Completed:**
+
+- **CLAUDE.md's Build workflow section gained the multi-track session rules** (owner, 2026-08-15): per-track worktrees with serialized merges, orchestrator-only minting of scarce identifiers, documentation delegated to a docs agent that writes from evidence rather than builder claims, an owner decision queue and a hardware punch list in `docs/private/`, running-binary gates at the end of every seam, and the live-fleet and unpublished-release rules restated as absolute when no owner is present.
+- `.claude/agents/showmesh-docs.md` (the docs agent definition, untracked tooling), `docs/private/DECISION-QUEUE.md` and `docs/private/PUNCH-LIST.md` created. The punch list opens with the hardware items already owed: the B0 NDI spike, the playout-host repeat of the thirteen live Arena checks, the phone recheck of the CSRF Origin fallback, RES-002's physical bench, the first real-host plugin install, and Track C's per-device tone test.
+- **Two stale claims in the Current state block corrected against the documents they summarize:** D-3a's §7 decisions were answered by the owner on 2026-08-15 and the seam is buildable as written, and the D-3 §9 wire-id question is answered by ADR-037 rather than open.
+- Confirmed the close-out flags session landed clean: working tree clean at `c041c6f`.
+
+**Decisions made:** the owner reconfirmed that no interface gates Track C (already recorded 2026-08-14 in BUILD-PLAN; nothing new to record) and directed that unattended sessions run under the multi-track rules now in CLAUDE.md.
+
+**Questions raised with the owner:** none.
+
+**Deferred:** the B0 NDI spike remains the owner's own bench work and the most schedule-critical unrun item.
+
+**Verification gates:** `go build ./...` and `go test ./internal/coordinator/... -count=1` green on `c041c6f` this session. No other gates run; this session changed no code.
 
 ---
 

@@ -87,6 +87,7 @@ Desk research 2026-08-10 (Resolume manual, API specs, forum excerpts; no bench w
 7. NDI input end-to-end latency in the reference topology. **Still open.**
 8. **New, 2026-08-14: what the API reports while a composition is swapped without a restart.** A restart produces a ~1.2 s window in which REST answers `200 OK` with a composition that is not the show, carrying the correct name for the last 0.7 s. The swap case is the one the owner says actually recurs, and assuming it is atomic would be unwise.
 9. **New, 2026-08-14: whether the crossfader can silence a layer that passes every other readiness term.**
+10. **New, 2026-08-16, and something else now depends on the answer: does a timecode-driven timeline resume by itself after a Resolume restart, with LTC still rolling?** The restart case was already in the test matrix; what changed is that [D-3a](../build/TRACK-D-D3A-CRASH-RECOVERY-SPEC.md) §10.1 scopes crash recovery to the layers ShowMesh drove explicitly, on the owner's reasoning that the timeline picks itself back up. That reasoning is untested. **If it does not resume, §10.1 reopens** and the alternatives are a low-rate layer read during a show or restoring layer state instead of clip state. Method: run a clip from LTC, kill Arena (never quit it, that raises a save prompt), relaunch, keep the generator running throughout, and record whether the clip re-launches on its own, how long it takes, and whether the layer's own state (bypass, master) survives.
 
 ## Decision, fallback, and revalidation
 
