@@ -12,7 +12,6 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
-import { ResolumeCompositionUpload } from '../components/ResolumeCompositionUpload'
 
 // Step 7 seam A (RES-008 D1): the configuration write surface's own view —
 // the active `fpp.endpoints` configuration, its revision history, and an
@@ -298,20 +297,6 @@ export function Configuration() {
                 </>
               )}
 
-              {/*
-                Track D seam D-2a (ADR-032 decision 8). Placed inside this
-                SAME `scopeGate.allowed` gate as the fpp.endpoints editor
-                above, rather than given its own scope check: the
-                coordinator's own route registration requires config:write
-                for BOTH GET and POST /config/resolume/composition (unlike
-                most reads, which stay open by default per ADR-024
-                constraint 23) — the identical scope this whole page
-                already gates on. See ResolumeCompositionUpload.tsx's own
-                comment for why it still handles a live 403 itself: this
-                gate reflects the browser's last-fetched scope list, which
-                can be stale relative to the coordinator's actual answer.
-              */}
-              <ResolumeCompositionUpload />
             </>
           )}
         </>

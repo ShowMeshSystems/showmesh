@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  getShowAction,
   getShowMacro,
   getShowMacroRevisions,
   listConfigObjects,
@@ -15,6 +16,7 @@ import { ScopedButton } from '../components/ScopedButton'
 import { RunMacroButton } from '../components/RunMacroButton'
 import { MacroRunOutcome } from '../components/MacroRunOutcome'
 import type {
+  ActionIntegration,
   ConfigObjectSummary,
   ConfigShowMacro,
   ConfigShowMacroStep,
@@ -155,6 +157,13 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
   const [actions, setActions] = useState<ConfigObjectSummary[] | null>(null)
   const [runs, setRuns] = useState<MacroRunSummary[] | null>(null)
   const [runsError, setRunsError] = useState<string | null>(null)
+  // Track D seam D-4 (build contract §2.4): "the localFallback.class
+  // constraint surfaced honestly (every Resolume action is
+  // coordinator-required, and the server refuses anything else)." A show
+  // action's OWN integration is not on ConfigObjectSummary (id/label/
+  // revision only) — this fetches each referenced action's full payload,
+  // once per distinct id, and caches the answer here.
+  const [actionIntegrations, setActionIntegrations] = useState<Record<string, ActionIntegration>>({})
 
   useEffect(() => {
     if (!readGate.allowed) return
@@ -211,6 +220,38 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
       cancelled = true
     }
   }, [existingId, readGate.allowed, isNew])
+
+  useEffect(() => {
+    if (!readGate.allowed) return
+    const unknownIds = [
+      ...new Set(
+        form.steps
+          .map((s) => s.action.trim())
+          .filter((id) => id !== '' && !(id in actionIntegrations)),
+      ),
+    ]
+    if (unknownIds.length === 0) return
+    let cancelled = false
+    void Promise.all(
+      unknownIds.map((id) =>
+        getShowAction(id)
+          .then((resp) => [id, resp.payload.target.integration] as const)
+          .catch(() => null),
+      ),
+    ).then((results) => {
+      if (cancelled) return
+      setActionIntegrations((prev) => {
+        const next = { ...prev }
+        for (const result of results) {
+          if (result !== null) next[result[0]] = result[1]
+        }
+        return next
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [form.steps, readGate.allowed, actionIntegrations])
 
   function updateStep(index: number, patch: Partial<StepForm>): void {
     setForm((f) => ({ ...f, steps: f.steps.map((s, i) => (i === index ? { ...s, ...patch } : s)) }))
@@ -387,12 +428,31 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
                   }
                 >
                   {LOCAL_FALLBACK_CLASSES.map((cls) => (
-                    <option key={cls} value={cls}>
+                    <option
+                      key={cls}
+                      value={cls}
+                      disabled={actionIntegrations[step.action.trim()] === 'resolume' && cls !== 'coordinator-required'}
+                    >
                       {cls}
                     </option>
                   ))}
                 </select>
               </label>
+              {/* Track D seam D-4 (build contract §2.4): mirroring, not
+                  enforcing (ADR-030) — every option besides
+                  "coordinator-required" is disabled above once this step's
+                  own action is known to be a Resolume integration, but the
+                  coordinator still refuses a saved mismatch on its own;
+                  this note states the reason where an operator authoring
+                  this exact field would look. */}
+              {actionIntegrations[step.action.trim()] === 'resolume' && (
+                <p className="text-muted" role="status">
+                  This step invokes a Resolume action. Every Resolume action is
+                  coordinator-required — Resolume holds no local fallback for a
+                  coordinator-hosted adapter — so the coordinator refuses anything
+                  other than &ldquo;coordinator-required&rdquo; here.
+                </p>
+              )}
               {/* STEP-9-SPEC.md section 5.4: stated where an operator
                   authoring this exact field would look, not buried in a
                   document this component never links to. */}

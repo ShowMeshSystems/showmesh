@@ -3,7 +3,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Dashboard } from './Dashboard'
 import { ModelContext } from '../app/ModelContext'
-import { makeCollectorStatus, makeEvidence, makeFPPInstance, makeModel, makeNode } from '../app/test-support/fixtures'
+import {
+  makeCollectorStatus,
+  makeEvidence,
+  makeFPPInstance,
+  makeModel,
+  makeNode,
+  makeResolumeInstance,
+} from '../app/test-support/fixtures'
 import { makeMainInstance, makeRemote04Instance } from '../app/test-support/fppFleetFixtures'
 import type { Model } from '../app/types'
 
@@ -193,5 +200,54 @@ describe('Dashboard', () => {
   it('shows "not collected" for fleet warnings when no instance has reported a count', () => {
     renderDashboard(makeModel({ fpp: [makeFPPInstance('fpp-a', { observations: [] })] }))
     expect(screen.getByText('FPP warnings across fleet').nextElementSibling?.textContent).toBe('not collected')
+  })
+
+  // Track D seam D-4 (build contract §2.1, acceptance criterion 1): "not
+  // configured" rather than an error or an empty box when GET
+  // /resolume/instances answers with an empty array by design.
+  it('renders the Resolume panel as "not configured" when no instance is configured', () => {
+    renderDashboard(makeModel({ resolume: [] }))
+    const heading = screen.getByRole('heading', { name: 'Resolume' })
+    const section = heading.closest('section')
+    expect(section?.textContent).toContain('not configured')
+  })
+
+  // Acceptance criterion 1: reachability with provenance and freshness,
+  // through the shared EvidenceValue.
+  it('renders Resolume reachability through EvidenceValue, with its state and freshness', () => {
+    const instance = makeResolumeInstance('resolume-1', {
+      composition: { name: 'Christmas 25' },
+      observations: [makeEvidence({ signal: 'resolume.reachable', value: true, state: 'current' })],
+    })
+    renderDashboard(makeModel({ resolume: [instance] }))
+    const heading = screen.getByRole('heading', { name: 'Resolume' })
+    const section = heading.closest('section')
+    expect(section?.textContent).toContain('true')
+    expect(section?.textContent).toContain('Christmas 25')
+    expect(section?.textContent).toMatch(/observed/)
+  })
+
+  // Acceptance criterion 2: an unreachable Arena renders "unknown", never
+  // "healthy", and "unknown" does not collapse into "warning" in the
+  // Attention panel's own sort order.
+  it('surfaces a Resolume instance with unknown health as its own attention item, distinct from warning', () => {
+    const instances = [makeResolumeInstance('resolume-1', { health: 'unknown' })]
+    renderDashboard(makeModel({ resolume: instances }))
+    const labels = attentionBadgeLabels()
+    expect(labels).toHaveLength(1)
+    expect(labels[0]).toContain('unknown')
+    expect(labels[0]).not.toContain('warning')
+  })
+
+  it('surfaces a degraded Resolume instance as a warning, and a failed one as critical', () => {
+    const instances = [
+      makeResolumeInstance('resolume-degraded', { health: 'degraded' }),
+      makeResolumeInstance('resolume-failed', { health: 'failed' }),
+    ]
+    renderDashboard(makeModel({ resolume: instances }))
+    const labels = attentionBadgeLabels()
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toContain('critical')
+    expect(labels[1]).toContain('warning')
   })
 })

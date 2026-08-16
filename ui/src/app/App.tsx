@@ -25,6 +25,7 @@ import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
+import { ResolumeView } from '../views/ResolumeView'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -43,6 +44,8 @@ export default function App() {
             <Route path="fpp/:instanceId" element={<FPPDetail />} />
             <Route path="capabilities" element={<Capabilities />} />
             <Route path="events" element={<Events />} />
+            {/* Track D seam D-4: the Resolume observability/control view. */}
+            <Route path="resolume" element={<ResolumeView />} />
             <Route path="config" element={<Configuration />} />
             {/* Step 9 (STEP-9-SPEC.md section 9): the macro list/run/run-view
                 surfaces plus authoring for both show.macro and show.action.
