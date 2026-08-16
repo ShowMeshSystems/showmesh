@@ -2,9 +2,9 @@ package coordinator
 
 // This file is resolumeactionwiring.go's own unit-level test suite: the
 // pure translation functions (mapActionOutcomeState, mapActionSafetyClass,
-// buildResolumeActionParams, resolveWireObjectID) exercised directly,
-// independent of a real Resolume, a real store, or a real HTTP request —
-// resolumeactionwiring_e2e_test.go is where the wired-path proof lives.
+// buildResolumeActionParams) exercised directly, independent of a real
+// Resolume, a real store, or a real HTTP request — resolumeactionwiring_e2e_test.go
+// is where the wired-path proof lives.
 
 import (
 	"strings"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
+	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
 // --- mapActionOutcomeState: all five outcomes survive, and an unmapped
@@ -167,18 +168,24 @@ func TestAdapterActionsParamsVocabularyMatchesTheShippedWireContract(t *testing.
 		byName[d.Name] = d.Params
 	}
 
-	idParam := api.ResolumeActionParam{Name: "id", Kind: api.ResolumeActionParamString, Required: true}
+	clipParam := api.ResolumeActionParam{Name: "clip", Kind: api.ResolumeActionParamString, Required: true}
+	deckParamOptional := api.ResolumeActionParam{Name: "deck", Kind: api.ResolumeActionParamString, Required: false}
+	deckParamRequired := api.ResolumeActionParam{Name: "deck", Kind: api.ResolumeActionParamString, Required: true}
+	layerParamOptional := api.ResolumeActionParam{Name: "layer", Kind: api.ResolumeActionParamString, Required: false}
+	layerParamRequired := api.ResolumeActionParam{Name: "layer", Kind: api.ResolumeActionParamString, Required: true}
+	persistentParam := api.ResolumeActionParam{Name: "persistent", Kind: api.ResolumeActionParamBool, Required: false}
+	columnParam := api.ResolumeActionParam{Name: "column", Kind: api.ResolumeActionParamString, Required: true}
 	tests := []struct {
 		action string
 		want   []api.ResolumeActionParam
 	}{
-		{"launchClip", []api.ResolumeActionParam{idParam}},
-		{"clearLayer", []api.ResolumeActionParam{idParam}},
-		{"launchColumn", []api.ResolumeActionParam{idParam}},
-		{"selectDeck", []api.ResolumeActionParam{idParam}},
+		{"launchClip", []api.ResolumeActionParam{clipParam, deckParamOptional, layerParamOptional, persistentParam}},
+		{"clearLayer", []api.ResolumeActionParam{layerParamRequired}},
+		{"launchColumn", []api.ResolumeActionParam{columnParam, deckParamRequired}},
+		{"selectDeck", []api.ResolumeActionParam{deckParamRequired}},
 		{"blackout", nil},
-		{"setLayerBypass", []api.ResolumeActionParam{idParam, {Name: "bypassed", Kind: api.ResolumeActionParamBool, Required: true}}},
-		{"setLayerMaster", []api.ResolumeActionParam{idParam, {Name: "master", Kind: api.ResolumeActionParamNumber, Required: true}}},
+		{"setLayerBypass", []api.ResolumeActionParam{layerParamRequired, {Name: "bypassed", Kind: api.ResolumeActionParamBool, Required: true}}},
+		{"setLayerMaster", []api.ResolumeActionParam{layerParamRequired, {Name: "master", Kind: api.ResolumeActionParamNumber, Required: true}}},
 	}
 	for _, tt := range tests {
 		got := byName[tt.action]
@@ -198,34 +205,23 @@ func TestAdapterActionsParamsVocabularyMatchesTheShippedWireContract(t *testing.
 // adapter DOES decide (pure boundary translation, see resolumeactionwiring.go's
 // own top comment). ---
 
-func TestResolveWireObjectIDParsesANumericString(t *testing.T) {
-	id, refusal, err := resolveWireObjectID(map[string]any{"id": "6000000000001"}, "id")
+// buildTestTrackedComposition is this file's own small fixture: one deck,
+// one layer, one deck clip on it — just enough for buildResolumeActionParams'
+// own tests to resolve a name against, independent of resolumeactionwiring_e2e_test.go's
+// larger fixture (that file drives the real HTTP stack; these tests drive
+// only the pure translation function).
+func buildTestTrackedComposition(t *testing.T) *resolume.TrackedComposition {
+	t.Helper()
+	comp := &resolumecomp.Composition{
+		Decks:  []resolumecomp.Deck{{ID: "1001", Name: "Main"}},
+		Layers: []resolumecomp.Layer{{ID: "2001", Index: 0, Name: "Layer A"}},
+		Clips:  []resolumecomp.Clip{{ID: "3001", DeckID: "1001", LayerIndex: 0, Name: "Snow"}},
+	}
+	tc, err := resolume.BuildTrackedComposition(comp)
 	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
+		t.Fatalf("BuildTrackedComposition: %v", err)
 	}
-	if refusal != "" {
-		t.Fatalf("refusal = %q, want empty", refusal)
-	}
-	if id != resolume.ObjectID(6000000000001) {
-		t.Errorf("id = %v, want 6000000000001", id)
-	}
-}
-
-func TestResolveWireObjectIDRefusesANonNumericString(t *testing.T) {
-	_, refusal, err := resolveWireObjectID(map[string]any{"id": "not-a-number"}, "id")
-	if err != nil {
-		t.Fatalf("err = %v, want nil (a malformed id is a REFUSAL, not a Go error)", err)
-	}
-	if refusal == "" {
-		t.Fatal("refusal is empty, want a non-empty reason naming the malformed id")
-	}
-}
-
-func TestResolveWireObjectIDErrorsOnAMissingKey(t *testing.T) {
-	_, _, err := resolveWireObjectID(map[string]any{}, "id")
-	if err == nil {
-		t.Fatal("err = nil, want a non-nil error — a missing required param here means B's own decode step and this file's own vocabulary have disagreed, an internal inconsistency, not an ordinary refusal")
-	}
+	return tc
 }
 
 // TestBuildResolumeActionParamsSetLayerMasterPassesTheNumberThrough is
@@ -237,9 +233,10 @@ func TestResolveWireObjectIDErrorsOnAMissingKey(t *testing.T) {
 // every other param-shape mismatch buildResolumeActionParams guards
 // against.
 func TestBuildResolumeActionParamsSetLayerMasterPassesTheNumberThrough(t *testing.T) {
+	tc := buildTestTrackedComposition(t)
 	tests := []float64{0.0, 1.0, 0.4, 0.256}
 	for _, want := range tests {
-		params, refusal, err := buildResolumeActionParams(resolume.ActionSetLayerMaster, map[string]any{"id": "1", "master": want})
+		params, refusal, err := buildResolumeActionParams(resolume.ActionSetLayerMaster, map[string]any{"layer": "Layer A", "master": want}, tc)
 		if err != nil || refusal != "" {
 			t.Fatalf("master=%v: err=%v refusal=%q, want both empty", want, err, refusal)
 		}
@@ -250,9 +247,70 @@ func TestBuildResolumeActionParamsSetLayerMasterPassesTheNumberThrough(t *testin
 }
 
 func TestBuildResolumeActionParamsSetLayerMasterRejectsNonNumeric(t *testing.T) {
-	_, _, err := buildResolumeActionParams(resolume.ActionSetLayerMaster, map[string]any{"id": "1", "master": true})
+	tc := buildTestTrackedComposition(t)
+	_, _, err := buildResolumeActionParams(resolume.ActionSetLayerMaster, map[string]any{"layer": "Layer A", "master": true}, tc)
 	if err == nil {
 		t.Fatalf("err = nil, want a non-nil error for a boolean master param")
+	}
+}
+
+// TestBuildResolumeActionParamsLaunchClipResolvesByNameNoID is this seam's
+// own headline property (ADR-037): a launchClip reference resolves to the
+// composition's own object id, and nothing in the params map this function
+// was given, or the ActionParams it returns, ever carries a raw id as a
+// REFERENCE — ClipID is the resolved result, not an echo of caller input.
+func TestBuildResolumeActionParamsLaunchClipResolvesByNameNoID(t *testing.T) {
+	tc := buildTestTrackedComposition(t)
+	params, refusal, err := buildResolumeActionParams(resolume.ActionLaunchClip, map[string]any{"clip": "Snow", "deck": "Main"}, tc)
+	if err != nil || refusal != "" {
+		t.Fatalf("err=%v refusal=%q, want both empty", err, refusal)
+	}
+	if params.ClipID != resolume.ObjectID(3001) {
+		t.Errorf("params.ClipID = %v, want 3001 (resolved from the composition, not an input id)", params.ClipID)
+	}
+}
+
+// TestBuildResolumeActionParamsLaunchClipRefusesUnknownName proves a name
+// that is not in the stored composition is a REFUSAL (empty err, non-empty
+// refusal), never a Go error and never a fabricated id.
+func TestBuildResolumeActionParamsLaunchClipRefusesUnknownName(t *testing.T) {
+	tc := buildTestTrackedComposition(t)
+	params, refusal, err := buildResolumeActionParams(resolume.ActionLaunchClip, map[string]any{"clip": "Nope", "deck": "Main"}, tc)
+	if err != nil {
+		t.Fatalf("err = %v, want nil (an unresolved name is a refusal, not an error)", err)
+	}
+	if refusal == "" {
+		t.Fatal("refusal is empty, want a reason naming the unresolved clip")
+	}
+	if params != (resolume.ActionParams{}) {
+		t.Errorf("params = %+v, want the zero value on a refusal", params)
+	}
+}
+
+// TestBuildResolumeActionParamsLaunchClipDeckAndPersistentBothRefuse is
+// TRACK-D-SEAM-B-NAMES-SPEC.md §2.1's own rule, exercised through this
+// file's own translation layer rather than only against resolume.ResolveClip
+// directly.
+func TestBuildResolumeActionParamsLaunchClipDeckAndPersistentBothRefuse(t *testing.T) {
+	tc := buildTestTrackedComposition(t)
+	_, refusal, err := buildResolumeActionParams(resolume.ActionLaunchClip,
+		map[string]any{"clip": "Snow", "deck": "Main", "persistent": true}, tc)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if refusal == "" {
+		t.Fatal("refusal is empty, want a reason: deck and persistent must not both be given")
+	}
+}
+
+func TestBuildResolumeActionParamsLaunchClipNeitherDeckNorPersistentRefuses(t *testing.T) {
+	tc := buildTestTrackedComposition(t)
+	_, refusal, err := buildResolumeActionParams(resolume.ActionLaunchClip, map[string]any{"clip": "Snow"}, tc)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if refusal == "" {
+		t.Fatal("refusal is empty, want a reason: a clip reference must name its deck")
 	}
 }
 
@@ -310,7 +368,7 @@ func TestTranslateActionOutcomeSanitizesTheReason(t *testing.T) {
 }
 
 func TestBuildResolumeActionParamsBlackoutTakesNoID(t *testing.T) {
-	params, refusal, err := buildResolumeActionParams(resolume.ActionBlackout, map[string]any{})
+	params, refusal, err := buildResolumeActionParams(resolume.ActionBlackout, map[string]any{}, nil)
 	if err != nil || refusal != "" {
 		t.Fatalf("err=%v refusal=%q, want both empty", err, refusal)
 	}
