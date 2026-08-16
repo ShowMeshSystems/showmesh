@@ -712,6 +712,7 @@ paths:
           | `event.recorded` | `EventRecordedEvent` | every connection |
           | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
           | `resolume.changed` | `ResolumeChangedEvent` | every connection |
+          | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -1311,6 +1312,108 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/resolume.recovery:
+    get:
+      operationId: getResolumeRecoveryConfig
+      summary: The resolume.recovery auto-restore toggle's revision metadata (Track D seam D-3a)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/fpp.endpoints`'s
+        own always-sensitive posture. Unlike fpp.endpoints, "nothing has
+        ever been written" is never a `404` here — the toggle has a
+        well-defined default (enabled) — so this always answers `200`,
+        with `revision` `0` and `source` `"default"` when nothing has ever
+        been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeRecoveryConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putResolumeRecoveryConfig
+      summary: Write a new resolume.recovery auto-restore toggle revision (Track D seam D-3a)
+      description: >-
+        Requires `config:write` (admin only). The body's `autoRestoreEnabled`
+        field is required and must be a JSON boolean, never absent and
+        never null. No other top-level field is accepted. On success,
+        appends a new immutable revision and activates it in the SAME
+        transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule) — with the audit store failing, the write
+        is refused and no revision is created. A cookie-authenticated
+        request additionally requires `Sec-Fetch-Site: same-origin`
+        (ADR-024 decision 6); a bearer-token-authenticated request is
+        exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigResolumeRecoveryPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeRecoveryConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/resolume.recovery/revisions:
+    get:
+      operationId: getResolumeRecoveryConfigRevisions
+      summary: resolume.recovery revision history, newest first (Track D seam D-3a)
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -1423,6 +1526,63 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /resolume/recovery:
+    get:
+      operationId: getResolumeRecovery
+      summary: The Arena crash-recovery record, toggle, and last restore (Track D seam D-3a)
+      description: >-
+        Never gated by any scope — the dashboard renders this with no
+        session (ADR-024's reads-stay-open posture). autoRestoreEnabled is
+        the current toggle value; autoRestoreConfigured is false when
+        nothing has ever been written for it (the default is enabled).
+        record is one row per layer in the current composition, every
+        object reference a name (ADR-037), never an id. lastRestore is
+        null until a restore has run.
+      security: []
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeRecoveryResponse"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /resolume/recovery/restore:
+    post:
+      operationId: restoreResolumeRecovery
+      summary: Manually run the crash-recovery restore (Track D seam D-3a)
+      description: >-
+        Requires `resolume:action`. Runs the same restore the automatic
+        gate runs, without the crash-return gate's own settle wait or
+        identity-freshness check — an operator invoking this on demand is
+        not resolving a specific crash-return race. Always attempts,
+        regardless of the auto-restore toggle. Each eligible layer's own
+        restore is an ordinary `launchClip` dispatch and inherits every
+        D-3 guard (the identity gate, the deck refusal, confirmation).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolumeRecoveryRestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/instances:
     get:
       operationId: listResolumeInstances
@@ -3608,12 +3768,13 @@ components:
       type: object
       description: >-
         The body of GET /config/fpp.endpoints/revisions, GET
-        /config/show.action/{id}/revisions, and GET
-        /config/show.macro/{id}/revisions, newest first — one shape shared
-        across every configuration kind's own revision history route
+        /config/show.action/{id}/revisions, GET
+        /config/show.macro/{id}/revisions, and GET
+        /config/resolume.recovery/revisions, newest first — one shape
+        shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained two more
-        callers).
+        callers; Track D seam D-3a added a fourth).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -3621,7 +3782,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro]
+          enum: [fpp.endpoints, show.action, show.macro, resolume.recovery]
         revisions:
           type: array
           items:
@@ -4184,7 +4345,7 @@ components:
         status to editorialize about the answer.
       required:
         [id, idempotencyKey, action, params, replay, outcome, outcomeReason,
-         attributionDegraded, dispatchedAt, resolvedAt]
+         attributionDegraded, dispatchedAt, resolvedAt, selectedDeckChanged]
       properties:
         id:
           type: string
@@ -4257,6 +4418,230 @@ components:
             id from what an operator types, not from the record). Absent
             for `blackout`, which addresses nothing, and for a refusal
             reached before any name was resolved.
+        selectedDeckChanged:
+          type: [boolean, "null"]
+          description: >-
+            Whether the selected deck changed between this action's
+            decision and its confirmation. Meaningful only for a confirmed
+            `launchClip` (the only action that can race a deck — layers
+            are deck-independent). ALWAYS present; null, never false, both
+            when the deck could not be read at confirmation time and for
+            every action other than a confirmed launchClip. Evidence, never
+            a refusal.
+    ResolumeRecoveryRecordEntry:
+      type: object
+      description: >-
+        One layer's row in the crash-recovery record (Track D seam D-3a).
+        Every object reference is a name (ADR-037), never an id. clip,
+        clipNameGenerated, and deck are absent when state is not "clip".
+        establishedAt and source are absent only when no record has ever
+        been established for this layer at all (state "unknown", reason
+        "never observed"). reason is always present when state is
+        "unknown".
+      required: [layer, layerNameGenerated, state]
+      properties:
+        layer:
+          type: string
+        layerNameGenerated:
+          type: boolean
+        state:
+          type: string
+          enum: ["clip", "dark", "unknown"]
+        clip:
+          type: string
+        clipNameGenerated:
+          type: boolean
+        deck:
+          type: string
+        establishedAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: ["action", "survey"]
+        reason:
+          type: string
+    ResolumeRecoveryRestoreLayer:
+      type: object
+      description: >-
+        One layer's own outcome within a restore (Track D seam D-3a).
+        reason is always present on "skipped" and "failed", always absent
+        on "restored". clip is present only when this layer had a
+        clip-state target. actionOutcome is present only when a D-3
+        dispatch was actually issued for this layer.
+      required: [layer, layerNameGenerated, result]
+      properties:
+        layer:
+          type: string
+        layerNameGenerated:
+          type: boolean
+        result:
+          type: string
+          enum: ["restored", "skipped", "failed"]
+        reason:
+          type: string
+        clip:
+          type: string
+        actionOutcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "failed", "refused"]
+    ResolumeRecoveryRestoreReport:
+      type: object
+      description: One restore's whole outcome (Track D seam D-3a).
+      required: [startedAt, finishedAt, trigger, outcome, principal, layers, omittedLayerCount]
+      properties:
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        trigger:
+          type: string
+          enum: ["automatic", "manual"]
+        outcome:
+          type: string
+          enum: ["restored", "partial", "nothing_to_do", "failed"]
+        principal:
+          type: string
+        layers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolumeRecoveryRestoreLayer"
+        omittedLayerCount:
+          type: integer
+          description: >-
+            Nonzero when the composition had more layers than one restore
+            attempts: the excess layers were never attempted and do not
+            appear in layers. Zero means nothing was omitted. Run the
+            restore again to continue.
+    ResolumeRecoveryResponse:
+      type: object
+      description: >-
+        The body of GET /resolume/recovery (Track D seam D-3a): the
+        auto-restore toggle, the recovery record, and the last restore.
+        lastRestore is null until a restore has run.
+      required:
+        [serverTime, resolumeConfigured, autoRestoreEnabled, autoRestoreConfigured,
+         settleDelaySeconds, record, lastRestore]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        resolumeConfigured:
+          type: boolean
+          description: >-
+            False when this coordinator has no Resolume instance configured
+            at all (SHOWMESH_RESOLUME_URL unset) — distinct from
+            autoRestoreConfigured, which is about whether the toggle has a
+            stored value. A client renders "not configured" rather than the
+            toggle's default-ON value when this is false: an operator who
+            believes recovery is armed and is wrong is worse off than one
+            who knows it is unavailable.
+        autoRestoreEnabled:
+          type: boolean
+        autoRestoreConfigured:
+          type: boolean
+          description: False when autoRestoreEnabled is the built-in default rather than a stored choice.
+        settleDelaySeconds:
+          type: number
+        record:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolumeRecoveryRecordEntry"
+        lastRestore:
+          oneOf:
+            - $ref: "#/components/schemas/ResolumeRecoveryRestoreReport"
+            - type: "null"
+    ResolumeRecoveryRestoreResponse:
+      type: object
+      description: The body of a successful POST /resolume/recovery/restore.
+      required: [serverTime, restore]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        restore:
+          $ref: "#/components/schemas/ResolumeRecoveryRestoreReport"
+    ResolumeRecoveryChangedEvent:
+      type: object
+      description: >-
+        The payload of a "resolumeRecovery.changed" SSE event (Track D seam
+        D-3a): the resource's own rendered wire representation, minus
+        serverTime (stamped separately, alongside seq, at broadcast time).
+        No delta event kind exists for this resource, matching
+        resolume.changed's own posture.
+      required:
+        [seq, serverTime, resolumeConfigured, autoRestoreEnabled,
+         autoRestoreConfigured, settleDelaySeconds, record, lastRestore]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        resolumeConfigured:
+          type: boolean
+          description: >-
+            False when this coordinator has no Resolume instance configured
+            at all (SHOWMESH_RESOLUME_URL unset) — distinct from
+            autoRestoreConfigured, which is about whether the toggle has a
+            stored value. A client renders "not configured" rather than the
+            toggle's default-ON value when this is false: an operator who
+            believes recovery is armed and is wrong is worse off than one
+            who knows it is unavailable.
+        autoRestoreEnabled:
+          type: boolean
+        autoRestoreConfigured:
+          type: boolean
+          description: False when autoRestoreEnabled is the built-in default rather than a stored choice.
+        settleDelaySeconds:
+          type: number
+        record:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolumeRecoveryRecordEntry"
+        lastRestore:
+          oneOf:
+            - $ref: "#/components/schemas/ResolumeRecoveryRestoreReport"
+            - type: "null"
+    ConfigResolumeRecoveryPayload:
+      type: object
+      description: >-
+        The "resolume.recovery" configuration kind's decoded payload
+        (Track D seam D-3a): the body PUT /config/resolume.recovery
+        accepts, and the "payload" member of GET /config/resolume.recovery's
+        response. One boolean, no other keys.
+      required: [autoRestoreEnabled]
+      properties:
+        autoRestoreEnabled:
+          type: boolean
+    ResolumeRecoveryConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/resolume.recovery.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigResolumeRecoveryPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
     Problem:
       type: object
       description: >-

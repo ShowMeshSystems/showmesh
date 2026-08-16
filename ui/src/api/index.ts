@@ -30,6 +30,13 @@ export type {
   ResolumeCompositionResponse,
   ResolumeCompositionSummary,
   ResolumeCompositionUploadResponse,
+  ResolumeRecoveryRecordEntry,
+  ResolumeRecoveryRestoreLayer,
+  ResolumeRecoveryRestoreReport,
+  ResolumeRecoveryResponse,
+  ResolumeRecoveryRestoreResponse,
+  ConfigResolumeRecoveryPayload,
+  ResolumeRecoveryConfigResponse,
   ResourceRef,
   SessionInfo,
   SessionResponse,
@@ -91,6 +98,10 @@ export {
   getMacroRun,
   getResolumeComposition,
   uploadResolumeComposition,
+  getResolumeRecovery,
+  getResolumeRecoveryConfig,
+  putResolumeRecoveryConfig,
+  restoreResolumeRecovery,
 } from './useModel'
 
 // Track D seam D-2a: the progress shape [uploadResolumeComposition]'s

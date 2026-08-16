@@ -5,6 +5,7 @@ import { ClockSkewWarning } from '../components/ClockSkewWarning'
 import { SeverityBadge, CollectorStatusBadge } from '../components/DomainBadges'
 import { StatusBadge, type StatusTone } from '../components/StatusBadge'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
+import { ResolumeRecoveryToggle } from '../components/ResolumeRecoveryToggle'
 import { FleetSignalBadge } from '../components/FleetSignalBadge'
 import { findObservation } from '../app/fppSignals'
 import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard'
@@ -223,6 +224,14 @@ export function Dashboard() {
             </dd>
           </dl>
         </section>
+      </PanelErrorBoundary>
+
+      {/* Track D seam D-3a §7.1/§2.6: the auto-restore toggle's own read
+          and write control — the one exception to "everything else of
+          Track D's UI is D-4's own work" (see ResolumeRecoveryToggle.tsx's
+          own top comment for why this ships here rather than waiting). */}
+      <PanelErrorBoundary panelLabel="Resolume crash recovery">
+        <ResolumeRecoveryToggle />
       </PanelErrorBoundary>
 
       {/* Step 5: four newly modeled signal groups each get a panel (spec

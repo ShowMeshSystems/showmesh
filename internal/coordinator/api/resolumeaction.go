@@ -227,8 +227,9 @@ func resolumeActionRequestBodyTooLargeProblem() v1.Problem {
 // response does, since [ResolumeActionDispatcher.Dispatch] never surfaces
 // one to this package — see that method's own doc comment).
 type resolumeActionResultPayload struct {
-	Outcome    string `json:"outcome,omitempty"`
-	ResolvedID string `json:"resolvedId,omitempty"`
+	Outcome             string `json:"outcome,omitempty"`
+	ResolvedID          string `json:"resolvedId,omitempty"`
+	SelectedDeckChanged *bool  `json:"selectedDeckChanged,omitempty"`
 }
 
 // resolumeActionEvidenceState maps outcome to pkg/observation's
@@ -699,7 +700,7 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	// identity.AuditEntry.OutcomeState are both documented as that
 	// vocabulary, not this endpoint's own five-word outcome.
 	evidenceState := resolumeActionEvidenceState(result.Outcome)
-	finalResult, _ := json.Marshal(resolumeActionResultPayload{Outcome: outcomeStr, ResolvedID: result.ResolvedID})
+	finalResult, _ := json.Marshal(resolumeActionResultPayload{Outcome: outcomeStr, ResolvedID: result.ResolvedID, SelectedDeckChanged: result.SelectedDeckChanged})
 	finalResultStr := string(finalResult)
 	if err := h.updateResolumeActionOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
 		DispatchedAt: result.DispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
@@ -736,6 +737,7 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 			DispatchedAt:        formatTimePtr(result.DispatchedAt),
 			ResolvedAt:          formatTimePtr(&resolvedAt),
 			ResolvedID:          result.ResolvedID,
+			SelectedDeckChanged: result.SelectedDeckChanged,
 		},
 	})
 }
@@ -808,6 +810,7 @@ func (h *handlers) resolveResolumeActionReplay(ctx context.Context, now time.Tim
 		DispatchedAt:        formatTimePtr(existing.DispatchedAt),
 		ResolvedAt:          formatTimePtr(existing.ResolvedAt),
 		ResolvedID:          payload.ResolvedID,
+		SelectedDeckChanged: payload.SelectedDeckChanged,
 	}, nil
 }
 

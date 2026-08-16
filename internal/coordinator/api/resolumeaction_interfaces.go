@@ -186,6 +186,11 @@ type ResolumeActionResult struct {
 	// "which object did this dispatch actually address" even after a
 	// rename makes that no longer obvious from the name alone.
 	ResolvedID string
+
+	// SelectedDeckChanged mirrors [v1.ResolumeActionResult.SelectedDeckChanged]
+	// (TRACK-D-ADAPTER-SPEC.md §3.8) — passed straight through from
+	// resolume.ActionOutcome.SelectedDeckChanged, never recomputed here.
+	SelectedDeckChanged *bool
 }
 
 // ResolumeActionDispatcher is what this package needs from D-3/A's action

@@ -222,6 +222,34 @@ type Options struct {
 	// reference, since [Collector.Footprint] merely returns whatever was
 	// stored at construction.
 	Footprint *FootprintControls
+
+	// OnReachableTransition is Track D seam D-3a's own hook (§5 term 1):
+	// called on a GENUINE reachable->unreachable->reachable return — never
+	// on this Collector's very first liveness result ever, which is not a
+	// "return" (a coordinator that starts while Resolume is already
+	// reachable must not fire the crash-recovery gate for a crash that
+	// never happened). Never throttled: the crash-recovery gate must
+	// still fire on a second crash inside [DefaultTransitionSurveyMinInterval]
+	// (§5's own bypass, criterion 12) — that limiter applies only to the
+	// ordinary transition SURVEY trigger below, a separate condition.
+	// Invoked in its own goroutine, never synchronously from
+	// [Collector.Poll] — this Collector has no idea how long the callback
+	// takes and must never block on it. nil means no hook.
+	OnReachableTransition func(returnedAt time.Time)
+
+	// OnUnreachableTransition is Track D seam D-3a's own crash-detection
+	// hook: called on a genuine reachable->unreachable transition, i.e.
+	// the crash itself. Invoked SYNCHRONOUSLY from
+	// [Collector.Poll] — unlike OnReachableTransition — because the
+	// callback's own job (snapshotting the recovery record) must complete
+	// before any LATER Poll call could detect the eventual return;
+	// internal/coordinator/collector.Runner never calls Poll concurrently
+	// with itself for one collector, so a synchronous call here is
+	// guaranteed ordered against every subsequent call. Must be fast and
+	// must never issue a request to Resolume — see
+	// [Recovery.captureCrashTarget], the only intended implementation.
+	// nil means no hook.
+	OnUnreachableTransition func(at time.Time)
 }
 
 // Collector polls one Resolume Arena instance's REST API. On the liveness
@@ -318,6 +346,26 @@ type Collector struct {
 	// change (0 == 0), while a genuinely new upload — whose revision is
 	// always >= 1 — always does.
 	lastSeenCompositionRevision int64
+
+	// onReachableTransition is [Options.OnReachableTransition], stored
+	// verbatim; nil is a legitimate value (no crash-recovery gate wired
+	// in — most tests, and any coordinator with no Resolume instance
+	// configured).
+	onReachableTransition func(time.Time)
+
+	// onUnreachableTransition is [Options.OnUnreachableTransition], stored
+	// verbatim; nil is legitimate for the identical reasons
+	// onReachableTransition's nil is.
+	onUnreachableTransition func(time.Time)
+
+	// recoveryMu guards recoveryRecord — Track D seam D-3a's own recovery
+	// record (recovery.go), deliberately its own lock in this file's
+	// established granular-locking style: a reader of the record
+	// ([Collector.RecoveryRecord]) must never block behind an in-progress
+	// survey the way [Collector.surveyMu] correctly does for a second
+	// survey attempt.
+	recoveryMu     sync.Mutex
+	recoveryRecord map[ObjectID]recoveryEntry
 }
 
 // New constructs a Collector for one Resolume Arena instance. id must
@@ -366,14 +414,16 @@ func New(id string, baseURL string, opts Options) (*Collector, error) {
 	}
 
 	return &Collector{
-		id:               id,
-		client:           client,
-		validFor:         validFor,
-		now:              now,
-		logger:           logger,
-		surveyValidFor:   surveyValidFor,
-		compositionStore: compositionStore,
-		footprint:        footprint,
+		id:                      id,
+		client:                  client,
+		validFor:                validFor,
+		now:                     now,
+		logger:                  logger,
+		surveyValidFor:          surveyValidFor,
+		compositionStore:        compositionStore,
+		footprint:               footprint,
+		onReachableTransition:   opts.OnReachableTransition,
+		onUnreachableTransition: opts.OnUnreachableTransition,
 	}, nil
 }
 
@@ -519,6 +569,19 @@ func (c *Collector) requeueSurvey(afterReconnect bool) {
 	}
 }
 
+// SurveyNow runs a survey immediately, bypassing both the liveness poll
+// cadence and [DefaultTransitionSurveyMinInterval] — the "explicit path"
+// that limiter already exempts (its own doc comment). Used only by the
+// crash-recovery gate (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §5's bypass),
+// which must still be able to restore on a second crash inside that
+// minute. Returns the resulting [SurveySnapshot] directly, so a caller
+// never needs to poll [Collector.LastSurveySnapshot] afterward to learn
+// what its own call just produced.
+func (c *Collector) SurveyNow(ctx context.Context, afterReconnect bool) SurveySnapshot {
+	c.survey(ctx, afterReconnect, c.now())
+	return c.LastSurveySnapshot()
+}
+
 // Poll performs one collection cycle.
 //
 // Liveness (SignalReachable, SignalProduct, source [sourceName]):
@@ -660,13 +723,43 @@ func (c *Collector) noteLivenessAndCheckTransition(reachable bool, now time.Time
 	c.transitionMu.Lock()
 	defer c.transitionMu.Unlock()
 
-	// "The previous liveness result was a failure" (down->up) and "this is
-	// the very first successful poll ever" (livenessKnown still false)
-	// collapse into one test: !livenessKnown || !lastLivenessReachable,
-	// evaluated BEFORE either field is updated for this cycle.
-	isTransition := reachable && (!c.livenessKnown || !c.lastLivenessReachable)
+	wasKnown, wasReachable := c.livenessKnown, c.lastLivenessReachable
+
+	// isTransition: "the previous liveness result was a failure" (down->up)
+	// or "this is the very first successful poll ever" (livenessKnown
+	// still false) — evaluated BEFORE either field is updated for this
+	// cycle. This is the SURVEY trigger: a first-ever observation is
+	// legitimately worth surveying (there is nothing yet to compare it
+	// against).
+	isTransition := reachable && (!wasKnown || !wasReachable)
+
+	// gateTransition/crashTransition are a GENUINE return/crash only — never
+	// this Collector's very first liveness result, which is not a "return":
+	// a coordinator started while Resolume is already reachable must not
+	// report a phantom automatic restore. Both require wasKnown, unlike
+	// isTransition above.
+	gateTransition := reachable && wasKnown && !wasReachable
+	crashTransition := !reachable && wasKnown && wasReachable
+
 	c.livenessKnown = true
 	c.lastLivenessReachable = reachable
+
+	if gateTransition && c.onReachableTransition != nil {
+		// Fired on EVERY genuine return, unrate-limited — see
+		// [Options.OnReachableTransition]'s own doc comment for why this
+		// must not share the transition-survey rate limit below. Spawned
+		// so a slow or blocking hook (the crash-recovery gate's own
+		// settle wait) can never stall this Poll call.
+		cb, at := c.onReachableTransition, now
+		go cb(at)
+	}
+	if crashTransition && c.onUnreachableTransition != nil {
+		// Called SYNCHRONOUSLY, unlike the return hook above — see
+		// [Options.OnUnreachableTransition]'s own doc comment for why
+		// ordering against a later Poll call depends on this completing
+		// before this call returns.
+		c.onUnreachableTransition(now)
+	}
 
 	if !isTransition {
 		return false
@@ -1020,6 +1113,10 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 	sample := tc.IdentitySample(selectedID)
 
 	layerResults := c.readLayers(ctx, tc)
+	// Track D seam D-3a §4 rule 2/§2.3: a survey updates every layer it
+	// read, and only those — fed here, from the reads this survey already
+	// performed, never a separate poll of its own (criterion 8).
+	c.recoveryUpdateFromSurvey(layerResults, surveyedAt)
 	groupResults := c.readGroups(ctx, tc)
 
 	clipIDs := clipFetchOrder(sample, tc.Layers(), layerResults)

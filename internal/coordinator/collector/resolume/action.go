@@ -130,6 +130,16 @@ type ActionOutcome struct {
 	// ConfirmedAt is meaningful only when State == ActionConfirmed, and is
 	// always strictly after DispatchedAt.
 	ConfirmedAt time.Time
+
+	// SelectedDeckChanged records whether the selected deck changed
+	// between this action's decision and its confirmation (TRACK-D-ADAPTER-SPEC.md
+	// §3.8) — evidence carried alongside the outcome, never a refusal
+	// (making it one would reintroduce the fail-closed inversion D-3's own
+	// review found three times in one diff). nil means either this is not
+	// [ActionLaunchClip] (the only action that races a deck — layers are
+	// deck-independent) or the deck could not be read at confirmation
+	// time; nil is NEVER coerced to false.
+	SelectedDeckChanged *bool
 }
 
 // ActionParams is the typed parameter bag for one Dispatch call; which fields
@@ -267,24 +277,35 @@ func (d *ActionDispatcher) Dispatch(ctx context.Context, name ActionName, params
 	ctx, cancel := context.WithDeadline(ctx, w.endAt)
 	defer cancel()
 
+	var outcome ActionOutcome
 	switch name {
 	case ActionLaunchClip:
-		return d.dispatchLaunchClip(ctx, w, params), nil
+		outcome = d.dispatchLaunchClip(ctx, w, params)
 	case ActionClearLayer:
-		return d.dispatchClearLayer(ctx, w, params), nil
+		outcome = d.dispatchClearLayer(ctx, w, params)
 	case ActionBlackout:
-		return d.dispatchBlackout(ctx, w), nil
+		outcome = d.dispatchBlackout(ctx, w)
 	case ActionLaunchColumn:
-		return d.dispatchLaunchColumn(ctx, w, params), nil
+		outcome = d.dispatchLaunchColumn(ctx, w, params)
 	case ActionSelectDeck:
-		return d.dispatchSelectDeck(ctx, w, params), nil
+		outcome = d.dispatchSelectDeck(ctx, w, params)
 	case ActionSetLayerBypass:
-		return d.dispatchSetLayerBypass(ctx, w, params), nil
+		outcome = d.dispatchSetLayerBypass(ctx, w, params)
 	case ActionSetLayerMaster:
-		return d.dispatchSetLayerMaster(ctx, w, params), nil
+		outcome = d.dispatchSetLayerMaster(ctx, w, params)
 	default:
 		return ActionOutcome{}, fmt.Errorf("resolume: dispatch: unrecognized action %q", name)
 	}
+
+	// Track D seam D-3a §4 rule 1: the recovery record updates at
+	// confirmation, never at dispatch (ADR-003). Centralized here, once,
+	// rather than in each dispatchX method, so every action's confirmed
+	// path updates the record identically.
+	if outcome.State == ActionConfirmed {
+		d.collector.applyConfirmedActionToRecoveryRecord(name, params, outcome.ConfirmedAt)
+	}
+
+	return outcome, nil
 }
 
 // --- Deadline and budget constants (§3.3) ---------------------------------

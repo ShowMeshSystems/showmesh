@@ -258,6 +258,8 @@ func cmdResolume(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return cmdResolumeAction(rest, stdout, stderr, clock)
 	case "status":
 		return cmdResolumeStatus(rest, stdout, stderr, clock)
+	case "recovery":
+		return cmdResolumeRecovery(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume: unknown subcommand %q\n\n", sub)
 		printResolumeUsage(stderr)
@@ -277,10 +279,12 @@ Subcommands:
   status        show the configured Resolume instance: its health, its
                 loaded composition, and every resolume.* observation
                 (GET /resolume/instances), no HTTP request to Resolume itself
+  recovery      Arena crash recovery: the auto-restore toggle, the
+                recovery record, and running a restore on demand
 
 Run "showmeshctl resolume composition --help", "showmeshctl resolume
-action --help", or "showmeshctl resolume status --help" for their own
-subcommands and flags.
+action --help", "showmeshctl resolume status --help", or "showmeshctl
+resolume recovery --help" for their own subcommands and flags.
 `)
 }
 

@@ -241,6 +241,13 @@ type pendingFrame struct {
 	// audience is always the zero value (audienceAll).
 	resolumeInstance *v1.ResolumeInstance
 
+	// resolumeRecovery is set only for a "resolumeRecovery.changed"
+	// pendingFrame (Track D seam D-3a, build contract §1.7): the
+	// resolumerecovery:default singleton resource, full-frame only, same
+	// posture as resolumeInstance immediately above — no delta kind exists
+	// for it either.
+	resolumeRecovery *v1.ResolumeRecoveryChangedEvent
+
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
 	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
 	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
@@ -280,6 +287,11 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		return "macroRun.changed", ev
 	case "resolume.changed":
 		return "resolume.changed", v1.ResolumeChangedEvent{Seq: seq, ServerTime: pf.serverTime, Instance: *pf.resolumeInstance}
+	case "resolumeRecovery.changed":
+		ev := *pf.resolumeRecovery
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "resolumeRecovery.changed", ev
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -532,6 +544,32 @@ func (h *Hub) render(ctx context.Context) {
 			}
 		}
 		h.evictRendered("resolume:", present)
+	}
+
+	// The recovery record, the auto-restore toggle, and the last restore:
+	// one fixed singleton resource, keyed "resolumerecovery:default" —
+	// never evicted, full-frame only, no delta kind, mirroring
+	// resolume.changed's own posture immediately above. Skipped entirely
+	// when ResolumeRecovery is unwired ([noResolumeRecoveryProvider]): a
+	// singleton has no natural empty state the way ListInstances gives
+	// resolume:<id> above for free. Once wired, a toggle-read error skips
+	// this pass rather than publishing a default-looking state —
+	// Record/LastReport never error.
+	if _, unwired := h.deps.ResolumeRecovery.(noResolumeRecoveryProvider); !unwired {
+		if enabled, configured, err := ResolveResolumeRecoveryToggle(ctx, h.deps.Config); err != nil {
+			h.logger.Warn("stream hub: resolve resolume.recovery toggle failed", "error", err)
+		} else {
+			const key = "resolumerecovery:default"
+			// resolumeConfigured is always true here — this whole branch is
+			// gated on ResolumeRecovery being wired (the !unwired check
+			// above), which is exactly what that field reports.
+			proj := resolumeRecoveryChangedEventProjection(true, enabled, configured, h.deps.ResolumeRecoverySettleSeconds,
+				h.deps.ResolumeRecovery.Record(), h.deps.ResolumeRecovery.LastReport())
+			if h.updateRendered(key, proj) {
+				ev := proj
+				pending = append(pending, pendingFrame{event: "resolumeRecovery.changed", serverTime: formatTime(now), resolumeRecovery: &ev})
+			}
+		}
 	}
 
 	pending = append(pending, h.renderNewEvents(ctx, now)...)
