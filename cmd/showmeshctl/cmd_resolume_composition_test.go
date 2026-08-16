@@ -609,6 +609,83 @@ func TestCmdResolumeCompositionShowGroupsClipsByDeck(t *testing.T) {
 	}
 }
 
+// testResolumeCompositionResponseWithAmbiguousClips reproduces the shape
+// measured against the operator's real composition (ADR-037 amendment,
+// 2026-08-16): four clips sharing a name on one layer (deck-a), plus two
+// persistent clips sharing a name — neither collision resolvable by
+// adding a "layer", since each group already shares one.
+const testResolumeCompositionResponseWithAmbiguousClips = `{
+	"revision": 1,
+	"activatedAt": "2026-08-16T00:00:00Z",
+	"composition": {
+		"name": "Ambiguity Fixture", "sourceFilename": "fixture.avc", "contentHash": "sha256:aaa", "sizeBytes": 100,
+		"writtenBy": {"product": "Resolume Arena", "major": 7, "minor": 23, "micro": 2, "revision": 1},
+		"canvas": {"width": 1920, "height": 1080},
+		"decks": [{"id": "deck-a", "name": "Main", "nameGenerated": false, "closed": false, "clipCount": 5}],
+		"layerCount": 1, "layerGroupCount": 0, "columnCount": 5, "clipCount": 5, "persistentClipCount": 2
+	},
+	"decks": [{"id": "deck-a", "name": "Main", "nameGenerated": false, "closed": false, "clipCount": 5}],
+	"layerGroups": [],
+	"layers": [{"id": "layer-1", "index": 0, "name": "Peak Only", "nameGenerated": false}],
+	"columns": [],
+	"clips": [
+		{"id": "clip-1", "deckId": "deck-a", "layerIndex": 0, "columnIndex": 0, "name": "Text Block", "nameGenerated": false, "ambiguous": true},
+		{"id": "clip-2", "deckId": "deck-a", "layerIndex": 0, "columnIndex": 1, "name": "Text Block", "nameGenerated": false, "ambiguous": true},
+		{"id": "clip-3", "deckId": "deck-a", "layerIndex": 0, "columnIndex": 2, "name": "Text Block", "nameGenerated": false, "ambiguous": true},
+		{"id": "clip-4", "deckId": "deck-a", "layerIndex": 0, "columnIndex": 3, "name": "Text Block", "nameGenerated": false, "ambiguous": true},
+		{"id": "clip-5", "deckId": "deck-a", "layerIndex": 0, "columnIndex": 4, "name": "Unique Clip", "nameGenerated": false, "ambiguous": false}
+	],
+	"persistentClips": [
+		{"id": "pclip-1", "layerIndex": 0, "columnIndex": 0, "name": "Solid Color", "nameGenerated": false, "ambiguous": true},
+		{"id": "pclip-2", "layerIndex": 0, "columnIndex": 0, "name": "Solid Color", "nameGenerated": false, "ambiguous": true}
+	]
+}`
+
+// TestCmdResolumeCompositionShowListsAmbiguousClips is acceptance
+// criterion 15: `resolume composition show` lists the ambiguous clips,
+// grouped by their shared triple, and never lists a clip that is not
+// ambiguous.
+func TestCmdResolumeCompositionShowListsAmbiguousClips(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testResolumeCompositionResponseWithAmbiguousClips)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolume([]string{"composition", "show", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+
+	ambiguousIdx := strings.Index(out, "AMBIGUOUS CLIPS")
+	idMapIdx := strings.Index(out, "layer groups (")
+	if ambiguousIdx == -1 || idMapIdx == -1 {
+		t.Fatalf("stdout does not contain both an AMBIGUOUS CLIPS section and the id map; full output:\n%s", out)
+	}
+	// Scoped to the section itself: "clips by deck" below also legitimately
+	// lists every clip including the non-ambiguous one, so a whole-output
+	// substring check for "clip-5"'s absence would be checking the wrong
+	// thing.
+	section := out[ambiguousIdx:idMapIdx]
+	for _, want := range []string{"clip-1", "clip-2", "clip-3", "clip-4", "pclip-1", "pclip-2", "Text Block", "Solid Color"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("ambiguous-clips section does not mention %q; section:\n%s", want, section)
+		}
+	}
+	if strings.Contains(section, "clip-5") {
+		t.Errorf("ambiguous-clips section mentions clip-5 (\"Unique Clip\", not ambiguous) — it must not appear here; section:\n%s", section)
+	}
+
+	// "Do not bury it": the section must appear before the full id map
+	// (layer groups / layers / columns tables), not after everything else.
+	if ambiguousIdx >= idMapIdx {
+		t.Errorf("AMBIGUOUS CLIPS section (at %d) must appear before the id map (at %d); full output:\n%s", ambiguousIdx, idMapIdx, out)
+	}
+}
+
 // TestCmdResolumeCompositionShowPrintsLayerNames is ADR-037 decisions 4
 // and 7's own text-table test: the layers table must carry a NAME column,
 // an authored name must print verbatim, and an unnamed layer's

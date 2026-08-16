@@ -157,7 +157,7 @@ func TestCmdResolumeActionLaunchClipConfirmedExitsOK(t *testing.T) {
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--token", "smsh_test", "clip-1"}, &stdout, &stderr, time.Now)
+	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--token", "smsh_test", "--deck", "Main", "clip-1"}, &stdout, &stderr, time.Now)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -171,8 +171,14 @@ func TestCmdResolumeActionLaunchClipConfirmedExitsOK(t *testing.T) {
 		t.Errorf("request body action = %v, want \"launchClip\"", gotBody["action"])
 	}
 	params, _ := gotBody["params"].(map[string]any)
-	if params["id"] != "clip-1" {
-		t.Errorf("request body params.id = %v, want \"clip-1\"", params["id"])
+	if params["clip"] != "clip-1" {
+		t.Errorf("request body params.clip = %v, want \"clip-1\"", params["clip"])
+	}
+	if params["deck"] != "Main" {
+		t.Errorf("request body params.deck = %v, want \"Main\"", params["deck"])
+	}
+	if _, present := params["persistent"]; present {
+		t.Errorf("request body params.persistent = %v, want absent (a deck clip, not persistent)", params["persistent"])
 	}
 	key, _ := gotBody["idempotencyKey"].(string)
 	if key == "" {
@@ -180,6 +186,149 @@ func TestCmdResolumeActionLaunchClipConfirmedExitsOK(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "confirmed") {
 		t.Errorf("stdout = %q, want it to report \"confirmed\"", stdout.String())
+	}
+}
+
+// TestCmdResolumeActionLaunchClipPersistentSendsPersistentParam proves
+// --persistent sends "persistent":true and no "deck" at all.
+func TestCmdResolumeActionLaunchClipPersistentSendsPersistentParam(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-p1", "launchClip", "confirmed", "clip connected", false, false))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--persistent", "Persistent A"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	params, _ := gotBody["params"].(map[string]any)
+	if params["clip"] != "Persistent A" {
+		t.Errorf("request body params.clip = %v, want \"Persistent A\"", params["clip"])
+	}
+	if params["persistent"] != true {
+		t.Errorf("request body params.persistent = %v, want true", params["persistent"])
+	}
+	if _, present := params["deck"]; present {
+		t.Errorf("request body params.deck = %v, want absent (persistent clip)", params["deck"])
+	}
+}
+
+// TestCmdResolumeActionLaunchClipDeckAndPersistentBothExitsUsage is
+// acceptance criterion 11's own named case: --deck and --persistent
+// together is a client-side usage error, caught before any request.
+func TestCmdResolumeActionLaunchClipDeckAndPersistentBothExitsUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"launch-clip", "--server", "http://unused.invalid", "--deck", "Main", "--persistent", "Snow"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+}
+
+func TestCmdResolumeActionLaunchClipNeitherDeckNorPersistentExitsUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"launch-clip", "--server", "http://unused.invalid", "Snow"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+}
+
+// TestCmdResolumeActionClearLayerSendsLayerParam and its siblings below
+// prove "showmeshctl resolume action <verb>" drives every one of §2's seven
+// actions by name — acceptance criterion 11.
+func TestCmdResolumeActionClearLayerSendsLayerParam(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-cl", "clearLayer", "confirmed", "layer cleared", false, false))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"clear-layer", "--server", ts.URL, "Layer A"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	params, _ := gotBody["params"].(map[string]any)
+	if params["layer"] != "Layer A" {
+		t.Errorf("request body params.layer = %v, want \"Layer A\"", params["layer"])
+	}
+}
+
+func TestCmdResolumeActionLaunchColumnSendsColumnAndDeckParams(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-col", "launchColumn", "confirmed", "column connected", false, false))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"launch-column", "--server", ts.URL, "--deck", "Main", "Column 1"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	params, _ := gotBody["params"].(map[string]any)
+	if params["column"] != "Column 1" || params["deck"] != "Main" {
+		t.Errorf("request body params = %v, want {column: \"Column 1\", deck: \"Main\"}", params)
+	}
+}
+
+func TestCmdResolumeActionLaunchColumnRequiresDeck(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"launch-column", "--server", "http://unused.invalid", "Column 1"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage (no --deck supplied); stderr=%s", code, stderr.String())
+	}
+}
+
+func TestCmdResolumeActionSelectDeckSendsDeckParam(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-sd", "selectDeck", "confirmed", "deck selected", false, false))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"select-deck", "--server", ts.URL, "Main"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	params, _ := gotBody["params"].(map[string]any)
+	if params["deck"] != "Main" {
+		t.Errorf("request body params.deck = %v, want \"Main\"", params["deck"])
+	}
+}
+
+func TestCmdResolumeActionSetLayerMasterSendsNumberParam(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, resolumeActionServerBody("cmd-sm", "setLayerMaster", "confirmed", "layer master reached 0.4", false, false))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdResolumeAction([]string{"set-layer-master", "--server", ts.URL, "Layer A", "0.4"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	params, _ := gotBody["params"].(map[string]any)
+	if params["layer"] != "Layer A" || params["master"] != 0.4 {
+		t.Errorf("request body params = %v, want {layer: \"Layer A\", master: 0.4}", params)
 	}
 }
 
@@ -220,8 +369,8 @@ func TestCmdResolumeActionSetLayerBypassSendsBoolParam(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	params, _ := gotBody["params"].(map[string]any)
-	if params["id"] != "layer-1" || params["bypassed"] != true {
-		t.Errorf("request body params = %v, want {id: layer-1, bypassed: true}", params)
+	if params["layer"] != "layer-1" || params["bypassed"] != true {
+		t.Errorf("request body params = %v, want {layer: layer-1, bypassed: true}", params)
 	}
 }
 
@@ -243,7 +392,7 @@ func TestCmdResolumeActionUnconfirmableExitsNonZeroButIsNotAnError(t *testing.T)
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "clip-1"}, &stdout, &stderr, time.Now)
+	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--deck", "Main", "clip-1"}, &stdout, &stderr, time.Now)
 	if code != exitActionUnconfirmable {
 		t.Fatalf("exit code = %d, want exitActionUnconfirmable (%d); stdout=%s stderr=%s", code, exitActionUnconfirmable, stdout.String(), stderr.String())
 	}
@@ -265,7 +414,7 @@ func TestCmdResolumeActionRefusedExitsActionRefused(t *testing.T) {
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "clip-1"}, &stdout, &stderr, time.Now)
+	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--deck", "Main", "clip-1"}, &stdout, &stderr, time.Now)
 	if code != exitActionRefused {
 		t.Fatalf("exit code = %d, want exitActionRefused (%d); stdout=%s stderr=%s", code, exitActionRefused, stdout.String(), stderr.String())
 	}
@@ -319,7 +468,7 @@ func TestCmdResolumeActionForbiddenNamesScope(t *testing.T) {
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "clip-1"}, &stdout, &stderr, time.Now)
+	code := cmdResolumeAction([]string{"launch-clip", "--server", ts.URL, "--deck", "Main", "clip-1"}, &stdout, &stderr, time.Now)
 	if code != exitForbidden {
 		t.Fatalf("exit code = %d, want exitForbidden; stderr=%s", code, stderr.String())
 	}

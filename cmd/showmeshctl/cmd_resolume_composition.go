@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -66,11 +67,15 @@ type resolumeCanvas struct {
 // resolumeDeckSummary is one element of composition.decks (and of the
 // stored id map's own top-level "decks"): a deck's name, whether it is
 // closed, and how many clips it holds, not the clips themselves.
+// Name/NameGenerated are ADR-037 decision 4, extended to decks: Name is
+// never blank, and NameGenerated says whether it is the operator's own
+// value or a coordinator-generated positional label.
 type resolumeDeckSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Closed    bool   `json:"closed"`
-	ClipCount int    `json:"clipCount"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	NameGenerated bool   `json:"nameGenerated"`
+	Closed        bool   `json:"closed"`
+	ClipCount     int    `json:"clipCount"`
 }
 
 // resolumeCompositionSummary is the "composition" object common to both
@@ -165,17 +170,17 @@ type resolumeLayer struct {
 	NameGenerated bool   `json:"nameGenerated"`
 }
 
-// resolumeColumn is one element of the stored id map's columns.
-//
-// Review finding A: an earlier version declared {id, name} — the same
-// invented-field mistake as [resolumeLayerGroup] and [resolumeLayer].
-// The server sends {id, deckId, index}: a column belongs to exactly one
-// deck (unlike a layer, which is deck-independent), and DeckID is the
-// other structural relation this program used to silently drop.
+// resolumeColumn is one element of the stored id map's columns. A column
+// belongs to exactly one deck (unlike a layer, which is deck-independent),
+// and DeckID names it. Name/NameGenerated are ADR-037 decision 4: columns
+// never carry an authored name at all, so NameGenerated is always true and
+// Name is always the coordinator's generated "Column <n>" form.
 type resolumeColumn struct {
-	ID     string `json:"id"`
-	DeckID string `json:"deckId"`
-	Index  int    `json:"index"`
+	ID            string `json:"id"`
+	DeckID        string `json:"deckId"`
+	Index         int    `json:"index"`
+	Name          string `json:"name"`
+	NameGenerated bool   `json:"nameGenerated"`
 }
 
 // resolumeClip is one element of clips or persistentClips. DeckID is a
@@ -201,12 +206,18 @@ type resolumeColumn struct {
 // not present in the composition file and vary per clip over the live
 // API — this program does not know what any particular index means and
 // must never imply that it does by inventing a label for it.
+// Ambiguous is the ADR-037 amendment (2026-08-16): true when no reference
+// this program can build — including one naming this clip's own layer —
+// can ever resolve it, because another clip shares its exact (deck, layer,
+// label) triple. See printAmbiguousClips for where this is surfaced.
 type resolumeClip struct {
 	ID                 string  `json:"id"`
 	DeckID             *string `json:"deckId"`
 	LayerIndex         int     `json:"layerIndex"`
 	ColumnIndex        int     `json:"columnIndex"`
 	Name               string  `json:"name"`
+	NameGenerated      bool    `json:"nameGenerated"`
+	Ambiguous          bool    `json:"ambiguous"`
 	TransportTypeIndex *int    `json:"transportTypeIndex,omitempty"`
 	SourcePath         string  `json:"sourcePath"`
 	Width              *int    `json:"width,omitempty"`
@@ -568,7 +579,7 @@ func printResolumeCompositionSummary(w io.Writer, c resolumeCompositionSummary) 
 	tw := newTabWriter(w)
 	_, _ = fmt.Fprintln(tw, "  ID\tNAME\tCLOSED\tCLIPS")
 	for _, d := range c.Decks {
-		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%t\t%d\n", d.ID, d.Name, d.Closed, d.ClipCount)
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%t\t%d\n", d.ID, formatGeneratedName(d.Name, d.NameGenerated), d.Closed, d.ClipCount)
 	}
 	_ = tw.Flush()
 }
@@ -693,6 +704,11 @@ func printResolumeCompositionDetail(w io.Writer, resp resolumeCompositionRespons
 	_, _ = fmt.Fprintf(w, "activated at: %s\n\n", resp.ActivatedAt.Format(time.RFC3339))
 	printResolumeCompositionSummary(w, resp.Composition)
 
+	// Printed here, right after the summary and before the full id map —
+	// ADR-037's own amendment (2026-08-16) says not to bury this: an
+	// operator who never scrolls must still see it.
+	printAmbiguousClips(w, resp)
+
 	printResolumeCompositionIDMap(w, resp)
 
 	deckName := make(map[string]string, len(resp.Decks))
@@ -736,6 +752,80 @@ func printResolumeCompositionDetail(w io.Writer, resp resolumeCompositionRespons
 	printResolumeClipsTable(w, resp.PersistentClips)
 }
 
+// resolumeAmbiguousClipGroup is one (scope, layer, label) triple
+// printAmbiguousClips found two or more clips sharing.
+type resolumeAmbiguousClipGroup struct {
+	scope, layer, label string
+	ids                 []string
+}
+
+// printAmbiguousClips is the ADR-037 amendment's (2026-08-16) own "do not
+// bury it" requirement: an operator who never scrolls must still see that
+// some clips cannot be bound by name at all, grouped by the exact triple
+// that makes them indistinguishable — adding a "layer" to a reference does
+// not help a clip in one of these groups, because the group already
+// agrees on its own layer too. Prints nothing when there is nothing to
+// report.
+func printAmbiguousClips(w io.Writer, resp resolumeCompositionResponse) {
+	layerLabel := func(index int) string {
+		for _, l := range resp.Layers {
+			if l.Index == index {
+				return formatGeneratedName(l.Name, l.NameGenerated)
+			}
+		}
+		return "an unknown layer"
+	}
+	deckLabel := func(id *string) string {
+		if id == nil {
+			return "the persistent clips"
+		}
+		for _, d := range resp.Decks {
+			if d.ID == *id {
+				return fmt.Sprintf("deck %q", formatGeneratedName(d.Name, d.NameGenerated))
+			}
+		}
+		return "an unknown deck"
+	}
+
+	groups := map[string]*resolumeAmbiguousClipGroup{}
+	var order []string
+	addClip := func(clip resolumeClip) {
+		if !clip.Ambiguous {
+			return
+		}
+		scope := deckLabel(clip.DeckID)
+		layer := layerLabel(clip.LayerIndex)
+		label := formatGeneratedName(clip.Name, clip.NameGenerated)
+		key := scope + "\x00" + layer + "\x00" + label
+		g, ok := groups[key]
+		if !ok {
+			g = &resolumeAmbiguousClipGroup{scope: scope, layer: layer, label: label}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.ids = append(g.ids, clip.ID)
+	}
+	for _, clip := range resp.Clips {
+		addClip(clip)
+	}
+	for _, clip := range resp.PersistentClips {
+		addClip(clip)
+	}
+	if len(order) == 0 {
+		return
+	}
+	sort.Strings(order)
+
+	_, _ = fmt.Fprintln(w, "\nAMBIGUOUS CLIPS — these cannot be addressed by name at all, not even by adding a")
+	_, _ = fmt.Fprintln(w, `"layer": every clip in a group below already shares one. Rename all but one clip`)
+	_, _ = fmt.Fprintln(w, "in each group, in Resolume, and re-upload the composition to make them addressable.")
+	for _, key := range order {
+		g := groups[key]
+		_, _ = fmt.Fprintf(w, "  %s, layer %q, name %q: %d clips (ids: %s)\n",
+			g.scope, g.layer, g.label, len(g.ids), strings.Join(g.ids, ", "))
+	}
+}
+
 // printResolumeCompositionIDMap renders the id map's structural relations
 // — which group a layer belongs to, which deck a column belongs to — as
 // real tables, not just counts.
@@ -767,7 +857,7 @@ func printResolumeCompositionIDMap(w io.Writer, resp resolumeCompositionResponse
 		tw := newTabWriter(w)
 		_, _ = fmt.Fprintln(tw, "  ID\tNAME\tINDEX\tLAYER GROUP INDEX")
 		for _, l := range resp.Layers {
-			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%d\t%s\n", l.ID, formatResolumeLayerName(l), l.Index, formatIntPtr(l.LayerGroupIndex))
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%d\t%s\n", l.ID, formatGeneratedName(l.Name, l.NameGenerated), l.Index, formatIntPtr(l.LayerGroupIndex))
 		}
 		_ = tw.Flush()
 	}
@@ -777,24 +867,28 @@ func printResolumeCompositionIDMap(w io.Writer, resp resolumeCompositionResponse
 		_, _ = fmt.Fprintln(w, "  (none)")
 	} else {
 		tw := newTabWriter(w)
-		_, _ = fmt.Fprintln(tw, "  ID\tDECK\tINDEX")
+		_, _ = fmt.Fprintln(tw, "  ID\tNAME\tDECK\tINDEX")
 		for _, c := range resp.Columns {
-			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%d\n", c.ID, c.DeckID, c.Index)
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%d\n", c.ID, formatGeneratedName(c.Name, c.NameGenerated), c.DeckID, c.Index)
 		}
 		_ = tw.Flush()
 	}
 }
 
-// formatResolumeLayerName renders a layer's name for the text table,
-// marking a coordinator-generated label as generated (ADR-037 decision 4)
-// rather than letting it look like something the operator typed — the
-// server's own l.Name is never blank, so this never has to fall back to a
-// placeholder of its own.
-func formatResolumeLayerName(l resolumeLayer) string {
-	if l.NameGenerated {
-		return l.Name + " (generated)"
+// formatGeneratedName renders any object's (name, nameGenerated) pair for a
+// text table, marking a coordinator-generated label as generated (ADR-037
+// decision 4) rather than letting it look like something the operator
+// typed — every kind's own name field is never blank, so this never has to
+// fall back to a placeholder of its own. One function for every kind
+// (layer, deck, column, clip): the server computes the label once
+// (internal/coordinator/collector/resolume's own label functions) and this
+// program renders whichever (name, generated) pair it decoded, never
+// re-deriving the generated form itself.
+func formatGeneratedName(name string, generated bool) string {
+	if generated {
+		return name + " (generated)"
 	}
-	return l.Name
+	return name
 }
 
 // formatIntPtr renders an optional integer field for a text table: the
@@ -827,7 +921,7 @@ func printResolumeClipsTable(w io.Writer, clips []resolumeClip) {
 	_, _ = fmt.Fprintln(tw, "    ID\tNAME\tLAYER\tCOLUMN\tTRANSPORT INDEX (unlabeled)\tWIDTH\tHEIGHT\tSOURCE PATH")
 	for _, c := range clips {
 		_, _ = fmt.Fprintf(tw, "    %s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
-			c.ID, c.Name, c.LayerIndex, c.ColumnIndex,
+			c.ID, formatGeneratedName(c.Name, c.NameGenerated), c.LayerIndex, c.ColumnIndex,
 			formatIntPtr(c.TransportTypeIndex), formatIntPtr(c.Width), formatIntPtr(c.Height), c.SourcePath)
 	}
 	_ = tw.Flush()
