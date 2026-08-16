@@ -61,3 +61,6 @@ ui/.vite/
 # never part of the repository: without this, a git add -A in the main
 # working tree would swallow an entire second checkout.
 .claude/worktrees/
+
+# Preserved local env snapshots (live-fleet credentials; never commit)
+deploy/.env.*
