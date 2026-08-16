@@ -1195,10 +1195,11 @@ export interface components {
             width: number;
             height: number;
         };
-        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. */
+        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. name/nameGenerated are ADR-037 decision 4: name is the deck's own authored name when non-empty, otherwise a generated "Deck <n>" from its 1-based position among this response's own deck list, and nameGenerated says which. */
         ResolumeCompositionDeckSummary: {
             id: string;
             name: string;
+            nameGenerated: boolean;
             closed: boolean;
             clipCount: number;
         };
@@ -1239,19 +1240,23 @@ export interface components {
             name: string;
             nameGenerated: boolean;
         };
-        /** @description One column position within one deck. */
+        /** @description One column position within one deck. name/nameGenerated are ADR-037 decision 4: columns never carry an authored name at all (the .avc format gives them none), so nameGenerated is always true and name is always the generated "Column <n>" form from index — carried anyway so every kind's response shares the identical (name, nameGenerated) shape. */
         ResolumeCompositionColumn: {
             id: string;
             deckId: string;
             index: number;
+            name: string;
+            nameGenerated: boolean;
         };
-        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. */
+        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. name/nameGenerated are ADR-037 decision 4: name is the clip's own authored name when non-empty, otherwise a generated form — "Clip L<layerIndex+1>C<columnIndex+1>" for a deck clip, "Persistent clip <n>" (1-based position among "persistentClips") for a persistent one. ambiguous (amendment, 2026-08-16) is true when this clip's own (deck-or-persistent, layer, label) triple is shared by another clip in this composition, meaning no reference — including one naming this clip's own layer — can ever resolve it; the remedy is renaming one of the colliding clips in Resolume and re-uploading. */
         ResolumeCompositionClip: {
             id: string;
             deckId?: string;
             layerIndex: number;
             columnIndex: number;
             name: string;
+            nameGenerated: boolean;
+            ambiguous: boolean;
             transportTypeIndex?: number;
             sourcePath?: string;
             width?: number;
@@ -1272,7 +1277,7 @@ export interface components {
             clips: components["schemas"]["ResolumeCompositionClip"][];
             persistentClips: components["schemas"]["ResolumeCompositionClip"][];
         };
-        /** @description One named parameter one Resolume action's "params" object accepts. Every parameter in this seven-action vocabulary is required — none of these seven actions has an optional parameter with a default — so there is no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters. */
+        /** @description One named parameter one Resolume action's "params" object accepts. ADR-037 gave this vocabulary its first optional parameters (launchClip's "layer" and "persistent", and its conditionally required "deck") — required: false means the parameter may be absent, never that an absent value is silently defaulted; there is still no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters, because what an absence means is a resolution rule the caller applies, not a decode-time default. */
         ResolumeActionParam: {
             name: string;
             /** @enum {string} */
@@ -1293,19 +1298,66 @@ export interface components {
             serverTime: string;
             actions: components["schemas"]["ResolumeAction"][];
         };
-        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. */
-        ResolumeActionRequest: components["schemas"]["ResolumeIDActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
-        /** @description `action` one of `"launchClip"`, `"clearLayer"`, `"launchColumn"`, `"selectDeck"` — every action in this vocabulary whose entire payload is one ShowMesh object reference. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` (never a stale-reference error and never a silent deck change) — see ResolumeActionResult.outcome. */
-        ResolumeIDActionRequest: {
+        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition — a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
+        ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
+        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) — `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference — see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
+        ResolumeLaunchClipActionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "launchClip" | "clearLayer" | "launchColumn" | "selectDeck";
+            action: "launchClip";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference this action resolves through the stored composition id map. */
-                id: string;
+                /** @description The clip's own label — its authored name, or its generated form if unnamed. */
+                clip: string;
+                /** @description The deck this clip lives on. Required unless `persistent` is `true`; must be absent when `persistent` is `true`. */
+                deck?: string;
+                /** @description Disambiguates a clip name that occurs more than once. Never required. */
+                layer?: string;
+                /** @description True when `clip` names a persistent clip (no `deck` allowed). Absent or false means a deck clip, and `deck` is then required. */
+                persistent?: boolean;
+            } & (unknown | unknown);
+        };
+        /** @description `action: "clearLayer"`: clears (disconnects) a layer's active clip, named by `params.layer`. */
+        ResolumeClearLayerActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "clearLayer";
+            idempotencyKey: string;
+            params: {
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
+            };
+        };
+        /** @description `action: "launchColumn"`: launches (connects) a column named by `params.column`, on the deck named by `params.deck`. */
+        ResolumeLaunchColumnActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "launchColumn";
+            idempotencyKey: string;
+            params: {
+                /** @description The column's own generated label — columns never carry an authored name. */
+                column: string;
+                /** @description The deck this column lives on. Always required. */
+                deck: string;
+            };
+        };
+        /** @description `action: "selectDeck"`: selects the deck named by `params.deck`. */
+        ResolumeSelectDeckActionRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "selectDeck";
+            idempotencyKey: string;
+            params: {
+                /** @description The deck's own label — its authored name, or its generated form if unnamed. */
+                deck: string;
             };
         };
         /** @description `action: "blackout"`: disconnects every tracked layer. Exempt from ADR-024 decision 11's fail-closed audit rule. */
@@ -1328,8 +1380,8 @@ export interface components {
             action: "setLayerBypass";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference of the layer to change. */
-                id: string;
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
                 bypassed: boolean;
             };
         };
@@ -1342,8 +1394,8 @@ export interface components {
             action: "setLayerMaster";
             idempotencyKey: string;
             params: {
-                /** @description The ShowMesh reference of the layer to change. */
-                id: string;
+                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                layer: string;
                 /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
                 master: number;
             };
@@ -1381,6 +1433,8 @@ export interface components {
             dispatchedAt: string | null;
             /** Format: date-time */
             resolvedAt: string | null;
+            /** @description The Resolume object id this action's own name reference resolved to, kept visible for debugging (ADR-037 removes the id from what an operator types, not from the record). Absent for `blackout`, which addresses nothing, and for a refusal reached before any name was resolved. */
+            resolvedId?: string;
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.

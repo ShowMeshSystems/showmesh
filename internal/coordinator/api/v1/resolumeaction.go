@@ -126,4 +126,12 @@ type ResolumeActionResult struct {
 	// FPPCommandResult documents for its own identical fields.
 	DispatchedAt *string `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
+
+	// ResolvedID is the Resolume object id this action's own name
+	// reference resolved to, kept visible for debugging (ADR-037's own
+	// Consequences: the reference an operator types is a name, never an
+	// id, but the id "stays visible for debugging"). Omitted entirely for
+	// blackout, which addresses nothing, and for a refusal reached before
+	// any name was resolved.
+	ResolvedID string `json:"resolvedId,omitempty"`
 }

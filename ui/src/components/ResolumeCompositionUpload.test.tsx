@@ -38,8 +38,8 @@ const summary: ResolumeCompositionSummary = {
   writtenBy: { product: 'Arena', major: 7, minor: 23, micro: 2, revision: 0 },
   canvas: { width: 1920, height: 1080 },
   decks: [
-    { id: 'deck-1', name: 'Main', closed: false, clipCount: 30 },
-    { id: 'deck-2', name: 'Backup', closed: true, clipCount: 12 },
+    { id: 'deck-1', name: 'Main', nameGenerated: false, closed: false, clipCount: 30 },
+    { id: 'deck-2', name: 'Backup', nameGenerated: false, closed: true, clipCount: 12 },
   ],
   layerCount: 18,
   layerGroupCount: 3,

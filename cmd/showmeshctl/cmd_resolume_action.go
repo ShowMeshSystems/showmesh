@@ -221,22 +221,20 @@ func cmdResolumeAction(args []string, stdout, stderr io.Writer, clock func() tim
 	case "list":
 		return cmdResolumeActionList(rest, stdout, stderr, clock)
 	case "launch-clip":
-		return cmdResolumeSingleIDAction(rest, stdout, stderr, clock, "resolume action launch-clip", "launchClip",
-			"<clip-id>", "Launch (connect) a clip by its stored ShowMesh reference.")
+		return cmdResolumeLaunchClip(rest, stdout, stderr, clock)
 	case "clear-layer":
-		return cmdResolumeSingleIDAction(rest, stdout, stderr, clock, "resolume action clear-layer", "clearLayer",
-			"<layer-id>", "Clear (disconnect) a layer's active clip by its stored ShowMesh reference.")
+		return cmdResolumeSingleNameAction(rest, stdout, stderr, clock, "resolume action clear-layer", "clearLayer",
+			"layer", "<layer name>", "Clear (disconnect) a layer's active clip by name.")
 	case "launch-column":
-		return cmdResolumeSingleIDAction(rest, stdout, stderr, clock, "resolume action launch-column", "launchColumn",
-			"<column-id>", "Launch (connect) a column by its stored ShowMesh reference.")
+		return cmdResolumeLaunchColumn(rest, stdout, stderr, clock)
 	case "select-deck":
-		return cmdResolumeSingleIDAction(rest, stdout, stderr, clock, "resolume action select-deck", "selectDeck",
-			"<deck-id>", "Select a deck by its stored ShowMesh reference.")
+		return cmdResolumeSingleNameAction(rest, stdout, stderr, clock, "resolume action select-deck", "selectDeck",
+			"deck", "<deck name>", "Select a deck by name.")
 	case "blackout":
 		return cmdResolumeBlackout(rest, stdout, stderr, clock)
 	case "set-layer-bypass":
 		return cmdResolumeSetLayerBoolParam(rest, stdout, stderr, clock, "resolume action set-layer-bypass",
-			"setLayerBypass", "bypassed", "Set a layer's bypass state by its stored ShowMesh reference.")
+			"setLayerBypass", "bypassed", "Set a layer's bypass state by name.")
 	case "set-layer-master":
 		return cmdResolumeSetLayerMaster(rest, stdout, stderr, clock)
 	default:
@@ -250,24 +248,32 @@ func printResolumeActionUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl resolume action <subcommand> [args] [flags]
 
 Dispatch one of the seven Resolume actions, or list the vocabulary this
-coordinator supports. Every dispatch subcommand requires the
-resolume:action scope, mints a fresh idempotency key per invocation, and
-reports the coordinator's outcome honestly — a request that completes an
-HTTP round trip is not the same as the action having taken effect; see the
-exit code table in "showmeshctl help".
+coordinator supports. Every reference below is a NAME (ADR-037) — the
+coordinator resolves it against the stored composition; no Resolume object
+id ever appears on this command line. Every dispatch subcommand requires
+the resolume:action scope, mints a fresh idempotency key per invocation,
+and reports the coordinator's outcome honestly — a request that completes
+an HTTP round trip is not the same as the action having taken effect; see
+the exit code table in "showmeshctl help".
 
 Subcommands:
-  list                              show the action vocabulary this
-                                     coordinator supports, with each
-                                     action's own parameters
-  launch-clip <clip-id>              launch (connect) a clip (write)
-  clear-layer <layer-id>             clear (disconnect) a layer (write)
-  launch-column <column-id>          launch (connect) a column (write)
-  select-deck <deck-id>               select a deck (write)
-  blackout                           disconnect every tracked layer (write)
-  set-layer-bypass <layer-id> <true|false>   set a layer's bypass (write)
-  set-layer-master <layer-id> <value>        set a layer's master to a
-                                              continuous value (write)
+  list                                          show the action vocabulary
+                                                 this coordinator supports
+  launch-clip --deck <deck> [--layer <layer>] <clip name>
+                                                 launch a deck clip (write)
+  launch-clip --persistent [--layer <layer>] <clip name>
+                                                 launch a persistent clip (write)
+  clear-layer <layer name>                      clear (disconnect) a layer (write)
+  launch-column --deck <deck> <column name>     launch (connect) a column (write)
+  select-deck <deck name>                       select a deck (write)
+  blackout                                      disconnect every tracked layer (write)
+  set-layer-bypass <layer name> <true|false>    set a layer's bypass (write)
+  set-layer-master <layer name> <value>         set a layer's master to a
+                                                 continuous value (write)
+
+--layer disambiguates a clip name that occurs more than once; --deck and
+--persistent are mutually exclusive and exactly one is required for
+launch-clip.
 
 Run "showmeshctl resolume action <subcommand> --help" for flags specific
 to one subcommand.
@@ -335,10 +341,11 @@ func cmdResolumeActionList(args []string, stdout, stderr io.Writer, clock func()
 	return exitOK
 }
 
-// cmdResolumeSingleIDAction implements every subcommand whose entire
-// payload is one ShowMesh object reference ("id"): launch-clip,
-// clear-layer, launch-column, select-deck.
-func cmdResolumeSingleIDAction(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, wireAction, argName, help string) int {
+// cmdResolumeSingleNameAction implements every subcommand whose entire
+// payload is one named reference under one params key: clear-layer
+// ("layer"), select-deck ("deck"). launch-clip and launch-column carry more
+// than one param and have their own functions below.
+func cmdResolumeSingleNameAction(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, wireAction, paramName, argName, help string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s %s [flags]\n\n%s\nRequires resolume:action.\n", cmdLabel, argName, help)
@@ -355,11 +362,101 @@ func cmdResolumeSingleIDAction(args []string, stdout, stderr io.Writer, clock fu
 		fs.Usage()
 		return exitUsage
 	}
-	id := rest[0]
-	if id == "" {
+	name := rest[0]
+	if name == "" {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "%s must not be empty", argName))
 	}
-	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, wireAction, map[string]any{"id": id})
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, wireAction, map[string]any{paramName: name})
+}
+
+// cmdResolumeLaunchClip implements launch-clip: a clip name, scoped to
+// either a named deck or --persistent — never both, never neither (ADR-037
+// TRACK-D-SEAM-B-NAMES-SPEC.md §2.1) — with an optional --layer to
+// disambiguate a clip name that occurs more than once. --deck and
+// --persistent are registered on the SAME flag.FlagSet newFlagSet returns,
+// alongside the global flags, per this seam's own convention for
+// subcommand-scoped flags.
+func cmdResolumeLaunchClip(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "resolume action launch-clip"
+	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
+	var deck, layer string
+	var persistent bool
+	fs.StringVar(&deck, "deck", "", "the deck this clip lives on (required unless --persistent)")
+	fs.StringVar(&layer, "layer", "", "disambiguate a clip name that occurs more than once")
+	fs.BoolVar(&persistent, "persistent", false, "the clip is a persistent clip (lives outside any deck)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s --deck <deck> [--layer <layer>] <clip name>\n"+
+			"       showmeshctl %s --persistent [--layer <layer>] <clip name>\n\n"+
+			"Launch (connect) a clip by name. Exactly one of --deck or --persistent\n"+
+			"is required. Requires resolume:action.\n", cmdLabel, cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	clip := rest[0]
+	if clip == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "clip name must not be empty"))
+	}
+	if persistent && deck != "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--deck and --persistent must not both be given"))
+	}
+	if !persistent && deck == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "either --deck or --persistent is required"))
+	}
+
+	params := map[string]any{"clip": clip}
+	if persistent {
+		params["persistent"] = true
+	} else {
+		params["deck"] = deck
+	}
+	if layer != "" {
+		params["layer"] = layer
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "launchClip", params)
+}
+
+// cmdResolumeLaunchColumn implements launch-column: a column name, always
+// scoped to a required --deck (§2's table: "deck" is required, never
+// conditional, for launchColumn).
+func cmdResolumeLaunchColumn(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	const cmdLabel = "resolume action launch-column"
+	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
+	var deck string
+	fs.StringVar(&deck, "deck", "", "the deck this column lives on (required)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s --deck <deck> <column name> [flags]\n\n"+
+			"Launch (connect) a column by name. Requires resolume:action.\n", cmdLabel)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	column := rest[0]
+	if column == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "column name must not be empty"))
+	}
+	if deck == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "--deck is required"))
+	}
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "launchColumn", map[string]any{"column": column, "deck": deck})
 }
 
 // cmdResolumeBlackout implements "showmeshctl resolume action blackout"
@@ -386,14 +483,14 @@ func cmdResolumeBlackout(args []string, stdout, stderr io.Writer, clock func() t
 	return dispatchResolumeAction(stdout, stderr, clock, g, "resolume action blackout", "blackout", nil)
 }
 
-// cmdResolumeSetLayerBoolParam implements set-layer-bypass — a layer id and
-// one named boolean parameter. setLayerMaster is a continuous number end to
-// end, not a boolean, so it has its own subcommand below rather than
-// sharing this shape.
+// cmdResolumeSetLayerBoolParam implements set-layer-bypass — a layer name
+// and one named boolean parameter. setLayerMaster is a continuous number
+// end to end, not a boolean, so it has its own subcommand below rather
+// than sharing this shape.
 func cmdResolumeSetLayerBoolParam(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, wireAction, boolParamName, help string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer-id> <true|false> [flags]\n\n%s\nRequires resolume:action.\n", cmdLabel, help)
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer name> <true|false> [flags]\n\n%s\nRequires resolume:action.\n", cmdLabel, help)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -407,9 +504,9 @@ func cmdResolumeSetLayerBoolParam(args []string, stdout, stderr io.Writer, clock
 		fs.Usage()
 		return exitUsage
 	}
-	id := rest[0]
-	if id == "" {
-		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "layer-id must not be empty"))
+	layer := rest[0]
+	if layer == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "layer name must not be empty"))
 	}
 	var value bool
 	switch rest[1] {
@@ -420,10 +517,10 @@ func cmdResolumeSetLayerBoolParam(args []string, stdout, stderr io.Writer, clock
 	default:
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "value must be %q or %q, not %q", "true", "false", rest[1]))
 	}
-	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, wireAction, map[string]any{"id": id, boolParamName: value})
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, wireAction, map[string]any{"layer": layer, boolParamName: value})
 }
 
-// cmdResolumeSetLayerMaster implements set-layer-master — a layer id and
+// cmdResolumeSetLayerMaster implements set-layer-master — a layer name and
 // one continuous numeric value: a layer master that can only be 0 or 1 is
 // not a master. The coordinator validates the value against Arena's own
 // declared range for this specific layer's master parameter (read fresh at
@@ -432,7 +529,7 @@ func cmdResolumeSetLayerMaster(args []string, stdout, stderr io.Writer, clock fu
 	const cmdLabel = "resolume action set-layer-master"
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer-id> <value> [flags]\n\n"+
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s <layer name> <value> [flags]\n\n"+
 			"Set a layer's master to a continuous value. The coordinator validates\n"+
 			"<value> against Arena's own declared range for this layer and refuses\n"+
 			"an out-of-range request rather than clamping it silently.\nRequires resolume:action.\n", cmdLabel)
@@ -449,13 +546,13 @@ func cmdResolumeSetLayerMaster(args []string, stdout, stderr io.Writer, clock fu
 		fs.Usage()
 		return exitUsage
 	}
-	id := rest[0]
-	if id == "" {
-		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "layer-id must not be empty"))
+	layer := rest[0]
+	if layer == "" {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "layer name must not be empty"))
 	}
 	value, err := strconv.ParseFloat(rest[1], 64)
 	if err != nil {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "value must be a number, not %q", rest[1]))
 	}
-	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "setLayerMaster", map[string]any{"id": id, "master": value})
+	return dispatchResolumeAction(stdout, stderr, clock, g, cmdLabel, "setLayerMaster", map[string]any{"layer": layer, "master": value})
 }

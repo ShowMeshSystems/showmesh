@@ -14,6 +14,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
@@ -590,12 +591,17 @@ func mapResolumeCompositionSummary(payload resolumeCompositionStoredPayload) v1.
 		clipCountByDeck[clip.DeckID]++
 	}
 	decks := make([]v1.ResolumeCompositionDeckSummary, 0, len(c.Decks))
-	for _, d := range c.Decks {
+	for i, d := range c.Decks {
+		// position is 1-based (ADR-037 decision 4, resolume.DeckLabel), the
+		// deck's own order in this response's own list — never recomputed
+		// from anything but that position.
+		name, generated := resolume.DeckLabel(i+1, d.Name)
 		decks = append(decks, v1.ResolumeCompositionDeckSummary{
-			ID:        d.ID,
-			Name:      d.Name,
-			Closed:    d.Closed,
-			ClipCount: clipCountByDeck[d.ID],
+			ID:            d.ID,
+			Name:          name,
+			NameGenerated: generated,
+			Closed:        d.Closed,
+			ClipCount:     clipCountByDeck[d.ID],
 		})
 	}
 
@@ -651,7 +657,7 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 
 	layers := make([]v1.ResolumeCompositionLayer, 0, len(c.Layers))
 	for _, l := range c.Layers {
-		name, generated := resolumeLayerDisplayName(l)
+		name, generated := resolume.LayerLabel(l.Index, l.Name)
 		layers = append(layers, v1.ResolumeCompositionLayer{
 			ID:              l.ID,
 			Index:           l.Index,
@@ -663,17 +669,29 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 
 	columns := make([]v1.ResolumeCompositionColumn, 0, len(c.Columns))
 	for _, col := range c.Columns {
-		columns = append(columns, v1.ResolumeCompositionColumn{ID: col.ID, DeckID: col.DeckID, Index: col.Index})
+		// Columns never carry an authored name at all (resolumecomp.Column
+		// has no Name field), so this is always generated — see
+		// [resolume.ColumnLabel]'s own doc comment.
+		columns = append(columns, v1.ResolumeCompositionColumn{
+			ID: col.ID, DeckID: col.DeckID, Index: col.Index,
+			Name: resolume.ColumnLabel(col.Index), NameGenerated: true,
+		})
 	}
+
+	ambiguous := resolumeClipAmbiguity(c)
 
 	clips := make([]v1.ResolumeCompositionClip, 0, len(c.Clips))
 	for _, clip := range c.Clips {
-		clips = append(clips, mapResolumeCompositionClip(clip))
+		name, generated := resolume.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
+		clips = append(clips, mapResolumeCompositionClip(clip, name, generated, ambiguous[clip.ID]))
 	}
 
 	persistentClips := make([]v1.ResolumeCompositionClip, 0, len(c.PersistentClips))
-	for _, clip := range c.PersistentClips {
-		persistentClips = append(persistentClips, mapResolumeCompositionClip(clip))
+	for i, clip := range c.PersistentClips {
+		// position is 1-based (resolume.PersistentClipLabel), this clip's
+		// own order in this response's own persistentClips list.
+		name, generated := resolume.PersistentClipLabel(i+1, clip.Name)
+		persistentClips = append(persistentClips, mapResolumeCompositionClip(clip, name, generated, ambiguous[clip.ID]))
 	}
 
 	return v1.ResolumeCompositionResponse{
@@ -690,38 +708,59 @@ func mapResolumeCompositionResponse(now time.Time, obj store.ConfigObjectRecord,
 	}
 }
 
-// resolumeLayerDisplayName is ADR-037 decision 7 (the parser must read
-// layer names and the API must show them) plus decision 4 (an unnamed
-// object gets a stable generated label, visibly generated rather than
-// passed off as authored). l.Name is the operator's own value, verbatim,
-// when the uploaded file carried a Name param for this layer. When it did
-// not — measured 5 of 18 layers in the operator's own composition — this
-// invents a positional label from the layer's 0-based Index rather than
-// ever sending an empty string: CLAUDE.md's standing rule is that absent
-// evidence is stated, never omitted, because a blank cell reads as fine.
-// generated tells a client which case it got.
-func resolumeLayerDisplayName(l resolumecomp.Layer) (name string, generated bool) {
-	if l.Name != "" {
-		return l.Name, false
-	}
-	return fmt.Sprintf("Layer %d", l.Index+1), true
-}
-
 // mapResolumeCompositionClip renders one [resolumecomp.Clip] onto the
 // wire. clip.DeckID passes straight through to the JSON-tagged
 // "deckId,omitempty" field: empty for a persistent clip (never sent at
 // all, per ADR-032 decision 6 — see [v1.ResolumeCompositionClip]'s own
-// doc comment), non-empty for a deck clip.
-func mapResolumeCompositionClip(clip resolumecomp.Clip) v1.ResolumeCompositionClip {
+// doc comment), non-empty for a deck clip. name/generated are ADR-037
+// decision 4's already-computed label (resolume.ClipLabel or
+// resolume.PersistentClipLabel, chosen by the caller per clip kind — a
+// deck clip's generated form needs its layer/column index, a persistent
+// clip's needs its list position, and neither is available from clip
+// alone), never recomputed here a second way.
+func mapResolumeCompositionClip(clip resolumecomp.Clip, name string, generated, ambiguous bool) v1.ResolumeCompositionClip {
 	return v1.ResolumeCompositionClip{
 		ID:                 clip.ID,
 		DeckID:             clip.DeckID,
 		LayerIndex:         clip.LayerIndex,
 		ColumnIndex:        clip.ColumnIndex,
-		Name:               clip.Name,
+		Name:               name,
+		NameGenerated:      generated,
+		Ambiguous:          ambiguous,
 		TransportTypeIndex: clip.TransportTypeIndex,
 		SourcePath:         clip.SourcePath,
 		Width:              clip.Width,
 		Height:             clip.Height,
 	}
+}
+
+// resolumeClipAmbiguity computes, keyed by each clip's own id, the
+// (deck-or-persistent, layer, label) triple two clips must not share (see
+// [resolume.AmbiguousClipIDs]) — over BOTH c.Clips and c.PersistentClips
+// together: deck.ID is always non-empty for a deck clip and always "" for
+// a persistent one, so the two collections never collide in the key space.
+func resolumeClipAmbiguity(c *resolumecomp.Composition) map[string]bool {
+	// A clip whose layerIndex does not resolve to any tracked layer gets a
+	// key unique to it — two such clips are never thereby known to share a
+	// layer, mirroring resolveDeckClip's own identical rule in the resolume
+	// package.
+	unknownLayerSeq := 0
+	layerKey := func(layerIndex int) string {
+		if label, known := resolume.LayerLabelByIndex(c.Layers, layerIndex); known {
+			return label
+		}
+		unknownLayerSeq++
+		return fmt.Sprintf("\x00unknown-%d", unknownLayerSeq)
+	}
+
+	entries := make(map[string]resolume.ClipTripleKey, len(c.Clips)+len(c.PersistentClips))
+	for _, clip := range c.Clips {
+		label, _ := resolume.ClipLabel(clip.LayerIndex, clip.ColumnIndex, clip.Name)
+		entries[clip.ID] = resolume.ClipTripleKey{Deck: clip.DeckID, Layer: layerKey(clip.LayerIndex), Label: label}
+	}
+	for i, clip := range c.PersistentClips {
+		label, _ := resolume.PersistentClipLabel(i+1, clip.Name)
+		entries[clip.ID] = resolume.ClipTripleKey{Layer: layerKey(clip.LayerIndex), Label: label}
+	}
+	return resolume.AmbiguousClipIDs(entries)
 }

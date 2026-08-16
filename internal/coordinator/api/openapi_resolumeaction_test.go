@@ -32,11 +32,39 @@ func TestOpenAPIResolumeActionListResponseMatchesRealResponse(t *testing.T) {
 	assertMatchesSchema(t, c, "ResolumeActionsResponse", body)
 }
 
+// TestOpenAPIResolumeActionLaunchClipWithIDIsRefusedNamingExpectedParams is
+// acceptance criterion 2: ADR-037 retired the raw "id" reference entirely,
+// so a launchClip request that still sends it is refused as an
+// unrecognized parameter — never accepted, never silently ignored — and
+// the refusal names what this action actually expects.
+func TestOpenAPIResolumeActionLaunchClipWithIDIsRefusedNamingExpectedParams(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-still-id", `{"id":"clip-1"}`), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "Problem", body)
+
+	m := decodeMap(t, body)
+	detail, _ := m["detail"].(string)
+	for _, want := range []string{"id", "clip", "deck", "layer", "persistent"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail = %q, want it to name %q", detail, want)
+		}
+	}
+}
+
 // TestOpenAPIResolumeActionRequestAndResponseVariantsMatchSchemas is the
-// request+response half proving every one of ResolumeActionRequest's four
-// oneOf variants (the plain object-id shape shared by launchClip/
-// clearLayer/launchColumn/selectDeck, blackout's zero-parameter shape, and
-// the two set-layer-bool shapes) both validate as a REQUEST and, once
+// request+response half proving every one of ResolumeActionRequest's seven
+// oneOf variants (ADR-037's named-reference shape per action — launchClip,
+// clearLayer, launchColumn, selectDeck, blackout's zero-parameter shape,
+// and the two set-layer shapes) both validate as a REQUEST and, once
 // dispatched against a real [API], produce a response validating against
 // ResolumeActionResponse.
 func TestOpenAPIResolumeActionRequestAndResponseVariantsMatchSchemas(t *testing.T) {
@@ -54,13 +82,13 @@ func TestOpenAPIResolumeActionRequestAndResponseVariantsMatchSchemas(t *testing.
 		name string
 		body string
 	}{
-		{"launchClip", resolumeActionBody("launchClip", "conf-key-launchClip", `{"id":"clip-1"}`)},
-		{"clearLayer", resolumeActionBody("clearLayer", "conf-key-clearLayer", `{"id":"layer-1"}`)},
-		{"launchColumn", resolumeActionBody("launchColumn", "conf-key-launchColumn", `{"id":"col-1"}`)},
-		{"selectDeck", resolumeActionBody("selectDeck", "conf-key-selectDeck", `{"id":"deck-1"}`)},
+		{"launchClip", resolumeActionBody("launchClip", "conf-key-launchClip", `{"clip":"clip-1","deck":"deck-1"}`)},
+		{"clearLayer", resolumeActionBody("clearLayer", "conf-key-clearLayer", `{"layer":"layer-1"}`)},
+		{"launchColumn", resolumeActionBody("launchColumn", "conf-key-launchColumn", `{"column":"col-1","deck":"deck-1"}`)},
+		{"selectDeck", resolumeActionBody("selectDeck", "conf-key-selectDeck", `{"deck":"deck-1"}`)},
 		{"blackout", resolumeActionBody("blackout", "conf-key-blackout", "")},
-		{"setLayerBypass", resolumeActionBody("setLayerBypass", "conf-key-setLayerBypass", `{"id":"layer-1","bypassed":true}`)},
-		{"setLayerMaster", resolumeActionBody("setLayerMaster", "conf-key-setLayerMaster", `{"id":"layer-1","master":0.4}`)},
+		{"setLayerBypass", resolumeActionBody("setLayerBypass", "conf-key-setLayerBypass", `{"layer":"layer-1","bypassed":true}`)},
+		{"setLayerMaster", resolumeActionBody("setLayerMaster", "conf-key-setLayerMaster", `{"layer":"layer-1","master":0.4}`)},
 	}
 
 	for _, tt := range tests {
@@ -100,13 +128,44 @@ func TestOpenAPIResolumeActionOutcomeVocabularyResponsesMatchSchema(t *testing.T
 			operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 			token := mustIssueToken(t, setup.svc, operator.ID)
 
-			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-"+string(outcome), `{"id":"col-1"}`), token)
+			req := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-"+string(outcome), `{"column":"col-1","deck":"deck-1"}`), token)
 			resp, body := doRawRequest(t, api.Handler, req)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
 			}
 			assertMatchesSchema(t, c, "ResolumeActionResponse", body)
 		})
+	}
+}
+
+// TestOpenAPIResolumeActionLaunchClipMissingBothDeckAndPersistentIsRefusedNotRejected
+// is review finding 3: openapi.yaml's own ResolumeLaunchClipActionRequest.params
+// carries a oneOf that a well-formed client never violates (finding 4), but a
+// coordinator that receives the violation anyway does NOT reject it with 400 —
+// it answers 200 with result.outcome: "refused", the same as any other
+// unresolvable reference. This body is deliberately schema-invalid (finding
+// 4's own oneOf), so only the RESPONSE is checked against its schema here.
+func TestOpenAPIResolumeActionLaunchClipMissingBothDeckAndPersistentIsRefusedNotRejected(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
+	setup.dispatcher.results["launchClip"] = ResolumeActionResult{
+		Outcome: ResolumeOutcomeRefused, Reason: "a clip reference must name the deck the clip lives on", Dispatched: false,
+	}
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-neither", `{"clip":"Snow"}`), token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (refused is an ordinary outcome, never a 400); body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "ResolumeActionResponse", body)
+
+	m := decodeMap(t, body)
+	result, _ := m["result"].(map[string]any)
+	if result["outcome"] != "refused" {
+		t.Errorf("result.outcome = %v, want %q", result["outcome"], "refused")
 	}
 }
 
@@ -126,7 +185,7 @@ func TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse(t *tes
 
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-audit-unavailable", `{"id":"clip-1"}`), token)
+	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-audit-unavailable", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
@@ -217,12 +276,12 @@ func TestOpenAPIResolumeActionReplayConflictResponseMatchesSchema(t *testing.T) 
 
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-conflict", `{"id":"col-1"}`), token)
+	req1 := newResolumeActionRequest(t, resolumeActionBody("launchColumn", "conf-key-conflict", `{"column":"col-1","deck":"deck-1"}`), token)
 	if resp1, body1 := doRawRequest(t, api.Handler, req1); resp1.StatusCode != http.StatusOK {
 		t.Fatalf("first request status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "conf-key-conflict", `{"id":"deck-1"}`), token)
+	req2 := newResolumeActionRequest(t, resolumeActionBody("selectDeck", "conf-key-conflict", `{"deck":"deck-1"}`), token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp2.StatusCode, body2)

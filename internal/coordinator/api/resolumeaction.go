@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/command"
@@ -105,28 +106,10 @@ const resolumeActionWriteDeadlineMargin = 5 * time.Second
 // itself, end to end — the pre-dispatch baseline phase, the write, and
 // confirmation — and is handed to Dispatch as an actual context deadline
 // (see this file's own call site), not merely consulted here as an upper
-// bound to build a write deadline from. It MUST equal
-// resolume.MaxDispatchDuration (internal/coordinator/collector/resolume,
-// action.go): that constant's own doc comment is explicit that an EARLIER
-// revision of this file exported resolume.MaxActionConfirmDeadline (the
-// confirm-poll clamp alone, 30s) as its bound, which review fix 4 found was
-// false — the confirm clamp never covered the baseline phase (unbounded
-// per layer, 18 layers x 5s request timeout is 90s before dispatch is even
-// attempted) or the write phase, and Dispatch itself ran on a context with
-// no deadline at all (context.WithoutCancel(ctx), correct for surviving a
-// client abort, wrong for being bounded).
-//
-// This package deliberately does not import
-// internal/coordinator/collector/resolume in production code (the same
-// decoupling resolumeaction_interfaces.go's own doc comment states for the
-// dispatcher interface itself, and the same "duplicate the literal, name
-// the coupling" judgment apiwiring.go's own fppMQTTCollectorSourceID etc.
-// already make throughout this codebase) — so this constant stays a
-// literal, but it is no longer a coincidence: TestResolumeActionMaxDispatchDurationEqualsRegistryMax
-// (resolumeaction_test.go, a test file, which CAN import the producer
-// package without creating a production dependency) fails the build the
-// moment this value and resolume.MaxDispatchDuration disagree.
-const resolumeActionMaxDispatchDuration = 40 * time.Second
+// bound to build a write deadline from. Read directly from
+// resolume.MaxDispatchDuration rather than a duplicated literal, so the two
+// cannot drift apart.
+const resolumeActionMaxDispatchDuration = resolume.MaxDispatchDuration
 
 // resolumeActionHTTPWriteDeadline bounds this endpoint's own HTTP write
 // deadline (set before the request body is even read, so before this
@@ -238,7 +221,8 @@ func resolumeActionRequestBodyTooLargeProblem() v1.Problem {
 // response does, since [ResolumeActionDispatcher.Dispatch] never surfaces
 // one to this package — see that method's own doc comment).
 type resolumeActionResultPayload struct {
-	Outcome string `json:"outcome,omitempty"`
+	Outcome    string `json:"outcome,omitempty"`
+	ResolvedID string `json:"resolvedId,omitempty"`
 }
 
 // resolumeActionEvidenceState maps outcome to pkg/observation's
@@ -347,11 +331,15 @@ func quotedResolumeActionNames(descriptors []ResolumeActionDescriptor) string {
 }
 
 // decodeResolumeActionParams implements the identical absent/null/empty
-// rule decodeFPPCommandParams (fppcommand_primitives.go) enforces for FPP,
-// narrowed to this vocabulary's own property: every declared parameter is
-// REQUIRED (see [ResolumeActionParam]'s own doc comment), so there is no
-// Default branch to apply — an absent or null required parameter is
-// always a 400.
+// rule decodeFPPCommandParams (fppcommand_primitives.go) enforces for FPP:
+// an absent OPTIONAL parameter (def.Required == false) is left out of the
+// returned map entirely — never defaulted to a value here, since what an
+// absence means is a resolution rule its caller applies (see
+// [ResolumeActionParam]'s own doc comment) — while an absent REQUIRED
+// parameter is always a 400. An explicit null is refused for every
+// declared parameter regardless of Required: absent and null are two
+// different things on this wire, and "optional" only ever means "may be
+// absent," never "null is acceptable."
 func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]json.RawMessage) (map[string]any, *v1.Problem) {
 	rawParams, hasParams := top["params"]
 	if hasParams && isJSONNull(rawParams) {
@@ -392,7 +380,9 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	// comment (Step 8 review finding 14) for why this must run before the
 	// per-parameter loop: a misspelled required parameter must be reported
 	// as an unrecognized key, not as the correctly-spelled one being
-	// absent.
+	// absent. The refusal also names the expected keys (ADR-037: with "id"
+	// retired, a caller who still sends it must be told what replaced it,
+	// not just that it was rejected).
 	var unknown []string
 	for k := range fields {
 		if !known[k] {
@@ -401,9 +391,14 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
+		expected := make([]string, 0, len(desc.Params))
+		for _, def := range desc.Params {
+			expected = append(expected, def.Name)
+		}
+		sort.Strings(expected)
 		p := invalidParameterProblem(fmt.Sprintf(
 			"params contains unrecognized key(s) for action %q: %s (a typo'd parameter name is refused rather than "+
-				"silently ignored)", desc.Name, strings.Join(unknown, ", ")))
+				"silently ignored; this action expects: %s)", desc.Name, strings.Join(unknown, ", "), strings.Join(expected, ", ")))
 		return nil, &p
 	}
 
@@ -412,11 +407,16 @@ func decodeResolumeActionParams(desc ResolumeActionDescriptor, top map[string]js
 		raw, present := fields[def.Name]
 		switch {
 		case !present:
+			if !def.Required {
+				// Absent and optional: left out of the map entirely, never
+				// defaulted here — see this function's own doc comment.
+				continue
+			}
 			p := invalidParameterProblem(fmt.Sprintf("params.%s is required and was not provided", def.Name))
 			return nil, &p
 		case isJSONNull(raw):
 			p := invalidParameterProblem(fmt.Sprintf(
-				"params.%s is required and must not be null (an explicit null is not the same as an omitted field)", def.Name))
+				"params.%s must not be null (an explicit null is not the same as an omitted field)", def.Name))
 			return nil, &p
 		default:
 			val, err := decodeResolumeActionParamValue(def, raw)
@@ -693,7 +693,7 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 	// identity.AuditEntry.OutcomeState are both documented as that
 	// vocabulary, not this endpoint's own five-word outcome.
 	evidenceState := resolumeActionEvidenceState(result.Outcome)
-	finalResult, _ := json.Marshal(resolumeActionResultPayload{Outcome: outcomeStr})
+	finalResult, _ := json.Marshal(resolumeActionResultPayload{Outcome: outcomeStr, ResolvedID: result.ResolvedID})
 	finalResultStr := string(finalResult)
 	if err := h.updateResolumeActionOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
 		DispatchedAt: result.DispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
@@ -717,7 +717,7 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 		Timestamp: resolvedAt, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: auditAction, Target: resolumeActionTargetID, IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditOutcome, CommandID: cmdID,
+		Kind: identity.AuditOutcome, CommandID: cmdID, Params: resolumeActionResolvedIDAuditParams(result.ResolvedID),
 		Outcome: outcomeStr, OutcomeState: evidenceState, OutcomeReason: result.Reason,
 	})
 
@@ -729,8 +729,21 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 			AttributionDegraded: dispatchDegraded || outcomeDegraded,
 			DispatchedAt:        formatTimePtr(result.DispatchedAt),
 			ResolvedAt:          formatTimePtr(&resolvedAt),
+			ResolvedID:          result.ResolvedID,
 		},
 	})
+}
+
+// resolumeActionResolvedIDAuditParams returns the outcome audit entry's own
+// Params map naming the object id this action addressed, or nil when there
+// is none (blackout, or a refusal reached before any name was resolved) —
+// nil rather than an empty map, so the audit row's params column stays
+// genuinely absent instead of a plausible-looking {}.
+func resolumeActionResolvedIDAuditParams(resolvedID string) map[string]any {
+	if resolvedID == "" {
+		return nil
+	}
+	return map[string]any{"resolvedId": resolvedID}
 }
 
 // resolveResolumeActionReplay answers a replayed idempotency key: nothing
@@ -788,6 +801,7 @@ func (h *handlers) resolveResolumeActionReplay(ctx context.Context, now time.Tim
 		AttributionDegraded: degraded,
 		DispatchedAt:        formatTimePtr(existing.DispatchedAt),
 		ResolvedAt:          formatTimePtr(existing.ResolvedAt),
+		ResolvedID:          payload.ResolvedID,
 	}, nil
 }
 

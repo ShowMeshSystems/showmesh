@@ -29,20 +29,14 @@ import (
 // This deliberately does NOT re-run [ResolumeActionDispatcher]'s own
 // per-action confirmation rules (the derived deadline, the pre-dispatch
 // baseline, the deck refusal) the way ReconcileStrandedFPPCommands re-runs
-// an fppPrimitive's Confirm predicate against fresh observations: doing
-// that would require importing internal/coordinator/collector/resolume
-// into this package, exactly the production coupling
-// resolumeaction_interfaces.go's own doc comment (and resolumeaction.go's
-// sibling constants) already refuse to take on, and it would mean this
-// startup sweep re-implements — and could disagree with — D-3/A's own
-// dispatch-time rules for what counts as confirming evidence for a given
-// action. So every stranded Resolume row is resolved "unconfirmed" with a
-// reason that says exactly that: this coordinator will not guess whether a
-// Resolume action's effect actually landed once the process that
-// dispatched it is gone. "unconfirmed" is a claim about THIS
-// coordinator's own evidence pipeline (TRACK-D-D3-SPEC.md section 3.3's
-// closing rule — "unconfirmed... is a claim about ShowMesh's own evidence
-// pipeline"), never a claim that the action failed.
+// an fppPrimitive's Confirm predicate against fresh observations: a
+// startup sweep has no live dispatch window to run those rules inside, and
+// re-deriving them here would risk disagreeing with D-3/A's own dispatch-
+// time answer for what counts as confirming evidence. So every stranded
+// Resolume row is resolved "unconfirmed": this coordinator will not guess
+// whether a Resolume action's effect actually landed once the process that
+// dispatched it is gone. "unconfirmed" is a claim about this coordinator's
+// own evidence pipeline, never a claim that the action failed.
 func ReconcileStrandedResolumeActions(ctx context.Context, deps Dependencies, now func() time.Time, logger *slog.Logger) (resolved int, err error) {
 	deps = deps.withDefaults()
 

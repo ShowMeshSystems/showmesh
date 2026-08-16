@@ -939,11 +939,18 @@ type ResolumeCompositionCanvas struct {
 // deliberately, since a deck's summary IS its complete representation;
 // unlike a clip, a deck has no further detail the id map carries that the
 // summary omits).
+//
+// Name and NameGenerated are ADR-037 decision 4, extended to decks: Name is
+// the deck's own authored name (CompositionInfo/DeckInfo) when non-empty,
+// otherwise the generated "Deck <n>" form from its 1-based position among
+// this response's own deck list — see [ResolumeCompositionLayer.Name]'s
+// identical rule for layers.
 type ResolumeCompositionDeckSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Closed    bool   `json:"closed"`
-	ClipCount int    `json:"clipCount"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	NameGenerated bool   `json:"nameGenerated"`
+	Closed        bool   `json:"closed"`
+	ClipCount     int    `json:"clipCount"`
 }
 
 // ResolumeCompositionSummary is what the coordinator parsed from an
@@ -1026,10 +1033,20 @@ type ResolumeCompositionLayer struct {
 // ResolumeCompositionColumn is one element of
 // [ResolumeCompositionResponse.Columns]: one column position within one
 // deck.
+//
+// Name and NameGenerated are ADR-037 decision 4, extended to columns.
+// Columns never carry an authored name at all (resolumecomp.Column has no
+// Name field — the .avc format does not give one), so NameGenerated is
+// always true and Name is always the generated "Column <n>" form from
+// Index. The fields still exist here, rather than being omitted for
+// "always generated", so every kind's response carries the identical
+// (name, nameGenerated) shape a client can render uniformly.
 type ResolumeCompositionColumn struct {
-	ID     string `json:"id"`
-	DeckID string `json:"deckId"`
-	Index  int    `json:"index"`
+	ID            string `json:"id"`
+	DeckID        string `json:"deckId"`
+	Index         int    `json:"index"`
+	Name          string `json:"name"`
+	NameGenerated bool   `json:"nameGenerated"`
 }
 
 // ResolumeCompositionClip is one element of
@@ -1053,12 +1070,26 @@ type ResolumeCompositionColumn struct {
 // Resolume's REST API, varies per clip, and is not present in the
 // composition file at all, so inventing a name for an index here would be
 // exactly the mistake ADR-032's own bench capture warns against.
+// Name is never blank: the clip's own authored name when non-empty,
+// otherwise a generated form — "Clip L<layerIndex+1>C<columnIndex+1>" for
+// a deck clip, "Persistent clip <n>" (1-based position among
+// [ResolumeCompositionResponse.PersistentClips]) for a persistent one —
+// with NameGenerated saying which.
+//
+// Ambiguous is true when this clip's own (deck-or-persistent, layer,
+// label) triple is shared by another clip, meaning no reference —
+// including one naming its own layer — can ever resolve it, since the
+// colliding clips already agree on their own layer too. Measured against
+// the operator's real composition: 16 of 36 clips on one deck alone.
+// Always present, never omitted when false.
 type ResolumeCompositionClip struct {
 	ID                 string `json:"id"`
 	DeckID             string `json:"deckId,omitempty"`
 	LayerIndex         int    `json:"layerIndex"`
 	ColumnIndex        int    `json:"columnIndex"`
 	Name               string `json:"name"`
+	NameGenerated      bool   `json:"nameGenerated"`
+	Ambiguous          bool   `json:"ambiguous"`
 	TransportTypeIndex *int   `json:"transportTypeIndex,omitempty"`
 	SourcePath         string `json:"sourcePath,omitempty"`
 	Width              *int   `json:"width,omitempty"`
