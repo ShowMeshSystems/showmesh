@@ -1,11 +1,24 @@
-import type { ControlPlaneState, DiscoveryState, EventSeverity, FPPHealth } from '../app/types'
+import type {
+  ControlPlaneState,
+  DiscoveryState,
+  EventSeverity,
+  FPPHealth,
+  ResolumeHealth,
+  ResolumeRecoveryLayerState,
+  ResolumeRecoveryRestoreResult,
+} from '../app/types'
 import { StatusBadge, type StatusTone } from './StatusBadge'
 
 // Domain-specific status badges, all built on the one StatusBadge
 // primitive so the color-is-never-the-only-signal rule (OBSERVABILITY
 // section 6.3) is inherited rather than re-implemented per domain.
 
-const FPP_HEALTH: Record<FPPHealth, { tone: StatusTone; icon: string; label: string }> = {
+// FPPHealth and ResolumeHealth are the identical five-value wire vocabulary
+// (both "healthy" | "degraded" | "failed" | "unknown" | "suppressed" —
+// api/openapi.yaml's FPPInstance.health and ResolumeInstance.health), so
+// one table and one renderer serve both domains rather than risking two
+// copies drifting on tone/icon/label.
+const HEALTH: Record<FPPHealth, { tone: StatusTone; icon: string; label: string }> = {
   healthy: { tone: 'good', icon: '●', label: 'healthy' },
   degraded: { tone: 'warn', icon: '⚠', label: 'degraded' },
   failed: { tone: 'bad', icon: '✕', label: 'failed' },
@@ -14,7 +27,16 @@ const FPP_HEALTH: Record<FPPHealth, { tone: StatusTone; icon: string; label: str
 }
 
 export function FPPHealthBadge({ health }: { health: FPPHealth }) {
-  const spec = FPP_HEALTH[health]
+  const spec = HEALTH[health]
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// Track D seam D-4. 'unknown' is its own tone here exactly as it is for
+// FPP above -- "the system does not know" must never collapse into
+// 'warning'/'degraded' -- inherited automatically since both draw from the
+// same HEALTH table.
+export function ResolumeHealthBadge({ health }: { health: ResolumeHealth }) {
+  const spec = HEALTH[health]
   return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }
 
@@ -89,6 +111,43 @@ const DISCOVERY_STATE: Record<DiscoveryState, { tone: StatusTone; icon: string; 
 // coordinator ever adds a fifth verdict. CollectorStatusBadge above
 // already gets this right with `?? 'unknown'`; this brings the third
 // sibling renderer in line with the other two.
+// Track D seam D-3a/D-4: one crash-recovery record entry's own state.
+// "unknown" renders its OWN badge here (never dark or blank -- D-3a
+// criterion 14, this project's fifth encounter with absence of evidence
+// read as evidence of absence) -- the CALLER (the Resolume view) is
+// responsible for also rendering entry.reason alongside this badge, since
+// this component only ever renders the state word, not the reason text.
+const RESOLUME_RECOVERY_LAYER_STATE: Record<ResolumeRecoveryLayerState, { tone: StatusTone; icon: string; label: string }> = {
+  clip: { tone: 'good', icon: '●', label: 'clip loaded' },
+  dark: { tone: 'unknown', icon: '–', label: 'dark (no clip)' },
+  unknown: { tone: 'unknown', icon: '?', label: 'unknown' },
+}
+
+export function ResolumeRecoveryLayerStateBadge({ state }: { state: ResolumeRecoveryLayerState }) {
+  const spec = RESOLUME_RECOVERY_LAYER_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// One restore's own per-layer result (Track D seam D-3a/D-4).
+const RESOLUME_RESTORE_RESULT: Record<ResolumeRecoveryRestoreResult, { tone: StatusTone; icon: string; label: string }> = {
+  restored: { tone: 'good', icon: '●', label: 'restored' },
+  skipped: { tone: 'unknown', icon: '–', label: 'skipped' },
+  failed: { tone: 'bad', icon: '✕', label: 'failed' },
+}
+
+export function ResolumeRestoreResultBadge({ result }: { result: ResolumeRecoveryRestoreResult }) {
+  const spec = RESOLUME_RESTORE_RESULT[result] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized result (${String(result)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
 export function DeclarationBadge({ declared, discoveryState }: { declared: boolean; discoveryState: DiscoveryState }) {
   if (!declared) {
     return <StatusBadge tone="unknown" icon="–" label="not declared" />
