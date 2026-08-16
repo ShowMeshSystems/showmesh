@@ -214,24 +214,16 @@ var showSafetyClasses = map[string]bool{
 	ShowSafetyClassPowerOff: true,
 }
 
-// The three members of show.action.target.integration (STEP-9-SPEC.md
-// section 5.3; ShowActionIntegrationResolume added by Track D seam C,
-// minted by the orchestrator per TRACK-D-SEAM-C-MACRO-SPEC.md section 2).
+// The three members of show.action.target.integration.
 const (
 	ShowActionIntegrationFPP      = "fpp"
 	ShowActionIntegrationMQTT     = "mqtt"
 	ShowActionIntegrationResolume = "resolume"
 )
 
-// The seven Resolume action names TRACK-D-D3-SPEC.md section 2 registered
-// (internal/coordinator/collector/resolume.ActionName), duplicated here by
-// value rather than by import: this package must not import that package
-// or internal/coordinator/api for its own decode/validate logic (see this
-// file's own top comment and [ResolumeReferenceResolver]'s doc comment
-// below), matching the identical tradeoff this codebase already makes in
-// several other places (e.g. resolumeCompositionConfigKind,
-// resolumeActionCoordinatorRequiredLabel in
-// internal/coordinator/resolumewiring.go and resolumeactionwiring.go).
+// The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
+// duplicated here by value rather than by import: this package must not
+// import that package or internal/coordinator/api.
 const (
 	ShowActionResolumeLaunchClip     = "launchClip"
 	ShowActionResolumeClearLayer     = "clearLayer"
@@ -265,16 +257,12 @@ var showActionResolumeActions = map[string]bool{
 	ShowActionResolumeSetLayerMaster: true,
 }
 
-// resolumeActionDeclaredSafetyClass is TRACK-D-SEAM-C-MACRO-SPEC.md section
-// 2.2's mapping, mirroring internal/coordinator/collector/resolume's own
-// actionSafetyClass/ActionSafetyClassExempt classification. clearLayer is
-// blackout, not none, deliberately: D-3 already exempts it alongside
-// blackout for the identical reason, that both make the wall darker, and
-// ShowMesh never refuses to make the wall darker.
-// TestResolumeActionSafetyClassMatchesResolumeRegistry (an external
-// config_test package test) reads both this table and that package's own
-// registry and fails if they diverge, rather than this table being the
-// only copy of the rule.
+// resolumeActionDeclaredSafetyClass mirrors
+// internal/coordinator/collector/resolume's own safety-class
+// classification. clearLayer is blackout, not none: both make the wall
+// darker, and ShowMesh never refuses that.
+// TestResolumeActionSafetyClassMatchesResolumeRegistry reconciles this
+// table against that package's own registry so the two cannot diverge.
 var resolumeActionDeclaredSafetyClass = map[string]string{
 	ShowActionResolumeBlackout:       ShowSafetyClassBlackout,
 	ShowActionResolumeClearLayer:     ShowSafetyClassBlackout,
@@ -295,6 +283,20 @@ func ResolumeActionDeclaredSafetyClass(action string) (string, bool) {
 	return c, ok
 }
 
+// ResolumeActionNames returns every resolume action this package declares
+// a safety class for — the keys of resolumeActionDeclaredSafetyClass
+// itself, not the separate showActionResolumeActionNames vocabulary list,
+// so a reconciliation test comparing this against resolume's own registry
+// is actually comparing the map under test, not a second list that could
+// drift from it unnoticed.
+func ResolumeActionNames() []string {
+	out := make([]string, 0, len(resolumeActionDeclaredSafetyClass))
+	for name := range resolumeActionDeclaredSafetyClass {
+		out = append(out, name)
+	}
+	return out
+}
+
 // resolumeRefKind is one target.ref value's required wire JSON type.
 type resolumeRefKind int
 
@@ -312,16 +314,12 @@ type resolumeRefParam struct {
 	Required bool
 }
 
-// resolumeActionRefVocabulary is seam B's own reference vocabulary
-// (clip, deck, layer, column, persistent, bypassed, master), per action —
-// duplicated by value from
+// resolumeActionRefVocabulary is each action's own named-reference
+// vocabulary, duplicated by value from
 // internal/coordinator/resolumeactionwiring.go's identical
-// resolumeActionParamVocabulary, for the same reason
-// showActionResolumeActionNames is duplicated rather than imported.
-// "deck" is launchClip's own CONDITIONAL key (required unless
-// "persistent" is true): declared optional here and enforced by
-// validateResolumeRefConditionals, which is the only place that
-// conditional rule is decided.
+// resolumeActionParamVocabulary. "deck" is launchClip's own conditional
+// key (required unless "persistent" is true): declared optional here and
+// enforced by validateResolumeRefConditionals.
 var resolumeActionRefVocabulary = map[string][]resolumeRefParam{
 	ShowActionResolumeLaunchClip: {
 		{Name: "clip", Kind: resolumeRefString, Required: true},
@@ -351,15 +349,11 @@ var resolumeActionRefVocabulary = map[string][]resolumeRefParam{
 }
 
 // ErrResolumeCompositionNotUploaded is what a [ResolumeReferenceResolver]
-// method returns when no composition has ever been uploaded to this
-// coordinator (TRACK-D-SEAM-C-MACRO-SPEC.md section 2.1: "A write attempted
-// when no composition has been uploaded is refused, with
-// ErrCompositionNotUploaded's existing operator-facing sentence"). Declared
-// here rather than imported from
-// internal/coordinator/collector/resolume, so this package's own error
-// vocabulary does not depend on that package's; an implementation
-// translates that package's own ErrCompositionNotUploaded to this sentinel
-// at the boundary.
+// method returns when no composition has ever been uploaded. Declared here
+// rather than imported from internal/coordinator/collector/resolume, so
+// this package's own error vocabulary does not depend on that package's;
+// an implementation translates that package's own ErrCompositionNotUploaded
+// to this sentinel at the boundary.
 var ErrResolumeCompositionNotUploaded = errors.New("resolume: no composition has been uploaded to this coordinator yet")
 
 // ResolumeClipReference is launchClip's own reference vocabulary, mirroring
@@ -373,24 +367,18 @@ type ResolumeClipReference struct {
 	Layer      string
 }
 
-// ResolumeReferenceResolver is what DecodeShowActionPayload needs to
-// resolve a seam B reference against this coordinator's currently stored
-// composition, following the same pattern [FPPPrimitiveRegistry] already
-// established: declared here, at the consumer, and implemented over
-// internal/coordinator/collector/resolume somewhere that may import both
-// (internal/coordinator), never in this package. It must not — and by this
-// shape cannot — expose a Resolume object id to this package: ADR-037
-// forbids an object id ever appearing in a show.action payload, and every
-// method here returns only an error, never an id.
+// ResolumeReferenceResolver resolves a named reference against this
+// coordinator's currently stored composition, following the same pattern
+// [FPPPrimitiveRegistry] already established: declared here, at the
+// consumer, implemented over internal/coordinator/collector/resolume
+// somewhere that may import both, never in this package. It exposes no
+// Resolume object id to this package (ADR-037): every method returns only
+// an error, never an id.
 //
-// Every method returns nil for a reference that resolves to exactly one
-// object; [ErrResolumeCompositionNotUploaded] when nothing has ever been
-// uploaded; or any other error whose Error() text already names the label
-// (not found) or every candidate (ambiguous) —
-// internal/coordinator/collector/resolume's own ResolveClip/ResolveLayer/
-// ResolveColumn/ResolveDeck already produce exactly that text (ADR-037
-// decisions 5 and 6), so an implementation returns it unchanged rather
-// than re-composing it.
+// nil means resolved; [ErrResolumeCompositionNotUploaded] means nothing
+// has ever been uploaded; any other error's Error() text already names
+// the label (not found) or every candidate (ambiguous), and an
+// implementation returns it unchanged.
 type ResolumeReferenceResolver interface {
 	ResolveClip(ref ResolumeClipReference) error
 	ResolveLayer(name string) error
@@ -543,12 +531,12 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 }
 
 // DecodeShowActionPayload parses and validates raw against STEP-9-SPEC.md
-// section 5.3's rules, extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2.1
-// for the resolume branch. endpoints is the caller's currently-configured
-// FPP endpoint list (Config.FPPEndpoints or the store-authoritative
-// equivalent); brokers is the caller's declared integration broker set
-// (see integrationbrokers.go); registry resolves and validates an FPP
-// primitive's own parameter vocabulary and safety class; resolver resolves
+// section 5.3's rules, and the resolume branch's own rules. endpoints is
+// the caller's currently-configured FPP endpoint list (Config.FPPEndpoints
+// or the store-authoritative equivalent); brokers is the caller's declared
+// integration broker set (see integrationbrokers.go); registry resolves
+// and validates an FPP primitive's own parameter vocabulary and safety
+// class; resolver resolves
 // a resolume target's seam B reference against the currently stored
 // composition. None of the four is fetched by this package — see this
 // file's own top doc comment.
@@ -870,8 +858,7 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 }
 
 // decodeResolumeTarget decodes and validates target.integration ==
-// "resolume", in the order TRACK-D-SEAM-C-MACRO-SPEC.md section 2.1
-// requires: reject an unrecognized action, reject unknown ref keys,
+// "resolume": reject an unrecognized action, reject unknown ref keys,
 // apply the conditional rules, resolve every reference against the
 // currently stored composition, then enforce the safety class.
 func decodeResolumeTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string, resolver ResolumeReferenceResolver) (ShowActionTarget, *ValidationError) {
@@ -886,7 +873,7 @@ func decodeResolumeTarget(targetFields map[string]json.RawMessage, declaredSafet
 		}
 	}
 
-	refFields, verr := decodeRequiredObject(targetFields, "ref", "target.ref")
+	refFields, verr := decodeResolumeTargetRefFields(targetFields, action)
 	if verr != nil {
 		return ShowActionTarget{}, verr
 	}
@@ -900,7 +887,16 @@ func decodeResolumeTarget(targetFields map[string]json.RawMessage, declaredSafet
 		return ShowActionTarget{}, verr
 	}
 
-	registeredClass := resolumeActionDeclaredSafetyClass[action]
+	registeredClass, ok := resolumeActionDeclaredSafetyClass[action]
+	if !ok {
+		// Unreachable given showActionResolumeActions' own membership check
+		// above, answered rather than left to compare against "" if the two
+		// ever disagree.
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.action",
+			Detail: fmt.Sprintf("action %q has no registered safety class", action),
+		}
+	}
 	if registeredClass != declaredSafetyClass {
 		return ShowActionTarget{}, &ValidationError{
 			Code: ValidationCodeSafetyClassMismatch, Field: "safetyClass",
@@ -911,13 +907,46 @@ func decodeResolumeTarget(targetFields map[string]json.RawMessage, declaredSafet
 	return ShowActionTarget{Integration: ShowActionIntegrationResolume, Action: action, Ref: ref}, nil
 }
 
+// decodeResolumeTargetRefFields reads target.ref for action. Required and
+// non-null for every action whose own vocabulary is non-empty; for
+// blackout (the one zero-key action) it must be absent or an empty
+// object — requiring a key that can only ever be empty made a stored
+// blackout action unable to be read back and re-PUT, since encoding an
+// empty ref map drops the key (json:"ref,omitempty") and the decoder then
+// saw it as missing.
+func decodeResolumeTargetRefFields(targetFields map[string]json.RawMessage, action string) (map[string]json.RawMessage, *ValidationError) {
+	vocab := resolumeActionRefVocabulary[action]
+	raw, present := targetFields["ref"]
+	if !present {
+		if len(vocab) == 0 {
+			return map[string]json.RawMessage{}, nil
+		}
+		return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: "target.ref", Detail: "target.ref is required"}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: "target.ref", Detail: "target.ref must not be null"}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "target.ref", Detail: "target.ref must be a JSON object"}
+	}
+	if len(vocab) == 0 && len(fields) > 0 {
+		keys := make([]string, 0, len(fields))
+		for k := range fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldUnknownKey, Field: "target.ref",
+			Detail: fmt.Sprintf("action %q takes no ref keys, but ref named: %s", action, strings.Join(keys, ", ")),
+		}
+	}
+	return fields, nil
+}
+
 // decodeResolumeRef decodes and validates target.ref against action's own
-// vocabulary (resolumeActionRefVocabulary): an unrecognized key is
-// rejected first, naming what this action accepts, before any per-key
-// decode — the identical ordering rejectUnknownTopLevelKeys already
-// applies one level up, for the identical reason (a misspelled key must
-// be reported as unrecognized, not as the correctly-spelled one being
-// absent).
+// vocabulary: an unrecognized key is rejected first, naming what this
+// action accepts, before any per-key decode.
 func decodeResolumeRef(action string, fields map[string]json.RawMessage) (map[string]any, *ValidationError) {
 	params := resolumeActionRefVocabulary[action]
 
@@ -1010,10 +1039,8 @@ func decodeResolumeRefValue(p resolumeRefParam, raw json.RawMessage, field strin
 }
 
 // validateResolumeRefConditionals applies launchClip's own conditional rule
-// (seam B section 2.1, ADR-032 decision 6): "deck" is required unless
-// "persistent" is true, and forbidden when it is — a clip reference
-// without its deck cannot tell "this clip was replaced" from "this clip's
-// deck simply is not showing." No other action in this vocabulary has a
+// (ADR-032 decision 6): "deck" is required unless "persistent" is true,
+// and forbidden when it is. No other action in this vocabulary has a
 // conditional key.
 func validateResolumeRefConditionals(action string, ref map[string]any) *ValidationError {
 	if action != ShowActionResolumeLaunchClip {
@@ -1037,14 +1064,11 @@ func validateResolumeRefConditionals(action string, ref map[string]any) *Validat
 }
 
 // resolveResolumeRef resolves action's own reference fields out of ref
-// against resolver, per TRACK-D-SEAM-C-MACRO-SPEC.md section 2.1 rule 4.
-// blackout resolves nothing (it addresses every tracked layer, not a named
-// one). Every non-nil error resolver returns — "not found", "ambiguous",
-// or [ErrResolumeCompositionNotUploaded] — is reported through the SAME
-// Code, ValidationCodeFieldUnknownReference: all three are "this reference
-// does not resolve to exactly one object right now," told apart for the
-// operator by Detail's own text (which resolver already composed) rather
-// than by a client branching on a second Code.
+// against resolver. blackout resolves nothing (it addresses every tracked
+// layer, not a named one). Every non-nil error — not found, ambiguous, or
+// [ErrResolumeCompositionNotUploaded] — is reported through the same
+// Code, ValidationCodeFieldUnknownReference, told apart for the operator
+// by Detail's own text rather than by a client branching on a second Code.
 func resolveResolumeRef(action string, ref map[string]any, resolver ResolumeReferenceResolver) *ValidationError {
 	var err error
 	switch action {

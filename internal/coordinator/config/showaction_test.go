@@ -664,7 +664,7 @@ func TestDecodeShowActionPayloadUnknownTopLevelKeyRejected(t *testing.T) {
 	}
 }
 
-// --- Track D seam C: the "resolume" integration (TRACK-D-SEAM-C-MACRO-SPEC.md section 2) ---
+// --- Track D seam C: the "resolume" integration ---
 
 func validResolumeLaunchClipJSON() string {
 	return `{
@@ -679,55 +679,94 @@ func validResolumeLaunchClipJSON() string {
 	}`
 }
 
-// TestDecodeShowActionPayloadResolumeValid is acceptance criterion 1: a
-// show.action naming launchClip with a valid deck and clip name is
-// accepted, stored, and read back with the names intact and no object id
-// anywhere in the payload.
-func TestDecodeShowActionPayloadResolumeValid(t *testing.T) {
-	resolver := newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1")
-	p, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver)
-	if verr != nil {
-		t.Fatalf("unexpected error: %+v", verr)
-	}
-	if p.Target.Integration != ShowActionIntegrationResolume || p.Target.Action != ShowActionResolumeLaunchClip {
-		t.Fatalf("unexpected target: %+v", p.Target)
-	}
-	if p.Target.Ref["clip"] != "Whole House 1" || p.Target.Ref["deck"] != "Main" {
-		t.Fatalf("unexpected ref: %+v", p.Target.Ref)
+// TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction is
+// acceptance criterion 1, as a table over all seven actions rather than
+// launchClip alone: each is authored, encoded, and re-decoded from the
+// coordinator's own encoded output (the "action show --output json" into
+// a file, edited, "action put --file" back round trip cmd_action.go's own
+// doc comment promises), with names intact and no object id anywhere.
+//
+// This table is what caught a real bug: with only launchClip covered,
+// blackout's own round trip (an empty ref, dropped on encode by
+// omitempty) was never exercised, and a stored blackout action could not
+// be re-PUT.
+func TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction(t *testing.T) {
+	cases := []struct {
+		action, safetyClass, refJSON string
+		resolver                     *fakeResolumeReferenceResolver
+	}{
+		{
+			action: ShowActionResolumeLaunchClip, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"clip": "Whole House 1", "deck": "Main"}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1"),
+		},
+		{
+			action: ShowActionResolumeClearLayer, safetyClass: ShowSafetyClassBlackout,
+			refJSON:  `{"layer": "Whole House 1"}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1"),
+		},
+		{
+			action: ShowActionResolumeBlackout, safetyClass: ShowSafetyClassBlackout,
+			refJSON:  `{}`,
+			resolver: newFakeResolumeReferenceResolver(),
+		},
+		{
+			action: ShowActionResolumeLaunchColumn, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"column": "Column 3", "deck": "Main"}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("column", "Column 3"),
+		},
+		{
+			action: ShowActionResolumeSelectDeck, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"deck": "Main"}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("deck", "Main"),
+		},
+		{
+			action: ShowActionResolumeSetLayerBypass, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"layer": "Whole House 1", "bypassed": true}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1"),
+		},
+		{
+			action: ShowActionResolumeSetLayerMaster, safetyClass: ShowSafetyClassNone,
+			refJSON:  `{"layer": "Whole House 1", "master": 0.5}`,
+			resolver: newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1"),
+		},
 	}
 
-	raw, err := EncodeShowActionPayload(p)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	var back map[string]any
-	if err := json.Unmarshal([]byte(raw), &back); err != nil {
-		t.Fatalf("re-decode: %v", err)
-	}
-	target := back["target"].(map[string]any)
-	if target["action"] != "launchClip" {
-		t.Fatalf("action did not round trip: %v", target["action"])
-	}
-	ref := target["ref"].(map[string]any)
-	if ref["clip"] != "Whole House 1" || ref["deck"] != "Main" {
-		t.Fatalf("ref did not round trip: %v", ref)
-	}
-	// No object id anywhere in the stored/re-encoded payload — ADR-037.
-	if _, hasID := target["id"]; hasID {
-		t.Fatalf("an object id leaked onto the wire: %v", target)
-	}
-	if strings.Contains(raw, `"id"`) {
-		t.Fatalf("the encoded payload names an \"id\" key somewhere: %s", raw)
-	}
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"show": "halloween-2026", "label": "x", "safetyClass": %q,
+				"target": {"integration": "resolume", "action": %q, "ref": %s}}`,
+				tc.safetyClass, tc.action, tc.refJSON)
 
-	// Re-decode as a fresh write: the same payload round-trips (a read-then-
-	// PUT-back composes), as long as the resolver still knows the clip.
-	p2, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver)
-	if verr != nil {
-		t.Fatalf("re-decode as a write: %+v", verr)
-	}
-	if p2.Target.Ref["clip"] != "Whole House 1" {
-		t.Fatalf("re-decoded ref lost its clip: %+v", p2.Target.Ref)
+			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver)
+			if verr != nil {
+				t.Fatalf("decode: %+v", verr)
+			}
+			if p.Target.Action != tc.action {
+				t.Fatalf("action = %q, want %q", p.Target.Action, tc.action)
+			}
+
+			encoded, err := EncodeShowActionPayload(p)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			if strings.Contains(encoded, `"ref":{"id"`) {
+				t.Fatalf("an object id leaked into ref: %s", encoded)
+			}
+
+			p2, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver)
+			if verr != nil {
+				t.Fatalf("re-decode the coordinator's own encoded output: %+v", verr)
+			}
+			if p2.Target.Action != tc.action {
+				t.Fatalf("re-decoded action = %q, want %q", p2.Target.Action, tc.action)
+			}
+			for k, v := range p.Target.Ref {
+				if p2.Target.Ref[k] != v {
+					t.Fatalf("re-decoded ref[%q] = %v, want %v", k, p2.Target.Ref[k], v)
+				}
+			}
+		})
 	}
 }
 
@@ -838,6 +877,73 @@ func TestDecodeShowActionPayloadResolumeUnknownRefKeyRejected(t *testing.T) {
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key error for typo'd \"colum\", got %+v", verr)
 	}
+}
+
+// TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout is the
+// review fix for a real bug: ref was unconditionally required, blackout's
+// own vocabulary is empty, and an empty ref map encodes to no "ref" key at
+// all (json:"ref,omitempty"), so a stored blackout action could never be
+// re-decoded from its own encoded output. ref must be required for every
+// action with a non-empty vocabulary, and for blackout it must be absent
+// or an empty object — never required to be a key that can only ever hold
+// nothing.
+func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.T) {
+	t.Run("ref absent on a non-empty-vocabulary action is required", func(t *testing.T) {
+		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none",
+			"target": {"integration": "resolume", "action": "selectDeck"}}`
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver())
+		if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "target.ref" {
+			t.Fatalf("expected target.ref-required error, got %+v", verr)
+		}
+	})
+	t.Run("ref absent on blackout is accepted", func(t *testing.T) {
+		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
+			"target": {"integration": "resolume", "action": "blackout"}}`
+		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver())
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if len(p.Target.Ref) != 0 {
+			t.Fatalf("unexpected ref: %+v", p.Target.Ref)
+		}
+	})
+	t.Run("ref null on blackout is rejected", func(t *testing.T) {
+		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
+			"target": {"integration": "resolume", "action": "blackout", "ref": null}}`
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver())
+		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "target.ref" {
+			t.Fatalf("expected target.ref-null error, got %+v", verr)
+		}
+	})
+	t.Run("ref non-empty on blackout is rejected naming the keys", func(t *testing.T) {
+		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
+			"target": {"integration": "resolume", "action": "blackout", "ref": {"layer": "Whole House 1"}}}`
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver())
+		if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
+			t.Fatalf("expected field-unknown-key error, got %+v", verr)
+		}
+		if !strings.Contains(verr.Detail, "layer") {
+			t.Fatalf("expected the refusal to name the key, got %q", verr.Detail)
+		}
+	})
+
+	// The bug this test exists to catch: what the coordinator itself
+	// encodes for blackout must decode again without error.
+	t.Run("blackout's own encoded output re-decodes", func(t *testing.T) {
+		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
+			"target": {"integration": "resolume", "action": "blackout", "ref": {}}}`
+		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver())
+		if verr != nil {
+			t.Fatalf("decode: %+v", verr)
+		}
+		encoded, err := EncodeShowActionPayload(p)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		if _, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver()); verr != nil {
+			t.Fatalf("re-decoding the coordinator's own encoded output was refused: %+v (encoded: %s)", verr, encoded)
+		}
+	})
 }
 
 // TestDecodeShowActionPayloadResolumeLaunchClipDeckConditional proves

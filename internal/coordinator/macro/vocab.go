@@ -70,11 +70,8 @@ const (
 )
 
 // OutcomeState values this package itself produces for a Resolume step
-// (store.MacroRunStepRecord.OutcomeState) — Track D seam C: mirrors D-3/A's
-// own five-value [resolume.ActionOutcomeState] vocabulary one-for-one,
-// renamed into this package's own OutcomeState column exactly as mqttState*
-// mirrors ADR-020's evidence vocabulary for MQTT above, rather than
-// re-deriving that classification a second way.
+// (store.MacroRunStepRecord.OutcomeState): a rename of D-3/A's own
+// five-value ActionOutcomeState vocabulary, mirroring mqttState* above.
 const (
 	resolumeStateConfirmed     = "confirmed"
 	resolumeStateUnconfirmed   = "unconfirmed"

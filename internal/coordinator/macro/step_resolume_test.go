@@ -9,6 +9,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -58,12 +59,12 @@ func resolumeAction(action string, ref map[string]any, safetyClass string) confi
 // Setting Executor.resolumeActions directly (this file is package macro,
 // not macro_test) avoids growing every existing newTestExecutor call site
 // with a fifth argument nothing but this file's own tests need.
-func newTestExecutorWithResolume(t *testing.T, dispatch fppDispatcher, brokers mqttRegistry, resolumeActions resolumeActionDispatcher) (*Executor, *store.Store, string) {
+func newTestExecutorWithResolume(t *testing.T, dispatch fppDispatcher, brokers mqttRegistry, resolumeActions resolumeActionDispatcher) (*Executor, *store.Store, string, identity.Service) {
 	t.Helper()
 	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
 	e, _ := newTestExecutor(t, st, svc, dispatch, brokers)
 	e.resolumeActions = resolumeActions
-	return e, st, storeDir
+	return e, st, storeDir, svc
 }
 
 // TestMacroRunDispatchesResolumeStepThroughSameDispatcher is acceptance
@@ -81,7 +82,7 @@ func newTestExecutorWithResolume(t *testing.T, dispatch fppDispatcher, brokers m
 func TestMacroRunDispatchesResolumeStepThroughSameDispatcher(t *testing.T) {
 	t.Run("confirmed", func(t *testing.T) {
 		fake := &fakeResolumeActions{}
-		e, st, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+		e, st, _, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
 		putAction(t, st, "a1", resolumeAction(config.ShowActionResolumeLaunchClip,
 			map[string]any{"clip": "Whole House 1", "deck": "Main"}, config.ShowSafetyClassNone))
 		putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
@@ -113,7 +114,7 @@ func TestMacroRunDispatchesResolumeStepThroughSameDispatcher(t *testing.T) {
 				DispatchedAt: &d,
 			}, nil
 		}}
-		e, st, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+		e, st, _, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
 		putAction(t, st, "a1", resolumeAction(config.ShowActionResolumeClearLayer,
 			map[string]any{"layer": "Whole House 1"}, config.ShowSafetyClassBlackout))
 		putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
@@ -155,7 +156,7 @@ func TestMacroRunResolumeStepRefusedAtRunTimeStillRunsRemainingSteps(t *testing.
 			Dispatched: true, DispatchedAt: &d, ResolvedAt: &d,
 		}, nil
 	}}
-	e, st, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+	e, st, _, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
 
 	putAction(t, st, "a-stale", resolumeAction(config.ShowActionResolumeLaunchClip,
 		map[string]any{"clip": "Whole House 1", "deck": "Main"}, config.ShowSafetyClassNone))
@@ -200,7 +201,7 @@ func TestMacroRunResolumeStepRefusedAtRunTimeStillRunsRemainingSteps(t *testing.
 // assertion failed, confirming both are load-bearing. Restored afterward.
 func TestMacroRunResolumeBlackoutRunsWithAuditStoreUnwritable(t *testing.T) {
 	fake := &fakeResolumeActions{}
-	e, st, storeDir := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+	e, st, storeDir, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
 
 	putAction(t, st, "a-blackout", resolumeAction(config.ShowActionResolumeBlackout, map[string]any{}, config.ShowSafetyClassBlackout))
 	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a-blackout")))
@@ -243,7 +244,7 @@ func TestMacroRunResolumeBlackoutRunsWithAuditStoreUnwritable(t *testing.T) {
 // integration switch still behaves as before for an unrecognized
 // integration, after adding the resolume case alongside it.
 func TestDispatchStepDefaultArmStillBehavesForUnrecognizedIntegration(t *testing.T) {
-	e, _, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, &fakeResolumeActions{})
+	e, _, _, _ := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, &fakeResolumeActions{})
 	action := resolvedAction{
 		ObjectID: "a-future",
 		Payload: config.ShowActionPayload{
@@ -260,5 +261,203 @@ func TestDispatchStepDefaultArmStillBehavesForUnrecognizedIntegration(t *testing
 	}
 	if !strings.Contains(res.outcomeReason, "osc") {
 		t.Fatalf("outcomeReason = %q, want it to name the unrecognized integration %q", res.outcomeReason, "osc")
+	}
+}
+
+// TestMacroRunResolumeAuditEntriesCarryReferenceNamesAndResolvedID is
+// review finding 2: the macro-run audit trail must name which object a
+// step addressed, not only that a step of that action name ran. The
+// dispatch entry is written before Dispatch resolves anything, so it
+// carries the reference names but never a resolvedId; the outcome entry
+// carries both.
+//
+// Broken and confirmed to fail: reverted resolumeAuditParams to build only
+// {runId, stepId, stepIndex} — both the reference-name and resolvedId
+// assertions below failed. Restored afterward.
+func TestMacroRunResolumeAuditEntriesCarryReferenceNamesAndResolvedID(t *testing.T) {
+	fake := &fakeResolumeActions{dispatchFn: func(ctx context.Context, action string, params map[string]any, now time.Time) (api.ResolumeActionResult, error) {
+		d := time.Now()
+		return api.ResolumeActionResult{
+			Outcome: api.ResolumeOutcomeConfirmed, Reason: "confirmed",
+			Dispatched: true, DispatchedAt: &d, ResolvedAt: &d, ResolvedID: "482910",
+		}, nil
+	}}
+	e, st, _, svc := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+
+	putAction(t, st, "a1", resolumeAction(config.ShowActionResolumeLaunchClip,
+		map[string]any{"clip": "Whole House 1", "deck": "Main"}, config.ShowSafetyClassNone))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	submitAndWait(t, e, api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-audit", Trigger: "api", Issuer: testIssuer(),
+	})
+
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var dispatchEntry, outcomeEntry *identity.AuditEntry
+	for i := range entries {
+		if entries[i].Action != "resolume.launchClip" {
+			continue
+		}
+		switch entries[i].Kind {
+		case identity.AuditDispatch:
+			e := entries[i]
+			dispatchEntry = &e
+		case identity.AuditOutcome:
+			e := entries[i]
+			outcomeEntry = &e
+		}
+	}
+	if dispatchEntry == nil {
+		t.Fatal("no dispatch audit entry found for resolume.launchClip")
+	}
+	if dispatchEntry.Params["clip"] != "Whole House 1" || dispatchEntry.Params["deck"] != "Main" {
+		t.Fatalf("dispatch entry Params missing the reference names: %+v", dispatchEntry.Params)
+	}
+	if _, hasID := dispatchEntry.Params["resolvedId"]; hasID {
+		t.Fatalf("dispatch entry carries a resolvedId before anything was dispatched: %+v", dispatchEntry.Params)
+	}
+	if outcomeEntry == nil {
+		t.Fatal("no outcome audit entry found for resolume.launchClip")
+	}
+	if outcomeEntry.Params["clip"] != "Whole House 1" {
+		t.Fatalf("outcome entry Params missing the reference names: %+v", outcomeEntry.Params)
+	}
+	if outcomeEntry.Params["resolvedId"] != "482910" {
+		t.Fatalf("outcome entry Params[resolvedId] = %v, want \"482910\"", outcomeEntry.Params["resolvedId"])
+	}
+}
+
+// TestMacroRunResolumeBlackoutAuditCarriesNoResolvedID proves the other
+// half of finding 2: blackout addresses nothing, so its audit entries
+// carry no resolvedId at all, never a blank or fabricated one.
+func TestMacroRunResolumeBlackoutAuditCarriesNoResolvedID(t *testing.T) {
+	fake := &fakeResolumeActions{}
+	e, st, _, svc := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+
+	putAction(t, st, "a-blackout", resolumeAction(config.ShowActionResolumeBlackout, map[string]any{}, config.ShowSafetyClassBlackout))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a-blackout")))
+
+	submitAndWait(t, e, api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-blackout-audit", Trigger: "api", Issuer: testIssuer(),
+	})
+
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action != "resolume.blackout" {
+			continue
+		}
+		found = true
+		if _, hasID := e.Params["resolvedId"]; hasID {
+			t.Fatalf("blackout audit entry carries a resolvedId, want none: %+v", e.Params)
+		}
+	}
+	if !found {
+		t.Fatal("no audit entry found for resolume.blackout")
+	}
+}
+
+// TestMapResolumeActionResult is review finding 4: mapResolumeActionResult
+// shipped with only its confirmed arm exercised through a full run. This
+// covers every outcome directly, including the unreachable default.
+func TestMapResolumeActionResult(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name        string
+		in          api.ResolumeActionOutcome
+		wantOutcome string
+		wantState   string
+	}{
+		{"confirmed", api.ResolumeOutcomeConfirmed, outcomeConfirmed, resolumeStateConfirmed},
+		{"unconfirmed", api.ResolumeOutcomeUnconfirmed, outcomeUnconfirmed, resolumeStateUnconfirmed},
+		{"unconfirmable", api.ResolumeOutcomeUnconfirmable, outcomeUnconfirmable, resolumeStateUnconfirmable},
+		{"refused", api.ResolumeOutcomeRefused, outcomeFailed, resolumeStateRefused},
+		{"failed", api.ResolumeOutcomeFailed, outcomeFailed, resolumeStateFailed},
+		{"unrecognized", api.ResolumeActionOutcome("bogus"), outcomeFailed, "unrecognized_outcome"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := mapResolumeActionResult(api.ResolumeActionResult{
+				Outcome: tc.in, Reason: "test reason", DispatchedAt: &now, ResolvedAt: &now,
+			})
+			if res.outcome != tc.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", res.outcome, tc.wantOutcome)
+			}
+			if res.outcomeState != tc.wantState {
+				t.Fatalf("outcomeState = %q, want %q", res.outcomeState, tc.wantState)
+			}
+		})
+	}
+}
+
+// TestReconcileResolumeStepMidFlightIsNotSkipped is review finding 4:
+// resolveStrandedResolumeStep shipped at 0% coverage. Mirrors
+// TestReconcileMQTTStepMidFlightIsNotSkipped (run_test.go) for the
+// identical shape one integration over: a step whose own dispatch audit
+// entry exists (dispatch began before the coordinator died) resolves
+// unconfirmed naming the genuine uncertainty, never skipped; a step with
+// no such entry resolves skipped.
+func TestReconcileResolumeStepMidFlightIsNotSkipped(t *testing.T) {
+	e, st, _, svc := newTestExecutorWithResolume(t, &fakeDispatcher{}, &fakeBrokers{}, &fakeResolumeActions{})
+
+	putAction(t, st, "a1", resolumeAction(config.ShowActionResolumeBlackout, map[string]any{}, config.ShowSafetyClassBlackout))
+	putAction(t, st, "a2", resolumeAction(config.ShowActionResolumeBlackout, map[string]any{}, config.ShowSafetyClassBlackout))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1"), testStep("s2", "a2")))
+
+	rm, err := e.resolveMacro(context.Background(), "m1")
+	if err != nil {
+		t.Fatalf("resolveMacro: %v", err)
+	}
+	steps := buildStepRecords(rm)
+	run, _, err := e.store.CreateMacroRun(context.Background(), storeRunRecord("stranded-resolume", "m1", rm.Revision), steps)
+	if err != nil {
+		t.Fatalf("create stranded run: %v", err)
+	}
+
+	// Step 0's dispatch began before the kill: its own DISPATCH audit
+	// entry was written, mirroring dispatchResolumeStep's own write.
+	key := stepIdempotencyKey(run.ID, 0)
+	if err := svc.WriteAudit(context.Background(), identity.AuditEntry{
+		Timestamp: time.Now(), PrincipalID: "p1", PrincipalName: "tester",
+		Action: "resolume.blackout", Target: "resolume", IdempotencyKey: key,
+		Kind: identity.AuditDispatch,
+	}); err != nil {
+		t.Fatalf("write dispatch audit entry: %v", err)
+	}
+
+	// Step 1 never started: no audit entry under its own key.
+
+	if err := e.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	_, gotSteps, err := e.store.GetMacroRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get reconciled run: %v", err)
+	}
+
+	s0 := gotSteps[0]
+	if s0.Outcome == outcomeSkipped {
+		t.Fatalf("step 0 (whose dispatch audit entry proves it started) was recorded as skipped: %+v", s0)
+	}
+	if s0.DispatchedAt == nil {
+		t.Fatal("step 0 DispatchedAt is nil, want the audit entry's own recorded time")
+	}
+	if s0.Outcome != outcomeUnconfirmed {
+		t.Fatalf("step 0 Outcome = %q, want %q", s0.Outcome, outcomeUnconfirmed)
+	}
+	if s0.OutcomeState != resolumeStateRestartInterrupted {
+		t.Fatalf("step 0 OutcomeState = %q, want %q", s0.OutcomeState, resolumeStateRestartInterrupted)
+	}
+
+	s1 := gotSteps[1]
+	if s1.Outcome != outcomeSkipped {
+		t.Fatalf("step 1 Outcome = %q, want %q (no dispatch audit entry exists for it)", s1.Outcome, outcomeSkipped)
 	}
 }

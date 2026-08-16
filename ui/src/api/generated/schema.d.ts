@@ -1554,7 +1554,7 @@ export interface components {
             value?: string;
             deadlineSeconds?: number;
         };
-        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3, extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for "resolume"): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
+        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
         ConfigShowActionTarget: {
             /** @enum {string} */
             integration: "fpp" | "mqtt" | "resolume";

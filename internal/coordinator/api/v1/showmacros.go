@@ -64,9 +64,8 @@ type ConfigShowActionMQTTExpect struct {
 }
 
 // ConfigShowActionTarget is show.action.target (STEP-9-SPEC.md section
-// 5.3, extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for "resolume"),
-// flattened exactly as the specification's own wire examples show it:
-// Integration plus either the fpp, mqtt, or resolume fields directly,
+// 5.3), flattened exactly as the specification's own wire examples show
+// it: Integration plus either the fpp, mqtt, or resolume fields directly,
 // never nested a second level under an "fpp"/"mqtt"/"resolume" key.
 type ConfigShowActionTarget struct {
 	Integration string `json:"integration"`

@@ -1,15 +1,12 @@
 package config_test
 
 // This file is deliberately package config_test (external), not package
-// config, for the identical reason showaction_broker_deadline_test.go's own
-// top comment gives: it is the one place that may import both
+// config: it is the one place that may import both
 // internal/coordinator/config and internal/coordinator/collector/resolume
 // in the same compilation unit, so it can prove
 // config.ResolumeActionDeclaredSafetyClass agrees with that package's own
 // registered safety class without either production package importing the
-// other (TRACK-D-SEAM-C-MACRO-SPEC.md section 2.2: "write a test that reads
-// both and fails if they diverge, rather than maintaining the table
-// twice").
+// other.
 
 import (
 	"testing"
@@ -22,7 +19,8 @@ import (
 // resolume.actionRegistry declares (via a zero-value *resolume.Collector —
 // [resolume.ActionDispatcher.Actions] never touches its collector, it only
 // copies that package-level registry) and checks config's own declared
-// safety class agrees.
+// safety class agrees, in both directions: every resolume action has a
+// config entry, and config declares no entry resolume does not.
 //
 // Broken and confirmed to fail: temporarily changed
 // resolumeActionDeclaredSafetyClass's own clearLayer entry from
@@ -35,7 +33,11 @@ func TestResolumeActionSafetyClassMatchesResolumeRegistry(t *testing.T) {
 	if len(descriptors) == 0 {
 		t.Fatal("resolume.ActionDispatcher.Actions() returned nothing to compare against")
 	}
+
+	resolumeNames := make(map[string]bool, len(descriptors))
 	for _, desc := range descriptors {
+		resolumeNames[string(desc.Name)] = true
+
 		var want string
 		switch desc.SafetyClass {
 		case resolume.ActionSafetyClassExempt:
@@ -53,5 +55,18 @@ func TestResolumeActionSafetyClassMatchesResolumeRegistry(t *testing.T) {
 			t.Fatalf("action %q: config declares safety class %q, resolume's own registry declares %v (-> %q); these must agree",
 				desc.Name, got, desc.SafetyClass, want)
 		}
+	}
+
+	// The reverse direction: config must declare no action resolume does
+	// not also declare, or an entry could silently rot after resolume
+	// removes or renames an action.
+	for _, name := range config.ResolumeActionNames() {
+		if !resolumeNames[name] {
+			t.Fatalf("config declares a safety class for action %q, which resolume.actionRegistry does not declare", name)
+		}
+	}
+	if len(config.ResolumeActionNames()) != len(resolumeNames) {
+		t.Fatalf("config declares %d resolume actions, resolume's own registry declares %d; the key sets must be equal",
+			len(config.ResolumeActionNames()), len(resolumeNames))
 	}
 }

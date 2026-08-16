@@ -143,10 +143,9 @@ func EncodeShowMacroPayload(p ShowMacroPayload) (string, error) {
 // names an existing show.action object and, when it does, that action's
 // own target.integration — a caller-supplied lookup, per this file's own
 // top note, never something this package fetches itself. The integration
-// is needed by TRACK-D-SEAM-C-MACRO-SPEC.md section 2.3: a step whose
-// action is a Resolume action must declare
-// localFallback.class == "coordinator-required", because a controlled
-// device (ADR-016) holds no fallback of its own.
+// is needed because a step whose action is a Resolume action must declare
+// localFallback.class == "coordinator-required": a controlled device
+// (ADR-016) holds no fallback of its own.
 func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (integration string, ok bool)) (ShowMacroPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
@@ -261,11 +260,9 @@ func decodeShowMacroStep(raw json.RawMessage, field string, resolveAction func(s
 		return ShowMacroStep{}, verr
 	}
 
-	// TRACK-D-SEAM-C-MACRO-SPEC.md section 2.3: every Resolume action is
-	// coordinator-required (ADR-016, adapter spec section 3.9) — a
+	// Every Resolume action is coordinator-required (ADR-016): a
 	// controlled device holds no fallback, so a step naming one must
-	// declare exactly that class, and any other value is refused here
-	// rather than accepted and silently wrong.
+	// declare exactly that class.
 	if integration == ShowActionIntegrationResolume && fallback.Class != ShowMacroLocalFallbackCoordinatorRequired {
 		return ShowMacroStep{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: field + ".localFallback.class",

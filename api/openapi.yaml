@@ -4649,8 +4649,7 @@ components:
       type: object
       description: >-
         The STORED/READ shape of show.action.target (STEP-9-SPEC.md
-        section 5.3, extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for
-        "resolume"): integration plus either the fpp, mqtt, or resolume
+        section 5.3): integration plus either the fpp, mqtt, or resolume
         fields directly, never nested a second level under an
         "fpp"/"mqtt"/"resolume" key. Only integration is required here;
         which of the remaining fields is present depends on integration's

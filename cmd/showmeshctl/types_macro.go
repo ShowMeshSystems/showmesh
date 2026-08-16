@@ -61,11 +61,10 @@ type showActionMQTTExpect struct {
 	DeadlineSeconds int     `json:"deadlineSeconds,omitempty"`
 }
 
-// showActionTarget is show.action.target (STEP-9-SPEC.md section 5.3,
-// extended by TRACK-D-SEAM-C-MACRO-SPEC.md section 2 for "resolume"):
-// Integration plus either the fpp, mqtt, or resolume fields directly,
-// never nested a second level under an "fpp"/"mqtt"/"resolume" key —
-// matching the server's own flattened wire shape exactly.
+// showActionTarget is show.action.target: Integration plus either the
+// fpp, mqtt, or resolume fields directly, never nested a second level
+// under an "fpp"/"mqtt"/"resolume" key — matching the server's own
+// flattened wire shape exactly.
 type showActionTarget struct {
 	Integration string `json:"integration"`
 
