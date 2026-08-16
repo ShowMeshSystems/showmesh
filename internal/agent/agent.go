@@ -94,6 +94,19 @@ func Run() int {
 	// comments for why this exists at all.
 	heartbeatConnected := make(chan struct{}, 1)
 
+	// A node that has never held an asset still needs a real, empty
+	// directory: enumerateAssets reports a missing AssetDir as incomplete,
+	// which the coordinator maps to ManifestUnknown, and assetsync only
+	// ever dispatches to ManifestNotReady — so a fresh node's manifest
+	// state stays unknown forever and it can never receive its first
+	// asset. Not fatal, matching sweepAssetStaging below: a permission
+	// failure here still leaves the rest of the agent's capabilities
+	// (heartbeat, hello, command handling) usable, and enumerateAssets
+	// will honestly keep reporting incomplete until the directory exists.
+	if err := os.MkdirAll(cfg.AssetDir, 0o755); err != nil {
+		logger.Warn("failed to create asset directory at startup", "asset_dir", cfg.AssetDir, "error", err)
+	}
+
 	// A staging file left behind by a previous, interrupted process run is
 	// never a partially-usable asset; sweep it before anything else touches
 	// AssetDir. Not fatal: an agent that cannot clean its own staging area

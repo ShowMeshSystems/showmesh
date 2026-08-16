@@ -491,6 +491,52 @@ func TestAssetManifestReportsMissingBeforeShow(t *testing.T) {
 	}
 }
 
+// TestFreshNodeCreatesItsOwnAssetDirAndBecomesNotReady is this seam's
+// version of a node that has NEVER held an asset before: unlike
+// declareAndStartAgent (whose own doc comment names exactly this problem),
+// this test starts the agent against an assetDir that does not exist yet
+// and is never created by the test itself. Before the agent created its
+// own AssetDir at startup, enumerateAssets kept reporting
+// complete=false ("asset directory does not exist") forever, the
+// coordinator mapped that to ManifestUnknown, and a fresh node's manifest
+// state never left "unknown" — so it could never be dispatched its first
+// asset. This asserts the manifest reaches "not_ready" (an honest,
+// complete-and-empty report), never staying stuck at "unknown".
+func TestFreshNodeCreatesItsOwnAssetDirAndBecomesNotReady(t *testing.T) {
+	requireBroker(t)
+	dataDir := t.TempDir()
+	coord, token, _ := startAssetCoordinator(t, dataDir, false)
+
+	showID := "show-" + uniqueSuffix()
+	nodeID := "node-" + uniqueSuffix()
+	mustCtl(t, coord, token, []string{"show", "set", "--name", "S-fresh"}, showID)
+	mustCtl(t, coord, token, []string{"declare", "--label", "n"}, nodeID)
+
+	// Deliberately NOT created (unlike declareAndStartAgent's own
+	// pre-created directory) — this path exists to name the node whose
+	// directory the agent itself must create on first startup.
+	agentDir := filepath.Join(t.TempDir(), "assets")
+	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
+		t.Fatalf("agentDir %s must not exist yet, stat err = %v", agentDir, err)
+	}
+	startAgent(t, agentConfig{nodeID: nodeID, assetDir: agentDir})
+
+	filePath := writeTempFile(t, "Missing.fseq", []byte("expected but never fetched"))
+	uploadNodeAsset(t, coord, token, showID, "opening", "fseq", nodeID, filePath)
+	mustCtl(t, coord, token, []string{"show", "activate"}, showID)
+
+	waitFor(t, 10*time.Second, 100*time.Millisecond, func() bool {
+		return apiNodeManifestState(t, coord, nodeID) == "not_ready"
+	}, "a node that never held an asset before to reach not_ready rather than staying unknown forever")
+
+	if m := nodeManifestState(t, coord, token, nodeID); m != "not_ready" {
+		t.Fatalf("State = %q, want not_ready", m)
+	}
+	if _, err := os.Stat(agentDir); err != nil {
+		t.Errorf("agent asset directory %s was not created at startup: %v", agentDir, err)
+	}
+}
+
 // --- 4. A truncated asset is reported, never served; the agent discards a
 // hash mismatch and reports it (acceptance criterion 4) ---
 
