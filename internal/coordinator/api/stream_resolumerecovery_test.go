@@ -68,11 +68,18 @@ func (s *mutableResolumeRecoveryConfigStore) ListConfigObjects(context.Context, 
 var _ ConfigStore = (*mutableResolumeRecoveryConfigStore)(nil)
 
 // mutableResolumeRecoveryProvider is a minimal ResolumeRecoveryProvider
-// fake, controllable by a test via setRecord/setLastReport.
+// fake, controllable by a test via setRecord/setLastReport/setRestoreResult.
+// Restore defaults to errResolumeRecoveryNotConfigured (matching
+// noResolumeRecoveryProvider's own posture) until a test calls
+// setRestoreResult, reused by resolumerecovery_test.go for the manual
+// restore endpoint's own handler tests.
 type mutableResolumeRecoveryProvider struct {
-	mu     sync.Mutex
-	record []ResolumeRecoveryRecordEntryView
-	last   *ResolumeRecoveryRestoreReportView
+	mu                sync.Mutex
+	record            []ResolumeRecoveryRecordEntryView
+	last              *ResolumeRecoveryRestoreReportView
+	restoreRep        ResolumeRecoveryRestoreReportView
+	restoreErr        error
+	restoreConfigured bool
 }
 
 func (p *mutableResolumeRecoveryProvider) setRecord(r []ResolumeRecoveryRecordEntryView) {
@@ -99,8 +106,38 @@ func (p *mutableResolumeRecoveryProvider) LastReport() *ResolumeRecoveryRestoreR
 	return p.last
 }
 
-func (p *mutableResolumeRecoveryProvider) Restore(context.Context, string) (ResolumeRecoveryRestoreReportView, error) {
-	return ResolumeRecoveryRestoreReportView{}, errResolumeRecoveryNotConfigured
+// setRestoreResult makes Restore succeed with rep (Principal is overwritten
+// with Restore's own principalName argument, matching the real
+// implementation's contract per resolumerecovery_interfaces.go's doc
+// comment).
+func (p *mutableResolumeRecoveryProvider) setRestoreResult(rep ResolumeRecoveryRestoreReportView) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.restoreRep = rep
+	p.restoreErr = nil
+	p.restoreConfigured = true
+}
+
+// setRestoreErr makes Restore fail with err.
+func (p *mutableResolumeRecoveryProvider) setRestoreErr(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.restoreErr = err
+	p.restoreConfigured = true
+}
+
+func (p *mutableResolumeRecoveryProvider) Restore(_ context.Context, principalName string) (ResolumeRecoveryRestoreReportView, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.restoreConfigured {
+		return ResolumeRecoveryRestoreReportView{}, errResolumeRecoveryNotConfigured
+	}
+	if p.restoreErr != nil {
+		return ResolumeRecoveryRestoreReportView{}, p.restoreErr
+	}
+	rep := p.restoreRep
+	rep.Principal = principalName
+	return rep, nil
 }
 
 var _ ResolumeRecoveryProvider = (*mutableResolumeRecoveryProvider)(nil)

@@ -582,6 +582,43 @@ func TestResolumeActionMaxDispatchDurationEqualsRegistryMax(t *testing.T) {
 	}
 }
 
+// TestResolumeRecoveryMaxLayersEqualsProducerBound is
+// TestResolumeActionMaxDispatchDurationEqualsRegistryMax's own D-3a
+// sibling: resolumeRecoveryMaxLayers (resolumerecovery.go) duplicates
+// resolume.MaxRestoreLayers by value, and this is a TEST-only import
+// checking the two never drift apart.
+func TestResolumeRecoveryMaxLayersEqualsProducerBound(t *testing.T) {
+	if resolumeRecoveryMaxLayers != resolume.MaxRestoreLayers {
+		t.Fatalf("resolumeRecoveryMaxLayers (%d) != resolume.MaxRestoreLayers (%d) — this package's own "+
+			"write-deadline clamp has drifted from what a restore itself ever attempts; raise or lower "+
+			"resolumeRecoveryMaxLayers (resolumerecovery.go) to match",
+			resolumeRecoveryMaxLayers, resolume.MaxRestoreLayers)
+	}
+}
+
+// TestResolumeRecoveryRestoreDeadlineScalesAndClamps: the write deadline
+// scales with the composition's own layer count (never a fixed number
+// unrelated to what a restore actually needs) and is clamped at
+// resolumeRecoveryMaxLayers rather than growing without limit for an
+// unusually large composition. Breaking: the clamp `if layerCount >
+// resolumeRecoveryMaxLayers { layerCount = resolumeRecoveryMaxLayers }`
+// removed — confirmed this test's clamp assertion goes red (the deadline
+// for 500 extra layers grew unbounded instead of matching the deadline at
+// exactly resolumeRecoveryMaxLayers), then restored.
+func TestResolumeRecoveryRestoreDeadlineScalesAndClamps(t *testing.T) {
+	one := resolumeRecoveryRestoreDeadline(1)
+	two := resolumeRecoveryRestoreDeadline(2)
+	if two <= one {
+		t.Fatalf("resolumeRecoveryRestoreDeadline(2) = %s, want more than resolumeRecoveryRestoreDeadline(1) = %s — the deadline must scale with layer count", two, one)
+	}
+	atCeiling := resolumeRecoveryRestoreDeadline(resolumeRecoveryMaxLayers)
+	beyondCeiling := resolumeRecoveryRestoreDeadline(resolumeRecoveryMaxLayers + 500)
+	if beyondCeiling != atCeiling {
+		t.Fatalf("resolumeRecoveryRestoreDeadline(%d+500) = %s, want it clamped to resolumeRecoveryRestoreDeadline(%d) = %s",
+			resolumeRecoveryMaxLayers, beyondCeiling, resolumeRecoveryMaxLayers, atCeiling)
+	}
+}
+
 // TestResolumeActionHTTPWriteDeadlineFitsWithinCLIClientBudget is the
 // server-side half of the client-timeout-derived-from-server-deadline
 // reconciliation CLAUDE.md requires ("a test that fails if one is ever set

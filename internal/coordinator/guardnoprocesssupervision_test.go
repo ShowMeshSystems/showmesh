@@ -41,9 +41,10 @@ func checkResolumeWiringFileHasNoProcessSupervision(t *testing.T, fset *token.Fi
 
 	for _, imp := range f.Imports {
 		if imp.Path.Value == `"os/exec"` {
-			t.Errorf("%s: imports \"os/exec\" — no code in this repository may start, restart, or signal the "+
-				"Arena process (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §1). If a watchdog is ever built, it is its "+
-				"own small repository, never part of core.",
+			t.Errorf("%s: imports \"os/exec\" — no code under this guard's two directories may start, restart, "+
+				"or signal the Arena process (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §1). This is a boundary for "+
+				"CORE, not a verdict that process supervision is wrong everywhere; a watchdog, if ever built, is "+
+				"its own small repository, never part of core.",
 				fset.Position(imp.Pos()))
 		}
 	}
@@ -59,15 +60,27 @@ func checkResolumeWiringFileHasNoProcessSupervision(t *testing.T, fset *token.Fi
 		if !ok {
 			return true
 		}
+		// A method named exactly Signal is flagged regardless of receiver
+		// (build contract §2.5's (*os.Process).Signal) — see the sibling
+		// guard's own identical comment
+		// (internal/coordinator/collector/resolume/guardnoprocesssupervision_test.go).
+		if sel.Sel.Name == "Signal" {
+			t.Errorf("%s: calls a method named Signal — no code under this guard's two directories may start, "+
+				"restart, or signal the Arena process (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §1). This is a "+
+				"boundary for CORE, not a verdict that process supervision is wrong everywhere; a watchdog, if "+
+				"ever built, is its own small repository, never part of core.",
+				fset.Position(sel.Pos()))
+			return true
+		}
 		ident, ok := sel.X.(*ast.Ident)
 		if !ok {
 			return true
 		}
 		if forbiddenSelectors[ident.Name][sel.Sel.Name] {
-			t.Errorf("%s: calls %s.%s — no code in this repository may start, restart, or signal the Arena "+
-				"process (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §1). This is a boundary for CORE, not a verdict "+
-				"that process supervision is wrong everywhere; a watchdog, if ever built, is its own small "+
-				"repository.",
+			t.Errorf("%s: calls %s.%s — no code under this guard's two directories may start, restart, or "+
+				"signal the Arena process (TRACK-D-D3A-CRASH-RECOVERY-SPEC.md §1). This is a boundary for CORE, "+
+				"not a verdict that process supervision is wrong everywhere; a watchdog, if ever built, is its "+
+				"own small repository, never part of core.",
 				fset.Position(sel.Pos()), ident.Name, sel.Sel.Name)
 		}
 		return true

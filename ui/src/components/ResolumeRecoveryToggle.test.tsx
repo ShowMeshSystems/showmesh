@@ -37,6 +37,7 @@ function renderToggle(model: Model) {
 
 const baseResponse = {
   serverTime: '2026-08-16T00:00:00Z',
+  resolumeConfigured: true,
   autoRestoreEnabled: true,
   autoRestoreConfigured: false,
   settleDelaySeconds: 8,
@@ -100,5 +101,14 @@ describe('ResolumeRecoveryToggle', () => {
     await waitFor(() => expect(putResolumeRecoveryConfig).toHaveBeenCalledWith({ autoRestoreEnabled: false }))
     await waitFor(() => screen.getByRole('button', { name: /turn automatic restore on/i }))
     expect(screen.getByRole('status').textContent).toContain('OFF')
+  })
+
+  it('renders "not configured" rather than the toggle default when Resolume itself is unconfigured', async () => {
+    getResolumeRecovery.mockResolvedValue({ ...baseResponse, resolumeConfigured: false })
+    renderToggle(makeModel({}))
+
+    await waitFor(() => screen.getByRole('status'))
+    expect(screen.getByRole('status').textContent).toContain('not configured')
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

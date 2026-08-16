@@ -392,6 +392,9 @@ type TokenRecord struct {
 // generation at creation time regardless of what a caller guessed it to be.
 func (s *Store) CreateToken(ctx context.Context, rec TokenRecord) (TokenRecord, error) {
 	guardNotInTx(ctx, "Store.CreateToken")
+	if rec.PrincipalID == ReservedPrincipalID {
+		return TokenRecord{}, ErrReservedPrincipal
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TokenRecord{}, fmt.Errorf("store: begin create token for principal %q: %w", rec.PrincipalID, err)

@@ -40,9 +40,8 @@ var errResolumeRecoveryNotConfigured = errors.New("api: no ResolumeRecoveryProvi
 // read, the config:write-gated GET /config/resolume.recovery read, and
 // (via the wiring layer, which calls this identically) the automatic
 // recovery gate's own toggle check — so two readers of one value can
-// never disagree (the precedence.go lesson, one seam over). The default
-// when nothing has ever been written is [config.ResolumeRecoveryDefaultEnabled],
-// reported with configured=false.
+// never disagree. The default when nothing has ever been written is
+// [config.ResolumeRecoveryDefaultEnabled], reported with configured=false.
 func ResolveResolumeRecoveryToggle(ctx context.Context, cs ConfigStore) (enabled bool, configured bool, err error) {
 	obj, err := cs.GetConfigObject(ctx, config.ResolumeRecoveryConfigKind, config.ResolumeRecoveryConfigObjectID)
 	switch {
@@ -97,12 +96,26 @@ func (h *handlers) handleGetResolumeRecovery(w http.ResponseWriter, r *http.Requ
 
 	jsonWrite(w, v1.ResolumeRecoveryResponse{
 		ServerTime:            formatTime(now),
+		ResolumeConfigured:    resolumeRecoveryIsConfigured(h.deps.ResolumeRecovery),
 		AutoRestoreEnabled:    enabled,
 		AutoRestoreConfigured: configured,
 		SettleDelaySeconds:    h.deps.ResolumeRecoverySettleSeconds,
 		Record:                entries,
 		LastRestore:           lastRestore,
 	})
+}
+
+// resolumeRecoveryIsConfigured reports whether a real Resolume instance is
+// configured on this coordinator at all — false only for
+// [noResolumeRecoveryProvider], [Dependencies.ResolumeRecovery]'s nil-safe
+// default. Distinct from a toggle's own "configured" (whether a revision
+// has ever been written): a client renders "not configured" rather than
+// the toggle's default-ON value when this is false, since an operator who
+// believes recovery is armed and is wrong is worse off than one who knows
+// it is unavailable.
+func resolumeRecoveryIsConfigured(p ResolumeRecoveryProvider) bool {
+	_, unconfigured := p.(noResolumeRecoveryProvider)
+	return !unconfigured
 }
 
 func mapResolumeRecoveryRecordEntry(e ResolumeRecoveryRecordEntryView) v1.ResolumeRecoveryRecordEntry {
@@ -124,6 +137,7 @@ func mapResolumeRecoveryRestoreReport(rep ResolumeRecoveryRestoreReportView) v1.
 	return v1.ResolumeRecoveryRestoreReport{
 		StartedAt: rep.StartedAt, FinishedAt: rep.FinishedAt, Trigger: rep.Trigger,
 		Outcome: rep.Outcome, Principal: rep.Principal, Layers: layers,
+		OmittedLayerCount: rep.OmittedLayerCount,
 	}
 }
 
@@ -135,7 +149,7 @@ func mapResolumeRecoveryRestoreReport(rep ResolumeRecoveryRestoreReportView) v1.
 // too: byte-identical JSON on two consecutive render passes means nothing
 // about the toggle, the record, or the last restore has changed, so no
 // frame is sent — the quiet-system property build contract §1.7 requires.
-func resolumeRecoveryChangedEventProjection(enabled, configured bool, settleSeconds float64, record []ResolumeRecoveryRecordEntryView, lastReport *ResolumeRecoveryRestoreReportView) v1.ResolumeRecoveryChangedEvent {
+func resolumeRecoveryChangedEventProjection(resolumeConfigured, enabled, configured bool, settleSeconds float64, record []ResolumeRecoveryRecordEntryView, lastReport *ResolumeRecoveryRestoreReportView) v1.ResolumeRecoveryChangedEvent {
 	entries := make([]v1.ResolumeRecoveryRecordEntry, 0, len(record))
 	for _, e := range record {
 		entries = append(entries, mapResolumeRecoveryRecordEntry(e))
@@ -146,7 +160,7 @@ func resolumeRecoveryChangedEventProjection(enabled, configured bool, settleSeco
 		lastRestore = &mapped
 	}
 	return v1.ResolumeRecoveryChangedEvent{
-		AutoRestoreEnabled: enabled, AutoRestoreConfigured: configured, SettleDelaySeconds: settleSeconds,
+		ResolumeConfigured: resolumeConfigured, AutoRestoreEnabled: enabled, AutoRestoreConfigured: configured, SettleDelaySeconds: settleSeconds,
 		Record: entries, LastRestore: lastRestore,
 	}
 }
@@ -346,11 +360,12 @@ func (h *handlers) handlePostResolumeRecoveryRestore(w http.ResponseWriter, r *h
 	now := h.now()
 	ac := authFromContext(r.Context())
 
-	// This can legitimately run up to eighteen sequential D-3 dispatches
-	// (cmd_resolume_recovery.go's own client-timeout floor is sized from
-	// this bound) — held open past net/http.Server's own WriteTimeout,
-	// matching handleDispatchResolumeAction's identical reasoning.
-	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(resolumeRecoveryRestoreHTTPWriteDeadline))
+	// Sized from the CURRENT composition's own layer count, clamped to
+	// resolumeRecoveryMaxLayers — the same bound a restore itself never
+	// exceeds. Held open past net/http.Server's own WriteTimeout, matching
+	// handleDispatchResolumeAction's identical reasoning.
+	layerCount := len(h.deps.ResolumeRecovery.Record())
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(resolumeRecoveryRestoreDeadline(layerCount)))
 
 	bgCtx := context.WithoutCancel(r.Context())
 	report, err := h.deps.ResolumeRecovery.Restore(bgCtx, ac.result.Principal.Name)
@@ -369,18 +384,41 @@ func (h *handlers) handlePostResolumeRecoveryRestore(w http.ResponseWriter, r *h
 // ResolumeRecoveryRestoreReportView's exact field layout twice.
 func RestoreTriggerManual(rep ResolumeRecoveryRestoreReportView) string { return rep.Trigger }
 
-// resolumeRecoveryBookkeepingBudget/resolumeRecoveryRestoreHTTPWriteDeadline
-// mirror resolumeActionBookkeepingBudget/resolumeActionHTTPWriteDeadline's
-// identical reasoning (resolumeaction.go), sized for a restore rather
-// than a single action: up to eighteen sequential D-3 dispatches, each
-// bounded by resolume.MaxDispatchDuration (40s — see
-// resolumeActionMaxDispatchDuration's own doc comment for why this
-// package duplicates that literal rather than importing the producer).
-const (
-	resolumeRecoveryBookkeepingBudget        = 5 * time.Second
-	resolumeRecoveryMaxLayers                = 18
-	resolumeRecoveryRestoreHTTPWriteDeadline = time.Duration(resolumeRecoveryMaxLayers) * resolumeActionMaxDispatchDuration
-)
+// resolumeRecoveryBookkeepingBudget mirrors resolumeActionBookkeepingBudget's
+// identical reasoning (resolumeaction.go): each individual piece of
+// post-restore bookkeeping this handler does once Restore has already
+// returned (LastReport update, the outcome audit entry).
+const resolumeRecoveryBookkeepingBudget = 5 * time.Second
+
+// resolumeRecoveryDeadlineMargin mirrors resolumeActionWriteDeadlineMargin's
+// identical reasoning: headroom [resolumeRecoveryRestoreDeadline] carries
+// on top of its own known worst-case work, never zero.
+const resolumeRecoveryDeadlineMargin = 5 * time.Second
+
+// resolumeRecoveryMaxLayers duplicates resolume.MaxRestoreLayers by value
+// (this package does not import internal/coordinator/collector/resolume —
+// see resolumeActionMaxDispatchDuration's own doc comment for why),
+// reconciled by TestResolumeRecoveryMaxLayersEqualsProducerBound.
+const resolumeRecoveryMaxLayers = 30
+
+// resolumeRecoveryRestoreDeadline composes the HTTP write deadline for a
+// restore attempting layerCount layers. Mirrors
+// resolumeActionHTTPWriteDeadline's own composition exactly, per layer:
+// resolumeActionMaxDispatchDuration for each layer's own D-3 dispatch,
+// TWO rounds of resolumeRecoveryBookkeepingBudget, plus margin.
+// layerCount is clamped to resolumeRecoveryMaxLayers first — the SAME
+// clamp resolume.Recovery.restore itself applies to what it actually
+// attempts (resolume.RestoreReport.OmittedLayerCount), so this deadline
+// is never asked to cover more than a restore call can ever do.
+func resolumeRecoveryRestoreDeadline(layerCount int) time.Duration {
+	if layerCount > resolumeRecoveryMaxLayers {
+		layerCount = resolumeRecoveryMaxLayers
+	}
+	if layerCount < 1 {
+		layerCount = 1
+	}
+	return time.Duration(layerCount)*resolumeActionMaxDispatchDuration + 2*resolumeRecoveryBookkeepingBudget + resolumeRecoveryDeadlineMargin
+}
 
 func (h *handlers) writeResolumeRecoveryRestoreAuditBounded(parent context.Context, now time.Time, trigger string, ac authContext, r *http.Request) {
 	ctx, cancel := context.WithTimeout(parent, resolumeRecoveryBookkeepingBudget)

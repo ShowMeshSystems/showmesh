@@ -46,6 +46,12 @@ type ResolumeRecoveryRestoreReport struct {
 	Outcome    string                         `json:"outcome"`
 	Principal  string                         `json:"principal"`
 	Layers     []ResolumeRecoveryRestoreLayer `json:"layers"`
+
+	// OmittedLayerCount is nonzero when the composition had more layers
+	// than one restore attempts (build contract §1.6): the excess layers
+	// were never attempted and do not appear in Layers. Run the restore
+	// again to continue.
+	OmittedLayerCount int `json:"omittedLayerCount"`
 }
 
 // ResolumeRecoveryResponse is the body of GET /api/v1/resolume/recovery —
@@ -53,7 +59,16 @@ type ResolumeRecoveryRestoreReport struct {
 // and the last restore report. LastRestore is null until a restore has
 // run.
 type ResolumeRecoveryResponse struct {
-	ServerTime            string                         `json:"serverTime"`
+	ServerTime string `json:"serverTime"`
+
+	// ResolumeConfigured is false when this coordinator has no Resolume
+	// instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct
+	// from AutoRestoreConfigured, which is about whether the TOGGLE has a
+	// stored value. A client renders "not configured" rather than the
+	// toggle's default-ON value when this is false: an operator who
+	// believes recovery is armed and is wrong is worse off than one who
+	// knows it is unavailable.
+	ResolumeConfigured    bool                           `json:"resolumeConfigured"`
 	AutoRestoreEnabled    bool                           `json:"autoRestoreEnabled"`
 	AutoRestoreConfigured bool                           `json:"autoRestoreConfigured"`
 	SettleDelaySeconds    float64                        `json:"settleDelaySeconds"`
@@ -75,8 +90,11 @@ type ResolumeRecoveryRestoreResponse struct {
 // resource in this package follows the identical split). No delta event
 // kind exists for this resource, matching resolume.changed's own posture.
 type ResolumeRecoveryChangedEvent struct {
-	Seq                   uint64                         `json:"seq"`
-	ServerTime            string                         `json:"serverTime"`
+	Seq        uint64 `json:"seq"`
+	ServerTime string `json:"serverTime"`
+
+	// ResolumeConfigured mirrors [ResolumeRecoveryResponse.ResolumeConfigured].
+	ResolumeConfigured    bool                           `json:"resolumeConfigured"`
 	AutoRestoreEnabled    bool                           `json:"autoRestoreEnabled"`
 	AutoRestoreConfigured bool                           `json:"autoRestoreConfigured"`
 	SettleDelaySeconds    float64                        `json:"settleDelaySeconds"`

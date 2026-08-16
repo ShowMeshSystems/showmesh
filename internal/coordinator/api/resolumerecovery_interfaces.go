@@ -53,6 +53,11 @@ type ResolumeRecoveryRestoreReportView struct {
 	Outcome    string
 	Principal  string
 	Layers     []ResolumeRecoveryRestoreLayerView
+
+	// OmittedLayerCount mirrors resolume.RestoreReport.OmittedLayerCount:
+	// nonzero when the composition had more layers than one restore
+	// attempts, stated rather than silently truncated.
+	OmittedLayerCount int
 }
 
 // ResolumeRecoveryProvider is what this package needs from the recovery

@@ -914,12 +914,12 @@ func runListPrincipalsSubcommandWithDeps(deps *cliDeps, args []string) int {
 		return 1
 	}
 
-	if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "CREATED"); err != nil {
+	if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8s  %-8s  %s\n", "ID", "NAME", "KIND", "ROLE", "DISABLED", "RESERVED", "CREATED"); err != nil {
 		return 1
 	}
 	for _, p := range principals {
-		if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8v  %s\n",
-			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.CreatedAt.Format(time.RFC3339)); err != nil {
+		if err := writeCLIOutput(deps, "%-36s  %-24s  %-8s  %-10s  %-8v  %-8v  %s\n",
+			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.Reserved, p.CreatedAt.Format(time.RFC3339)); err != nil {
 			return 1
 		}
 	}

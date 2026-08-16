@@ -172,21 +172,24 @@ func TestCmdResolumeDispatchesRecovery(t *testing.T) {
 	}
 }
 
-// TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerFloor reconciles
+// TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerBound reconciles
 // this program's own client-timeout floor against the server's write
 // deadline it is sized from — see cmd_resolume_recovery.go's own doc
 // comment on why this is two independently-chosen literals rather than
 // one shared constant (this program cannot import the coordinator's api
-// package; its own importgraph_test.go forbids the reverse).
-func TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerFloor(t *testing.T) {
-	// resolumeRecoveryMaxLayers * resolume.MaxDispatchDuration (40s) is the
-	// server's own resolumeRecoveryRestoreHTTPWriteDeadline
-	// (internal/coordinator/api/resolumerecovery.go) before its own margin;
-	// this client's floor must be at least that, or a healthy conversation
-	// can be aborted early and misreported as failed.
-	const serverBound = resolumeRecoveryMaxLayers * 40 // seconds, matching resolume.MaxDispatchDuration
-	if minResolumeRecoveryRestoreClientTimeout.Seconds() < float64(serverBound) {
-		t.Fatalf("minResolumeRecoveryRestoreClientTimeout = %s, want at least %ds to cover the server's own write deadline",
+// package; its own importgraph_test.go forbids the reverse). Asserts
+// STRICT inequality: a client budget merely equal to the server's deadline
+// is the Step 7 defect (CLAUDE.md), since the server ALSO spends time past
+// its own deadline computation (the post-restore audit write) before it
+// can answer.
+func TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerBound(t *testing.T) {
+	// This is the server's own resolumeRecoveryRestoreDeadline formula
+	// (internal/coordinator/api/resolumerecovery.go), duplicated by value:
+	// resolumeRecoveryMaxLayers * 40s (matching resolume.MaxDispatchDuration)
+	// plus its own two rounds of bookkeeping and its own margin.
+	serverBound := time.Duration(resolumeRecoveryMaxLayers)*40*time.Second + 2*resolumeRecoveryBookkeepingBudget + resolumeRecoveryDeadlineMargin
+	if minResolumeRecoveryRestoreClientTimeout <= serverBound {
+		t.Fatalf("minResolumeRecoveryRestoreClientTimeout = %s, want STRICTLY more than the server's own worst-case bound %s",
 			minResolumeRecoveryRestoreClientTimeout, serverBound)
 	}
 }

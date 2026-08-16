@@ -23,6 +23,7 @@ const CONFIG_WRITE_SCOPE = 'config:write'
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
+  | { kind: 'unconfigured' }
   | { kind: 'loaded'; enabled: boolean; configured: boolean }
 
 export function ResolumeRecoveryToggle() {
@@ -43,6 +44,10 @@ export function ResolumeRecoveryToggle() {
       try {
         const resp = await getResolumeRecovery()
         if (cancelled) return
+        if (!resp.resolumeConfigured) {
+          setState({ kind: 'unconfigured' })
+          return
+        }
         setState({ kind: 'loaded', enabled: resp.autoRestoreEnabled, configured: resp.autoRestoreConfigured })
       } catch (err) {
         if (cancelled) return
@@ -78,6 +83,11 @@ export function ResolumeRecoveryToggle() {
       {state.kind === 'error' && (
         <p className="panel panel--error" role="alert">
           {state.message}
+        </p>
+      )}
+      {state.kind === 'unconfigured' && (
+        <p className="text-muted" role="status">
+          Resolume is not configured on this coordinator — crash recovery is not available.
         </p>
       )}
       {state.kind === 'loaded' && (

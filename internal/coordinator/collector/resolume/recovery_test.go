@@ -66,6 +66,12 @@ type recoveryFixture struct {
 	settle      time.Duration
 	autoEnabled func(ctx context.Context) (bool, error)
 	reports     []RestoreReport
+
+	// intercept, when non-nil, is checked before every request reaches
+	// arena.ServeHTTP — a test's own escape hatch for a response shape
+	// fakeArena/layerJSON cannot produce (e.g. finding 8's absent
+	// active_clip key). Returns true when it fully handled the request.
+	intercept func(w http.ResponseWriter, r *http.Request) bool
 }
 
 func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
@@ -82,6 +88,9 @@ func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
 	f.autoEnabled = func(context.Context) (bool, error) { return true, nil }
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f.intercept != nil && f.intercept(w, r) {
+			return
+		}
 		if r.URL.Path == "/api/v1/product" {
 			// Recorded into arena.requests directly (rather than
 			// delegating to arena.ServeHTTP, which has no /product case
@@ -105,7 +114,22 @@ func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
 	t.Cleanup(srv.Close)
 
 	store := newTestCompositionStore(t, recoveryTestComposition())
-	f.collector = newTestCollector(t, srv.URL, Options{Now: fixedClock(&now), CompositionStore: store})
+
+	// recoveryPtr is the same late-binding indirection coordinator.go's own
+	// atomic.Pointer[resolume.Recovery] wiring uses (resolumeRecoveryHolder):
+	// the Collector's OnUnreachableTransition callback must be supplied at
+	// construction, before f.recovery exists to call into. Single-goroutine
+	// test code, so a bare closure over this pointer is safe without an
+	// atomic — f.recovery is assigned below, before anything calls Poll.
+	var recoveryPtr *Recovery
+	f.collector = newTestCollector(t, srv.URL, Options{
+		Now: fixedClock(&now), CompositionStore: store,
+		OnUnreachableTransition: func(at time.Time) {
+			if recoveryPtr != nil {
+				recoveryPtr.captureCrashTarget(at)
+			}
+		},
+	})
 	f.dispatcher = NewActionDispatcher(f.collector, ActionDispatcherOptions{
 		Now: fixedClock(&now), Sleep: fakeSleep(&now), PollInterval: 5 * time.Millisecond,
 	})
@@ -114,6 +138,7 @@ func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
 		AutoRestoreEnabled: func(ctx context.Context) (bool, error) { return f.autoEnabled(ctx) },
 		OnRestoreComplete:  func(r RestoreReport) { f.reports = append(f.reports, r) },
 	})
+	recoveryPtr = f.recovery
 
 	// Establish a real, confirmed identity before any test body runs —
 	// every test in this file that dispatches starts from "D-2 already
@@ -124,6 +149,37 @@ func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
 		t.Fatalf("fixture setup: SurveyNow identity = %q, want %q (reason: %s) — the fixture's own composition/arena must resolve", snap.Identity, IdentityTrue, snap.IdentityObservedAt)
 	}
 	return f
+}
+
+// simulateCrash drives a REAL reachable->unreachable->(collector-side)
+// transition through f.collector.Poll — the production path that captures
+// Recovery's own crash-target snapshot — rather than relying on a live
+// re-read. Every test that calls
+// HandleReachableTransition to simulate a return and expects a restore
+// target must call this first, or [Recovery.takeCrashTarget] has nothing
+// captured and the restore is correctly empty. Leaves f.up == true (ready
+// for whatever the test does next) and advances *f.now by roughly two poll
+// intervals — callers that assert precise elapsed time do so AFTER this
+// call, never around it.
+func (f *recoveryFixture) simulateCrash(t *testing.T) {
+	t.Helper()
+	// A down-transition is only detected relative to a PRIOR known-
+	// reachable state (finding 6) — establish that first if this is the
+	// first Poll call this fixture has ever made. Advancing the clock
+	// before EACH Poll call (not only between them) is what keeps a
+	// second simulateCrash call due under Poll's own PollInterval
+	// throttle, since [Collector.lastLivenessPollAt] persists across
+	// calls on the same fixture.
+	*f.now = f.now.Add(f.collector.Footprint().PollInterval())
+	if _, complete := f.collector.Poll(context.Background()); !complete {
+		t.Fatalf("simulateCrash: warm-up Poll() complete = false")
+	}
+	*f.now = f.now.Add(f.collector.Footprint().PollInterval())
+	f.up = false
+	if _, complete := f.collector.Poll(context.Background()); !complete {
+		t.Fatalf("simulateCrash: crash Poll() complete = false")
+	}
+	f.up = true
 }
 
 // dispatchAndConfirm dispatches name against f's own dispatcher and fails
@@ -219,6 +275,7 @@ func TestPollFailureReportsReachableCollectionFailedWithReason(t *testing.T) {
 func TestHandleReachableTransitionRestoresConfirmedLayer(t *testing.T) {
 	f := newRecoveryFixture(t, 0)
 	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
 
 	// Simulate the crash-and-return: nothing external to touch here since
 	// the fake Arena never actually went anywhere, but layer one's clip
@@ -251,6 +308,7 @@ func TestHandleReachableTransitionRestoresConfirmedLayer(t *testing.T) {
 func TestGateRefusesWhenSurveyPredatesReturn(t *testing.T) {
 	f := newRecoveryFixture(t, 0)
 	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
 	f.arena.clips[testClipA].connected = "Disconnected"
 	f.arena.layers[testLayerOne].activeClip = nil
 	before := f.requestCount("/connect")
@@ -305,6 +363,7 @@ func TestGateRefusesOnIdentityNotTrue(t *testing.T) {
 	t.Run("unknown_end_to_end", func(t *testing.T) {
 		f := newRecoveryFixture(t, 0)
 		f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+		f.simulateCrash(t)
 		// Layer one goes genuinely dark (§2: "Arena comes back with
 		// nothing playing") AND every clip id 404s: the identity sample
 		// cannot resolve anything, matching §2's own "Resolume may not
@@ -390,6 +449,7 @@ func TestGateWaitsSettleDelayBeforeSurveying(t *testing.T) {
 func TestSecondCrashInsideThrottleWindowStillRestores(t *testing.T) {
 	f := newRecoveryFixture(t, 0)
 	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
 	f.arena.clips[testClipA].connected = "Disconnected"
 	f.arena.layers[testLayerOne].activeClip = nil
 
@@ -401,7 +461,12 @@ func TestSecondCrashInsideThrottleWindowStillRestores(t *testing.T) {
 	}
 
 	// A second crash 36s later — inside DefaultTransitionSurveyMinInterval
-	// (1 minute) — the measured real crash interval this bypass exists for.
+	// (1 minute) — the measured real crash interval this bypass exists
+	// for. The first restore's own confirmed launchClip already
+	// re-established layer one's action-sourced entry, so this crash's
+	// own capture reflects THAT — the same real sequence this restore's
+	// own applyConfirmedActionToRecoveryRecord hook runs in production.
+	f.simulateCrash(t)
 	f.arena.clips[testClipA].connected = "Disconnected"
 	f.arena.layers[testLayerOne].activeClip = nil
 	*f.now = f.now.Add(36 * time.Second)
@@ -580,6 +645,7 @@ func TestSteadyStatePollTrafficIsOneProductRequestPerCycle(t *testing.T) {
 func TestAutomaticRestoreWithToggleOffIssuesNoWriteButStillReports(t *testing.T) {
 	f := newRecoveryFixture(t, 0)
 	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
 	f.arena.clips[testClipA].connected = "Disconnected"
 	f.arena.layers[testLayerOne].activeClip = nil
 	f.autoEnabled = func(context.Context) (bool, error) { return false, nil }
@@ -758,5 +824,439 @@ func identifiedSnapshotFor(now time.Time, deck ObjectID) SurveySnapshot {
 		SurveyRan: true, SurveyAt: now,
 		IdentityKnown: true, Identity: IdentityTrue, IdentityObservedAt: now,
 		SelectedDeckKnown: true, SelectedDeckID: deck, SelectedDeckName: "Deck One", SelectedDeckObservedAt: now,
+	}
+}
+
+// --- Review 2026-08-16 findings ------------------------------------------
+
+// TestCrashRecoverySequenceEndToEnd is the realistic sequence: dispatch and
+// confirm, a survey between the confirmed action and the crash, a real
+// crash (down transition), the gate's own confirming survey between the
+// crash and the return, then the return — proving the restore target
+// survives both surveys intact. Breaking: HandleReachableTransition's
+// target reverted to a live r.collector.RecoveryRecord() read instead of
+// r.takeCrashTarget() — confirmed this test goes red (layer one was never
+// restored, since the intervening surveys had already reclassified the
+// live record to unknown by the time the return ran), then restored.
+func TestCrashRecoverySequenceEndToEnd(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+
+	// A survey between the confirmed action and the crash — Arena still
+	// genuinely shows clip A, so this survey AGREES with the action-sourced
+	// entry and must not destroy it.
+	f.collector.SurveyNow(context.Background(), false)
+
+	f.simulateCrash(t)
+
+	// Arena comes back with nothing playing (§2), and a survey races
+	// AHEAD of the gate itself — modeling the WebSocket reconnect
+	// resolving before the gate's own goroutine gets scheduled (this
+	// file's own top comment). This survey DISAGREES with the
+	// action-sourced entry (still standing from before the crash) and
+	// overwrites the LIVE record — the exact corruption a live re-read at
+	// gate entry would see, and the exact thing the crash-time snapshot
+	// must be immune to.
+	f.arena.clips[testClipA].connected = "Disconnected"
+	f.arena.layers[testLayerOne].activeClip = nil
+	f.collector.SurveyNow(context.Background(), true)
+
+	returnedAt := *f.now
+	*f.now = f.now.Add(time.Second)
+	f.recovery.HandleReachableTransition(context.Background(), returnedAt)
+
+	if len(f.reports) != 1 {
+		t.Fatalf("reports = %+v, want exactly one", f.reports)
+	}
+	report := f.reports[0]
+	if report.Outcome != RestoreOutcomeRestored {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, RestoreOutcomeRestored)
+	}
+	layerOne := findRestoreLayer(t, report, "Whole House 1")
+	if layerOne.Result != RestoreResultRestored {
+		t.Fatalf("layer one Result = %q, want %q (reason: %s)", layerOne.Result, RestoreResultRestored, layerOne.Reason)
+	}
+	if f.arena.layers[testLayerOne].activeClip == nil || *f.arena.layers[testLayerOne].activeClip != testClipA {
+		t.Errorf("arena layer one active clip not restored to %v", testClipA)
+	}
+}
+
+// TestSurveyAgreeingWithActionEntryKeepsActionProvenance is finding 1(b): a
+// survey that reads the same value an action already established keeps
+// that entry action-sourced, so RecoveryRecord's own "survey evidence is
+// never a restore target" rule (criterion 14) does not discard it.
+// Breaking: recoverySurveyAgreesWithAction changed to always return false —
+// confirmed this test goes red (State became unknown instead of clip), then
+// restored.
+func TestSurveyAgreeingWithActionEntryKeepsActionProvenance(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+
+	// Arena still genuinely shows clip A — a survey here should AGREE.
+	f.collector.SurveyNow(context.Background(), false)
+
+	record := f.collector.RecoveryRecord()
+	layerOne := findRecoveryEntry(t, record, "Whole House 1")
+	if layerOne.State != RecoveryLayerClip {
+		t.Fatalf("State = %q, want %q — an agreeing survey must not discard the action-sourced entry", layerOne.State, RecoveryLayerClip)
+	}
+	if layerOne.Source != RecoverySourceAction {
+		t.Fatalf("Source = %q, want %q — provenance must stay action-sourced when the survey agrees", layerOne.Source, RecoverySourceAction)
+	}
+	if layerOne.ClipID != testClipA {
+		t.Errorf("ClipID = %v, want %v", layerOne.ClipID, testClipA)
+	}
+}
+
+// TestSurveyDisagreeingWithActionEntryOverwritesIt is finding 1(b)'s other
+// half: a survey that finds something DIFFERENT than what an action
+// established replaces the entry, becoming survey-sourced — something else
+// changed it. Breaking: recoverySurveyAgreesWithAction changed to always
+// return true (never overwrite) — confirmed this test goes red (the entry
+// stayed action-sourced despite disagreeing), then restored.
+func TestSurveyDisagreeingWithActionEntryOverwritesIt(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+
+	// The operator relaunches clip B on layer one by hand before any
+	// survey runs.
+	f.arena.clips[testClipA].connected = "Disconnected"
+	f.arena.clips[testClipB].connected = "Connected"
+	f.arena.layers[testLayerOne].activeClip = idPtr(testClipB)
+
+	f.collector.SurveyNow(context.Background(), false)
+
+	record := f.collector.RecoveryRecord()
+	layerOne := findRecoveryEntry(t, record, "Whole House 1")
+	// Criterion 14 always renders State as unknown for a survey-sourced
+	// entry, so the moved provenance is checked via Source instead.
+	if layerOne.Source != RecoverySourceSurvey {
+		t.Fatalf("Source = %q, want %q — a disagreeing survey must overwrite the action-sourced entry", layerOne.Source, RecoverySourceSurvey)
+	}
+}
+
+// TestRestoreAllUsableLayersRefusedIsNeverNothingToDo is finding 2: when
+// every usable-target layer is refused rather than genuinely absent, the
+// outcome must never read as nothing_to_do — a refusal means a layer HAD a
+// usable entry (build contract §1.4). Breaking: restore()'s outcome switch
+// changed its usableCount==0 case to the pre-fix attemptedCount==0 —
+// confirmed this test goes red (Outcome became nothing_to_do), then
+// restored.
+func TestRestoreAllUsableLayersRefusedIsNeverNothingToDo(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipB})
+
+	// Both layers go dark on return, but the selected deck changes — the
+	// clip's own deck read at restore time refuses both via the deck term.
+	f.arena.clips[testClipA].connected = "Disconnected"
+	f.arena.layers[testLayerOne].activeClip = nil
+	f.arena.clips[testClipB].connected = "Disconnected"
+	f.arena.layers[testLayerTwo].activeClip = nil
+	f.arena.decks[testDeckOne].selected = false
+
+	report := f.recovery.RunManualRestore(context.Background())
+	if report.Outcome != RestoreOutcomeFailed {
+		t.Fatalf("Outcome = %q, want %q — every usable layer was refused, not absent", report.Outcome, RestoreOutcomeFailed)
+	}
+	layerOne := findRestoreLayer(t, report, "Whole House 1")
+	if layerOne.Result != RestoreResultSkipped || layerOne.Reason == "" {
+		t.Fatalf("layer one = %+v, want skipped with a reason (refused)", layerOne)
+	}
+}
+
+// TestFirstEverPollNeverFiresTheGate is finding 6: a coordinator started
+// while Resolume is already reachable must not report a phantom automatic
+// restore for a crash that never happened. Breaking:
+// noteLivenessAndCheckTransition's gateTransition condition weakened back
+// to isTransition's own test (!wasKnown || !wasReachable) — confirmed this
+// test goes red (the gate fired on the very first poll), then restored.
+func TestFirstEverPollNeverFiresTheGate(t *testing.T) {
+	var gateFired bool
+	now := time.Now()
+	arena := newFakeArena(&now)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/product" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(loadTestdata(t, "product.json"))
+			return
+		}
+		arena.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	store := newTestCompositionStore(t, recoveryTestComposition())
+	collector := newTestCollector(t, srv.URL, Options{
+		Now: fixedClock(&now), CompositionStore: store,
+		OnReachableTransition: func(time.Time) { gateFired = true },
+	})
+
+	if _, complete := collector.Poll(context.Background()); !complete {
+		t.Fatalf("Poll() complete = false")
+	}
+	// OnReachableTransition is spawned in its own goroutine — give it a
+	// moment before asserting a negative.
+	time.Sleep(50 * time.Millisecond)
+	if gateFired {
+		t.Error("the gate fired on this Collector's very first liveness result — a coordinator start is not a return")
+	}
+}
+
+// TestRestoreAbandonsRemainingLayersOnceSuperseded is finding 7:
+// supersession is checked BETWEEN layers, not only at the gate's own
+// checkpoints before restore() is called — a restore can run for minutes,
+// so without a per-layer check a second gate could start a second restore
+// while this one is still mid-flight. Breaking: removed the `if superseded
+// != nil && superseded()` check inside restore()'s per-layer loop —
+// confirmed this test goes red (both layers were processed instead of only
+// the first), then restored.
+func TestRestoreAbandonsRemainingLayersOnceSuperseded(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipB})
+	f.arena.clips[testClipA].connected = "Disconnected"
+	f.arena.layers[testLayerOne].activeClip = nil
+	f.arena.clips[testClipB].connected = "Disconnected"
+	f.arena.layers[testLayerTwo].activeClip = nil
+
+	target := f.collector.RecoveryRecord()
+	calls := 0
+	superseded := func() bool {
+		calls++
+		return calls > 1 // superseded starting from the second layer checked
+	}
+	report := f.recovery.restore(context.Background(), target, RestoreTriggerManual, *f.now, superseded)
+
+	layerOne := findRestoreLayer(t, report, "Whole House 1")
+	if layerOne.Result != RestoreResultRestored {
+		t.Fatalf("layer one Result = %q, want %q — the first layer must still complete before supersession is noticed", layerOne.Result, RestoreResultRestored)
+	}
+	layerTwo := findRestoreLayer(t, report, "Whole House 2")
+	if layerTwo.Result != RestoreResultSkipped || !strings.Contains(layerTwo.Reason, "superseded") {
+		t.Fatalf("layer two = %+v, want skipped naming supersession", layerTwo)
+	}
+	if f.arena.layers[testLayerTwo].activeClip != nil {
+		t.Errorf("layer two was dispatched despite supersession")
+	}
+}
+
+// TestRestoreDistinguishesUnreadableFromDifferentClip is finding 8: a
+// layer whose active_clip key is ABSENT from Resolume's response is
+// reported as unreadable, never as "playing a different clip" — opposite
+// facts an operator would act on oppositely. Breaking: restoreLayer's
+// switch on live.ActiveClip.Presence collapsed back to the single
+// `!layerActiveClipAbsent(live)` branch — confirmed this test goes red (the
+// unreadable case claimed a different clip was playing), then restored.
+func TestRestoreDistinguishesUnreadableFromDifferentClip(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+
+	// The pre-restore read of layer one answers with active_clip missing
+	// entirely — never produced by faLayer/layerJSON, so a hand-crafted
+	// response is used here.
+	f.intercept = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "layers/by-id/"+testLayerOne.String()) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":1,"bypassed":{"id":9001,"value":false},"master":{"id":9002,"value":1},"transition":null}`))
+			return true
+		}
+		return false
+	}
+
+	report := f.recovery.RunManualRestore(context.Background())
+	layerOne := findRestoreLayer(t, report, "Whole House 1")
+	if layerOne.Result != RestoreResultSkipped {
+		t.Fatalf("layer one Result = %q, want %q", layerOne.Result, RestoreResultSkipped)
+	}
+	if strings.Contains(layerOne.Reason, "different clip") {
+		t.Errorf("layer one Reason = %q, must not claim a different clip is playing when the field was merely absent", layerOne.Reason)
+	}
+	if !strings.Contains(layerOne.Reason, "absent") {
+		t.Errorf("layer one Reason = %q, want it to say the field was absent", layerOne.Reason)
+	}
+}
+
+// TestRecoveryRecordStatesCompositionStoreErrorWithReason is finding 9: a
+// composition-store error (nothing ever uploaded) renders as a stated row
+// with a reason, never a bare empty list indistinguishable from "uploaded
+// with zero layers." Breaking: RecoveryRecord's composition-error branch
+// changed to `return nil` — confirmed this test goes red (the record was
+// empty with no reason), then restored.
+func TestRecoveryRecordStatesCompositionStoreErrorWithReason(t *testing.T) {
+	arena := newFakeArena(new(time.Time))
+	srv := httptest.NewServer(arena)
+	t.Cleanup(srv.Close)
+
+	// No CompositionStore option supplied — it defaults to a fresh,
+	// never-refreshed *CompositionStore, whose Current() always answers
+	// ErrCompositionNotUploaded.
+	collector := newTestCollector(t, srv.URL, Options{})
+
+	record := collector.RecoveryRecord()
+	if len(record) != 1 {
+		t.Fatalf("RecoveryRecord() len = %d, want 1 (a stated row, not a bare empty list)", len(record))
+	}
+	if record[0].Reason == "" {
+		t.Error("the composition-store-error row has no reason")
+	}
+	if record[0].State != RecoveryLayerUnknown {
+		t.Errorf("State = %q, want %q", record[0].State, RecoveryLayerUnknown)
+	}
+}
+
+// TestRecoveryRecordSurveySourcedReasonDoesNotTickWithClock is finding 4:
+// the survey-sourced "never observed" reason must not embed a precomputed
+// age, or this resource would re-broadcast on the change stream on every
+// render tick for as long as any layer carries one — EstablishedAt is
+// already on the wire; a client computes its own age. Breaking:
+// buildRecoveryLayerRecord's survey-sourced Reason changed back to embed
+// now.Sub(entry.establishedAt) — confirmed this test goes red (the two
+// reads produced different Reason strings), then restored.
+func TestRecoveryRecordSurveySourcedReasonDoesNotTickWithClock(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.collector.SurveyNow(context.Background(), true)
+
+	first := findRecoveryEntry(t, f.collector.RecoveryRecord(), "Whole House 1")
+	*f.now = f.now.Add(5 * time.Second)
+	second := findRecoveryEntry(t, f.collector.RecoveryRecord(), "Whole House 1")
+
+	if first.Reason != second.Reason {
+		t.Fatalf("Reason changed as the clock advanced with nothing else different:\n  first:  %q\n  second: %q", first.Reason, second.Reason)
+	}
+}
+
+// TestRestoreSkipReasonsCoverAllFiveSectionSixRules is contract §1.4: every
+// one of §6's five skip rules has its own distinguishable sentence, tested
+// together so a future edit that collapses two of them back into one
+// generic reason is caught. Breaking (rule 5 specifically): restoreLayer's
+// ActionRefused branch reverted to `row.Reason = outcome.Reason` alone
+// (dropping the restore's own prefix) — confirmed the deck_not_selected
+// subtest goes red (Reason no longer named the restore's own deck rule),
+// then restored.
+func TestRestoreSkipReasonsCoverAllFiveSectionSixRules(t *testing.T) {
+	t.Run("dark", func(t *testing.T) {
+		f := newRecoveryFixture(t, 0)
+		f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+		f.dispatchAndConfirm(ActionClearLayer, ActionParams{LayerID: testLayerOne})
+		report := f.recovery.RunManualRestore(context.Background())
+		layer := findRestoreLayer(t, report, "Whole House 1")
+		if layer.Result != RestoreResultSkipped || !strings.Contains(layer.Reason, "recorded dark") {
+			t.Fatalf("layer = %+v, want skipped naming the dark rule", layer)
+		}
+	})
+	t.Run("unknown", func(t *testing.T) {
+		// Deliberately NOT newRecoveryFixture: its own SurveyNow warm-up
+		// call establishes a survey-sourced entry for every layer
+		// immediately, which criterion 14 reclassifies to unknown but
+		// with THAT reason, not the "never established" one this subtest
+		// needs — see TestRecoveryRecordReportsNeverObservedForUnestablishedLayer's
+		// identical note.
+		arena := newFakeArena(new(time.Time))
+		srv := httptest.NewServer(arena)
+		t.Cleanup(srv.Close)
+		store := newTestCompositionStore(t, recoveryTestComposition())
+		collector := newTestCollector(t, srv.URL, Options{CompositionStore: store})
+		dispatcher := NewActionDispatcher(collector, ActionDispatcherOptions{})
+		recovery := NewRecovery(collector, dispatcher, RecoveryOptions{})
+
+		report := recovery.RunManualRestore(context.Background())
+		layer := findRestoreLayer(t, report, "Whole House 1")
+		if layer.Result != RestoreResultSkipped || !strings.Contains(layer.Reason, "ever been established") {
+			t.Fatalf("layer = %+v, want skipped naming the unknown rule", layer)
+		}
+	})
+	t.Run("already_playing", func(t *testing.T) {
+		f := newRecoveryFixture(t, 0)
+		f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+		report := f.recovery.RunManualRestore(context.Background())
+		layer := findRestoreLayer(t, report, "Whole House 1")
+		if layer.Result != RestoreResultSkipped || !strings.Contains(layer.Reason, "already playing the recorded clip") {
+			t.Fatalf("layer = %+v, want skipped naming the already-playing rule", layer)
+		}
+	})
+	t.Run("playing_something_else", func(t *testing.T) {
+		f := newRecoveryFixture(t, 0)
+		f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+		f.arena.clips[testClipA].connected = "Disconnected"
+		f.arena.clips[testClipB].connected = "Connected"
+		f.arena.layers[testLayerOne].activeClip = idPtr(testClipB)
+		report := f.recovery.RunManualRestore(context.Background())
+		layer := findRestoreLayer(t, report, "Whole House 1")
+		if layer.Result != RestoreResultSkipped || !strings.Contains(layer.Reason, "different clip") {
+			t.Fatalf("layer = %+v, want skipped naming the different-clip rule", layer)
+		}
+	})
+	t.Run("deck_not_selected", func(t *testing.T) {
+		f := newRecoveryFixture(t, 0)
+		f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+		f.arena.clips[testClipA].connected = "Disconnected"
+		f.arena.layers[testLayerOne].activeClip = nil
+		f.arena.decks[testDeckOne].selected = false
+		report := f.recovery.RunManualRestore(context.Background())
+		layer := findRestoreLayer(t, report, "Whole House 1")
+		if layer.Result != RestoreResultSkipped || !strings.Contains(layer.Reason, "never selects a deck") {
+			t.Fatalf("layer = %+v, want skipped naming the restore's own deck rule", layer)
+		}
+	})
+}
+
+// TestGateRefusesOnIdentityUnknownReportsTheGateOwnSentence strengthens
+// TestGateRefusesOnIdentityNotTrue's unknown_end_to_end subtest per finding
+// 11: recovery.go's own identity check was previously proven only by
+// connect-request-count and Outcome, both of which ActionDispatcher's own
+// redundant identity gate (one layer down) satisfies identically — so a
+// mutation to recovery.go's OWN check alone did not turn that subtest red.
+// This asserts the report's own layer rows carry
+// describeIdentityGateRefusal's SPECIFIC sentence, which Dispatch's own
+// (differently worded) refusal cannot produce. Breaking: recovery.go's `if
+// snap.Identity != IdentityTrue` branch removed — confirmed this test goes
+// red (the report's reason no longer matched
+// describeIdentityGateRefusal(IdentityUnknown)'s text, having fallen through
+// to Dispatch's own generic identity-gate wording instead), then restored.
+func TestGateRefusesOnIdentityUnknownReportsTheGateOwnSentence(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
+	f.arena.layers[testLayerOne].activeClip = nil
+	delete(f.arena.clips, testClipA)
+	delete(f.arena.clips, testClipB)
+	delete(f.arena.clips, testPersistA)
+
+	returnedAt := *f.now
+	*f.now = f.now.Add(time.Second)
+	f.recovery.HandleReachableTransition(context.Background(), returnedAt)
+
+	if len(f.reports) != 1 {
+		t.Fatalf("reports = %+v, want exactly one", f.reports)
+	}
+	want := describeIdentityGateRefusal(SurveySnapshot{Identity: IdentityUnknown})
+	layerOne := findRestoreLayer(t, f.reports[0], "Whole House 1")
+	if layerOne.Reason != want {
+		t.Fatalf("layer one Reason = %q, want the gate's own sentence %q — recovery.go's own identity check, not just Dispatch's redundant one, must be what produced this report", layerOne.Reason, want)
+	}
+}
+
+// TestRestoreOmitsLayersBeyondMaxRestoreLayers is finding 3: a composition
+// larger than MaxRestoreLayers restores only its first MaxRestoreLayers,
+// stating the excess via OmittedLayerCount rather than silently attempting
+// (and overrunning the caller's own write deadline for) every layer.
+// Breaking: restore()'s truncation (`if len(target) > MaxRestoreLayers`)
+// removed — confirmed this test goes red (every target layer was
+// attempted and OmittedLayerCount stayed 0), then restored.
+func TestRestoreOmitsLayersBeyondMaxRestoreLayers(t *testing.T) {
+	target := make([]RecoveryLayerRecord, MaxRestoreLayers+3)
+	for i := range target {
+		target[i] = RecoveryLayerRecord{LayerID: ObjectID(i + 1), Layer: "layer", State: RecoveryLayerDark}
+	}
+
+	f := newRecoveryFixture(t, 0)
+	report := f.recovery.restore(context.Background(), target, RestoreTriggerManual, *f.now, nil)
+
+	if report.OmittedLayerCount != 3 {
+		t.Fatalf("OmittedLayerCount = %d, want 3", report.OmittedLayerCount)
+	}
+	if len(report.Layers) != MaxRestoreLayers {
+		t.Fatalf("len(Layers) = %d, want %d (the omitted layers must not appear at all)", len(report.Layers), MaxRestoreLayers)
 	}
 }

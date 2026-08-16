@@ -261,6 +261,10 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"ResolumeInstanceComposition", "ResolumeInstance",
 		"ResolumeInstancesResponse", "ResolumeInstanceResponse",
 		"ResolumeChangedEvent",
+		"ResolumeRecoveryRecordEntry", "ResolumeRecoveryRestoreLayer",
+		"ResolumeRecoveryRestoreReport", "ResolumeRecoveryResponse",
+		"ResolumeRecoveryRestoreResponse", "ResolumeRecoveryChangedEvent",
+		"ConfigResolumeRecoveryPayload", "ResolumeRecoveryConfigResponse",
 	} {
 		compileSchema(t, c, name)
 	}

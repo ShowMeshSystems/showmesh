@@ -337,7 +337,7 @@ func Run() int {
 	var resolumeRecovery api.ResolumeRecoveryProvider
 	if resolumeWire.collector != nil {
 		recoveryDispatcher := resolume.NewActionDispatcher(resolumeWire.collector, resolume.ActionDispatcherOptions{})
-		recovery, recoveryAdapter := newResolumeRecoveryWiring(st, identitySvc, resolumeWire.collector, recoveryDispatcher, cfg.ResolumeRecoverySettle, logger)
+		recovery, recoveryAdapter := newResolumeRecoveryWiring(st, identitySvc, resolumeWire.collector, recoveryDispatcher, cfg.ResolumeRecoverySettle, logger, notifyHub)
 		resolumeRecoveryHolder.Store(recovery)
 		resolumeRecovery = recoveryAdapter
 		resolumeActions = newResolumeActionDispatcherAdapter(resolumeWire.collector)

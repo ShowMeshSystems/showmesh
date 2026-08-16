@@ -40,12 +40,13 @@ type resolumeRecoveryRestoreLayer struct {
 }
 
 type resolumeRecoveryRestoreReport struct {
-	StartedAt  string                         `json:"startedAt"`
-	FinishedAt string                         `json:"finishedAt"`
-	Trigger    string                         `json:"trigger"`
-	Outcome    string                         `json:"outcome"`
-	Principal  string                         `json:"principal"`
-	Layers     []resolumeRecoveryRestoreLayer `json:"layers"`
+	StartedAt         string                         `json:"startedAt"`
+	FinishedAt        string                         `json:"finishedAt"`
+	Trigger           string                         `json:"trigger"`
+	Outcome           string                         `json:"outcome"`
+	Principal         string                         `json:"principal"`
+	Layers            []resolumeRecoveryRestoreLayer `json:"layers"`
+	OmittedLayerCount int                            `json:"omittedLayerCount"`
 }
 
 type resolumeRecoveryResponse struct {
@@ -78,20 +79,30 @@ type resolumeRecoveryConfigResponse struct {
 }
 
 // minResolumeRecoveryRestoreClientTimeout is "resolume recovery restore"'s
-// own minimum request budget — mirroring minResolumeActionClientTimeout's
-// identical reasoning (cmd_resolume_action.go): the coordinator can hold
-// this request open for up to resolumeRecoveryMaxLayers sequential D-3
-// dispatches before answering. resolumeRecoveryMaxLayers is the reference
-// installation's own measured layer count (LESSONS.md: "Arena held the
-// real 18-layer show"), not an arbitrary round number, and
-// resolumeActionSingleDispatchCeiling mirrors resolume.MaxDispatchDuration
-// (40s) — this program cannot import that package, so this is a
-// duplicated literal, reconciled against the server's own bound by
-// TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerFloor.
+// own minimum request budget, composed from the SAME terms the server's
+// own resolumeRecoveryRestoreDeadline is (internal/coordinator/api/resolumerecovery.go),
+// duplicated by value — this program cannot import the coordinator, the
+// identical reasoning minResolumeActionClientTimeout's own doc comment
+// states — plus resolumeRecoveryClientMargin strictly on top. Reconciled
+// against the server's own bound by
+// TestMinResolumeRecoveryRestoreClientTimeoutExceedsServerBound, which
+// asserts strict inequality: a client floor merely EQUAL to the server's
+// worst case is the Step 7 defect — a 5s post-restore audit write on the
+// server side alone could still answer after a client with zero margin
+// had already given up.
 const (
-	resolumeRecoveryMaxLayers               = 18
-	resolumeActionSingleDispatchCeiling     = 40 * time.Second
-	minResolumeRecoveryRestoreClientTimeout = resolumeRecoveryMaxLayers * resolumeActionSingleDispatchCeiling
+	// resolumeRecoveryMaxLayers duplicates resolume.MaxRestoreLayers by
+	// value — the SAME clamp both a restore itself and the server's own
+	// write deadline apply, so a composition larger than this never makes
+	// either bound grow without limit.
+	resolumeRecoveryMaxLayers           = 30
+	resolumeActionSingleDispatchCeiling = 40 * time.Second
+	resolumeRecoveryBookkeepingBudget   = 5 * time.Second
+	resolumeRecoveryDeadlineMargin      = 5 * time.Second
+	resolumeRecoveryClientMargin        = 30 * time.Second
+
+	minResolumeRecoveryRestoreClientTimeout = resolumeRecoveryMaxLayers*resolumeActionSingleDispatchCeiling +
+		2*resolumeRecoveryBookkeepingBudget + resolumeRecoveryDeadlineMargin + resolumeRecoveryClientMargin
 )
 
 func effectiveResolumeRecoveryRestoreTimeout(flagTimeout time.Duration) time.Duration {
@@ -301,6 +312,9 @@ func reportResolumeRecoveryRestore(stdout io.Writer, restore resolumeRecoveryRes
 			_, _ = fmt.Fprintf(stdout, "  %s: %s\n", l.Layer, l.Result)
 		}
 	}
+	if restore.OmittedLayerCount > 0 {
+		_, _ = fmt.Fprintf(stdout, "  %d further layer(s) were not attempted (composition larger than one restore covers) — run the restore again to continue\n", restore.OmittedLayerCount)
+	}
 	return exitCodeForResolumeRecoveryRestore(restore)
 }
 
@@ -309,6 +323,12 @@ func reportResolumeRecoveryRestore(stdout io.Writer, restore resolumeRecoveryRes
 const exitRestoreIncomplete = 16
 
 func exitCodeForResolumeRecoveryRestore(restore resolumeRecoveryRestoreReport) int {
+	// A composition larger than one restore covers is never a clean
+	// success regardless of how the attempted layers went — the operator
+	// must run the restore again to reach the rest.
+	if restore.OmittedLayerCount > 0 && (restore.Outcome == "restored" || restore.Outcome == "nothing_to_do") {
+		return exitRestoreIncomplete
+	}
 	switch restore.Outcome {
 	case "restored", "nothing_to_do":
 		return exitOK

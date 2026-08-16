@@ -56,6 +56,7 @@ type resolumeRecoveryAdapter struct {
 	recovery    *resolume.Recovery
 	identitySvc identity.Service
 	logger      *slog.Logger
+	notify      func()
 
 	mu   sync.Mutex
 	last *api.ResolumeRecoveryRestoreReportView
@@ -82,6 +83,7 @@ func (a *resolumeRecoveryAdapter) Restore(ctx context.Context, principalName str
 	report := a.recovery.RunManualRestore(ctx)
 	view := mapRestoreReport(report, principalName)
 	a.setLast(view)
+	a.notifyChanged()
 	return view, nil
 }
 
@@ -98,6 +100,17 @@ func (a *resolumeRecoveryAdapter) onRestoreComplete(report resolume.RestoreRepor
 	view := mapRestoreReport(report, identity.ReservedResolumeRecoveryPrincipalID)
 	a.setLast(view)
 	a.writeAuditEntry(view)
+	a.notifyChanged()
+}
+
+// notifyChanged pokes the change-stream hub so a completed restore reaches
+// a subscriber immediately, rather than waiting out the hub's own render
+// tick. a.notify is nil-safe: it is [coordinator.go]'s own notifyHub
+// closure, already nil-checked there.
+func (a *resolumeRecoveryAdapter) notifyChanged() {
+	if a.notify != nil {
+		a.notify()
+	}
 }
 
 func (a *resolumeRecoveryAdapter) setLast(view api.ResolumeRecoveryRestoreReportView) {
@@ -106,15 +119,11 @@ func (a *resolumeRecoveryAdapter) setLast(view api.ResolumeRecoveryRestoreReport
 	a.mu.Unlock()
 }
 
-// writeAuditEntry records the automatic restore's own audit entry
-// (build contract §1.5), best-effort, AFTER the restore has already run —
-// per §7.3, never refused for want of an audit write: the dispatch(es)
-// already happened, so there is nothing left for a refusal to protect,
-// and this project's own ADR-024 decision 11 exemption reasoning applies
-// (refusing to attribute an event that already happened only denies the
-// operator the record of it). The reserved principal holds no credential
-// of any form, so Form/CredentialID are left at their zero values rather
-// than a fabricated one.
+// writeAuditEntry records the automatic restore's own audit entry (build
+// contract §1.5), best-effort, AFTER the restore has already run — never
+// refused for want of an audit write (§7.3). The reserved principal holds
+// no credential of any form, so Form/CredentialID are left at their zero
+// values rather than a fabricated one.
 func (a *resolumeRecoveryAdapter) writeAuditEntry(view api.ResolumeRecoveryRestoreReportView) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -150,6 +159,7 @@ func mapRestoreReport(rep resolume.RestoreReport, principalName string) api.Reso
 	return api.ResolumeRecoveryRestoreReportView{
 		StartedAt: formatTimeOrEmpty(rep.StartedAt), FinishedAt: formatTimeOrEmpty(rep.FinishedAt),
 		Trigger: string(rep.Trigger), Outcome: string(rep.Outcome), Principal: principalName, Layers: layers,
+		OmittedLayerCount: rep.OmittedLayerCount,
 	}
 }
 
@@ -168,8 +178,8 @@ func formatTimeOrEmpty(t time.Time) string {
 // non-nil (the identical cfg.ResolumeURL != "" gate resolumeWire.collector
 // and resolumeActions are already built under — see this function's own
 // call site in coordinator.go).
-func newResolumeRecoveryWiring(st *store.Store, identitySvc identity.Service, collector *resolume.Collector, dispatcher *resolume.ActionDispatcher, settle time.Duration, logger *slog.Logger) (*resolume.Recovery, *resolumeRecoveryAdapter) {
-	adapter := &resolumeRecoveryAdapter{identitySvc: identitySvc, logger: logger}
+func newResolumeRecoveryWiring(st *store.Store, identitySvc identity.Service, collector *resolume.Collector, dispatcher *resolume.ActionDispatcher, settle time.Duration, logger *slog.Logger, notify func()) (*resolume.Recovery, *resolumeRecoveryAdapter) {
+	adapter := &resolumeRecoveryAdapter{identitySvc: identitySvc, logger: logger, notify: notify}
 	recovery := resolume.NewRecovery(collector, dispatcher, resolume.RecoveryOptions{
 		Settle:             settle,
 		AutoRestoreEnabled: resolumeRecoveryToggleReader(st),

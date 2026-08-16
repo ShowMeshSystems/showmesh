@@ -546,33 +546,24 @@ func (h *Hub) render(ctx context.Context) {
 		h.evictRendered("resolume:", present)
 	}
 
-	// The recovery record, the auto-restore toggle, and the last restore
-	// (Track D seam D-3a, build contract §1.7): one fixed singleton
-	// resource, keyed "resolumerecovery:default" — never evicted, since
-	// unlike a node/FPP/Resolume instance it does not come and go with
-	// configuration. Full-frame only, no delta kind, mirroring
-	// resolume.changed's own posture immediately above.
-	//
-	// A singleton has no natural empty state the way ListInstances does
-	// for the resolume:<id> block above, so an unwired ResolumeRecovery
-	// (the [noResolumeRecoveryProvider] default) is skipped explicitly —
-	// otherwise ResolveResolumeRecoveryToggle's own "unconfigured" default
-	// (enabled=true, configured=false, no error) would render this
-	// resource, and broadcast a frame, on every hub in this package's test
-	// suite that never wires the feature at all.
-	//
-	// Once wired, the toggle read is the only fallible half of this render
-	// (Record/LastReport never error — see ResolumeRecoveryProvider's own
-	// doc comment): a store error here is not evidence recovery is
-	// disarmed, so this resource kind is skipped for the pass rather than
-	// publishing an empty or default-looking state, mirroring every other
-	// dependency-error branch in this method.
+	// The recovery record, the auto-restore toggle, and the last restore:
+	// one fixed singleton resource, keyed "resolumerecovery:default" —
+	// never evicted, full-frame only, no delta kind, mirroring
+	// resolume.changed's own posture immediately above. Skipped entirely
+	// when ResolumeRecovery is unwired ([noResolumeRecoveryProvider]): a
+	// singleton has no natural empty state the way ListInstances gives
+	// resolume:<id> above for free. Once wired, a toggle-read error skips
+	// this pass rather than publishing a default-looking state —
+	// Record/LastReport never error.
 	if _, unwired := h.deps.ResolumeRecovery.(noResolumeRecoveryProvider); !unwired {
 		if enabled, configured, err := ResolveResolumeRecoveryToggle(ctx, h.deps.Config); err != nil {
 			h.logger.Warn("stream hub: resolve resolume.recovery toggle failed", "error", err)
 		} else {
 			const key = "resolumerecovery:default"
-			proj := resolumeRecoveryChangedEventProjection(enabled, configured, h.deps.ResolumeRecoverySettleSeconds,
+			// resolumeConfigured is always true here — this whole branch is
+			// gated on ResolumeRecovery being wired (the !unwired check
+			// above), which is exactly what that field reports.
+			proj := resolumeRecoveryChangedEventProjection(true, enabled, configured, h.deps.ResolumeRecoverySettleSeconds,
 				h.deps.ResolumeRecovery.Record(), h.deps.ResolumeRecovery.LastReport())
 			if h.updateRendered(key, proj) {
 				ev := proj

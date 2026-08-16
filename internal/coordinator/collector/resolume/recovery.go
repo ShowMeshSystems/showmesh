@@ -103,6 +103,10 @@ func (c *Collector) applyConfirmedActionToRecoveryRecord(name ActionName, params
 	case ActionLaunchClip:
 		tc, err := c.compositionStore.Current()
 		if err != nil {
+			// Surprising here specifically: a launchClip was just
+			// confirmed against Resolume, which means SOME composition
+			// was active, yet the stored composition disagrees.
+			c.logger.Warn("resolume recovery: confirmed launchClip but the stored composition could not be read; recovery record not updated", "error", err)
 			return
 		}
 		var layerID ObjectID
@@ -153,6 +157,9 @@ func (c *Collector) recoverySetDark(layerID ObjectID, source RecoverySource, at 
 func (c *Collector) recoverySetAllDark(at time.Time) {
 	tc, err := c.compositionStore.Current()
 	if err != nil {
+		// Surprising here specifically: a blackout was just confirmed
+		// against Resolume, so SOME composition was active.
+		c.logger.Warn("resolume recovery: confirmed blackout but the stored composition could not be read; recovery record not updated", "error", err)
 		return
 	}
 	layers := tc.Layers()
@@ -202,10 +209,17 @@ func (c *Collector) recoveryUpdateFromSurvey(layerResults map[ObjectID]layerRead
 				}
 				continue
 			}
+			clipID := r.layer.ActiveClip.Clip.ID
+			if existing, known := c.recoveryRecord[layerID]; known && recoverySurveyAgreesWithAction(existing, RecoveryLayerClip, clipID) {
+				continue
+			}
 			c.recoveryRecord[layerID] = recoveryEntry{
-				state: RecoveryLayerClip, clipID: r.layer.ActiveClip.Clip.ID, source: RecoverySourceSurvey, establishedAt: at,
+				state: RecoveryLayerClip, clipID: clipID, source: RecoverySourceSurvey, establishedAt: at,
 			}
 		case PresenceNull:
+			if existing, known := c.recoveryRecord[layerID]; known && recoverySurveyAgreesWithAction(existing, RecoveryLayerDark, 0) {
+				continue
+			}
 			c.recoveryRecord[layerID] = recoveryEntry{state: RecoveryLayerDark, source: RecoverySourceSurvey, establishedAt: at}
 		default: // PresenceAbsent
 			c.recoveryRecord[layerID] = recoveryEntry{
@@ -216,26 +230,32 @@ func (c *Collector) recoveryUpdateFromSurvey(layerResults map[ObjectID]layerRead
 	}
 }
 
-// RecoveryRecord returns one labeled entry per layer in the CURRENT
-// composition (build contract §1.3). A layer with no established entry
-// at all reports unknown, "never observed" (criterion 5).
-//
-// A source=survey entry is ALWAYS reported as unknown regardless of its
-// stored state (criterion 14, build contract §10.1/§2.4a's "the survey
-// source contributes one reading taken at coordinator startup" finding):
-// a survey never repeats during an ordinary show (§3), so any reading
-// only a survey ever established could have been superseded by whatever
-// the timeline (LTC) drove on that layer since. Reporting it as "clip" or
-// "dark" would assert something this package has no current evidence
-// for; "never observed", with the age and the source stated, is what is
-// actually known. This is also what makes the restore (§6) safe by
-// construction: every legitimate restore target is source=action (a
-// layer ShowMesh itself drove explicitly), and reclassifying survey
-// evidence here means the restore never treats stale startup evidence as
-// a target.
-func (c *Collector) RecoveryRecord() []RecoveryLayerRecord {
-	now := c.now()
+// recoverySurveyAgreesWithAction reports whether existing is an
+// action-sourced entry whose own value already matches what a survey just
+// read (newState, and newClipID when newState is clip) — the case where
+// ShowMesh's own confirmed action put a value on this layer and Arena's
+// survey confirms it is still there. Provenance records how we know: a
+// survey that only confirms what an action already established must keep
+// the action's own provenance, not overwrite it. A survey that DISAGREES
+// still replaces the entry, becoming survey-sourced with the survey's own
+// timestamp — something else changed it.
+func recoverySurveyAgreesWithAction(existing recoveryEntry, newState RecoveryLayerState, newClipID ObjectID) bool {
+	if existing.source != RecoverySourceAction || existing.state != newState {
+		return false
+	}
+	if newState == RecoveryLayerClip {
+		return existing.clipID == newClipID
+	}
+	return true
+}
 
+// RecoveryRecord returns one labeled entry per layer in the CURRENT
+// composition (build contract §1.3). A layer with no established entry at
+// all reports unknown, "never observed" (criterion 5). A source=survey
+// entry is ALWAYS reported as unknown regardless of its stored state
+// (criterion 14) — see [recoverySurveyAgreesWithAction] for the one case
+// that keeps an entry action-sourced instead.
+func (c *Collector) RecoveryRecord() []RecoveryLayerRecord {
 	c.recoveryMu.Lock()
 	entries := make(map[ObjectID]recoveryEntry, len(c.recoveryRecord))
 	for k, v := range c.recoveryRecord {
@@ -243,21 +263,26 @@ func (c *Collector) RecoveryRecord() []RecoveryLayerRecord {
 	}
 	c.recoveryMu.Unlock()
 
-	tc, _ := c.compositionStore.Current()
-	var order []TrackedLayer
-	if tc != nil {
-		order = tc.Layers()
+	tc, err := c.compositionStore.Current()
+	if err != nil {
+		// No composition has ever been uploaded — an ordinary, expected
+		// state, not logged. Stated as one row rather than a bare empty
+		// list: an empty list otherwise renders identically to "a
+		// composition IS uploaded and simply has no layers," and a
+		// restore against either silently reports nothing_to_do.
+		return []RecoveryLayerRecord{{Layer: "(no composition uploaded)", State: RecoveryLayerUnknown, Reason: err.Error()}}
 	}
 
+	order := tc.Layers()
 	out := make([]RecoveryLayerRecord, 0, len(order))
 	for _, l := range order {
 		entry, known := entries[l.ID]
-		out = append(out, buildRecoveryLayerRecord(tc, l.ID, entry, known, now))
+		out = append(out, buildRecoveryLayerRecord(tc, l.ID, entry, known))
 	}
 	return out
 }
 
-func buildRecoveryLayerRecord(tc *TrackedComposition, layerID ObjectID, entry recoveryEntry, known bool, now time.Time) RecoveryLayerRecord {
+func buildRecoveryLayerRecord(tc *TrackedComposition, layerID ObjectID, entry recoveryEntry, known bool) RecoveryLayerRecord {
 	rec := RecoveryLayerRecord{LayerID: layerID}
 	rec.Layer, rec.LayerNameGenerated = layerLabelForID(tc, layerID)
 
@@ -271,10 +296,13 @@ func buildRecoveryLayerRecord(tc *TrackedComposition, layerID ObjectID, entry re
 	rec.Source = entry.source
 
 	if entry.source == RecoverySourceSurvey {
+		// No precomputed age: EstablishedAt (set above) is already on the
+		// wire as an absolute timestamp (ADR-020), and a client computes
+		// its own age from it. A string that changes every second here
+		// would make this resource re-broadcast on every stream render
+		// tick for as long as any layer carries a survey-sourced entry.
 		rec.State = RecoveryLayerUnknown
-		rec.Reason = fmt.Sprintf(
-			"the only reading for this layer is from a survey taken %s ago; the timeline may have launched a clip on it since",
-			now.Sub(entry.establishedAt).Round(time.Second))
+		rec.Reason = "the only reading for this layer is from a survey; the timeline may have launched a clip on it since"
 		return rec
 	}
 
@@ -401,7 +429,26 @@ type RestoreReport struct {
 	Trigger    RestoreTrigger
 	Outcome    RestoreOutcome
 	Layers     []RestoreLayerResult
+
+	// OmittedLayerCount is nonzero when the target composition had more
+	// layers than [MaxRestoreLayers] permits in one restore: the excess
+	// layers, beyond the first MaxRestoreLayers in target's own order,
+	// were never attempted at all and do not appear in Layers. Stated here
+	// rather than silently truncated, so a report can never be mistaken
+	// for a complete accounting of every layer.
+	OmittedLayerCount int
 }
+
+// MaxRestoreLayers bounds how many layers ONE restore call ever attempts.
+// SHOWMESH GUESS, NOT MEASURED: chosen comfortably above the reference
+// installation's own measured 18 layers (LESSONS.md) while keeping the
+// worst-case HTTP write deadline this restore composes (build contract
+// §1.6, internal/coordinator/api's resolumeRecoveryRestoreDeadline)
+// bounded rather than scaling without limit against an unusually large
+// composition. A composition with more layers than this runs the restore
+// again to continue — RestoreReport.OmittedLayerCount states when that is
+// needed.
+const MaxRestoreLayers = 30
 
 // --- The recovery controller: the gate (§5) and the restore (§6) -------
 
@@ -460,6 +507,14 @@ type Recovery struct {
 	mu         sync.Mutex
 	generation uint64
 	lastReport *RestoreReport
+
+	// crashMu guards crashTarget/haveCrashTarget — a separate lock from mu
+	// since [Recovery.captureCrashTarget] is called synchronously from the
+	// collector's own liveness-poll goroutine (never blocking behind
+	// whatever a gate in flight is doing under mu).
+	crashMu         sync.Mutex
+	crashTarget     []RecoveryLayerRecord
+	haveCrashTarget bool
 }
 
 // NewRecovery constructs a [Recovery] over collector and dispatcher, which
@@ -519,23 +574,78 @@ func (r *Recovery) setLastReport(report RestoreReport) {
 	r.mu.Unlock()
 }
 
-// wait blocks for d (via r.sleep, so a test's fake advances deterministically)
-// or until ctx is done, whichever comes first. Reports false when ctx won.
-func (r *Recovery) wait(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return ctx.Err() == nil
+// captureCrashTarget snapshots the current recovery record as §4's restore
+// target — "what was on the wall a moment ago" — and is [Collector.Options.OnUnreachableTransition]'s
+// own hook, called SYNCHRONOUSLY from the collector's liveness-poll
+// goroutine the instant a reachable->unreachable transition is detected,
+// never from a spawned goroutine: internal/coordinator/collector.Runner
+// never calls Poll concurrently with itself for one collector, so a
+// synchronous capture here is guaranteed to complete before any LATER poll
+// call (including the eventual return's own up-transition) can begin —
+// which is what removes the race [Recovery.HandleReachableTransition] used
+// to run against an intervening survey. Nothing can corrupt the record
+// between a crash and the return that
+// follows it (no confirmed action can dispatch, and no survey runs, while
+// Resolume is unreachable), so this snapshot is exactly the record's state
+// as of the crash for as long as it takes Resolume to come back.
+func (r *Recovery) captureCrashTarget(at time.Time) {
+	target := r.collector.RecoveryRecord()
+	r.crashMu.Lock()
+	r.crashTarget = target
+	r.haveCrashTarget = true
+	r.crashMu.Unlock()
+}
+
+// takeCrashTarget returns and clears the most recently captured crash
+// target. ok is false when this Recovery has never observed a crash (a
+// coordinator started while Resolume was already reachable — see
+// [Collector.noteLivenessAndCheckTransition]'s own gateTransition/
+// crashTransition split — or a caller drives this gate directly without
+// ever routing a real transition through the collector, as several of this
+// package's own tests do); [Recovery.HandleReachableTransition] degrades
+// that to an empty target rather than falling back to a live re-read, which
+// would reopen the exact race this method exists to close.
+func (r *Recovery) takeCrashTarget() ([]RecoveryLayerRecord, bool) {
+	r.crashMu.Lock()
+	defer r.crashMu.Unlock()
+	target, ok := r.crashTarget, r.haveCrashTarget
+	r.crashTarget, r.haveCrashTarget = nil, false
+	return target, ok
+}
+
+// waitStep bounds [Recovery.wait]'s own polling granularity: a long settle
+// delay is slept in steps this small, each followed by a ctx/stop check,
+// rather than one opaque call to r.sleep in a spawned goroutine that
+// cannot be interrupted. Chosen small enough that neither of this method's
+// two callers-in-spirit — a cancellation during shutdown, or a later
+// HandleReachableTransition superseding this one — waits longer than this
+// to be noticed.
+const waitStep = 50 * time.Millisecond
+
+// wait blocks for d (via r.sleep, in [waitStep] increments, so a test's
+// fake advances deterministically) or until ctx is done or stop reports
+// true, whichever comes first. Reports false when ctx or stop won. No
+// goroutine is spawned: a spawned sleeper cannot be interrupted, so
+// sleeping this in steps and re-checking ctx/stop between them bounds both
+// a cancellation and a supersession to noticing within one step, rather
+// than waiting out the whole remaining settle window. stop may be nil (no
+// supersession to watch).
+func (r *Recovery) wait(ctx context.Context, d time.Duration, stop func() bool) bool {
+	for d > 0 {
+		if ctx.Err() != nil || (stop != nil && stop()) {
+			return false
+		}
+		step := d
+		if step > waitStep {
+			step = waitStep
+		}
+		r.sleep(step)
+		d -= step
 	}
-	done := make(chan struct{})
-	go func() {
-		r.sleep(d)
-		close(done)
-	}()
-	select {
-	case <-ctx.Done():
+	if stop != nil && stop() {
 		return false
-	case <-done:
-		return ctx.Err() == nil
 	}
+	return ctx.Err() == nil
 }
 
 // HandleReachableTransition is the crash-recovery gate (§5), intended to
@@ -557,20 +667,16 @@ func (r *Recovery) wait(ctx context.Context, d time.Duration) bool {
 func (r *Recovery) HandleReachableTransition(ctx context.Context, returnedAt time.Time) {
 	myGen := r.bumpGeneration()
 
-	// The restore TARGET is captured now, before the settle wait and
-	// before the confirming survey runs — see recovery.go's own top
-	// comment and TRACK-D-D3A-BUILD-CONTRACT.md §2.1: nothing updates the
-	// record while Resolume is unreachable (no confirmed actions, no
-	// survey), so this is exactly "what was on the wall before the
-	// crash". The confirming survey below WILL overwrite live record
-	// entries per §4 rule 2 — capturing the target first is what stops
-	// that overwrite from destroying the very thing being restored.
-	target := r.collector.RecoveryRecord()
+	// The restore target is [Recovery.captureCrashTarget]'s own snapshot,
+	// taken at the CRASH rather than read live here at the return — see
+	// that method's own doc comment. ok is false only when this Recovery
+	// never observed a crash before this return; target then defaults to
+	// empty, which [Recovery.restore] reports as RestoreOutcomeNothingToDo,
+	// never a live re-read that could race the confirming survey below.
+	target, _ := r.takeCrashTarget()
 
-	if !r.wait(ctx, r.settle) {
-		return
-	}
-	if r.superseded(myGen) {
+	stop := func() bool { return r.superseded(myGen) }
+	if !r.wait(ctx, r.settle, stop) {
 		return
 	}
 
@@ -601,7 +707,7 @@ func (r *Recovery) HandleReachableTransition(ctx context.Context, returnedAt tim
 		return
 	}
 
-	report := r.restore(ctx, target, RestoreTriggerAutomatic, startedAt)
+	report := r.restore(ctx, target, RestoreTriggerAutomatic, startedAt, stop)
 	r.finish(report)
 }
 
@@ -662,15 +768,45 @@ func gateRefusalLayers(target []RecoveryLayerRecord, gateReason string) []Restor
 func (r *Recovery) RunManualRestore(ctx context.Context) RestoreReport {
 	startedAt := r.now()
 	target := r.collector.RecoveryRecord()
-	report := r.restore(ctx, target, RestoreTriggerManual, startedAt)
+	report := r.restore(ctx, target, RestoreTriggerManual, startedAt, nil)
 	r.finish(report)
 	return report
 }
 
+// supersededLayerResult builds one layer's row for a restore abandoned
+// mid-flight: every remaining layer once [Recovery.restore]'s own
+// superseded check trips is reported skipped rather than silently dropped
+// from the report, preserving its clip reference when the target had one.
+func supersededLayerResult(t RecoveryLayerRecord) RestoreLayerResult {
+	row := RestoreLayerResult{LayerID: t.LayerID, Layer: t.Layer, LayerNameGenerated: t.LayerNameGenerated, Result: RestoreResultSkipped,
+		Reason: "a later crash-return superseded this restore before this layer was reached"}
+	if t.State == RecoveryLayerClip {
+		row.ClipKnown, row.Clip, row.ClipNameGenerated = true, t.Clip, t.ClipNameGenerated
+	}
+	return row
+}
+
 // restore implements §6: per layer, in target's own order, decide restore/
 // skip/fail and issue at most one D-3 launchClip dispatch per eligible
-// layer.
-func (r *Recovery) restore(ctx context.Context, target []RecoveryLayerRecord, trigger RestoreTrigger, startedAt time.Time) RestoreReport {
+// layer. superseded is checked BETWEEN layers, never only at the gate's own
+// checkpoints before this call — a restore can run for minutes (the
+// measured crash interval is 36s), so without a per-layer check a second
+// gate could start a second restore while this one is still mid-flight,
+// racing two launchClip dispatches on one layer. nil means never
+// superseded — [Recovery.RunManualRestore]'s own path, which holds no
+// generation to check.
+func (r *Recovery) restore(ctx context.Context, target []RecoveryLayerRecord, trigger RestoreTrigger, startedAt time.Time, superseded func() bool) RestoreReport {
+	// [MaxRestoreLayers]'s own doc comment: a composition with more layers
+	// than this restores its first MaxRestoreLayers only, stating the
+	// excess rather than silently attempting all of them — the caller's
+	// own HTTP write deadline is sized from this same bound and cannot
+	// honour more.
+	var omitted int
+	if len(target) > MaxRestoreLayers {
+		omitted = len(target) - MaxRestoreLayers
+		target = target[:MaxRestoreLayers]
+	}
+
 	autoEnabled := true
 	if trigger == RestoreTriggerAutomatic && r.autoRestoreEnabled != nil {
 		enabled, err := r.autoRestoreEnabled(ctx)
@@ -683,46 +819,44 @@ func (r *Recovery) restore(ctx context.Context, target []RecoveryLayerRecord, tr
 	}
 
 	layers := make([]RestoreLayerResult, 0, len(target))
-	var restoredCount, failedCount, attemptedCount int
+	var restoredCount, usableCount int
 	for _, t := range target {
+		if superseded != nil && superseded() {
+			layers = append(layers, supersededLayerResult(t))
+			continue
+		}
 		row := r.restoreLayer(ctx, t, trigger, autoEnabled)
 		layers = append(layers, row)
-		switch row.Result {
-		case RestoreResultRestored:
+		if t.State != RecoveryLayerClip {
+			continue // dark/unknown targets never had a usable entry (build contract §1.4)
+		}
+		usableCount++
+		if row.Result == RestoreResultRestored {
 			restoredCount++
-			attemptedCount++
-		case RestoreResultFailed:
-			failedCount++
-			attemptedCount++
 		}
 	}
 
+	// nothing_to_do means no layer had a usable entry at all (build
+	// contract §1.4) — never a usable layer that was refused, already
+	// satisfied, or unreadable: those layers had one and could not be
+	// acted on, the opposite fact.
 	var outcome RestoreOutcome
 	switch {
-	case attemptedCount == 0:
+	case usableCount == 0:
 		outcome = RestoreOutcomeNothingToDo
-	case failedCount == 0:
+	case restoredCount == usableCount:
 		outcome = RestoreOutcomeRestored
 	case restoredCount > 0:
 		outcome = RestoreOutcomePartial
 	default:
+		// Every usable layer ended up neither restored nor genuinely
+		// absent — refused, already satisfied, unreadable, or disabled by
+		// the toggle. Zero of the layers this restore had something to do
+		// for were actually restored, so this is never a silent success.
 		outcome = RestoreOutcomeFailed
 	}
-	// A layer that was neither restored nor failed but WAS skipped for a
-	// reason other than "nothing to do" (dark/unknown) still degrades a
-	// fully-restored outcome to partial — e.g. "already playing" or
-	// "playing something else" on an otherwise-successful run. Recompute
-	// against the skip count among CLIP-target layers specifically.
-	if outcome == RestoreOutcomeRestored {
-		for i, t := range target {
-			if t.State == RecoveryLayerClip && layers[i].Result == RestoreResultSkipped {
-				outcome = RestoreOutcomePartial
-				break
-			}
-		}
-	}
 
-	return RestoreReport{StartedAt: startedAt, FinishedAt: r.now(), Trigger: trigger, Outcome: outcome, Layers: layers}
+	return RestoreReport{StartedAt: startedAt, FinishedAt: r.now(), Trigger: trigger, Outcome: outcome, Layers: layers, OmittedLayerCount: omitted}
 }
 
 // restoreLayer decides and, if eligible, dispatches one layer's own
@@ -749,16 +883,27 @@ func (r *Recovery) restoreLayer(ctx context.Context, target RecoveryLayerRecord,
 		row.Reason = fmt.Sprintf("this layer's current state could not be confirmed before restoring: %s", ClassifyError(err))
 		return row
 	}
-	switch {
-	case layerActiveClipIs(live, target.ClipID):
-		row.Result = RestoreResultSkipped
-		row.Reason = "this layer is already playing the recorded clip"
-		return row
-	case !layerActiveClipAbsent(live):
+	// PresenceAbsent (the field was missing) and PresencePresent-with-a-
+	// different-clip are two different facts an operator would act on
+	// oppositely: "someone else launched something" versus "we could not
+	// read this layer." §6 authorises no blind launch either way, so the
+	// skip itself is identical — only the stated reason differs.
+	switch live.ActiveClip.Presence {
+	case PresencePresent:
+		if layerActiveClipIs(live, target.ClipID) {
+			row.Result = RestoreResultSkipped
+			row.Reason = "this layer is already playing the recorded clip"
+			return row
+		}
 		row.Result = RestoreResultSkipped
 		row.Reason = "this layer is currently playing a different clip than recorded; not overwritten"
 		return row
+	case PresenceAbsent:
+		row.Result = RestoreResultSkipped
+		row.Reason = "this layer's active clip field was absent from Resolume's response, so whether it already holds the recorded clip is not known; not launched blindly"
+		return row
 	}
+	// PresenceNull: genuinely no active clip — proceed.
 
 	if trigger == RestoreTriggerAutomatic && !autoEnabled {
 		row.Result = RestoreResultSkipped
@@ -777,8 +922,14 @@ func (r *Recovery) restoreLayer(ctx context.Context, target RecoveryLayerRecord,
 	case ActionConfirmed:
 		row.Result = RestoreResultRestored
 	case ActionRefused:
+		// §6's own deck-term rule ("the restore does not select a deck")
+		// is enforced by D-3's Dispatch, not by this function, so this is
+		// the one §6 skip rule with no sentence of its own at this layer —
+		// every refusal Dispatch can produce (deck or otherwise) is
+		// prefixed here so a restore report never reads as launchClip's
+		// own generic wording alone.
 		row.Result = RestoreResultSkipped
-		row.Reason = outcome.Reason
+		row.Reason = "this layer's own recorded clip could not be launched during the restore (the restore never selects a deck — §6): " + outcome.Reason
 	default:
 		row.Result = RestoreResultFailed
 		row.Reason = outcome.Reason

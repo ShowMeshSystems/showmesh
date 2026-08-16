@@ -246,6 +246,7 @@ export interface paths {
          *       | `event.recorded` | `EventRecordedEvent` | every connection |
          *       | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
+         *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -1258,12 +1259,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, and GET /config/show.macro/{id}/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, and GET /config/resolume.recovery/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers; Track D seam D-3a added a fourth). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "resolume.recovery";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -1560,11 +1561,15 @@ export interface components {
             outcome: "restored" | "partial" | "nothing_to_do" | "failed";
             principal: string;
             layers: components["schemas"]["ResolumeRecoveryRestoreLayer"][];
+            /** @description Nonzero when the composition had more layers than one restore attempts: the excess layers were never attempted and do not appear in layers. Zero means nothing was omitted. Run the restore again to continue. */
+            omittedLayerCount: number;
         };
         /** @description The body of GET /resolume/recovery (Track D seam D-3a): the auto-restore toggle, the recovery record, and the last restore. lastRestore is null until a restore has run. */
         ResolumeRecoveryResponse: {
             /** Format: date-time */
             serverTime: string;
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            resolumeConfigured: boolean;
             autoRestoreEnabled: boolean;
             /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
             autoRestoreConfigured: boolean;
@@ -1577,6 +1582,21 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             restore: components["schemas"]["ResolumeRecoveryRestoreReport"];
+        };
+        /** @description The payload of a "resolumeRecovery.changed" SSE event (Track D seam D-3a): the resource's own rendered wire representation, minus serverTime (stamped separately, alongside seq, at broadcast time). No delta event kind exists for this resource, matching resolume.changed's own posture. */
+        ResolumeRecoveryChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            resolumeConfigured: boolean;
+            autoRestoreEnabled: boolean;
+            /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
+            autoRestoreConfigured: boolean;
+            settleDelaySeconds: number;
+            record: components["schemas"]["ResolumeRecoveryRecordEntry"][];
+            lastRestore: components["schemas"]["ResolumeRecoveryRestoreReport"] | null;
         };
         /** @description The "resolume.recovery" configuration kind's decoded payload (Track D seam D-3a): the body PUT /config/resolume.recovery accepts, and the "payload" member of GET /config/resolume.recovery's response. One boolean, no other keys. */
         ConfigResolumeRecoveryPayload: {

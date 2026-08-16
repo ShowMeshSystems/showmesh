@@ -995,7 +995,12 @@ func (s *svc) GetPrincipal(ctx context.Context, principalID string) (Principal, 
 // IssueToken mints a new API token for principalID. The returned [Token]'s
 // Value is the only time the raw token string is ever available — only
 // [Token.Digest] and [Token.Hint] are persisted (store.Store.CreateToken).
+// Refused for [ReservedResolumeRecoveryPrincipalID]: that principal holds
+// no credential of any form, and a minted token would contradict that.
 func (s *svc) IssueToken(ctx context.Context, principalID, label string, expiresAt *time.Time) (Token, error) {
+	if principalID == ReservedResolumeRecoveryPrincipalID {
+		return Token{}, ErrReservedPrincipal
+	}
 	tok, err := GenerateToken()
 	if err != nil {
 		return Token{}, err
