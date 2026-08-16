@@ -225,6 +225,12 @@ type Service interface {
 	ListPrincipals(ctx context.Context) ([]Principal, error)
 	GetPrincipal(ctx context.Context, principalID string) (Principal, error)
 
+	// EnsureReservedRecoveryPrincipal idempotently creates Track D seam
+	// D-3a's built-in automatic-recovery principal
+	// ([ReservedResolumeRecoveryPrincipalID]) if it does not already
+	// exist. Called once at coordinator startup.
+	EnsureReservedRecoveryPrincipal(ctx context.Context) (Principal, error)
+
 	IssueToken(ctx context.Context, principalID, label string, expiresAt *time.Time) (Token, error)
 	RevokeToken(ctx context.Context, tokenID string) error
 	ListTokens(ctx context.Context, principalID string) ([]TokenInfo, error)
@@ -370,6 +376,7 @@ func principalFromRecord(rec store.PrincipalRecord) Principal {
 		CreatedAt:  rec.CreatedAt,
 		Disabled:   rec.Disabled,
 		Generation: rec.Generation,
+		Reserved:   rec.ID == ReservedResolumeRecoveryPrincipalID,
 	}
 }
 
@@ -798,6 +805,9 @@ func (s *svc) ensureBootstrap(ctx context.Context) error {
 // principal was created and the bootstrap code was NOT consumed — the
 // operator may simply try again.
 func (s *svc) ClaimBootstrap(ctx context.Context, code, name, password, deviceLabel, clientAddr string, form CredentialForm, now time.Time) (Principal, error) {
+	if name == ReservedResolumeRecoveryPrincipalID {
+		return Principal{}, ErrReservedPrincipal
+	}
 	rec, err := s.st.GetBootstrap(ctx)
 	if errors.Is(err, store.ErrBootstrapNotFound) {
 		return Principal{}, ErrBootstrapNotAvailable
@@ -866,6 +876,9 @@ func (s *svc) ClaimBootstrap(ctx context.Context, code, name, password, deviceLa
 // --- principal and token administration (extensions; see Service doc comment) ---
 
 func (s *svc) CreatePrincipal(ctx context.Context, name string, kind Kind, role Role, password string) (Principal, error) {
+	if name == ReservedResolumeRecoveryPrincipalID {
+		return Principal{}, ErrReservedPrincipal
+	}
 	var hash string
 	if password != "" {
 		h, err := HashPassword(password)
@@ -888,6 +901,9 @@ func (s *svc) CreatePrincipal(ctx context.Context, name string, kind Kind, role 
 }
 
 func (s *svc) SetPassword(ctx context.Context, principalID, password string) (Principal, error) {
+	if principalID == ReservedResolumeRecoveryPrincipalID {
+		return Principal{}, ErrReservedPrincipal
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return Principal{}, fmt.Errorf("identity: set password: %w", err)
@@ -903,6 +919,9 @@ func (s *svc) SetPassword(ctx context.Context, principalID, password string) (Pr
 }
 
 func (s *svc) SetDisabled(ctx context.Context, principalID string, disabled bool) (Principal, error) {
+	if principalID == ReservedResolumeRecoveryPrincipalID {
+		return Principal{}, ErrReservedPrincipal
+	}
 	if _, err := s.st.SetPrincipalDisabled(ctx, principalID, disabled); err != nil {
 		return Principal{}, fmt.Errorf("identity: set disabled: %w", err)
 	}
@@ -920,6 +939,9 @@ func (s *svc) SetDisabled(ctx context.Context, principalID string, disabled bool
 // unrecognized role string before it reaches here, matching
 // [svc.CreatePrincipal]'s identical trust of its own role parameter.
 func (s *svc) SetRole(ctx context.Context, principalID string, role Role) (Principal, error) {
+	if principalID == ReservedResolumeRecoveryPrincipalID {
+		return Principal{}, ErrReservedPrincipal
+	}
 	if _, err := s.st.SetPrincipalRole(ctx, principalID, string(role)); err != nil {
 		return Principal{}, fmt.Errorf("identity: set role: %w", err)
 	}
@@ -940,6 +962,26 @@ func (s *svc) ListPrincipals(ctx context.Context) ([]Principal, error) {
 		out[i] = principalFromRecord(rec)
 	}
 	return out, nil
+}
+
+// EnsureReservedRecoveryPrincipal idempotently creates
+// [ReservedResolumeRecoveryPrincipalID] with [RoleRecovery] and no
+// credential of any form (build contract §1.2: "not something anything
+// logs in as; it is the attribution the automatic restore writes into the
+// audit trail"). Called at coordinator startup, in the same place schema
+// migrations run — see [store.Store.EnsureReservedPrincipal], the one
+// store path permitted to create it.
+func (s *svc) EnsureReservedRecoveryPrincipal(ctx context.Context) (Principal, error) {
+	rec, _, err := s.st.EnsureReservedPrincipal(ctx, store.PrincipalRecord{
+		ID:   ReservedResolumeRecoveryPrincipalID,
+		Name: ReservedResolumeRecoveryPrincipalID,
+		Kind: string(KindMachine),
+		Role: string(RoleRecovery),
+	})
+	if err != nil {
+		return Principal{}, fmt.Errorf("identity: ensure reserved recovery principal: %w", err)
+	}
+	return principalFromRecord(rec), nil
 }
 
 func (s *svc) GetPrincipal(ctx context.Context, principalID string) (Principal, error) {

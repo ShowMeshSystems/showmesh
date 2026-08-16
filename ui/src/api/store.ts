@@ -87,6 +87,10 @@ type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
+type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
+type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
+type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
@@ -499,6 +503,63 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/fpp.endpoints/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track D seam D-3a: Arena crash recovery ---------------------------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as Step 7 seam A's fpp.endpoints methods above: the
+  // recovery record and the toggle are not part of the SSE snapshot/delta
+  // stream (build contract §1.7: no new observation signal is minted).
+
+  /** `GET /api/v1/resolume/recovery` (Track D seam D-3a). The open read: never throws on 401/403 — it carries no auth requirement at all. */
+  async getResolumeRecovery(): Promise<SchemaResolumeRecoveryResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeRecoveryResponse>('/resolume/recovery', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/resolume.recovery` (Track D seam D-3a). Requires config:write. */
+  async getResolumeRecoveryConfig(): Promise<SchemaResolumeRecoveryConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeRecoveryConfigResponse>('/config/resolume.recovery', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/resolume.recovery` (Track D seam D-3a). Requires config:write. */
+  async putResolumeRecoveryConfig(
+    payload: SchemaConfigResolumeRecoveryPayload,
+  ): Promise<SchemaResolumeRecoveryConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaResolumeRecoveryConfigResponse>(
+        '/config/resolume.recovery',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/resolume/recovery/restore` (Track D seam D-3a). Requires resolume:action. */
+  async restoreResolumeRecovery(): Promise<SchemaResolumeRecoveryRestoreResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaResolumeRecoveryRestoreResponse>(
+        '/resolume/recovery/restore',
+        undefined,
         controller.signal,
       )
     } finally {

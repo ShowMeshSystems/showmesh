@@ -56,6 +56,10 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// "defaults regardless of whether the feature is active" posture
 		// FPPMQTTTopicPrefix already has, see ResolumeID's doc comment.
 		ResolumeID: "resolume",
+
+		// SHOWMESH_RESOLUME_RECOVERY_SETTLE also defaults regardless of
+		// whether the collector is active — see its own doc comment.
+		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
 	}
 
 	// reflect.DeepEqual, not ==: FPPEndpoints is a slice, which made Config
@@ -93,8 +97,9 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 		LogLevel:     "debug",
 		FPPEndpoints: nil,
 
-		FPPMQTTTopicPrefix: "falcon/player",
-		ResolumeID:         "resolume",
+		FPPMQTTTopicPrefix:     "falcon/player",
+		ResolumeID:             "resolume",
+		ResolumeRecoverySettle: defaultResolumeRecoverySettle,
 	}
 
 	if !reflect.DeepEqual(cfg, want) {

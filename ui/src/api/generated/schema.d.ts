@@ -394,6 +394,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/resolume.recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The resolume.recovery auto-restore toggle's revision metadata (Track D seam D-3a)
+         * @description Requires `config:write`, mirroring `GET /config/fpp.endpoints`'s own always-sensitive posture. Unlike fpp.endpoints, "nothing has ever been written" is never a `404` here — the toggle has a well-defined default (enabled) — so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         */
+        get: operations["getResolumeRecoveryConfig"];
+        /**
+         * Write a new resolume.recovery auto-restore toggle revision (Track D seam D-3a)
+         * @description Requires `config:write` (admin only). The body's `autoRestoreEnabled` field is required and must be a JSON boolean, never absent and never null. No other top-level field is accepted. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putResolumeRecoveryConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/resolume.recovery/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * resolume.recovery revision history, newest first (Track D seam D-3a)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+         */
+        get: operations["getResolumeRecoveryConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/resolume/actions": {
         parameters: {
             query?: never;
@@ -414,6 +458,46 @@ export interface paths {
          *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition — see GET /resolume/actions' own `auditExempt` field.
          */
         post: operations["dispatchResolumeAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Arena crash-recovery record, toggle, and last restore (Track D seam D-3a)
+         * @description Never gated by any scope — the dashboard renders this with no session (ADR-024's reads-stay-open posture). autoRestoreEnabled is the current toggle value; autoRestoreConfigured is false when nothing has ever been written for it (the default is enabled). record is one row per layer in the current composition, every object reference a name (ADR-037), never an id. lastRestore is null until a restore has run.
+         */
+        get: operations["getResolumeRecovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resolume/recovery/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually run the crash-recovery restore (Track D seam D-3a)
+         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check — an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
+         */
+        post: operations["restoreResolumeRecovery"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1435,6 +1519,81 @@ export interface components {
             resolvedAt: string | null;
             /** @description The Resolume object id this action's own name reference resolved to, kept visible for debugging (ADR-037 removes the id from what an operator types, not from the record). Absent for `blackout`, which addresses nothing, and for a refusal reached before any name was resolved. */
             resolvedId?: string;
+            /** @description Whether the selected deck changed between this action's decision and its confirmation. Meaningful only for a confirmed `launchClip` (the only action that can race a deck — layers are deck-independent). ALWAYS present; null, never false, both when the deck could not be read at confirmation time and for every action other than a confirmed launchClip. Evidence, never a refusal. */
+            selectedDeckChanged: boolean | null;
+        };
+        /** @description One layer's row in the crash-recovery record (Track D seam D-3a). Every object reference is a name (ADR-037), never an id. clip, clipNameGenerated, and deck are absent when state is not "clip". establishedAt and source are absent only when no record has ever been established for this layer at all (state "unknown", reason "never observed"). reason is always present when state is "unknown". */
+        ResolumeRecoveryRecordEntry: {
+            layer: string;
+            layerNameGenerated: boolean;
+            /** @enum {string} */
+            state: "clip" | "dark" | "unknown";
+            clip?: string;
+            clipNameGenerated?: boolean;
+            deck?: string;
+            /** Format: date-time */
+            establishedAt?: string;
+            /** @enum {string} */
+            source?: "action" | "survey";
+            reason?: string;
+        };
+        /** @description One layer's own outcome within a restore (Track D seam D-3a). reason is always present on "skipped" and "failed", always absent on "restored". clip is present only when this layer had a clip-state target. actionOutcome is present only when a D-3 dispatch was actually issued for this layer. */
+        ResolumeRecoveryRestoreLayer: {
+            layer: string;
+            layerNameGenerated: boolean;
+            /** @enum {string} */
+            result: "restored" | "skipped" | "failed";
+            reason?: string;
+            clip?: string;
+            /** @enum {string} */
+            actionOutcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused";
+        };
+        /** @description One restore's whole outcome (Track D seam D-3a). */
+        ResolumeRecoveryRestoreReport: {
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            /** @enum {string} */
+            trigger: "automatic" | "manual";
+            /** @enum {string} */
+            outcome: "restored" | "partial" | "nothing_to_do" | "failed";
+            principal: string;
+            layers: components["schemas"]["ResolumeRecoveryRestoreLayer"][];
+        };
+        /** @description The body of GET /resolume/recovery (Track D seam D-3a): the auto-restore toggle, the recovery record, and the last restore. lastRestore is null until a restore has run. */
+        ResolumeRecoveryResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            autoRestoreEnabled: boolean;
+            /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
+            autoRestoreConfigured: boolean;
+            settleDelaySeconds: number;
+            record: components["schemas"]["ResolumeRecoveryRecordEntry"][];
+            lastRestore: components["schemas"]["ResolumeRecoveryRestoreReport"] | null;
+        };
+        /** @description The body of a successful POST /resolume/recovery/restore. */
+        ResolumeRecoveryRestoreResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            restore: components["schemas"]["ResolumeRecoveryRestoreReport"];
+        };
+        /** @description The "resolume.recovery" configuration kind's decoded payload (Track D seam D-3a): the body PUT /config/resolume.recovery accepts, and the "payload" member of GET /config/resolume.recovery's response. One boolean, no other keys. */
+        ConfigResolumeRecoveryPayload: {
+            autoRestoreEnabled: boolean;
+        };
+        /** @description The body of GET and PUT /config/resolume.recovery. */
+        ResolumeRecoveryConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigResolumeRecoveryPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
@@ -2662,6 +2821,95 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getResolumeRecoveryConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putResolumeRecoveryConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigResolumeRecoveryPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeRecoveryConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listResolumeActions: {
         parameters: {
             query?: never;
@@ -2733,6 +2981,54 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    getResolumeRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryResponse"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restoreResolumeRecovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeRecoveryRestoreResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
     listResolumeInstances: {

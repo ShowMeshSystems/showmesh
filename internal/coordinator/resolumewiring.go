@@ -259,7 +259,13 @@ func (w resolumeWiring) RunWatcherSupervisor(ctx context.Context) {
 // with no restart required — the identical property
 // newResolumeCompositionWiring's own doc comment already establishes for
 // itself.
-func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger) (resolumeWiring, error) {
+// onReachableTransition is Track D seam D-3a's own hook
+// (resolume.Options.OnReachableTransition): called by the collector,
+// already in its own goroutine, on every unreachable->reachable
+// transition. nil means no crash-recovery gate is wired in (no live
+// Resolume instance configured — see this function's own cfg.ResolumeURL
+// gate).
+func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger, onReachableTransition func(time.Time)) (resolumeWiring, error) {
 	if cfg.ResolumeURL == "" {
 		return resolumeWiring{status: resolumeCollectorStatusLister{configured: false}}, nil
 	}
@@ -294,10 +300,11 @@ func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector
 	}
 
 	resolumeCollector, err := resolume.New(cfg.ResolumeID, cfg.ResolumeURL, resolume.Options{
-		HTTPClient:       resolumeHTTPClient,
-		Logger:           logger,
-		CompositionStore: compositionStore,
-		Footprint:        footprint,
+		HTTPClient:            resolumeHTTPClient,
+		Logger:                logger,
+		CompositionStore:      compositionStore,
+		Footprint:             footprint,
+		OnReachableTransition: onReachableTransition,
 	})
 	if err != nil {
 		return resolumeWiring{}, fmt.Errorf("resolume collector %q: %w", cfg.ResolumeID, err)

@@ -220,6 +220,22 @@ type Dependencies struct {
 	// stream announces no resolume.changed — matching this struct's
 	// standing "an unwired dependency is not this API failing" posture.
 	Resolume ResolumeLister
+
+	// ResolumeRecovery is Track D seam D-3a's own recovery controller
+	// (internal/coordinator/collector/resolume.Recovery), reached only
+	// through [ResolumeRecoveryProvider]. A nil field is replaced by
+	// [noResolumeRecoveryProvider]: the record reads empty, no restore
+	// has ever run, and a manual restore refuses loudly — matching this
+	// struct's standing "an unwired dependency is not this API failing"
+	// posture.
+	ResolumeRecovery ResolumeRecoveryProvider
+
+	// ResolumeRecoverySettleSeconds threads [config.Config.ResolumeRecoverySettle]
+	// through for the identical "this package does not read the
+	// environment or config package state on its own" reason
+	// [Dependencies.ResolumeID] documents. Rendered on GET
+	// /resolume/recovery as settleDelaySeconds.
+	ResolumeRecoverySettleSeconds float64
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -272,6 +288,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
+	}
+	if d.ResolumeRecovery == nil {
+		d.ResolumeRecovery = noResolumeRecoveryProvider{}
 	}
 	return d
 }
@@ -903,6 +922,19 @@ func New(deps Dependencies, opts Options) *API {
 	// resolumeaction.go.
 	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
 	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
+
+	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
+	// never gated, per ADR-024's reads-stay-open posture and the build
+	// contract §1.3's own "the dashboard renders with no session"
+	// requirement. POST .../restore requires resolume:action, the same
+	// scope every other Resolume write requires. GET/PUT
+	// /config/resolume.recovery mirror /config/fpp.endpoints's own
+	// config:write-only posture (resolumerecovery.go).
+	mux.HandleFunc("GET /api/v1/resolume/recovery", h.handleGetResolumeRecovery)
+	mux.HandleFunc("POST /api/v1/resolume/recovery/restore", h.writeGuard(&scopeResolumeAction, h.handlePostResolumeRecoveryRestore))
+	mux.HandleFunc("GET /api/v1/config/resolume.recovery", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfig))
+	mux.HandleFunc("PUT /api/v1/config/resolume.recovery", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeRecoveryConfig))
+	mux.HandleFunc("GET /api/v1/config/resolume.recovery/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfigRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

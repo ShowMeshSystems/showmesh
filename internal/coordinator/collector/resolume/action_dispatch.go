@@ -213,7 +213,7 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, w dispatchWin
 			"this clip was already playing before this command was dispatched, so evidence collected afterward cannot be attributed to it")
 	}
 
-	return d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
+	outcome := d.pollUntilConfirmedOrDeadline(ctx, w, name, dispatchedAt, DefaultActionConfirmDeadline, func(s confirmScope) (bool, time.Time, string) {
 		clip, clipAt, err := d.readClip(s.ctx, clipID)
 		if err != nil {
 			return false, time.Time{}, fmt.Sprintf("reading the clip's confirming evidence failed: %s", ClassifyError(err))
@@ -240,6 +240,29 @@ func (d *ActionDispatcher) dispatchLaunchClip(ctx context.Context, w dispatchWin
 		}
 		return true, confirmedAt, fmt.Sprintf("the clip is connected and its owning layer reports it as the active clip (confirmed %s)", confirmedAt.Format(time.RFC3339))
 	})
+
+	// TRACK-D-ADAPTER-SPEC.md §3.8: only launchClip races a deck — layers
+	// are deck-independent (measured 2026-08-14) — and only a persistent
+	// clip has no deck to race in the first place. One extra by-id read,
+	// on the action path only, never the timer.
+	if outcome.State == ActionConfirmed && !persistent {
+		outcome.SelectedDeckChanged = d.deckChangedSinceDecision(ctx, deckID)
+	}
+	return outcome
+}
+
+// deckChangedSinceDecision re-reads deckID's own Selected field once more
+// at confirmation time and reports whether it no longer reads selected —
+// evidence, never a refusal (see [ActionOutcome.SelectedDeckChanged]).
+// Returns nil when the re-read itself failed: ShowMesh does not know,
+// which must never render as false.
+func (d *ActionDispatcher) deckChangedSinceDecision(ctx context.Context, deckID ObjectID) *bool {
+	deck, _, err := d.readDeck(ctx, deckID)
+	if err != nil {
+		return nil
+	}
+	changed := !deckIsSelected(deck)
+	return &changed
 }
 
 // --- clearLayer ---------------------------------------------------------

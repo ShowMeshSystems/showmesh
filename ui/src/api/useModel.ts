@@ -23,6 +23,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
+  ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
   ConfigShowMacro,
@@ -31,6 +32,9 @@ import type {
   Model,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
+  ResolumeRecoveryConfigResponse,
+  ResolumeRecoveryResponse,
+  ResolumeRecoveryRestoreResponse,
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
@@ -92,6 +96,25 @@ export function putFPPEndpointsConfig(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
+export function getResolumeRecovery(): Promise<ResolumeRecoveryResponse> {
+  return store.getResolumeRecovery()
+}
+
+export function getResolumeRecoveryConfig(): Promise<ResolumeRecoveryConfigResponse> {
+  return store.getResolumeRecoveryConfig()
+}
+
+export function putResolumeRecoveryConfig(
+  payload: ConfigResolumeRecoveryPayload,
+): Promise<ResolumeRecoveryConfigResponse> {
+  return store.putResolumeRecoveryConfig(payload)
+}
+
+export function restoreResolumeRecovery(): Promise<ResolumeRecoveryRestoreResponse> {
+  return store.restoreResolumeRecovery()
 }
 
 // Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin

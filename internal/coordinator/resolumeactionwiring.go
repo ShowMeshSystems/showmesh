@@ -310,11 +310,12 @@ func (a *resolumeActionDispatcherAdapter) translateActionOutcome(outcome resolum
 	resolvedAt := a.now()
 
 	return api.ResolumeActionResult{
-		Outcome:      state,
-		Reason:       sanitizeResolumeActionReason(outcome.Action, outcome.Reason),
-		Dispatched:   dispatched,
-		DispatchedAt: dispatchedAt,
-		ResolvedAt:   &resolvedAt,
+		Outcome:             state,
+		Reason:              sanitizeResolumeActionReason(outcome.Action, outcome.Reason),
+		Dispatched:          dispatched,
+		DispatchedAt:        dispatchedAt,
+		ResolvedAt:          &resolvedAt,
+		SelectedDeckChanged: outcome.SelectedDeckChanged,
 	}, nil
 }
 

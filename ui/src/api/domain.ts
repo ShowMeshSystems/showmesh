@@ -112,6 +112,17 @@ export type ResolumeCompositionSummary = components['schemas']['ResolumeComposit
 export type ResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
 export type ResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
 
+// Track D seam D-3a: Arena crash recovery. Aliased for the identical
+// reason as every type above. Not part of `Model` — this data is not a
+// resource ADR-020's change stream models (build contract §1.7).
+export type ResolumeRecoveryRecordEntry = components['schemas']['ResolumeRecoveryRecordEntry']
+export type ResolumeRecoveryRestoreLayer = components['schemas']['ResolumeRecoveryRestoreLayer']
+export type ResolumeRecoveryRestoreReport = components['schemas']['ResolumeRecoveryRestoreReport']
+export type ResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
+export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
+export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -275,7 +277,20 @@ func Run() int {
 	// resolumeWire.status reports CollectorNotConfigured, when
 	// SHOWMESH_RESOLUME_URL is unset — no goroutine, no warning storm, no
 	// failed-connection signals for a feature the operator did not enable.
-	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger)
+	// resolumeRecoveryHolder is Track D seam D-3a's own late-binding cell:
+	// the Collector's own OnReachableTransition callback must be supplied
+	// at construction time (immediately below), but the *resolume.Recovery
+	// it calls cannot exist until AFTER the Collector and its
+	// ActionDispatcher do — see this cell's own store below, and
+	// resolumerecoverywiring.go's own top comment. Safe under the race
+	// detector: nothing can invoke the callback before fppRunner.Run(ctx)
+	// starts polling, several lines below where this cell is stored.
+	var resolumeRecoveryHolder atomic.Pointer[resolume.Recovery]
+	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger, func(returnedAt time.Time) {
+		if rec := resolumeRecoveryHolder.Load(); rec != nil {
+			rec.HandleReachableTransition(ctx, returnedAt)
+		}
+	})
 	if err != nil {
 		logger.Error("failed to construct resolume collector/watcher", "error", err)
 		_ = bm.Disconnect(ctx)
@@ -311,7 +326,20 @@ func Run() int {
 	// that posture, only gates on the identical condition that already
 	// decides it for resolumeWire.collector.
 	var resolumeActions api.ResolumeActionDispatcher
+	// resolumeRecovery/resolumeRecoveryAdapter are Track D seam D-3a's own
+	// wiring gap, closed the identical way: nil under the identical
+	// cfg.ResolumeURL == "" gate. The built-in recovery principal is
+	// ensured to exist regardless of whether the collector is configured
+	// — it costs one idempotent SQLite read/insert at startup and keeps
+	// "the principal exists" true even for a coordinator that enables
+	// Resolume later without a restart being required first.
+	ensureResolumeRecoveryPrincipal(ctx, identitySvc, logger)
+	var resolumeRecovery api.ResolumeRecoveryProvider
 	if resolumeWire.collector != nil {
+		recoveryDispatcher := resolume.NewActionDispatcher(resolumeWire.collector, resolume.ActionDispatcherOptions{})
+		recovery, recoveryAdapter := newResolumeRecoveryWiring(st, identitySvc, resolumeWire.collector, recoveryDispatcher, cfg.ResolumeRecoverySettle, logger)
+		resolumeRecoveryHolder.Store(recovery)
+		resolumeRecovery = recoveryAdapter
 		resolumeActions = newResolumeActionDispatcherAdapter(resolumeWire.collector)
 	}
 
@@ -433,6 +461,15 @@ func Run() int {
 		// /resolume/instances and Dependencies.ResolumeID can never
 		// disagree about whether a Resolume instance is configured.
 		Resolume: resolumeInstanceLister{st: st, instanceID: resolumeConfiguredID},
+		// ResolumeRecovery is Track D seam D-3a's own recovery controller,
+		// wired above under the identical cfg.ResolumeURL != "" gate
+		// resolumeActions is built under (nil otherwise, against
+		// api.noResolumeRecoveryProvider's no-op default). ResolumeRecoverySettleSeconds
+		// is threaded through unconditionally (matching FPPMQTTTopicPrefix's
+		// own "defaults regardless of whether the feature is active"
+		// posture) since it costs nothing when unused.
+		ResolumeRecovery:              resolumeRecovery,
+		ResolumeRecoverySettleSeconds: cfg.ResolumeRecoverySettle.Seconds(),
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
