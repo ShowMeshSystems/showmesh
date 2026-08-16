@@ -1881,6 +1881,377 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show:
+    get:
+      operationId: listShows
+      summary: Enumerate show objects (Track E, ADR-027)
+      description: >-
+        Object ids with label (the show's own name), show (the show's own
+        id — a show belongs to no other show), and current revision
+        number, NOT the full payloads. Requires `show:macro:run` OR
+        `config:write`, matching GET /config/show.action and GET
+        /config/show.macro — never toggled by `Options.CloseReads`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show/{id}:
+    get:
+      operationId: getShow
+      summary: One show object's active revision (Track E)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShow
+      summary: Write a new show revision (Track E, ADR-027 decision 2)
+      description: >-
+        Requires `config:write` (admin only). A Show is a namespace, not a
+        container: this payload carries no list of surfaces, actions, or
+        macros. `name` is required, non-empty, at most 200 characters.
+        This is a FULL REPLACEMENT: `notes` is optional and an absent key
+        means notes becomes empty, never "leave the previous value" — the
+        same absent/null/empty distinction every write surface in this
+        contract enforces. The request body is therefore ConfigShowWrite;
+        the response is always the resolved ConfigShow shape, which
+        renders `notes` even when empty (never absent).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowWrite"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show/{id}/revisions:
+    get:
+      operationId: listShowRevisions
+      summary: show revision history, newest first (Track E)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.surface:
+    get:
+      operationId: listShowSurfaces
+      summary: Enumerate show.surface objects (Track E, ADR-026)
+      description: >-
+        Object ids with label (the surface's own name), show (the parent
+        show id), and current revision number, NOT the full payloads.
+        Optionally narrowed with `?show=<id>`. Same read posture as GET
+        /config/show.
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to surfaces belonging to this show id.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.surface/{id}:
+    get:
+      operationId: getShowSurface
+      summary: One show.surface object's active revision (Track E)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowSurfaceConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowSurface
+      summary: Write a new show.surface revision (Track E, ADR-026)
+      description: >-
+        Requires `config:write` (admin only). `show` must name an existing
+        `show` object; `node` must name a declared node — this coordinator
+        deliberately does NOT check the node's advertised NDI/HDMI
+        capability, which is observed state and absent whenever a node is
+        offline (checking it would manufacture absence from a node that
+        has simply not checked in yet). `channelRange` is required and
+        must be non-empty: an absent `channelRange`, an explicit `null`,
+        and an explicitly empty one (`channelCount: 0`) are three distinct
+        refusals with three distinct messages, never a silent default.
+        `geometry.width * geometry.height * channelsPerPixel(pixelFormat)`
+        must equal `channelRange.channelCount` exactly.
+        `output.transport` selects exactly one of `output.ndi` /
+        `output.hdmi`; the other must be absent — support for one
+        transport is never evidence for the other, so nothing here
+        defaults a transport. This is a FULL REPLACEMENT: every field is
+        required on every write (this payload has no optional/defaulted
+        key), so the request and response share the same
+        ConfigShowSurface shape. A second surface assigned to the same
+        node is accepted (ADR-026's `N=1` is a scope limit on the
+        renderer, not a schema rule).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowSurface"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowSurfaceConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.surface/{id}/revisions:
+    get:
+      operationId: listShowSurfaceRevisions
+      summary: show.surface revision history, newest first (Track E)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.active:
+    get:
+      operationId: getShowActive
+      summary: The active-show pointer (Track E, ADR-027 decision 3)
+      description: >-
+        404 `resourceNotFoundProblem` when nothing has ever been
+        activated, matching what GET /config/fpp.endpoints and GET
+        /config/resolume/composition already answer for "nothing
+        configured yet" — two configuration surfaces answering
+        differently for the same condition is a thing an operator would
+        have to learn twice.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowActiveConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowActive
+      summary: Activate a show (Track E, ADR-027 decision 3)
+      description: >-
+        Requires `config:write` (admin only). `show` must name an
+        existing `show` object. The active show is configuration,
+        revisioned and audited exactly like every other kind here, so
+        that programming Christmas cannot accidentally break Halloween.
+        This is a singleton: the underlying object id is a fixed
+        constant, never derived from `show` or from any other
+        configuration value, so activating a different show accumulates
+        as a new revision of the SAME object rather than orphaning the
+        previous history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowActive"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowActiveConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.active/revisions:
+    get:
+      operationId: listShowActiveRevisions
+      summary: show.active revision history, newest first (Track E)
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -3468,12 +3839,15 @@ components:
       type: object
       description: >-
         The body of GET /config/fpp.endpoints/revisions, GET
-        /config/show.action/{id}/revisions, and GET
-        /config/show.macro/{id}/revisions, newest first — one shape shared
+        /config/show.action/{id}/revisions, GET
+        /config/show.macro/{id}/revisions, GET
+        /config/show/{id}/revisions, GET
+        /config/show.surface/{id}/revisions, and GET
+        /config/show.active/revisions, newest first — one shape shared
         across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained two more
-        callers).
+        callers; Track E added three more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -3481,7 +3855,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active]
         revisions:
           type: array
           items:
@@ -4256,7 +4630,9 @@ components:
           format: date-time
     ConfigObjectsListResponse:
       type: object
-      description: The body of GET /config/show.action and GET /config/show.macro.
+      description: >-
+        The body of GET /config/show.action, GET /config/show.macro, GET
+        /config/show, and GET /config/show.surface.
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -4264,7 +4640,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro]
+          enum: [show.action, show.macro, show, show.surface]
         objects:
           type: array
           items:
@@ -4942,3 +5318,258 @@ components:
           type: string
         attributionDegraded:
           type: boolean
+    ConfigShow:
+      type: object
+      description: >-
+        The STORED/READ shape of the "show" configuration kind's decoded
+        payload (Track E, ADR-027 decision 2: a Show is a namespace, not a
+        container — this payload carries no list of surfaces, actions, or
+        macros), returned by GET and by a successful PUT. notes is always
+        the resolved value here (empty string if none was ever set), never
+        absent — a stored revision states its own content outright. To
+        submit a show, use ConfigShowWrite instead, which allows notes to
+        be absent.
+      required: [name, notes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        notes:
+          type: string
+          maxLength: 4000
+    ConfigShowWrite:
+      type: object
+      description: >-
+        The WRITE shape of the "show" configuration kind's payload: the
+        body PUT /config/show/{id} accepts. Identical to ConfigShow except
+        that notes is not required — an absent key takes its documented
+        default of empty (i.e. no notes), and a present `null` is rejected
+        as invalid, the same absent-defaults rule ConfigShowActionWrite's
+        own description field uses. This is still a FULL REPLACEMENT: a
+        `notes` value from a previous revision is never carried forward.
+        The response to a successful write stores and returns the
+        resolved ConfigShow shape, never this one.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        notes:
+          type: string
+          maxLength: 4000
+    ShowConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShow"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigShowSurfaceChannelRange:
+      type: object
+      description: >-
+        show.surface.channelRange (Track E, ADR-026). Required and must be
+        non-empty: an empty range makes xLights render a full, non-sparse
+        FSEQ (RES-003), which is the gigabytes-per-song case ADR-028's
+        asset store exists to avoid. This schema alone cannot express
+        "channelCount must be at least 1" as a REFUSAL DISTINCT FROM
+        absent/null (see PUT /config/show.surface/{id}'s own description);
+        that three-way distinction is enforced server-side.
+      required: [startChannel, channelCount]
+      properties:
+        startChannel:
+          type: integer
+          minimum: 1
+        channelCount:
+          type: integer
+          minimum: 0
+          description: >-
+            The published minimum is 0 so a schema validator does not
+            reject the exact "explicitly empty" request body this
+            coordinator's own write-time validation exists to name and
+            refuse with its own message; the server's real minimum is 1.
+    ConfigShowSurfaceGeometry:
+      type: object
+      description: >-
+        show.surface.geometry (Track E, ADR-026). width * height *
+        channelsPerPixel(pixelFormat) must equal the sibling
+        channelRange.channelCount exactly — enforced server-side, since it
+        is a rule across two sibling objects.
+      required: [width, height, pixelFormat]
+      properties:
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        pixelFormat:
+          type: string
+          enum: [rgb, rgbw]
+    ConfigShowSurfaceNDIOutput:
+      type: object
+      description: show.surface.output.ndi (ADR-026 — NDI is the reference transport).
+      required: [sourceName]
+      properties:
+        sourceName:
+          type: string
+          minLength: 1
+    ConfigShowSurfaceHDMI:
+      type: object
+      description: show.surface.output.hdmi (ADR-026 — HDMI is a supported alternate).
+      required: [display]
+      properties:
+        display:
+          type: string
+          minLength: 1
+    ConfigShowSurfaceOutput:
+      type: object
+      description: >-
+        show.surface.output (Track E, ADR-026). Exactly one of ndi/hdmi
+        must be present, and it must be the one named by transport —
+        support for one transport is never evidence for the other, so
+        this never defaults or infers a transport from whichever
+        sub-object happens to be present. Only transport is required by
+        THIS schema; which of ndi/hdmi accompanies it is enforced
+        server-side.
+      required: [transport]
+      properties:
+        transport:
+          type: string
+          enum: [ndi, hdmi]
+        ndi:
+          $ref: "#/components/schemas/ConfigShowSurfaceNDIOutput"
+        hdmi:
+          $ref: "#/components/schemas/ConfigShowSurfaceHDMI"
+    ConfigShowSurface:
+      type: object
+      description: >-
+        The "show.surface" configuration kind's decoded payload (Track E,
+        ADR-026), returned by GET and accepted by PUT
+        /config/show.surface/{id}. Every field is required on write —
+        unlike ConfigShow, this payload has no optional/defaulted key, so
+        one shape serves both the read and write side. `node` must name a
+        declared node; this coordinator deliberately does not check the
+        node's advertised NDI/HDMI capability (observed state, absent
+        whenever the node is offline). A second surface assigned to the
+        same node is a valid payload on its own terms (ADR-026's `N=1` is
+        a scope limit on the renderer, not a schema rule).
+      required: [show, name, node, channelRange, geometry, frameRate, output]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        node:
+          type: string
+          minLength: 1
+        channelRange:
+          $ref: "#/components/schemas/ConfigShowSurfaceChannelRange"
+        geometry:
+          $ref: "#/components/schemas/ConfigShowSurfaceGeometry"
+        frameRate:
+          type: integer
+          minimum: 1
+          maximum: 120
+          description: >-
+            ADR-026's day-0 profile of 40 fps over NDI on OptiPlex
+            7040-class hardware is L0 design intent, a target to validate
+            and not a supported profile.
+        output:
+          $ref: "#/components/schemas/ConfigShowSurfaceOutput"
+    ShowSurfaceConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.surface/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.surface]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowSurface"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigShowActive:
+      type: object
+      description: >-
+        The "show.active" singleton configuration kind's decoded payload
+        (Track E, ADR-027 decision 3): the body PUT /config/show.active
+        accepts, and the "payload" member of GET /config/show.active's
+        response. show must name an existing show config object
+        (server-side; not expressible in this schema alone).
+      required: [show]
+      properties:
+        show:
+          type: string
+          minLength: 1
+    ShowActiveConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.active.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.active]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowActive"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]

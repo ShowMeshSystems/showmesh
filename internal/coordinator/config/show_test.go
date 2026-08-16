@@ -116,3 +116,22 @@ func TestDecodeShowPayloadBodyNotObject(t *testing.T) {
 		t.Fatalf("expected body-invalid, got %+v", verr)
 	}
 }
+
+// An object id a "show" reference could never name must be refused at the
+// write, not stored. Without this a show created as "Halloween 2026" saves
+// fine and then rejects every surface that tries to point at it.
+func TestValidateShowObjectIDMatchesTheReferenceRule(t *testing.T) {
+	for _, bad := range []string{"", "Halloween 2026", "-leading", "trailing-", "UPPER", "has_underscore"} {
+		if verr := ValidateShowObjectID("show id", bad); verr == nil {
+			t.Fatalf("id %q was accepted as an object id but would be refused as a reference", bad)
+		}
+	}
+	for _, good := range []string{"halloween-2026", "s", "a1"} {
+		if verr := ValidateShowObjectID("show id", good); verr != nil {
+			t.Fatalf("id %q was refused: %+v", good, verr)
+		}
+		if verr := validateShowRef(good); verr != nil {
+			t.Fatalf("id %q passes as an object id but fails as a reference: %+v", good, verr)
+		}
+	}
+}

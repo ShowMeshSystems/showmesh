@@ -881,6 +881,34 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
 	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
 
+	// --- Track E: show, surface, and the active-show pointer ---
+	//
+	// Three new configuration kinds (show, show.surface, show.active —
+	// TRACK-E-SESSION-SPEC.md section 2), following show.action/show.macro's
+	// own route shape immediately above: reads use
+	// readAnyGuard(showConfigReadScopes, ...) (show:macro:run OR
+	// config:write), writes use writeGuard(&scopeConfigWrite, ...). "show" and
+	// "show.surface" are collections with the usual four routes each;
+	// "show.active" is a singleton (fixed id, no {id} path segment) with
+	// three: GET, PUT, and its own revisions route. "show.active" is a
+	// distinct literal path segment from "show" — net/http.ServeMux's
+	// pattern matching is by segment, so this route can never be swallowed
+	// by "GET /api/v1/config/show/{id}" (see this package's own
+	// TestShowActiveRouteIsNotSwallowedByShowIDRoute).
+	mux.HandleFunc("GET /api/v1/config/show", h.readAnyGuard(showConfigReadScopes, h.handleListShows))
+	mux.HandleFunc("GET /api/v1/config/show/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShow))
+	mux.HandleFunc("PUT /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShow))
+	mux.HandleFunc("GET /api/v1/config/show/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.surface", h.readAnyGuard(showConfigReadScopes, h.handleListShowSurfaces))
+	mux.HandleFunc("GET /api/v1/config/show.surface/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurface))
+	mux.HandleFunc("PUT /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowSurface))
+	mux.HandleFunc("GET /api/v1/config/show.surface/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurfaceRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.active", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActive))
+	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
+	mux.HandleFunc("GET /api/v1/config/show.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActiveRevisions))
+
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.
 	//

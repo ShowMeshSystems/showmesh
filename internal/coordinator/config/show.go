@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"unicode/utf8"
+
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // ShowConfigKind is config_objects.kind and config_revisions.kind for a
@@ -32,6 +34,21 @@ var showTopLevelKeys = map[string]bool{"name": true, "notes": true}
 type ShowPayload struct {
 	Name  string `json:"name"`
 	Notes string `json:"notes"`
+}
+
+// ValidateShowObjectID checks the config_objects id a show or surface is
+// being written under. It is the same rule a "show" REFERENCE is held to,
+// so a write cannot mint an object whose id no other object could ever
+// name: without it, a show created as "Halloween 2026" stores fine and
+// then rejects every surface that tries to point at it.
+func ValidateShowObjectID(field, id string) *ValidationError {
+	if err := mqttproto.ValidateNodeID(id); err != nil {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: field,
+			Detail: fmt.Sprintf("%s must be 1-64 characters of lowercase letters, digits, and hyphens, and must not start or end with a hyphen", field),
+		}
+	}
+	return nil
 }
 
 // EncodeShowPayload marshals p into config_revisions.payload_json's column

@@ -615,6 +615,163 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate show objects (Track E, ADR-027)
+         * @description Object ids with label (the show's own name), show (the show's own id — a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro — never toggled by `Options.CloseReads`.
+         */
+        get: operations["listShows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One show object's active revision (Track E) */
+        get: operations["getShow"];
+        /**
+         * Write a new show revision (Track E, ADR-027 decision 2)
+         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" — the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent).
+         */
+        put: operations["putShow"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** show revision history, newest first (Track E) */
+        get: operations["listShowRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.surface": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate show.surface objects (Track E, ADR-026)
+         * @description Object ids with label (the surface's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. Same read posture as GET /config/show.
+         */
+        get: operations["listShowSurfaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.surface/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One show.surface object's active revision (Track E) */
+        get: operations["getShowSurface"];
+        /**
+         * Write a new show.surface revision (Track E, ADR-026)
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node — this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent — support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule).
+         */
+        put: operations["putShowSurface"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.surface/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** show.surface revision history, newest first (Track E) */
+        get: operations["listShowSurfaceRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active-show pointer (Track E, ADR-027 decision 3)
+         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/fpp.endpoints and GET /config/resolume/composition already answer for "nothing configured yet" — two configuration surfaces answering differently for the same condition is a thing an operator would have to learn twice.
+         */
+        get: operations["getShowActive"];
+        /**
+         * Activate a show (Track E, ADR-027 decision 3)
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` object. The active show is configuration, revisioned and audited exactly like every other kind here, so that programming Christmas cannot accidentally break Halloween. This is a singleton: the underlying object id is a fixed constant, never derived from `show` or from any other configuration value, so activating a different show accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         */
+        put: operations["putShowActive"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.active/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** show.active revision history, newest first (Track E) */
+        get: operations["listShowActiveRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1105,12 +1262,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, and GET /config/show.macro/{id}/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, and GET /config/show.active/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained two more callers; Track E added three more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -1391,12 +1548,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action and GET /config/show.macro. */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, and GET /config/show.surface. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro";
+            kind: "show.action" | "show.macro" | "show" | "show.surface";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -1667,6 +1824,107 @@ export interface components {
             confirmed: boolean | null;
             reason: string;
             attributionDegraded: boolean;
+        };
+        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container — this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
+        ConfigShow: {
+            name: string;
+            notes: string;
+        };
+        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required — an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
+        ConfigShowWrite: {
+            name: string;
+            notes?: string;
+        };
+        /** @description The body of GET and PUT /config/show/{id}. */
+        ShowConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "show";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShow"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description show.surface.channelRange (Track E, ADR-026). Required and must be non-empty: an empty range makes xLights render a full, non-sparse FSEQ (RES-003), which is the gigabytes-per-song case ADR-028's asset store exists to avoid. This schema alone cannot express "channelCount must be at least 1" as a REFUSAL DISTINCT FROM absent/null (see PUT /config/show.surface/{id}'s own description); that three-way distinction is enforced server-side. */
+        ConfigShowSurfaceChannelRange: {
+            startChannel: number;
+            /** @description The published minimum is 0 so a schema validator does not reject the exact "explicitly empty" request body this coordinator's own write-time validation exists to name and refuse with its own message; the server's real minimum is 1. */
+            channelCount: number;
+        };
+        /** @description show.surface.geometry (Track E, ADR-026). width * height * channelsPerPixel(pixelFormat) must equal the sibling channelRange.channelCount exactly — enforced server-side, since it is a rule across two sibling objects. */
+        ConfigShowSurfaceGeometry: {
+            width: number;
+            height: number;
+            /** @enum {string} */
+            pixelFormat: "rgb" | "rgbw";
+        };
+        /** @description show.surface.output.ndi (ADR-026 — NDI is the reference transport). */
+        ConfigShowSurfaceNDIOutput: {
+            sourceName: string;
+        };
+        /** @description show.surface.output.hdmi (ADR-026 — HDMI is a supported alternate). */
+        ConfigShowSurfaceHDMI: {
+            display: string;
+        };
+        /** @description show.surface.output (Track E, ADR-026). Exactly one of ndi/hdmi must be present, and it must be the one named by transport — support for one transport is never evidence for the other, so this never defaults or infers a transport from whichever sub-object happens to be present. Only transport is required by THIS schema; which of ndi/hdmi accompanies it is enforced server-side. */
+        ConfigShowSurfaceOutput: {
+            /** @enum {string} */
+            transport: "ndi" | "hdmi";
+            ndi?: components["schemas"]["ConfigShowSurfaceNDIOutput"];
+            hdmi?: components["schemas"]["ConfigShowSurfaceHDMI"];
+        };
+        /** @description The "show.surface" configuration kind's decoded payload (Track E, ADR-026), returned by GET and accepted by PUT /config/show.surface/{id}. Every field is required on write — unlike ConfigShow, this payload has no optional/defaulted key, so one shape serves both the read and write side. `node` must name a declared node; this coordinator deliberately does not check the node's advertised NDI/HDMI capability (observed state, absent whenever the node is offline). A second surface assigned to the same node is a valid payload on its own terms (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule). */
+        ConfigShowSurface: {
+            show: string;
+            name: string;
+            node: string;
+            channelRange: components["schemas"]["ConfigShowSurfaceChannelRange"];
+            geometry: components["schemas"]["ConfigShowSurfaceGeometry"];
+            /** @description ADR-026's day-0 profile of 40 fps over NDI on OptiPlex 7040-class hardware is L0 design intent, a target to validate and not a supported profile. */
+            frameRate: number;
+            output: components["schemas"]["ConfigShowSurfaceOutput"];
+        };
+        /** @description The body of GET and PUT /config/show.surface/{id}. */
+        ShowSurfaceConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "show.surface";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShowSurface"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The "show.active" singleton configuration kind's decoded payload (Track E, ADR-027 decision 3): the body PUT /config/show.active accepts, and the "payload" member of GET /config/show.active's response. show must name an existing show config object (server-side; not expressible in this schema alone). */
+        ConfigShowActive: {
+            show: string;
+        };
+        /** @description The body of GET and PUT /config/show.active. */
+        ShowActiveConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "show.active";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShowActive"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
         };
     };
     responses: {
@@ -2952,6 +3210,314 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowWrite"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowSurfaces: {
+        parameters: {
+            query?: {
+                /** @description Narrow the list to surfaces belonging to this show id. */
+                show?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowSurface: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowSurfaceConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShowSurface: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowSurface"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowSurfaceConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowSurfaceRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowActiveConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShowActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowActive"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowActiveConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowActiveRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
