@@ -426,6 +426,13 @@ func Run() int {
 		// names explicitly: every action compiled, passed its own tests,
 		// and reached nothing.
 		ResolumeActions: resolumeActions,
+		// Resolume: resolumeInstanceLister (resolumewiring.go) reads whatever
+		// the D-2/C collector has already persisted, gated on
+		// resolumeConfiguredID exactly like ResolumeID above — the same
+		// cfg.ResolumeURL != "" condition decides both, so GET
+		// /resolume/instances and Dependencies.ResolumeID can never
+		// disagree about whether a Resolume instance is configured.
+		Resolume: resolumeInstanceLister{st: st, instanceID: resolumeConfiguredID},
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes

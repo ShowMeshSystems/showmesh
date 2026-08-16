@@ -211,6 +211,15 @@ type Dependencies struct {
 	// unsupported, matching this struct's standing "an unwired dependency
 	// is not this API failing" posture.
 	ResolumeActions ResolumeActionDispatcher
+
+	// Resolume is this API's observability dependency: whatever
+	// Resolume instances this coordinator has configured, with their
+	// currently-held observations. A nil field is replaced by
+	// [noResolumeLister], under which GET /resolume/instances reports an
+	// empty array, the single-instance route always 404s, and the change
+	// stream announces no resolume.changed — matching this struct's
+	// standing "an unwired dependency is not this API failing" posture.
+	Resolume ResolumeLister
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -261,7 +270,21 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.ResolumeActions == nil {
 		d.ResolumeActions = noResolumeActionDispatcher{}
 	}
+	if d.Resolume == nil {
+		d.Resolume = noResolumeLister{}
+	}
 	return d
+}
+
+// noResolumeLister is [Dependencies.Resolume]'s nil-safe default:
+// ListInstances always answers empty-and-successful, matching every other
+// no-op lister in this package (noNodeLister, noFPPLister) — an
+// unconfigured or unwired Resolume dependency is a real, honest "nothing
+// configured", never an error.
+type noResolumeLister struct{}
+
+func (noResolumeLister) ListInstances(context.Context) ([]ResolumeInstanceView, error) {
+	return nil, nil
 }
 
 // noFPPPollNudger is [Dependencies.Nudger]'s nil-safe default: NudgePoll
@@ -880,6 +903,19 @@ func New(deps Dependencies, opts Options) *API {
 	// resolumeaction.go.
 	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
 	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
+
+	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
+	// seam E): Resolume as a first-class observability resource. "instances"
+	// is an explicit path segment, not a bare {id} under /resolume/, because
+	// /resolume/actions already exists and /resolume/recovery is being added
+	// in parallel — see resolumeinstances.go's own doc comment. Guarded by
+	// observation:read, the same guard GET /observations uses: this is
+	// telemetry, not configuration, so it follows ADR-024 decision 4's
+	// pre-existing open-by-default read posture rather than requireScope's
+	// always-sensitive one (compare GET /config/resolume/composition, which
+	// deliberately uses the latter).
+	mux.HandleFunc("GET /api/v1/resolume/instances", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstances))
+	mux.HandleFunc("GET /api/v1/resolume/instances/{instanceId}", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstance))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

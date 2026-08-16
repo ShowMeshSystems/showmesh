@@ -56,6 +56,26 @@ type FPPLister interface {
 	ListInstances(ctx context.Context) ([]FPPInstanceView, error)
 }
 
+// ResolumeInstanceView is what this package needs from one configured
+// Resolume Arena instance's collector state: its identity and whatever
+// observations the collector currently holds. Unlike [FPPInstanceView]
+// there is no Endpoint/LastPollAt/LastPollError here — Health/Composition
+// are derived elsewhere (mapping.go/resolumecomposition.go), never carried
+// on this view.
+type ResolumeInstanceView struct {
+	InstanceID   string
+	Observations []observation.Observation
+}
+
+// ResolumeLister lists the coordinator's configured Resolume instances and
+// their current collector state, mirroring [FPPLister]'s shape. The list
+// holds at most one element today (SHOWMESH_RESOLUME_ID) and stays a list:
+// a singleton-shaped API that later grows a second member would be a
+// breaking change.
+type ResolumeLister interface {
+	ListInstances(ctx context.Context) ([]ResolumeInstanceView, error)
+}
+
 // ObservationFilter narrows GET /api/v1/observations per contract section
 // 6.1 ("filters resourceKind, resourceId, signal"). A nil field means no
 // filter on that dimension.

@@ -318,11 +318,46 @@ type snapshotFPP struct {
 
 // snapshot is the body of GET /api/v1/snapshot.
 type snapshot struct {
-	ServerTime     time.Time        `json:"serverTime"`
-	LatestEventSeq uint64           `json:"latestEventSeq"`
-	Nodes          []node           `json:"nodes"`
-	FPP            snapshotFPP      `json:"fpp"`
-	Collectors     []collectorState `json:"collectors"`
+	ServerTime     time.Time          `json:"serverTime"`
+	LatestEventSeq uint64             `json:"latestEventSeq"`
+	Nodes          []node             `json:"nodes"`
+	FPP            snapshotFPP        `json:"fpp"`
+	Collectors     []collectorState   `json:"collectors"`
+	Resolume       []resolumeInstance `json:"resolume"`
+}
+
+// resolumeInstanceComposition is ResolumeInstance.composition: which show
+// is loaded, from the composition ShowMesh holds as configuration
+// (ADR-032), never a live read of Arena. Null before any composition has
+// ever been uploaded. Name only — owner ruling, 2026-08-16: this route is
+// an open read, and revision/activatedAt (administrative provenance) stay
+// on the gated `resolume composition show` (GET /config/resolume/composition).
+type resolumeInstanceComposition struct {
+	Name string `json:"name"`
+}
+
+// resolumeInstance is the ResolumeInstance shape: an element of GET
+// /resolume/instances, the body of GET /resolume/instances/{id}, and the
+// payload of a resolume.changed stream event.
+type resolumeInstance struct {
+	InstanceID   string                       `json:"instanceId"`
+	Health       string                       `json:"health"`
+	Observations []evidence                   `json:"observations"`
+	Composition  *resolumeInstanceComposition `json:"composition"`
+}
+
+// resolumeInstancesResponse is the body of GET /resolume/instances.
+type resolumeInstancesResponse struct {
+	ServerTime time.Time          `json:"serverTime"`
+	Instances  []resolumeInstance `json:"instances"`
+}
+
+// resolumeInstanceResponse is the body of GET
+// /resolume/instances/{instanceId}. See [nodeResponse]'s doc comment; the
+// same pinned-wrapper rule applies identically here.
+type resolumeInstanceResponse struct {
+	ServerTime time.Time        `json:"serverTime"`
+	Instance   resolumeInstance `json:"instance"`
 }
 
 // principalSummary is SessionResponse.principal (ADR-024 decision 1): a

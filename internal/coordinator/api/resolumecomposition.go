@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -522,6 +523,60 @@ func readResolumeCompositionFilePart(r *http.Request) (fileBytes []byte, filenam
 		return nil, "", errors.New(`request must include one file part named "file"`)
 	}
 	return fileBytes, filename, nil
+}
+
+// resolumeInstanceComposition reads the stored resolume.composition config
+// revision and renders it as a [v1.ResolumeInstanceComposition] (Track D
+// seam E) — the reduced summary a Resolume instance's own payload needs,
+// not the full id map GET /config/resolume/composition renders. nil, nil is
+// the correctly-distinguished "nothing uploaded yet" case (no config object
+// for this kind, or one declared but never activated), mirroring
+// [handlers.handleGetResolumeComposition]'s identical two guards — this is
+// the ONE place both that handler and every Resolume instance renderer
+// (mapping.go's mapResolumeInstance, called from resolumeinstances.go's
+// handlers, handleSnapshot, and Hub.render) compute this fact, so they
+// cannot answer it inconsistently.
+func resolumeInstanceComposition(ctx context.Context, cfg ConfigStore) (*v1.ResolumeInstanceComposition, error) {
+	obj, err := cfg.GetConfigObject(ctx, resolumeCompositionConfigKind, resolumeCompositionObjectIDConst)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get resolume.composition config object: %w", err)
+	}
+	if obj.CurrentRevision == 0 {
+		return nil, nil
+	}
+
+	rev, err := cfg.GetConfigRevision(ctx, resolumeCompositionConfigKind, resolumeCompositionObjectIDConst, obj.CurrentRevision)
+	if err != nil {
+		return nil, fmt.Errorf("get resolume.composition config revision %d: %w", obj.CurrentRevision, err)
+	}
+	payload, err := decodeResolumeCompositionPayload(rev.PayloadJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode resolume.composition config payload: %w", err)
+	}
+
+	return &v1.ResolumeInstanceComposition{
+		Name: payload.Composition.Name,
+	}, nil
+}
+
+// resolumeCompositionDegradeOnError reads the stored Resolume composition
+// via [resolumeInstanceComposition], logging and returning nil on a
+// config-store error rather than propagating it (owner review finding 3,
+// 2026-08-16). Composition is stored configuration; a caller here still
+// has real ListInstances evidence to render (reachability, health), and a
+// storage hiccup reading composition must not cost the operator that view
+// too — CLAUDE.md constraint 23 and ADR-024 decision 7 scope a failure to
+// "you cannot act", never "you cannot see".
+func resolumeCompositionDegradeOnError(ctx context.Context, cfg ConfigStore, logger *slog.Logger, action string) *v1.ResolumeInstanceComposition {
+	composition, err := resolumeInstanceComposition(ctx, cfg)
+	if err != nil {
+		logger.Warn("resolume composition read failed; rendering composition: null", "action", action, "error", err)
+		return nil
+	}
+	return composition
 }
 
 // mapResolumeCompositionSummary renders payload's own metadata plus its

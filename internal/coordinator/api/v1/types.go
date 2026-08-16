@@ -352,6 +352,56 @@ type FPPInstance struct {
 	LastPollError *string `json:"lastPollError"`
 }
 
+// ResolumeInstanceComposition is one Resolume instance's "composition"
+// member: which show is loaded, from the composition ShowMesh holds as
+// configuration (ADR-032), never a live read of Arena. Name only — owner
+// ruling, 2026-08-16: this route is an open read with no credential by
+// default (ADR-024), the same class as an FPP playlist name already
+// served openly, so what show is loaded belongs here. Revision and
+// activatedAt are administrative provenance (who changed it, when) and
+// stay on the gated GET /config/resolume/composition, which already
+// carries both.
+type ResolumeInstanceComposition struct {
+	Name string `json:"name"`
+}
+
+// ResolumeInstance is one configured Resolume Arena instance's current
+// representation: an element of GET /resolume/instances, the body of GET
+// /resolume/instances/{id}, and the payload of a resolume.changed stream
+// event. Mirrors FPPInstance's conventions: Observations is never null
+// (an instance with nothing collected yet still reports whatever the
+// coordinator currently holds), and Composition is null before any
+// composition has ever been uploaded.
+type ResolumeInstance struct {
+	InstanceID   string                       `json:"instanceId"`
+	Health       string                       `json:"health"`
+	Observations []Evidence                   `json:"observations"`
+	Composition  *ResolumeInstanceComposition `json:"composition"`
+}
+
+// ResolumeInstancesResponse is the body of GET /resolume/instances.
+// Instances is never null: an unconfigured coordinator reports an empty
+// array, not an absent field.
+type ResolumeInstancesResponse struct {
+	ServerTime string             `json:"serverTime"`
+	Instances  []ResolumeInstance `json:"instances"`
+}
+
+// ResolumeInstanceResponse is the body of GET
+// /resolume/instances/{instanceId}. See [NodeResponse]'s doc comment; the
+// same pinned-wrapper rule applies identically here.
+type ResolumeInstanceResponse struct {
+	ServerTime string           `json:"serverTime"`
+	Instance   ResolumeInstance `json:"instance"`
+}
+
+// ResolumeChangedEvent is the payload of a "resolume.changed" SSE event.
+type ResolumeChangedEvent struct {
+	Seq        uint64           `json:"seq"`
+	ServerTime string           `json:"serverTime"`
+	Instance   ResolumeInstance `json:"instance"`
+}
+
 // Event is one recorded event: an element of GET /api/v1/events, and the
 // payload of an event.recorded stream event.
 //
@@ -537,6 +587,11 @@ type Snapshot struct {
 	// would see nothing, submit a duplicate, and receive ADR-031 decision
 	// 6's overlap 409 naming a run it cannot display.
 	MacroRuns []MacroRunSummary `json:"macroRuns"`
+
+	// Resolume: every configured Resolume instance (today: at most one),
+	// rendered exactly as GET /resolume/instances renders it. Never null,
+	// matching MacroRuns' own "fatal to omit" reasoning.
+	Resolume []ResolumeInstance `json:"resolume"`
 }
 
 // Problem is the RFC 9457 application/problem+json body every error in

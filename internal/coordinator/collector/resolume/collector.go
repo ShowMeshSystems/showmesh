@@ -1052,13 +1052,11 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 	// and selected-deck result — never a fresh read of its own — via
 	// [Collector.LastSurveySnapshot]. Recorded here, once, after both are
 	// known for this survey, using this survey's own IdentityOutcome
-	// UNCHANGED by the load-window/deck-mismatch handling below: a
-	// snapshot reader (a pre-dispatch guard) needs the real classification
-	// (including IdentityDeckMismatch, which the identified-signal
-	// observation below deliberately does NOT publish) rather than the
-	// load-window-adjusted "unknown" string that signal renders for an
-	// operator dashboard — see TRACK-D-D3-SPEC.md §3.6's own "consumes it,
-	// does not recompute it."
+	// UNCHANGED by the load-window handling below: a snapshot reader (a
+	// pre-dispatch guard) needs the real classification rather than the
+	// load-window-adjusted "unknown" string the identified-signal
+	// observation below renders for an operator dashboard — see
+	// TRACK-D-D3-SPEC.md §3.6's own "consumes it, does not recompute it."
 	snapIdentity := identity.Outcome
 	if loadWindow {
 		snapIdentity = IdentityUnknown
@@ -1071,21 +1069,7 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 
 	var obs []observation.Observation
 	obs = append(obs, c.compositionNameObservation(surveyedAt))
-	if identityObs, ok := c.identityObservation(identity, loadWindow, surveyedAt); ok {
-		obs = append(obs, identityObs)
-	} else {
-		// IdentityDeckMismatch: §6's own "leave identified untouched" —
-		// no observation is emitted for this signal this cycle at all, so
-		// whatever the store already holds simply ages normally. Logged so
-		// the mismatch is not silently invisible to anyone watching logs.
-		c.logger.Warn("resolume composition identity check found a deck mismatch, not a stale reference; resolume.composition.identified left unchanged this cycle",
-			"resolume_id", c.id,
-			"expected_deck", identity.ExpectedDeck.ID,
-			"actual_deck_known", identity.ActualDeckKnown,
-			"actual_deck", identity.ActualDeck,
-		)
-	}
-
+	obs = append(obs, c.identityObservation(identity, loadWindow, surveyedAt))
 	obs = append(obs, c.deckObservations(deckResults, tc.Decks(), selectedID, selectedName, selectedKnown, surveyedAt)...)
 	obs = append(obs, c.layerObservations(tc.Layers(), layerResults, groupResults, loadWindow, surveyedAt)...)
 	obs = append(obs, c.clipObservations(clipIDs, clipResults, surveyedAt)...)
@@ -1103,26 +1087,39 @@ func (c *Collector) surveyNoCompositionObservations(now time.Time) []observation
 	}
 }
 
-// identityObservation builds resolume.composition.identified's
-// observation, or ok=false when none should be emitted this cycle at all
-// — §6's "leave identified untouched" for a deck-mismatch outcome, which
-// is "not an identity result at all" (§6's own wording).
-func (c *Collector) identityObservation(identity IdentityResult, loadWindow bool, now time.Time) (observation.Observation, bool) {
+// identityObservation builds resolume.composition.identified's observation.
+// A deck mismatch is not skipped: the survey's other resolume-survey rows
+// are delivered complete=true in the same batch (survey's own caller), so
+// omitting this signal here does not leave it "unchanged" — ReplaceObservations
+// prunes any resolume-survey row not present in a complete=true batch, which
+// deletes the evidence instead of preserving it.
+func (c *Collector) identityObservation(identity IdentityResult, loadWindow bool, now time.Time) observation.Observation {
 	if identity.Outcome == IdentityDeckMismatch {
-		return observation.Observation{}, false
+		return c.surveyMeasured(SignalCompositionIdentified, "deck_mismatch: "+identity.Reason+" ("+deckMismatchDetail(identity)+")", now)
 	}
 
 	switch {
 	case loadWindow:
 		return c.surveyMeasured(SignalCompositionIdentified,
-			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now), true
+			"unknown: still within the post-connect load window; Resolume may not have finished loading the composition yet", now)
 	case identity.Outcome == IdentityTrue:
-		return c.surveyMeasured(SignalCompositionIdentified, "identified", now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "identified", now)
 	case identity.Outcome == IdentityFalse:
-		return c.surveyMeasured(SignalCompositionIdentified, "not_identified: "+identity.Reason+formatMissing(identity.MissingIDs), now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "not_identified: "+identity.Reason+formatMissing(identity.MissingIDs), now)
 	default: // IdentityUnknown
-		return c.surveyMeasured(SignalCompositionIdentified, "unknown: "+identity.Reason, now), true
+		return c.surveyMeasured(SignalCompositionIdentified, "unknown: "+identity.Reason, now)
 	}
+}
+
+// deckMismatchDetail names both decks per §6.4's "naming both decks"
+// requirement, using the same formatRef every other deck/clip reference in
+// this file uses.
+func deckMismatchDetail(identity IdentityResult) string {
+	expected := "expected deck " + formatRef(identity.ExpectedDeck.ID, "")
+	if !identity.ActualDeckKnown {
+		return expected + ", now selected deck could not be re-identified"
+	}
+	return expected + ", now selected " + formatRef(identity.ActualDeck, identity.ActualDeckName)
 }
 
 func formatMissing(ids []IdentitySampleClip) string {

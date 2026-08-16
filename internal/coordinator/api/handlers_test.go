@@ -27,6 +27,7 @@ func buildTestAPI(t *testing.T) *API {
 		Collectors: &fakeCollectorStatusLister{statuses: []CollectorState{
 			{ID: "fpp-rest", State: "running"},
 		}},
+		Resolume: &fakeResolumeLister{views: []ResolumeInstanceView{resolumeInstanceFixture(t)}},
 	}
 	return New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 }

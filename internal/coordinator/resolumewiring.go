@@ -25,6 +25,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // resolumeCollectorSourceID is this collector's own id in GET
@@ -57,6 +58,66 @@ func (l resolumeCollectorStatusLister) CollectorStatuses(context.Context) ([]api
 		return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+}
+
+// resolumeInstanceLister adapts *store.Store plus the coordinator's
+// resolved SHOWMESH_RESOLUME_ID into api.ResolumeLister. instanceID is
+// resolved once at construction, since it cannot change without a
+// coordinator restart. An empty instanceID (SHOWMESH_RESOLUME_URL unset)
+// means ListInstances always answers an empty slice.
+type resolumeInstanceLister struct {
+	st         *store.Store
+	instanceID string
+}
+
+func (l resolumeInstanceLister) ListInstances(ctx context.Context) ([]api.ResolumeInstanceView, error) {
+	if l.instanceID == "" {
+		return nil, nil
+	}
+	obs, err := l.st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceResolume,
+		ResourceID:   l.instanceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("coordinator: list resolume instance observations for %q: %w", l.instanceID, err)
+	}
+	if len(obs) == 0 {
+		// No poll has completed yet (freshly configured, or the
+		// coordinator just restarted) — synthesize a not_collected row per
+		// static signal rather than an empty list, mirroring
+		// fppInstanceLister's identical notYetPolledObservations
+		// (apiwiring.go): an empty array renders as blank, and blank reads
+		// as fine (finding 5, owner review 2026-08-16).
+		obs = notYetPolledResolumeObservations(l.instanceID, time.Now())
+	}
+	return []api.ResolumeInstanceView{{InstanceID: l.instanceID, Observations: obs}}, nil
+}
+
+// resolumeSignals is [resolume.AllSignals] verbatim, mirroring apiwiring.go's
+// identical fppSignals/fpp.AllSignals pattern — the static signal list
+// [notYetPolledResolumeObservations] synthesizes placeholders from.
+var resolumeSignals = resolume.AllSignals
+
+// notYetPolledResolumeObservations synthesizes one [observation.StateNotCollected]
+// observation per [resolumeSignals] entry, mirroring apiwiring.go's
+// notYetPolledObservations: passing now here is safe because mapEvidence
+// masks CollectedAt to null whenever State is not_collected, so this never
+// retriggers the hub's change detection on its own.
+func notYetPolledResolumeObservations(instanceID string, now time.Time) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: instanceID}
+	out := make([]observation.Observation, 0, len(resolumeSignals))
+	for _, sig := range resolumeSignals {
+		o, err := observation.NotCollected(res, sig,
+			"no poll has completed yet for this Resolume instance",
+			observation.WithSource(resolumeCollectorSourceID), observation.WithCollectedAt(now))
+		if err != nil {
+			// Unreachable: every argument above is a fixed constant or a
+			// non-empty literal reason string.
+			panic(fmt.Sprintf("coordinator: notYetPolledResolumeObservations(%q, %q): %v", instanceID, sig, err))
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // resolumeWiring is what newResolumeWiring hands back to coordinator.go's

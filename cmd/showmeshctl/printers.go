@@ -170,6 +170,39 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 	}
 }
 
+// printResolumeInstancesTable renders GET /resolume/instances and the
+// resolume.changed stream event's instance, mirroring printFPPTable's
+// shape: a one-line-per-instance summary (id, health, composition)
+// followed by each instance's full observation table.
+func printResolumeInstancesTable(w io.Writer, resp resolumeInstancesResponse) {
+	if len(resp.Instances) == 0 {
+		_, _ = fmt.Fprintln(w, "(no Resolume instance configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tHEALTH\tCOMPOSITION")
+	for _, ri := range resp.Instances {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", ri.InstanceID, healthGlyph(ri.Health), resolumeCompositionSummaryColumn(ri.Composition))
+	}
+	_ = tw.Flush()
+
+	for _, ri := range resp.Instances {
+		_, _ = fmt.Fprintf(w, "\n%s observations:\n", ri.InstanceID)
+		printObservations(w, ri.Observations, resp.ServerTime)
+	}
+}
+
+// resolumeCompositionSummaryColumn renders ResolumeInstance.composition as
+// a single table cell: "-" when nothing has ever been uploaded, or the
+// loaded show's name once it has. Run `resolume composition show` for
+// revision/upload provenance (that route is gated; this one is not).
+func resolumeCompositionSummaryColumn(c *resolumeInstanceComposition) string {
+	if c == nil {
+		return "-"
+	}
+	return c.Name
+}
+
 // printFPPObservationsChangedLine renders one fpp.observations.changed
 // frame (ADR-023) for --output text: which instance, which signals moved
 // (with their new value/state, exactly like printObservations' columns),
@@ -438,6 +471,9 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 
 	_, _ = fmt.Fprintln(w, "\nFPP instances:")
 	printFPPTable(w, fppResponse{ServerTime: s.ServerTime, Instances: s.FPP.Instances})
+
+	_, _ = fmt.Fprintln(w, "\nResolume instances:")
+	printResolumeInstancesTable(w, resolumeInstancesResponse{ServerTime: s.ServerTime, Instances: s.Resolume})
 
 	_, _ = fmt.Fprintln(w, "\nCollectors:")
 	if len(s.Collectors) == 0 {
