@@ -6,6 +6,137 @@ Defects this project actually shipped and caught, and the rules that came out of
 
 These are conventions, not history. They are enforced in review.
 
+## A survey destroyed the restore target, and its own tests were green
+
+**Track D seam D-3a, 2026-08-16.** The crash-recovery record kept, per layer, the most
+recent thing ShowMesh knew was playing there: a confirmed `launchClip` wrote `{clip,
+action}`, and any later survey overwrote that entry survey-sourced. The reader then
+reclassified every survey-sourced entry to `unknown` before a restore could use it. So any
+survey that ran between a confirmed launch and a crash silently erased the very entry the
+restore exists to read.
+
+The production sequence made this certain rather than unlucky, and that is what makes it
+worth keeping. A survey runs on WebSocket connect; a crash-restart of the coordinator's
+connection to Arena always reconnects the socket; the socket returns roughly 1.5 seconds
+after Arena launches, while the liveness poll that gates the restore notices the return on
+its own ten-second cadence. So the survey always landed first, always overwrote the record,
+and the gate always read a wiped entry. The reviewer reproduced it directly rather than
+inferring it.
+
+The test suite that shipped with the first version of this seam was green throughout,
+because every test that exercised the transition drove it directly — set the record, fire
+the reachable-transition handler, assert the restore — with no WebSocket, no survey, and no
+reconnect in the loop. The shorter path the test took was also the path that never
+triggered the defect.
+
+**Rule:** when a test drives a state transition directly, ask what else fires on that same
+transition in production and is not in the test's call graph. This is related to but
+distinct from the existing rule that a test environment differing from the deployment
+environment reports success on exactly that difference: here the harness was not a
+different environment, it was a shorter causal chain through the identical one.
+
+## File ownership prevents conflicts, not incompatibilities
+
+**Track D, four seams merged 2026-08-16.** Git merged every seam cleanly — no path
+collision, no textual conflict — and the combined tree still broke twice, caught only by
+the post-fold gate suite rather than by the merge itself.
+
+First: seam E added `TestPackageNeverImportsACollector`, an AST guard asserting
+`internal/coordinator/api` imports no collector package, while seam B's own work needed
+`internal/coordinator/api/resolumecomposition.go` and `resolumeaction.go` to call label and
+ambiguity helpers that lived in `internal/coordinator/collector/resolume`. Both seams were
+specified by the same orchestrator and the two specifications contradicted each other; nothing
+in either branch's own gates could have found it, because each branch only had its own half.
+The fix moved the shared vocabulary into `pkg/resolumecomp`, which both the `api` package and
+the collector package already import legitimately, so there is exactly one implementation of
+each label rather than two that could drift.
+
+Second: seam D-3a added a parameter to `newResolumeWiring` and updated every call site it
+could see in its own branch. Seam C created a new test file, `resolumemacro_e2e_test.go`,
+calling that same constructor in parallel. Neither branch's own test suite covered the
+other's new file, so both branches individually built and tested clean, and git merged them
+into a tree that did not compile.
+
+**Rule:** parallel seams need a shared contract for anything they both touch by name — a
+signature, an import boundary, a registry — stated once and referenced by both specs rather
+than derived independently by each. Beyond that, the fold's own gate run is the only thing
+that catches what the shared contract missed; a clean git merge is evidence of no textual
+conflict and no evidence of compatibility.
+
+## `make test-integration` is not concurrency-safe, and its failures look like regressions
+
+**Multi-track session, 2026-08-16.** Four integration fixtures use fixed, non-namespaced
+container names: `showmesh-test-mosquitto` (port 11883), `showmesh-bench-fpp-master` (port
+8090), `showmesh-test-mosquitto-fpp` (11893), `showmesh-test-mosquitto-fppmqtt` (11894).
+`showmesh-test-mosquitto`'s harness registers `trap cleanup EXIT`, and `cleanup` removes the
+container **by name**. Two concurrent runs of `make test-integration` therefore share one
+container: whichever run exits first tears down the broker the still-running second run is
+using, mid-test.
+
+Two builders working different worktrees hit this from opposite directions the same night —
+one saw its own broker vanish mid-suite, the other saw a "port already in use" failure
+starting its own — and both correctly diagnosed contention between concurrent runs rather
+than reporting a regression in the code either of them had touched.
+
+**Rule:** a shared fixture failure presents as a red test in code the diff never touched.
+Before chasing a red integration gate as a regression, check whether another run of the same
+suite is using the same fixed container name or port at the same time. This project's
+worktree-per-track model makes concurrent runs routine, not an edge case, so the fixtures
+need namespacing to actually match that model; until they do, treat a same-night red run
+against otherwise-unrelated code as contention first.
+
+## A flaky test that was a test defect, diagnosed by falsification
+
+**Multi-track session, 2026-08-16.** `TestRetainedHeartbeatReplayNeverReadsHealthy` failed
+about 4% of the time. Reproduced alone on an exclusively-owned broker at roughly 1-in-25,
+which ruled out the contention lesson above before it was even written down.
+
+The polling loop made two independent HTTP round trips per iteration: one `getRaw` call
+captured the raw response body for a later assertion, and a separate `findNode` call decoded
+the gate condition the loop was waiting on. Both calls hit a live coordinator answering
+correctly at every instant, but the two requests were not atomic with each other. When the
+`not_collected` to `unknown_age` transition landed in the gap between them, the raw body
+(request one) still read `not_collected` while the decoded gate (request two) already read
+`unknown_age`, so the loop exited on a body that was one HTTP round trip stale relative to
+the condition it exited on.
+
+The fix decodes the gate from the same `getRaw` response that captures the body, removing
+the second round trip entirely. Verified 50 passes out of 50 across two separate foreground
+batches, and then — because a fix that removes a flake is not by itself evidence the test
+still catches anything — a deliberate mutation (making `inventory.classify` return a
+non-nil timestamp on a retained delivery, which the test exists to forbid) turned the fixed
+test red 3 times out of 3 before the mutation was reverted.
+
+**Rule:** a flake that survives isolation from concurrent runs is a test defect, not
+infrastructure noise, and the usual shape is two requests standing in for one atomic read.
+And fixing a flake without proving the test still bites can leave it permanently green and
+useless — mutate the behavior it names and confirm the fixed version still fails.
+Separately, this is a fourth instance of a rule this project keeps needing: `not_collected`
+and `unknown_age` are different claims about evidence, and a test straddling the transition
+between them has to read both halves from one instant, not two.
+
+## The measured shape of the operator's own composition beat the record of it
+
+**Track D seam B, 2026-08-16.** [ADR-037](../decisions/ADR-037-resolume-references-are-names-not-ids.md)'s
+Context section states the operator's real composition has 13 of 18 layers named and 5
+unnamed, and lists the 13 by name. Seam B's parser, run against the same `.avc` file, finds
+**12** named and **6** unnamed — and the ADR's own bulleted list of names has 12 entries, one
+fewer than its own prose claims. The record and the data it describes had already drifted by
+the time the seam that implements the record started.
+
+The more consequential gap is in the decision itself. ADR-037 decision 3 assumed a reference
+scoped by deck plus layer name would be enough to be unambiguous. Measured against the same
+real composition: **seven groups covering 16 of the 36 clips remain ambiguous** under deck
+plus layer plus name, and every one of them is on `Main`, the deck the show runs from. The
+vocabulary was not wrong to require scoping; it was optimistic about how far deck-plus-name
+scoping alone would go, and the gap surfaced only once the parser ran against the operator's
+own file rather than against the record's summary of it.
+
+**Rule:** when a decision rests on the shape of real data, parse the real data before
+building the decision's vocabulary around it, and re-check after — a record that summarizes
+external data is itself a measurement with its own error, not a substitute for reading the
+source again at build time.
+
 ## A branch that is never pushed is never linted
 
 **Step 9's close-out.** The `step-9-wave-3` branch ran every local gate before merging: `gofmt`, `go vet`, `go test -race`, the UI suite, the FPP integration suite. All green, honestly reported, and the claim was believed. But `golangci-lint` runs only in CI, and the branch was never pushed, so the one gate that would have failed was the one gate the branch never met: the merge landed on `main` with 63 lint findings, and CI had already been red since the day before on Track D's own findings, so the new ones arrived invisibly behind the old ones.
