@@ -91,6 +91,11 @@ type TrackedLayerGroup struct {
 type TrackedColumn struct {
 	ID     ObjectID
 	DeckID ObjectID
+
+	// Index is the column's own columnIndex attribute (0-based), exactly as
+	// resolumecomp.Column.Index reports it — ADR-037's ColumnLabel generates
+	// "Column <n>" from this, never from this slice's own position.
+	Index int
 }
 
 // TrackedLayer is one layer, deck-independent (bench capture §16.1: all 18
@@ -99,6 +104,13 @@ type TrackedColumn struct {
 // composition's own layer count).
 type TrackedLayer struct {
 	ID ObjectID
+
+	// Index is the layer's own layerIndex attribute (0-based), exactly as
+	// resolumecomp.Layer.Index reports it — ADR-037's LayerLabel generates
+	// "Layer <n>" from this, never from this slice's own position, so a
+	// layer that is reordered in a future upload keeps the label its own
+	// file states rather than one this package invented from list order.
+	Index int
 
 	// Name is the layer's own display name (ADR-037 decision 7), read
 	// from resolumecomp.Layer.Name exactly as parsed: empty when the
@@ -132,6 +144,17 @@ type TrackedClip struct {
 	ID     ObjectID
 	DeckID ObjectID
 	Name   string
+
+	// LayerIndex and ColumnIndex are this clip's own layerIndex/columnIndex
+	// attributes (0-based), exactly as resolumecomp.Clip reports them —
+	// ADR-037's ClipLabel generates "Clip L<n>C<m>" from these when Name is
+	// empty. Kept separately from LayerID (below): LayerID is this
+	// package's own RESOLVED reference (nil when the file's layerIndex does
+	// not resolve to a known layer), while LayerIndex is the raw value the
+	// file states regardless of whether it resolves, which a label must
+	// still be able to render from.
+	LayerIndex  int
+	ColumnIndex int
 
 	// LayerID is the id of the layer this clip's own layerIndex resolves
 	// to, or nil when it does not (the file's layerIndex names a layer
@@ -490,7 +513,7 @@ func BuildTrackedComposition(comp *resolumecomp.Composition) (*TrackedCompositio
 			// invent a group that is not there.
 		}
 
-		layers = append(layers, TrackedLayer{ID: id, Name: l.Name, LayerGroupID: groupID})
+		layers = append(layers, TrackedLayer{ID: id, Index: l.Index, Name: l.Name, LayerGroupID: groupID})
 		layerIndexToID[l.Index] = id
 	}
 
@@ -504,7 +527,7 @@ func BuildTrackedComposition(comp *resolumecomp.Composition) (*TrackedCompositio
 		if err != nil {
 			return nil, err
 		}
-		columns = append(columns, TrackedColumn{ID: id, DeckID: deckID})
+		columns = append(columns, TrackedColumn{ID: id, DeckID: deckID, Index: col.Index})
 	}
 
 	// resolveLayerID looks up layerIndexToID for one clip's own layerIndex
@@ -534,7 +557,11 @@ func BuildTrackedComposition(comp *resolumecomp.Composition) (*TrackedCompositio
 		if err != nil {
 			return nil, err
 		}
-		clips = append(clips, TrackedClip{ID: id, DeckID: deckID, Name: c.Name, LayerID: resolveLayerID(c.LayerIndex)})
+		clips = append(clips, TrackedClip{
+			ID: id, DeckID: deckID, Name: c.Name,
+			LayerIndex: c.LayerIndex, ColumnIndex: c.ColumnIndex,
+			LayerID: resolveLayerID(c.LayerIndex),
+		})
 	}
 
 	persistentClips := make([]TrackedPersistentClip, 0, len(comp.PersistentClips))

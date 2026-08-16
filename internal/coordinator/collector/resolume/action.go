@@ -208,6 +208,16 @@ func NewActionDispatcher(collector *Collector, opts ActionDispatcherOptions) *Ac
 	return &ActionDispatcher{collector: collector, now: now, sleep: sleep, pollInterval: pollInterval}
 }
 
+// CurrentComposition returns the stored composition Dispatch itself resolves
+// every id against, or [ErrCompositionNotUploaded]. ADR-037 seam B's
+// resolution step runs ABOVE this dispatcher (§4.1 of its own spec: "not
+// inside it"), so the caller that resolves a name into an [ActionParams]
+// field needs this composition before Dispatch is ever called — the same
+// *TrackedComposition Dispatch itself reads, never a second copy.
+func (d *ActionDispatcher) CurrentComposition() (*TrackedComposition, error) {
+	return d.collector.compositionStore.Current()
+}
+
 // Actions returns [actionRegistry]'s entries, sorted by Name so a discovery
 // endpoint built from them does not depend on Go's slice-literal order.
 func (d *ActionDispatcher) Actions() []ActionDescriptor {
