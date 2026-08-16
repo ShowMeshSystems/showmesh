@@ -166,6 +166,9 @@ Commands:
   assets fetch <assetId> --out <path>
                            download one asset's bytes, verifying the content
                            hash before the file lands at --out
+  assets manifest [--node <id>] [--require-ready]
+                           what each node should hold for the active show,
+                           versus what it actually holds (Track E seam E5)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
@@ -301,6 +304,16 @@ Exit codes:
      this CLI's exit codes keep them separate too. A FINISHED run whose
      coordinator response did not even report completed/confirmed at all
      is neither of these: see exit 6)
+  20 assets not ready ("assets manifest --require-ready" only: at least one
+     node is not_ready — a fresh, complete inventory report is MISSING a
+     named asset. "I checked, and it is missing.")
+  21 assets unknown ("assets manifest --require-ready" only: at least one
+     node is unknown, and none is not_ready — no report has ever arrived,
+     the last one is stale, it said complete:false, or no active show is
+     configured. "I cannot tell." Deliberately distinct from exit 20: a
+     script that collapses "checked and missing" into "cannot tell", or the
+     reverse, will either start a show it should not or block one it
+     should not)
 `)
 }
 

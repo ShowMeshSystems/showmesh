@@ -234,6 +234,34 @@ type Dependencies struct {
 	// the same "nothing told this API otherwise" posture as every other
 	// unwired/unset numeric dependency in this struct.
 	AssetMaxUploadBytes int64
+
+	// AssetManifests is Track E seam E5's asset manifest surface
+	// (GET /assets/manifest, GET /nodes/{nodeId}/assets — assetmanifest.go).
+	// It is a concrete *store.Store, not an interface, unlike every other
+	// field in this struct: assetsync.BuildManifest/BuildNodeManifest
+	// (ComputeNodeManifest is the ONLY function in this codebase permitted
+	// to decide a node's asset readiness — see that package's own doc
+	// comment) take *store.Store directly, because computing one node's
+	// manifest reads config objects, node declarations, and asset
+	// inventory across more than ten store methods, and a narrow
+	// interface here would just be assetsync's own dependency surface
+	// duplicated with no decoupling benefit — the identical reasoning
+	// [CommandStore]'s doc comment (interfaces.go) gives for importing
+	// store's record types directly one field over. A nil field is NOT
+	// defaulted to a no-op (there is no safe no-op *store.Store): both
+	// handlers check for nil explicitly and render every node's manifest
+	// "unknown" with a reason naming the missing wiring, rather than
+	// panicking on a nil dereference.
+	AssetManifests *store.Store
+
+	// AssetInventoryInterval is SHOWMESH_ASSET_INVENTORY_INTERVAL
+	// ([config.Config.AssetInventoryInterval]), threaded through for the
+	// identical "this package does not read the environment or config
+	// package state on its own" reason [FPPEndpointsEnvVarSet] documents.
+	// assetsync.StalenessWindow(AssetInventoryInterval) is the ONE staleness
+	// computation every manifest response rests on. A value <= 0 is
+	// replaced by [defaultAssetManifestInventoryInterval].
+	AssetInventoryInterval time.Duration
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -298,8 +326,21 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetMaxUploadBytes <= 0 {
 		d.AssetMaxUploadBytes = assetstore.DefaultMaxUploadBytes
 	}
+	if d.AssetInventoryInterval <= 0 {
+		d.AssetInventoryInterval = defaultAssetManifestInventoryInterval
+	}
 	return d
 }
+
+// defaultAssetManifestInventoryInterval mirrors
+// internal/coordinator/config's own defaultAssetInventoryInterval (2
+// minutes). Duplicated, not imported: that constant is unexported, and
+// this package must not import internal/coordinator/config for a value —
+// the same posture [Dependencies.FPPEndpointsEnvVarSet]'s doc comment
+// states for reading the environment. Only reached when
+// [Dependencies.AssetInventoryInterval] is left unset, which production
+// wiring never does (config.Load always computes a positive value).
+const defaultAssetManifestInventoryInterval = 2 * time.Minute
 
 // noFPPPollNudger is [Dependencies.Nudger]'s nil-safe default: NudgePoll
 // always reports false, which every caller already treats identically to
@@ -1005,6 +1046,18 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
 	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
+
+	// Seam E5 (assetmanifest.go): "what should a node hold" versus "what
+	// does it hold" — read-only, same showConfigReadScopes posture as
+	// every other Track E config-metadata read above, never asset:write.
+	// "GET /api/v1/assets/manifest" and "GET /api/v1/assets/{id}" both
+	// match the literal path "/api/v1/assets/manifest"; net/http.ServeMux
+	// (Go 1.22+) resolves that in favor of the more specific, all-literal
+	// pattern regardless of registration order — the identical property
+	// "/posts/latest" vs "/posts/{id}" demonstrates in that package's own
+	// doc comment — so this is not a route ordering hazard.
+	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

@@ -2506,6 +2506,84 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /assets/manifest:
+    get:
+      operationId: getAssetManifest
+      summary: Every declared node's asset readiness (Track E seam E5, ADR-028)
+      description: >-
+        "What should a node hold" (the active show's current assets)
+        compared against "what does it actually hold" (its own inventory
+        report), for every declared node, in declaration order. Computed
+        identically to `GET /nodes/{nodeId}/assets`, one node at a time.
+        Never gated by `asset:write`: reads stay open by default
+        (ADR-024), matching every other Track E config-metadata read's
+        `readAnyGuard(show:macro:run OR config:write)` posture. Absent
+        evidence is stated, never omitted (ADR-020): no active show
+        configured, a report that has never arrived, a report older than
+        the staleness window, and a report that said it could not fully
+        enumerate its own directory each render `state: "unknown"` with
+        their own distinct `reason` — an `unknown` verdict never renders
+        as `ready` or `not_ready`, and a stale report never renders as
+        `not_ready` (a stale report is not evidence of absence).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetManifestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/assets:
+    get:
+      operationId: getNodeAssetManifest
+      summary: One node's asset readiness (Track E seam E5, ADR-028)
+      description: >-
+        The same verdict `GET /assets/manifest` renders for this node
+        alone. `404` when `nodeId` does not name a declared node —
+        matching `GET /nodes/{nodeId}`'s identical posture, never
+        `state: "unknown"` for a node this coordinator has never heard of
+        at all.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeAssetManifestResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -5934,3 +6012,111 @@ components:
         target:
           type: string
           description: Required, and must name a declared node, when targetKind is "node".
+    NodeAssetManifest:
+      type: object
+      description: >-
+        One node's asset readiness verdict (Track E seam E5, ADR-020,
+        ADR-028): "what should this node hold" versus "what does it
+        actually hold". state is "ready", "not_ready", or "unknown".
+        reason is null only when state is "ready"; every other state
+        names the specific cause. missing and gaps are populated only
+        when state is "not_ready". extra is populated whenever a fresh
+        inventory report exists, regardless of state — never an error and
+        never a basis for deletion. observedAt is null exactly when state
+        is "unknown": there is no evidence an unknown verdict rests on, so
+        there is nothing to date it by.
+      additionalProperties: false
+      required: [node, state, reason, missing, gaps, extra, observedAt]
+      properties:
+        node:
+          type: string
+        state:
+          type: string
+          enum: [ready, not_ready, unknown]
+        reason:
+          type: [string, "null"]
+        missing:
+          type: array
+          items:
+            $ref: "#/components/schemas/MissingAsset"
+        gaps:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetGap"
+        extra:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtraAsset"
+        observedAt:
+          type: [string, "null"]
+          format: date-time
+    MissingAsset:
+      type: object
+      description: One expected asset a manifest found the node does not currently hold.
+      additionalProperties: false
+      required: [assetId, sequence, filename, contentHash, sizeBytes]
+      properties:
+        assetId:
+          type: string
+        sequence:
+          type: string
+        filename:
+          type: string
+        contentHash:
+          type: string
+        sizeBytes:
+          type: integer
+    AssetGap:
+      type: object
+      description: >-
+        A sequence the active show has some current asset for, that a
+        node carrying one or more surfaces in that show has no coverage
+        for at all — inferred from the show's own asset rows, not a
+        stored surface-to-sequence link.
+      additionalProperties: false
+      required: [sequence, surfaces]
+      properties:
+        sequence:
+          type: string
+        surfaces:
+          type: array
+          items:
+            type: string
+    ExtraAsset:
+      type: object
+      description: >-
+        One asset a node holds that this manifest did not expect. Never an
+        error and never a basis for deletion.
+      additionalProperties: false
+      required: [contentHash, filename, sizeBytes]
+      properties:
+        contentHash:
+          type: string
+        filename:
+          type: string
+        sizeBytes:
+          type: integer
+    NodeAssetManifestResponse:
+      type: object
+      description: The body of GET /nodes/{nodeId}/assets.
+      additionalProperties: false
+      required: [serverTime, manifest]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        manifest:
+          $ref: "#/components/schemas/NodeAssetManifest"
+    AssetManifestResponse:
+      type: object
+      description: The body of GET /assets/manifest.
+      additionalProperties: false
+      required: [serverTime, nodes]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeAssetManifest"

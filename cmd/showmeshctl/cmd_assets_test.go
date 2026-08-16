@@ -486,3 +486,223 @@ func TestRunDispatchesAssets(t *testing.T) {
 		t.Errorf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 }
+
+// --- manifest ---
+
+func strPtr(s string) *string { return &s }
+
+func assetManifestJSON(nodes ...nodeAssetManifestRecord) string {
+	b, _ := json.Marshal(assetManifestResponse{ServerTime: time.Now(), Nodes: nodes})
+	return string(b)
+}
+
+func nodeAssetManifestJSON(m nodeAssetManifestRecord) string {
+	b, _ := json.Marshal(nodeAssetManifestResponse{ServerTime: time.Now(), Manifest: m})
+	return string(b)
+}
+
+func TestCmdAssetsManifestPrintsTable(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/assets/manifest" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, assetManifestJSON(
+			nodeAssetManifestRecord{
+				Node: "render-01", State: "not_ready", Reason: strPtr("missing 1 expected asset(s)"),
+				Missing: []missingAssetRecord{{AssetID: "a1", Sequence: "opening", Filename: "Thriller.fseq", ContentHash: "sha256:abc", SizeBytes: 100}},
+				Gaps:    []assetGapRecord{},
+				Extra:   []extraAssetRecord{},
+			},
+			nodeAssetManifestRecord{Node: "render-02", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+		))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"manifest", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK (no --require-ready); stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"render-01", "not_ready", "render-02", "ready", "Thriller.fseq", "opening"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdAssetsManifestNodeFlagUsesSingleNodeRoute(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/nodes/render-01/assets" {
+			t.Fatalf("unexpected path %s, want the single-node route", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nodeAssetManifestJSON(nodeAssetManifestRecord{
+			Node: "render-01", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{},
+		}))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"manifest", "--node", "render-01", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "render-01") {
+		t.Errorf("output missing render-01:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAssetsManifestWithoutRequireReadyAlwaysExitsOK is this
+// subcommand's own "reporting is not failing" rule: a not_ready node
+// changes the printed table but NEVER the exit code unless --require-ready
+// is passed.
+//
+// Broken and confirmed to fail: removed the "if !requireReady { return
+// exitOK }" early return in cmdAssetsManifest, so a not_ready node fell
+// through to the exit-code switch even without the flag — this test's
+// assertion failed (got exitAssetsNotReady, want exitOK). Restored
+// afterward.
+func TestCmdAssetsManifestWithoutRequireReadyAlwaysExitsOK(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, assetManifestJSON(
+			nodeAssetManifestRecord{Node: "render-01", State: "not_ready", Reason: strPtr("missing"), Missing: []missingAssetRecord{{}}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+			nodeAssetManifestRecord{Node: "render-02", State: "unknown", Reason: strPtr("never reported"), Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+		))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"manifest", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK (reporting is not failing without --require-ready); stderr=%s", code, stderr.String())
+	}
+}
+
+// TestCmdAssetsManifestRequireReadyExitCodes proves exit 20 and exit 21
+// are reachable and distinct, and that "not_ready" always wins over
+// "unknown" when both appear across the node set (spec: exit 21 fires
+// only when NO node is not_ready).
+func TestCmdAssetsManifestRequireReadyExitCodes(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []nodeAssetManifestRecord
+		want  int
+	}{
+		{
+			"all ready",
+			[]nodeAssetManifestRecord{
+				{Node: "render-01", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+				{Node: "render-02", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+			},
+			exitOK,
+		},
+		{
+			"one unknown, none not_ready",
+			[]nodeAssetManifestRecord{
+				{Node: "render-01", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+				{Node: "render-02", State: "unknown", Reason: strPtr("never reported"), Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+			},
+			exitAssetsUnknown,
+		},
+		{
+			"one not_ready, none unknown",
+			[]nodeAssetManifestRecord{
+				{Node: "render-01", State: "not_ready", Reason: strPtr("missing"), Missing: []missingAssetRecord{{}}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+				{Node: "render-02", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+			},
+			exitAssetsNotReady,
+		},
+		{
+			// not_ready MUST win over unknown: exit 21 fires only when NO
+			// node is not_ready.
+			"both not_ready and unknown present",
+			[]nodeAssetManifestRecord{
+				{Node: "render-01", State: "not_ready", Reason: strPtr("missing"), Missing: []missingAssetRecord{{}}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+				{Node: "render-02", State: "unknown", Reason: strPtr("never reported"), Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+			},
+			exitAssetsNotReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				_, _ = fmt.Fprint(w, assetManifestJSON(tt.nodes...))
+			}))
+			defer ts.Close()
+
+			var stdout, stderr bytes.Buffer
+			code := cmdAssets([]string{"manifest", "--require-ready", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+			if code != tt.want {
+				t.Errorf("exit code = %d, want %d; stderr=%s", code, tt.want, stderr.String())
+			}
+		})
+	}
+}
+
+func TestCmdAssetsManifestJSONOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, assetManifestJSON(
+			nodeAssetManifestRecord{Node: "render-01", State: "ready", Missing: []missingAssetRecord{}, Gaps: []assetGapRecord{}, Extra: []extraAssetRecord{}},
+		))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"manifest", "--server", ts.URL, "--output", "json"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	var decoded struct {
+		Nodes []nodeAssetManifestRecord `json:"nodes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode --output json: %v\nstdout: %s", err, stdout.String())
+	}
+	if len(decoded.Nodes) != 1 || decoded.Nodes[0].Node != "render-01" {
+		t.Errorf("decoded nodes = %+v, want one entry for render-01", decoded.Nodes)
+	}
+}
+
+// TestCmdAssetsManifestHelpListsBothExitCodes checks stderr, not stdout:
+// this subcommand's flag.FlagSet is built by newFlagSet with
+// SetOutput(stderr), and cmdAssetsManifest's own Usage closure writes to
+// the same stderr writer — matching every other subcommand's --help in
+// this package.
+func TestCmdAssetsManifestHelpListsBothExitCodes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{"manifest", "--help"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Errorf("exit code = %d, want exitOK", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "exit 20") || !strings.Contains(out, "exit 21") {
+		t.Errorf("help output missing exit codes 20/21:\n%s", out)
+	}
+}
+
+// TestMainHelpListsAssetsExitCodes proves the TOP-LEVEL "showmeshctl
+// --help" exit-code table also names 20 and 21 (main.go's usage text) —
+// distinct from the subcommand-level test above, which covers
+// "assets manifest --help" only.
+func TestMainHelpListsAssetsExitCodes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--help"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Errorf("exit code = %d, want exitOK", code)
+	}
+	out := stdout.String() + stderr.String()
+	if !strings.Contains(out, "20 assets not ready") || !strings.Contains(out, "21 assets unknown") {
+		t.Errorf("top-level help missing exit codes 20/21:\n%s", out)
+	}
+}

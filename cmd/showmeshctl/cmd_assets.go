@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -61,6 +62,52 @@ type assetResponse struct {
 type assetsListResponse struct {
 	ServerTime time.Time     `json:"serverTime"`
 	Assets     []assetRecord `json:"assets"`
+}
+
+// --- manifest wire types, mirroring v1.NodeAssetManifest and friends ---
+
+type missingAssetRecord struct {
+	AssetID     string `json:"assetId"`
+	Sequence    string `json:"sequence"`
+	Filename    string `json:"filename"`
+	ContentHash string `json:"contentHash"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
+
+type assetGapRecord struct {
+	Sequence string   `json:"sequence"`
+	Surfaces []string `json:"surfaces"`
+}
+
+type extraAssetRecord struct {
+	ContentHash string `json:"contentHash"`
+	Filename    string `json:"filename"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
+
+// nodeAssetManifestRecord mirrors v1.NodeAssetManifest. State is one of
+// "ready", "not_ready", "unknown"; Reason is non-nil whenever State is not
+// "ready" (ADR-020).
+type nodeAssetManifestRecord struct {
+	Node       string               `json:"node"`
+	State      string               `json:"state"`
+	Reason     *string              `json:"reason"`
+	Missing    []missingAssetRecord `json:"missing"`
+	Gaps       []assetGapRecord     `json:"gaps"`
+	Extra      []extraAssetRecord   `json:"extra"`
+	ObservedAt *time.Time           `json:"observedAt"`
+}
+
+// nodeAssetManifestResponse is the body of GET /api/v1/nodes/{nodeId}/assets.
+type nodeAssetManifestResponse struct {
+	ServerTime time.Time               `json:"serverTime"`
+	Manifest   nodeAssetManifestRecord `json:"manifest"`
+}
+
+// assetManifestResponse is the body of GET /api/v1/assets/manifest.
+type assetManifestResponse struct {
+	ServerTime time.Time                 `json:"serverTime"`
+	Nodes      []nodeAssetManifestRecord `json:"nodes"`
 }
 
 // --- the timeout budget: restated from assetstore.UploadBudget ---
@@ -134,6 +181,8 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdAssetsUpload(rest, stdout, stderr, clock)
 	case "fetch":
 		return cmdAssetsFetch(rest, stdout, stderr, clock)
+	case "manifest":
+		return cmdAssetsManifest(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl assets: unknown subcommand %q\n\n", sub)
 		printAssetsUsage(stderr)
@@ -158,6 +207,8 @@ Subcommands:
                    (write, requires asset:write)
   fetch <assetId>  download one asset's bytes, verifying the content hash
                    before the file lands at --out
+  manifest         show what each node should hold for the active show
+                   versus what it actually holds (Track E seam E5)
 
 Run "showmeshctl assets <subcommand> --help" for flags specific to one
 subcommand.
@@ -587,6 +638,109 @@ func cmdAssetsFetch(args []string, stdout, stderr io.Writer, clock func() time.T
 	return exitOK
 }
 
+// --- manifest ---
+
+// cmdAssetsManifest implements "showmeshctl assets manifest": "what should
+// a node hold for the active show" versus "what does it actually hold"
+// (Track E seam E5). Reporting never fails on its own — without
+// --require-ready this always exits 0, no matter what state any node is
+// in, because printing a table is not the same claim as gating a show.
+func cmdAssetsManifest(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl assets manifest", stderr)
+	var node string
+	var requireReady bool
+	fs.StringVar(&node, "node", "", "show only this node's manifest (default: every declared node)")
+	fs.BoolVar(&requireReady, "require-ready", false,
+		"exit 20 if any node is not_ready, or 21 if any node is unknown and none is not_ready; without this flag, always exit 0")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets manifest [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nShow what each node should hold for the active show, versus what it")
+		_, _ = fmt.Fprintln(stderr, "actually holds (GET /api/v1/assets/manifest, or, with --node, GET")
+		_, _ = fmt.Fprintln(stderr, "/api/v1/nodes/{nodeId}/assets for one node only).")
+		_, _ = fmt.Fprintln(stderr, "\nReporting is not failing: without --require-ready this always exits 0,")
+		_, _ = fmt.Fprintln(stderr, "regardless of any node's state. With --require-ready:")
+		_, _ = fmt.Fprintln(stderr, "  exit 20  at least one node is not_ready (checked, and something is missing)")
+		_, _ = fmt.Fprintln(stderr, "  exit 21  at least one node is unknown, and none is not_ready (cannot tell)")
+		_, _ = fmt.Fprintln(stderr, "  exit 0   every node is ready")
+		_, _ = fmt.Fprintln(stderr, "These are deliberately distinct: \"I checked and it is missing\" and \"I")
+		_, _ = fmt.Fprintln(stderr, "cannot tell\" are different operational situations, and a script that")
+		_, _ = fmt.Fprintln(stderr, "treats them the same will either start a show it should not, or block")
+		_, _ = fmt.Fprintln(stderr, "one it should not.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "assets manifest", err)
+	}
+	if extra := fs.Args(); len(extra) > 0 {
+		fs.Usage()
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "assets manifest", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var nodes []nodeAssetManifestRecord
+	var serverTime time.Time
+	if node != "" {
+		var resp nodeAssetManifestResponse
+		if err := c.getJSON(ctx, "/api/v1/nodes/"+url.PathEscape(node)+"/assets", nil, &resp); err != nil {
+			return reportError(stderr, "assets manifest", err)
+		}
+		nodes = []nodeAssetManifestRecord{resp.Manifest}
+		serverTime = resp.ServerTime
+	} else {
+		var resp assetManifestResponse
+		if err := c.getJSON(ctx, "/api/v1/assets/manifest", nil, &resp); err != nil {
+			return reportError(stderr, "assets manifest", err)
+		}
+		nodes = resp.Nodes
+		serverTime = resp.ServerTime
+	}
+	printClockSkew(stderr, serverTime, clock())
+
+	if g.output == outputJSON {
+		out := struct {
+			ServerTime time.Time                 `json:"serverTime"`
+			Nodes      []nodeAssetManifestRecord `json:"nodes"`
+		}{ServerTime: serverTime, Nodes: nodes}
+		if err := printJSON(stdout, out); err != nil {
+			return reportError(stderr, "assets manifest", err)
+		}
+	} else {
+		printAssetManifestTable(stdout, nodes)
+	}
+
+	if !requireReady {
+		return exitOK
+	}
+	anyNotReady, anyUnknown := false, false
+	for _, n := range nodes {
+		switch n.State {
+		case "not_ready":
+			anyNotReady = true
+		case "unknown":
+			anyUnknown = true
+		}
+	}
+	switch {
+	case anyNotReady:
+		_, _ = fmt.Fprintln(stderr, "showmeshctl assets manifest: at least one node is not_ready")
+		return exitAssetsNotReady
+	case anyUnknown:
+		_, _ = fmt.Fprintln(stderr, "showmeshctl assets manifest: at least one node is unknown (no node is not_ready)")
+		return exitAssetsUnknown
+	default:
+		return exitOK
+	}
+}
+
 // --- rendering ---
 
 func printAssetsTable(w io.Writer, resp assetsListResponse) {
@@ -632,5 +786,34 @@ func printAssetDetail(w io.Writer, a assetRecord) {
 		_, _ = fmt.Fprintf(w, "current:          no (superseded at %s)\n", a.SupersededAt.Format(time.RFC3339))
 	} else {
 		_, _ = fmt.Fprintln(w, "current:          no")
+	}
+}
+
+// printAssetManifestTable renders one summary row per node, then one
+// detail line per missing asset and per gap — the summary alone tells an
+// operator whether to worry; the detail lines say exactly what to fix.
+func printAssetManifestTable(w io.Writer, nodes []nodeAssetManifestRecord) {
+	if len(nodes) == 0 {
+		_, _ = fmt.Fprintln(w, "(no nodes)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "NODE\tSTATE\tMISSING\tGAPS\tEXTRA\tREASON")
+	for _, n := range nodes {
+		reason := ""
+		if n.Reason != nil {
+			reason = *n.Reason
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\n", n.Node, n.State, len(n.Missing), len(n.Gaps), len(n.Extra), reason)
+	}
+	_ = tw.Flush()
+
+	for _, n := range nodes {
+		for _, m := range n.Missing {
+			_, _ = fmt.Fprintf(w, "  %s: missing %q (sequence %s, %s)\n", n.Node, m.Filename, m.Sequence, m.ContentHash)
+		}
+		for _, g := range n.Gaps {
+			_, _ = fmt.Fprintf(w, "  %s: no coverage for sequence %s (surfaces: %s)\n", n.Node, g.Sequence, strings.Join(g.Surfaces, ", "))
+		}
 	}
 }

@@ -396,6 +396,15 @@ func Run() int {
 		Assets:              st,
 		AssetBackend:        assetBackend,
 		AssetMaxUploadBytes: cfg.AssetMaxUploadBytes,
+		// AssetManifests is seam E5's own dependency: *store.Store, not an
+		// interface (see that field's own doc comment for why), wired the
+		// same *st already used for Config/Assets/Commands/Discovery above.
+		// AssetInventoryInterval is the same cfg.AssetInventoryInterval
+		// assetSync was already constructed from above, so the manifest's
+		// staleness window and the agent's own report cadence can never
+		// silently disagree about which number they mean.
+		AssetManifests:         st,
+		AssetInventoryInterval: cfg.AssetInventoryInterval,
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must

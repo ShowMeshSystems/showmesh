@@ -835,6 +835,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assets/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every declared node's asset readiness (Track E seam E5, ADR-028)
+         * @description "What should a node hold" (the active show's current assets) compared against "what does it actually hold" (its own inventory report), for every declared node, in declaration order. Computed identically to `GET /nodes/{nodeId}/assets`, one node at a time. Never gated by `asset:write`: reads stay open by default (ADR-024), matching every other Track E config-metadata read's `readAnyGuard(show:macro:run OR config:write)` posture. Absent evidence is stated, never omitted (ADR-020): no active show configured, a report that has never arrived, a report older than the staleness window, and a report that said it could not fully enumerate its own directory each render `state: "unknown"` with their own distinct `reason` — an `unknown` verdict never renders as `ready` or `not_ready`, and a stale report never renders as `not_ready` (a stale report is not evidence of absence).
+         */
+        get: operations["getAssetManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One node's asset readiness (Track E seam E5, ADR-028)
+         * @description The same verdict `GET /assets/manifest` renders for this node alone. `404` when `nodeId` does not name a declared node — matching `GET /nodes/{nodeId}`'s identical posture, never `state: "unknown"` for a node this coordinator has never heard of at all.
+         */
+        get: operations["getNodeAssetManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2040,6 +2080,49 @@ export interface components {
             targetKind: "node" | "show";
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
+        };
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state — never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
+        NodeAssetManifest: {
+            node: string;
+            /** @enum {string} */
+            state: "ready" | "not_ready" | "unknown";
+            reason: string | null;
+            missing: components["schemas"]["MissingAsset"][];
+            gaps: components["schemas"]["AssetGap"][];
+            extra: components["schemas"]["ExtraAsset"][];
+            /** Format: date-time */
+            observedAt: string | null;
+        };
+        /** @description One expected asset a manifest found the node does not currently hold. */
+        MissingAsset: {
+            assetId: string;
+            sequence: string;
+            filename: string;
+            contentHash: string;
+            sizeBytes: number;
+        };
+        /** @description A sequence the active show has some current asset for, that a node carrying one or more surfaces in that show has no coverage for at all — inferred from the show's own asset rows, not a stored surface-to-sequence link. */
+        AssetGap: {
+            sequence: string;
+            surfaces: string[];
+        };
+        /** @description One asset a node holds that this manifest did not expect. Never an error and never a basis for deletion. */
+        ExtraAsset: {
+            contentHash: string;
+            filename: string;
+            sizeBytes: number;
+        };
+        /** @description The body of GET /nodes/{nodeId}/assets. */
+        NodeAssetManifestResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            manifest: components["schemas"]["NodeAssetManifest"];
+        };
+        /** @description The body of GET /assets/manifest. */
+        AssetManifestResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            nodes: components["schemas"]["NodeAssetManifest"][];
         };
     };
     responses: {
@@ -3815,6 +3898,61 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+        };
+    };
+    getAssetManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetManifestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeAssetManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeAssetManifestResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
         };
     };
 }
