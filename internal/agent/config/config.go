@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -66,6 +67,25 @@ type Config struct {
 	// testing or a deliberate operator override — there is no production
 	// capability detection to wire it up to yet.
 	Capabilities capability.Set
+
+	// AssetDir is the node-local directory show assets (FSEQ, audio, media)
+	// are downloaded into and played from. This agent has no other notion of
+	// a persistent state directory yet, so the default is "./assets"
+	// relative to the process's working directory rather than a subdirectory
+	// of some existing state location; revisit this default if this package
+	// ever grows a real state-directory concept.
+	AssetDir string
+
+	// AgentAPIToken is an optional bearer credential asset.fetch sends when
+	// downloading asset bytes from the coordinator's read API. Only needed
+	// when the coordinator has closed anonymous reads (ADR-024's
+	// CloseReads); empty means send no Authorization header.
+	AgentAPIToken string
+
+	// AssetInventoryInterval is how often this agent publishes its asset
+	// inventory report when nothing else (a completed asset.fetch) has
+	// already triggered one. See internal/agent/assetinventory.go.
+	AssetInventoryInterval time.Duration
 }
 
 const (
@@ -77,9 +97,20 @@ const (
 	envMQTTUsername     = "SHOWMESH_MQTT_USERNAME"
 	envMQTTPassword     = "SHOWMESH_MQTT_PASSWORD"
 	envLogLevel         = "SHOWMESH_LOG_LEVEL"
+	envAssetDir         = "SHOWMESH_ASSET_DIR"
 
-	defaultBroker   = "tcp://localhost:1883"
-	defaultLogLevel = "info"
+	// envAgentAPIToken is deliberately NOT named SHOWMESH_API_TOKEN: the
+	// coordinator refuses to start when it sees that variable name (ADR-024
+	// decision 2, which retired it), so an operator who copies an agent env
+	// line into a coordinator .env file must not brick the coordinator by
+	// doing so.
+	envAgentAPIToken          = "SHOWMESH_AGENT_API_TOKEN"
+	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
+
+	defaultBroker                 = "tcp://localhost:1883"
+	defaultLogLevel               = "info"
+	defaultAssetDir               = "./assets"
+	defaultAssetInventoryInterval = 2 * time.Minute
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -141,15 +172,30 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		return Config{}, fmt.Errorf("%s: %w", envNodeCapabilities, err)
 	}
 
+	assetInventoryInterval := defaultAssetInventoryInterval
+	if raw, ok := lookup(envAssetInventoryInterval); ok && raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s %q is not a valid duration: %w", envAssetInventoryInterval, raw, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("%s %q must be positive", envAssetInventoryInterval, raw)
+		}
+		assetInventoryInterval = d
+	}
+
 	cfg := Config{
-		NodeID:       nodeID,
-		NodeLabel:    getEnvDefault(lookup, envNodeLabel, ""),
-		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
-		MQTTClientID: getEnvDefault(lookup, envMQTTClientID, defaultClientID(nodeID)),
-		MQTTUsername: getEnvDefault(lookup, envMQTTUsername, ""),
-		MQTTPassword: getEnvDefault(lookup, envMQTTPassword, ""),
-		LogLevel:     getEnvDefault(lookup, envLogLevel, defaultLogLevel),
-		Capabilities: capabilities,
+		NodeID:                 nodeID,
+		NodeLabel:              getEnvDefault(lookup, envNodeLabel, ""),
+		MQTTBroker:             getEnvDefault(lookup, envMQTTBroker, defaultBroker),
+		MQTTClientID:           getEnvDefault(lookup, envMQTTClientID, defaultClientID(nodeID)),
+		MQTTUsername:           getEnvDefault(lookup, envMQTTUsername, ""),
+		MQTTPassword:           getEnvDefault(lookup, envMQTTPassword, ""),
+		LogLevel:               getEnvDefault(lookup, envLogLevel, defaultLogLevel),
+		Capabilities:           capabilities,
+		AssetDir:               getEnvDefault(lookup, envAssetDir, defaultAssetDir),
+		AgentAPIToken:          getEnvDefault(lookup, envAgentAPIToken, ""),
+		AssetInventoryInterval: assetInventoryInterval,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -268,6 +314,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s is set but %s is empty: an MQTT password requires a username", envMQTTPassword, envMQTTUsername)
 	}
 
+	if c.AssetDir == "" {
+		return fmt.Errorf("%s must not be empty", envAssetDir)
+	}
+
+	if c.AssetInventoryInterval <= 0 {
+		return fmt.Errorf("%s must be positive", envAssetInventoryInterval)
+	}
+
 	return nil
 }
 
@@ -285,12 +339,17 @@ const redactedPassword = "REDACTED"
 
 // LogValue implements slog.LogValuer so that logging a Config (directly, or
 // nested in another value passed to a slog call) never emits
-// SHOWMESH_MQTT_PASSWORD in the clear. This is what actually enforces the
-// promise documented on LoadConfig; the doc comment alone enforces nothing.
+// SHOWMESH_MQTT_PASSWORD or SHOWMESH_AGENT_API_TOKEN in the clear. This is
+// what actually enforces the promise documented on LoadConfig; the doc
+// comment alone enforces nothing.
 func (c Config) LogValue() slog.Value {
 	password := ""
 	if c.MQTTPassword != "" {
 		password = redactedPassword
+	}
+	token := ""
+	if c.AgentAPIToken != "" {
+		token = redactedPassword
 	}
 
 	return slog.GroupValue(
@@ -302,5 +361,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("mqtt_password", password),
 		slog.String("log_level", c.LogLevel),
 		slog.Int("capability_count", len(c.Capabilities)),
+		slog.String("asset_dir", c.AssetDir),
+		slog.String("agent_api_token", token),
+		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 	)
 }

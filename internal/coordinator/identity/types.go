@@ -66,6 +66,12 @@ const (
 	// these actions changes what the wall shows, the identical reasoning
 	// [ScopeFPPCommand] already carries for FPP's own lifecycle commands.
 	ScopeResolumeAction Scope = "resolume:action"
+
+	// ScopeAssetWrite is Track E seam E3/E4's own write scope (ADR-028):
+	// uploading an asset. Admin-only, like config:write and
+	// principal:write — asset upload is configuration in the same sense
+	// fpp.endpoints and show.surface are, not an operator-role action.
+	ScopeAssetWrite Scope = "asset:write"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -85,7 +91,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // names it, alongside principal:write, as the pair that stays fail-closed
 // even under the audit-write-failure exemption, and neither appears in
 // operatorActionScopes above.
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a

@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [ADR-027](../decisions/ADR-027-show-and-surface-model.md) · [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md) · [ADR-029](../decisions/ADR-029-logical-actions-and-integration-bindings.md) · [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md)
 
-Status: not started. Specified 2026-08-13 from the owner's authoring specification.
+Status: **E1 through E6 are built, reviewed, fixed and acceptance-run, 2026-08-16.** E7 and E8 remain not started; see the deferral note under each below. Specified 2026-08-13 from the owner's authoring specification; narrowed into buildable seams and its identifiers pre-assigned in [TRACK-E-SESSION-SPEC.md](TRACK-E-SESSION-SPEC.md), which is the authoritative detail for E1–E6 — this document is not amended to restate it.
 
 ## Goal
 
@@ -26,21 +26,21 @@ All four ADRs were written on 2026-08-13 and should be read before starting. The
 
 ## Deliverables
 
-**E1. The configuration objects.** Show, Surface, Action, Macro, and the active-show pointer. All are new `kind` values under the existing `config_objects` and `config_revisions` tables, so **no schema migration is needed** for any of them. Each carries a show reference except the show itself and the active pointer.
+**E1. The configuration objects. Built, 2026-08-16.** As specified and built, this is the Show, Surface, and active-show pointer only — Action and Macro (originally listed here) are E7's, deferred below. All are new `kind` values under the existing `config_objects` and `config_revisions` tables, so **no schema migration is needed** for any of them. Each carries a show reference except the show itself and the active pointer. Detail: [TRACK-E-SESSION-SPEC.md](TRACK-E-SESSION-SPEC.md) §2.
 
-**E2. Manual surface configuration**, meaning channel range, geometry, node assignment, and output settings entered by the operator. Per ADR-027 decision 4 this is a permanent first-class path, and until the FPP Connect work lands **it is the only path that exists**, so it is built first and built properly rather than as a stub behind a nicer future.
+**E2. Manual surface configuration, built, 2026-08-16**, meaning channel range, geometry, node assignment, and output settings entered by the operator. Per ADR-027 decision 4 this is a permanent first-class path, and until the FPP Connect work lands **it is the only path that exists**, so it is built first and built properly rather than as a stub behind a nicer future. Detail: session spec §2.2.
 
-**E3. The asset store.** Metadata in SQLite, bytes in a pluggable backend: a directory in the coordinator's volume, a mount, an SMB share on the NAS, or a node advertising a storage capability. **Bytes never go in SQLite.** Identity is show plus logical sequence plus target plus content hash, with the runtime filename preserved separately.
+**E3. The asset store. Built, 2026-08-16**, as the volume directory backend only — SMB/NAS is deferred configuration behind the same interface, not built or stubbed. Metadata in SQLite, bytes in a pluggable backend. **Bytes never go in SQLite.** Identity is show plus logical sequence plus target plus content hash, with the runtime filename preserved separately. Detail: session spec §3.
 
-**E4. Manual asset upload**, through the API with the UI on top. Target selection is **mandatory** for node-specific assets, because the target is part of the identity and a defaulted target produces a confidently mislabelled artifact.
+**E4. Manual asset upload, built, 2026-08-16**, through the API. Target selection is **mandatory** for node-specific assets, because the target is part of the identity and a defaulted target produces a confidently mislabelled artifact. The UI half is E8, deferred below; the API and `showmeshctl` are the whole delivered surface. Detail: session spec §3.3–3.4.
 
-**E5. The asset manifest and validation.** Per node, what it should hold and whether what it holds matches. A node's readiness is not "the file exists" but "the variant assigned to this node for this sequence exists locally and matches the expected artifact", which is [ADR-003](../decisions/ADR-003-desired-and-observed-state.md)'s desired-versus-observed split applied to files.
+**E5. The asset manifest and validation. Built, 2026-08-16.** Per node, what it should hold and whether what it holds matches, as a three-valued readiness (`ready`/`not_ready`/`unknown`) computed in one function. Detail: session spec §4.
 
-**E6. The asset sync service.** One generic mechanism for every node type. Runs on upload and on a timer, **never in response to a show starting**.
+**E6. The asset sync service. Built, 2026-08-16.** One generic mechanism for every node type. Runs on upload and on a timer, **never in response to a show starting**. Detail: session spec §5.
 
-**E7. Logical actions and their bindings**, with the Resolume adapter as the first consumer. Track D builds the adapter; this track builds the action vocabulary and the binding configuration it reads.
+**E7. Logical actions and their bindings**, with the Resolume adapter as the first consumer. Track D builds the adapter; this track builds the action vocabulary and the binding configuration it reads. **Deliberately not started**: E7's action and binding configuration is what Track D's ADR-037 seam B is rewriting concurrently, and building it now would mean redoing it against ADR-037's naming rule immediately after.
 
-**E8. The authoring UI**, per ADR-030. Last, because every screen depends on an API endpoint that has to exist first.
+**E8. The authoring UI**, per ADR-030. Last, because every screen depends on an API endpoint that has to exist first. **Deliberately not started**: `ui/` is D-4's active surface, and E8 depends on E7 as well. Every E1–E6 acceptance criterion was proved through `showmeshctl` alone with the UI container stopped, so nothing here is blocked on E8 landing.
 
 ## What is deferred to early October
 
@@ -64,12 +64,16 @@ Everything in E1 through E8 is built so this arrives as an additional ingestion 
 
 ## Decisions this track must make
 
+Resolved for E1–E6, 2026-08-16, in [TRACK-E-SESSION-SPEC.md](TRACK-E-SESSION-SPEC.md) §0:
+
 - **What the surface configuration payload actually contains.** ADR-027 lists the fields conceptually; the schema is this track's to design, and it is the thing Track B's renderer reads.
 - **How a node reports what it holds.** The manifest comparison needs the node's actual state, which means either the agent reports its inventory or the coordinator tracks what it sent. The first is evidence and the second is an assumption, and this project has a strong preference between those.
 - **What happens to assets when the active show changes.** Nodes will be holding the wrong set. Sync brings them current, and the readiness surface has to state the gap rather than appearing fine while a node lacks half its files.
 - **Upload size limits, timeouts, and behaviour on a full disk.** The coordinator has never moved bytes before. ARCHITECTURE §11 already lists disk exhaustion as a failure mode this system must address.
 
 ## Acceptance criteria
+
+**Evidenced against a running coordinator, real agent processes and a real broker, `make test-integration`, 2026-08-16** — every criterion below, plus four the session specification added because they are the traps rather than the features (an absent/`null`/zero-length `channelRange` producing three distinct refusals; two surfaces on one node accepted; a stale inventory report reading `unknown` and never `not_ready` or `ready`; an upload slower than the server's 10-second `ReadTimeout` succeeding). Full detail in the 2026-08-16 BUILD-LOG entry.
 
 - An operator creates a show, defines a surface with a manual channel range, assigns it to a node, and configures NDI output, **entirely through `showmeshctl`** with no browser, **with the UI container stopped**. This is ADR-030 decision 1's test and it is deliberately the first criterion, because the CLI is the path an operator takes when the show is broken and the UI is down. Every authoring verb is exercised against a running coordinator, not only in unit tests: an emergency path nobody has run is an assumption, not a path.
 - Three FSEQ files with the **same filename** and different content are uploaded for three different nodes, and each node resolves to and holds the correct one.
@@ -82,4 +86,4 @@ Everything in E1 through E8 is built so this arrives as an additional ingestion 
 
 **Bound by:** ADR-003, ADR-009, ADR-011, ADR-014, ADR-020, ADR-024, ADR-026, ADR-027, ADR-028, ADR-029, ADR-030.
 
-**Out of scope:** any sequence or timeline editing, reimplementing xLights' per-controller FSEQ rendering, FPP Connect compatibility (early October, above), and asset retention policy across seasons.
+**Out of scope:** any sequence or timeline editing, reimplementing xLights' per-controller FSEQ rendering, FPP Connect compatibility (early October, above), and asset retention policy across seasons. **Known gaps recorded rather than hidden, carried from the session specification §9**: no delete for shows, surfaces or assets; superseded assets leave orphaned blobs; agent credential provisioning has no path when a deployment closes reads (`SHOWMESH_AGENT_API_TOKEN` must be set by hand — punch-list item, not an assumption); `internal/coordinator/assetsync` takes a concrete `*store.Store` rather than an interface, a deliberate deviation from the `Dependencies` convention. **Nothing here has run on real show hardware**: no real xLights FSEQ was ever uploaded, no upload crossed a real network link, and disk exhaustion was tested by error injection rather than by filling a real volume.

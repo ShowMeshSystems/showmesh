@@ -338,6 +338,25 @@ type FPPPollNudger interface {
 	NudgePoll(instanceID string) bool
 }
 
+// AssetSyncNudger requests an out-of-band asset sync pass as soon as the
+// service's current (or next) tick returns, instead of waiting out its own
+// interval — see [internal/coordinator/assetsync.Service.Nudge]'s own doc
+// comment, which already documents itself as "the upload handler's hook".
+// Declared here, at the consumer, for the identical reason [FPPPollNudger]
+// is: the real implementation is *assetsync.Service itself, which already
+// satisfies this one-method interface with no adapter needed (assetsync.
+// Service.Nudge takes no arguments and returns nothing).
+//
+// This closes a defect this project has now shipped three times: a
+// capability with no production caller (Step 6's ClaimBootstrap/IssueToken/
+// CreatePrincipal). Service.Nudge existed and was tested but nothing in
+// production wiring ever called it, so an upload or a show activation did
+// nothing until the service's own next scheduled tick, up to
+// SHOWMESH_ASSET_SYNC_INTERVAL (5 minutes) later.
+type AssetSyncNudger interface {
+	Nudge()
+}
+
 // DeclarationStore is what this package needs from seam 0's
 // node_declarations and discovery_runs tables (RES-008 D2/D6, BUILD-PLAN
 // Step 7 seam B) — satisfied directly by *store.Store, matching
@@ -378,4 +397,22 @@ type DeclarationStore interface {
 	// exactly why this narrow method, rather than DeclareNode, is what a
 	// discovery run itself is allowed to call.
 	RecordNodeDiscoverySeen(ctx context.Context, nodeID, runID string, seenAt time.Time) error
+}
+
+// AssetStore is Track E seam E3/E4's asset metadata store, as this package
+// needs it (ADR-028): looking up one asset by id and listing by filter.
+// Satisfied directly by *store.Store (its GetAsset/ListAssets methods),
+// matching [DeclarationStore]'s "the real dependency already has this
+// method set" pattern.
+//
+// The WRITE half (CreateAsset) is deliberately NOT a method here, for the
+// identical reason [ConfigStore]'s doc comment gives for its own write
+// half: it is composed directly against a live [store.Tx] inside
+// [identity.Service.AuditedWrite]'s closure (assets.go), because ADR-024
+// decision 11's same-transaction rule needs that exact boundary — bytes
+// are staged and hashed BEFORE any row exists, and the metadata row and its
+// audit entry land in one transaction or none of them do.
+type AssetStore interface {
+	GetAsset(ctx context.Context, id string) (store.AssetRecord, error)
+	ListAssets(ctx context.Context, filter store.AssetFilter) ([]store.AssetRecord, error)
 }

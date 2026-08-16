@@ -62,8 +62,14 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRun(rest, stdout, stderr, clock)
 	case "action":
 		return cmdAction(rest, stdout, stderr, clock)
+	case "show":
+		return cmdShow(rest, stdout, stderr, clock)
+	case "surface":
+		return cmdSurface(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
+	case "assets":
+		return cmdAssets(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -131,6 +137,16 @@ Commands:
   run list [--macro <id>] [--state]   list macro runs, most recent first
   action list                         enumerate show.action objects
   action show <id>                    show one action's full definition
+  show list                           enumerate show objects
+  show get <id>                       show one show's full definition
+  show set <id>                       write a new show revision (write, full replacement)
+  show revisions <id>                 list show revision history, newest first
+  show active                         print the currently active show (404 if none set)
+  show activate <id>                  make <id> the active show (write, full replacement)
+  surface list [--show <id>]          enumerate show.surface objects, optionally by show
+  surface get <id>                    show one surface's full definition
+  surface set <id>                    write a new surface revision (write, full replacement)
+  surface revisions <id>              list surface revision history, newest first
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports
@@ -141,6 +157,18 @@ Commands:
   resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
+  assets list [--show <id>] [--node <id>] [--sequence <id>]
+                           enumerate asset metadata
+  assets get <assetId>    show one asset's full metadata
+  assets upload            stream a file into the asset store (write, requires
+                           asset:write; --show --sequence --media-type
+                           --target-kind [--target] --file)
+  assets fetch <assetId> --out <path>
+                           download one asset's bytes, verifying the content
+                           hash before the file lands at --out
+  assets manifest [--node <id>] [--require-ready]
+                           what each node should hold for the active show,
+                           versus what it actually holds (Track E seam E5)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
@@ -276,6 +304,16 @@ Exit codes:
      this CLI's exit codes keep them separate too. A FINISHED run whose
      coordinator response did not even report completed/confirmed at all
      is neither of these: see exit 6)
+  20 assets not ready ("assets manifest --require-ready" only: at least one
+     node is not_ready — a fresh, complete inventory report is MISSING a
+     named asset. "I checked, and it is missing.")
+  21 assets unknown ("assets manifest --require-ready" only: at least one
+     node is unknown, and none is not_ready — no report has ever arrived,
+     the last one is stale, it said complete:false, or no active show is
+     configured. "I cannot tell." Deliberately distinct from exit 20: a
+     script that collapses "checked and missing" into "cannot tell", or the
+     reverse, will either start a show it should not or block one it
+     should not)
 `)
 }
 

@@ -322,6 +322,56 @@ And running it is where more has landed since. Step 6's three unreachable featur
 
 [ADR-022](../decisions/ADR-022-operator-ui-serves-the-api-same-origin.md) forbids *holding* the token, not merely injecting it as a header, because holding it makes reaching the UI equivalent to reaching the API. Compose still interpolates `${VAR}` from `.env` without `env_file`, so removing it cost nothing.
 
+## Extending one half of a timeout pair is not extending the timeout
+
+**Track E, seams E3/E4.** The upload handler extended its read deadline so an upload slower than the coordinator's 10-second server `ReadTimeout` would not be killed mid-transfer. Go arms the *write* deadline the moment request headers are read, not when the handler starts writing a response, so it kept ticking against the wall clock for the whole time the body streamed in. The upload was staged, hashed, registered and audited — genuinely, fully successful — and then failed on the response flush, so the operator read a transport error for a request that had already succeeded, reproducibly, and a retry reproduced it again. The test named for this behaviour left `WriteTimeout` at zero and passed whether or not the fix existed.
+
+This is the fifth time in this project that two timeouts on opposite sides of one contract turned out to be a single decision, and the first time the session's own specification named the trap explicitly and still under-specified the fix: it required extending the read deadline and cited an existing precedent for extending a *write* deadline elsewhere, without saying this handler needed both.
+
+**Rule:** when one operation is guarded by two deadlines, check both sides of the *same* request, not only the side the known trap points at. A server request has a read deadline and a write deadline, armed at different moments in the request lifecycle, and "extend the timeout" is not a complete instruction until you say which one.
+
+## A function with a no-op default and no caller is an unreachable capability wearing a type
+
+**Track E, seam E6.** `Nudge()` existed, was unit-tested, and was documented in its own doc comment as the upload handler's hook for triggering an immediate sync rather than waiting out the interval. Nothing called it. An upload, and separately an activation of a new active show, sat out a full `SHOWMESH_ASSET_SYNC_INTERVAL` before anything happened, silently, because the function that existed specifically to prevent that wait had no call site.
+
+This is the third time this project has shipped a function nothing invokes, and the first time the interface's own doc comment described the caller that did not exist — which reads as more diligent than silence, and is more dangerous for it: a reviewer who reads the comment sees the intended design and moves on rather than going looking for the call site.
+
+**Rule:** a capability is not shipped until something in the running system actually calls it. Check for a real call site with the scrutiny given the function itself, and treat a doc comment naming an intended caller as a claim to verify, never as evidence the caller exists.
+
+## A "replace" that runs on an incomplete report converts absence of evidence into evidence of absence, in the store
+
+**Track E, seams E5/E6.** The agent reports an empty asset list whenever it could not finish enumerating its own directory — a transiently unreadable mount, for instance. The coordinator's inventory store treated every report as authoritative and replaced the prior inventory wholesale on receipt, so an agent that could not read its disk this one time told the coordinator, correctly by the letter of "replace means replace," that the node now holds nothing. The manifest correctly rendered `unknown`. But the sync service was not consulting the manifest: it compared its own held-asset map directly against expectations, saw nothing held, and re-dispatched every asset on every tick until the mount returned — a fleet-wide re-fetch storm triggered by a report that was honestly reporting that it did not know anything.
+
+The fix needed two halves, and either alone would still have shipped a live defect. The store now leaves the existing inventory alone whenever a report is incomplete, because "we could not check" is not "we checked and found nothing." And the dispatcher was rerouted through the same readiness function the read API renders, so there is exactly one place a node's readiness gets decided, and dispatch now stops whenever that function reads `unknown` for any reason — not only when a second, locally-built map happens to agree with it.
+
+**Rule:** a subsystem that overwrites what it knows on receipt of a report must distinguish "the report says empty" from "the report could not be produced." And every consumer of derived state — not only the one that renders it to an operator — must go through the same readiness decision rather than keep a shadow copy that can disagree with it.
+
+## Strengthening a decorative test can leave it decorative
+
+**Track E, seams E3/E4.** Review found the agent's post-write read-back was dead code as far as the test suite could tell: the value it produced could be replaced with the already-known in-memory download hash and the whole package stayed green, even though the comment beside it claimed the value rested on a genuine re-read of the file just written to disk. The first fix — asserting the field's value more precisely, and separately asserting the on-disk file size — both still passed against the same mutation. Neither pinned what the code actually *did*; both pinned values the mutation happened to preserve, because the download hash and the disk hash agree in every reachable happy path. Only asserting that the read-back function was *called* caught it.
+
+**Rule:** when you strengthen a test that failed to catch a mutation, run the same mutation against the strengthened version before trusting it. A better assertion on the wrong thing is still decorative.
+
+## A test can catch its mutation for the wrong reason
+
+**Track E, seams E3/E4.** Two tests in one diff appeared to catch their intended defect for a reason unrelated to the rule they were named for. A refusal test asserted only that the response was non-2xx; a review mutation made the handler fail with a `500` instead of the `400` the test's name promised, and the test never noticed, because "not 2xx" is equally true of both. A path-traversal test drove its fixture through the store's public `Open` method, where a coincidental file-not-found produced the same outward failure a correctly rejected traversal path would — so the test could not distinguish "we refused this path" from "this path happened not to exist" underneath an unrelated error.
+
+**Rule:** a test that asserts only that something failed, without asserting *how*, will pass against a mutation that breaks the mechanism but happens to fail for an unrelated reason. Assert the specific failure — the exact status, the exact error — and where a guard is under test, exercise it directly rather than through a caller where an unrelated failure can stand in for it.
+
+## Integration found what neither review did, and one failure was a fix working
+
+**Track E, acceptance run.** Two failures surfaced only once the acceptance suite ran real processes against each other, and neither review pass had found either. The store-unreachable test simulated the store going away by closing its proxy's listener; the agent's HTTP client kept its already-open connection alive, so the proxy went on forwarding fetches over the connection it already had, the node fetched the asset it was meant to be unable to reach, and the test sat out its full timeout waiting for a `not_ready` that could never arrive, because the one path that mattered was still open. `stop()` now closes every live connection, not just the listener.
+
+The second was not a defect. The active-show-change test asserted `not_ready` immediately after activation, with a comment arguing the assertion was deterministic rather than a race. That was true only while sync ran on a fixed timer; the `Nudge` fix (above) made activation trigger sync within milliseconds, so the node was sometimes already ready by the time the assertion ran, and the comment's own argument for safety had quietly become false underneath it. The test now stops the content endpoint before activating, so `not_ready` is a resting state the test controls rather than a window it was racing to observe.
+
+**Rule:** a mock that only closes a listener does not remove a connection a real client is keeping open; any test simulating "the peer went away" has to close what a real client holds. And when a fix changes system timing, re-read every test whose passing depends on an argument about *when* something happens — a comment defending a race as "actually deterministic" is a claim about the system as it existed when written, not a property of the assertion itself.
+
+## Verify a reviewer's finding before acting on it
+
+**Track E, review fold.** Two independent reviews returned eleven findings together. One flagged a test as decorative — an `ETag` assertion said to pass regardless of the header's value. Checking it before changing anything found the assertion present and precise: it failed correctly under the mutation. Nine of the other ten findings held up and were fixed; this one did not, and no change was made for it.
+
+**Rule:** a review finding is a hypothesis, however specific it sounds, not a fact. Reproduce it — run the mutation, read the assertion, check the call site — before spending a fix on it. A fix for a finding that was wrong is a pointless change to code that was already correct.
+
 ## Removing a line from the working tree does not remove it from history
 
 **Step 0.** A third-party product name was removed from a working copy but remained in the initial commit, and therefore on the remote. History was rewritten, every reachable object re-scanned, and the result force-pushed. All commit hashes changed at that point.

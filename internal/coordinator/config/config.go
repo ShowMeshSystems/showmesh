@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -253,6 +255,50 @@ type Config struct {
 	// it. See ResolumePollInterval's own doc comment for why this is only
 	// ever a starting value, not the knob itself.
 	ResolumeWebSocketDisabled bool
+
+	// --- Track E seam E5/E6: the asset manifest and sync service (ADR-028) ---
+
+	// AssetDir is SHOWMESH_ASSET_DIR: the root directory
+	// internal/coordinator/assetstore's volume backend stores asset bytes
+	// under (ADR-028 decision 4: metadata in SQLite, bytes never in it).
+	// Defaults to "<DataDir>/assets" when unset.
+	AssetDir string
+
+	// AssetMaxUploadBytes is SHOWMESH_ASSET_MAX_UPLOAD_BYTES: the maximum
+	// size of a single asset upload. Defaults to
+	// assetstore.DefaultMaxUploadBytes when unset.
+	AssetMaxUploadBytes int64
+
+	// AssetContentBaseURL is SHOWMESH_ASSET_CONTENT_BASE_URL: the base URL
+	// an agent's asset.fetch operation downloads asset bytes from — an
+	// asset.fetch command's own "url" param is
+	// "<AssetContentBaseURL>/api/v1/assets/<id>/content". Empty (the
+	// default) means internal/coordinator/assetsync's sync service does
+	// NOT run at all: it logs that once at startup and the asset manifest
+	// states it as the reason no node can be confirmed ready, rather than
+	// the feature silently doing nothing — see that package's Service.Run.
+	AssetContentBaseURL string
+
+	// AssetSyncInterval is SHOWMESH_ASSET_SYNC_INTERVAL: how often the
+	// asset sync service recomputes every declared node's gap against the
+	// active show and dispatches asset.fetch commands, in addition to
+	// running once on every asset upload (ADR-028 decision 7: never at
+	// showtime). Defaults to 5 minutes when unset. Ignored entirely when
+	// AssetContentBaseURL is empty.
+	AssetSyncInterval time.Duration
+
+	// AssetInventoryInterval is SHOWMESH_ASSET_INVENTORY_INTERVAL: this
+	// coordinator's OWN COPY of the agent's inventory-report cadence
+	// (SHOWMESH_ASSET_INVENTORY_INTERVAL on the agent side), used only to
+	// derive the staleness window a node's inventory report must fall
+	// within to be treated as fresh (assetsync.StalenessWindow: 3x this
+	// value). This coordinator cannot see what an agent is actually
+	// configured with — the two must be set to agree by whoever deploys
+	// them, and a coordinator expecting a shorter interval than an agent
+	// actually publishes on will see that node read unknown for part of
+	// every cycle rather than ready. Defaults to 2 minutes, matching the
+	// agent's own default.
+	AssetInventoryInterval time.Duration
 }
 
 // FPPEndpoint is one configured FPP instance for the coordinator's FPP REST
@@ -387,6 +433,18 @@ const (
 	// deliberately NOT reused for anything else.
 	envResolumePollInterval      = "SHOWMESH_RESOLUME_POLL_INTERVAL"
 	envResolumeWebSocketDisabled = "SHOWMESH_RESOLUME_WEBSOCKET_DISABLED"
+
+	// envAssetDir, envAssetMaxUploadBytes, envAssetContentBaseURL,
+	// envAssetSyncInterval, and envAssetInventoryInterval back the Track E
+	// seam E5/E6 fields above. See each Config field's own doc comment.
+	envAssetDir               = "SHOWMESH_ASSET_DIR"
+	envAssetMaxUploadBytes    = "SHOWMESH_ASSET_MAX_UPLOAD_BYTES"
+	envAssetContentBaseURL    = "SHOWMESH_ASSET_CONTENT_BASE_URL"
+	envAssetSyncInterval      = "SHOWMESH_ASSET_SYNC_INTERVAL"
+	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
+
+	defaultAssetSyncInterval      = 5 * time.Minute
+	defaultAssetInventoryInterval = 2 * time.Minute
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -494,13 +552,28 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	dataDir := getEnvDefault(lookup, EnvDataDir, DefaultDataDir)
+
+	assetMaxUploadBytes, err := parseInt64Env(lookup, envAssetMaxUploadBytes, assetstore.DefaultMaxUploadBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	assetSyncInterval, err := parseDurationEnv(lookup, envAssetSyncInterval, defaultAssetSyncInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	assetInventoryInterval, err := parseDurationEnv(lookup, envAssetInventoryInterval, defaultAssetInventoryInterval)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
 		MQTTClientID: getEnvDefault(lookup, envMQTTClientID, defaultClientID),
 		MQTTUsername: getEnvDefault(lookup, envMQTTUsername, ""),
 		MQTTPassword: getEnvDefault(lookup, envMQTTPassword, ""),
-		DataDir:      getEnvDefault(lookup, EnvDataDir, DefaultDataDir),
+		DataDir:      dataDir,
 		LogLevel:     getEnvDefault(lookup, envLogLevel, defaultLogLevel),
 		FPPEndpoints: fppEndpoints,
 		// Non-empty, mirroring checkAPITokenRetired's "set" convention —
@@ -530,6 +603,12 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 
 		ResolumePollInterval:      resolumePollInterval,
 		ResolumeWebSocketDisabled: resolumeWebSocketDisabled,
+
+		AssetDir:               getEnvDefault(lookup, envAssetDir, filepath.Join(dataDir, "assets")),
+		AssetMaxUploadBytes:    assetMaxUploadBytes,
+		AssetContentBaseURL:    getEnvDefault(lookup, envAssetContentBaseURL, ""),
+		AssetSyncInterval:      assetSyncInterval,
+		AssetInventoryInterval: assetInventoryInterval,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -598,6 +677,22 @@ func parseIntEnv(lookup func(string) (string, bool), key string, def int) (int, 
 		return def, nil
 	}
 	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a valid integer: %w", key, raw, err)
+	}
+	return v, nil
+}
+
+// parseInt64Env mirrors [parseIntEnv] for a variable that must fit an
+// int64 (SHOWMESH_ASSET_MAX_UPLOAD_BYTES's byte count is the first such
+// case in this file; parseIntEnv's plain int would truncate on a 32-bit
+// build).
+func parseInt64Env(lookup func(string) (string, bool), key string, def int64) (int64, error) {
+	raw := getEnvDefault(lookup, key, "")
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %q is not a valid integer: %w", key, raw, err)
 	}
@@ -782,6 +877,10 @@ func (c Config) Validate() error {
 	}
 	if c.ResolumePollInterval < 0 {
 		return fmt.Errorf("%s must not be negative, got %s", envResolumePollInterval, c.ResolumePollInterval)
+	}
+
+	if err := validateAssetConfig(c); err != nil {
+		return err
 	}
 
 	return nil
@@ -1099,6 +1198,46 @@ func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEnd
 	return nil
 }
 
+// validateAssetConfig checks the Track E seam E5/E6 asset fields.
+// AssetContentBaseURL's rule mirrors validateResolumeConfig's exactly
+// (http/https, a host, no userinfo) except that empty is a valid,
+// deliberate "the sync service does not run" state rather than something
+// this function gates the rest of its checks on — AssetDir and
+// AssetMaxUploadBytes matter to the (separately built) upload/store
+// surface regardless of whether the sync service is enabled.
+func validateAssetConfig(c Config) error {
+	if c.AssetDir == "" {
+		return fmt.Errorf("%s must not be empty", envAssetDir)
+	}
+	if c.AssetMaxUploadBytes <= 0 {
+		return fmt.Errorf("%s must be positive, got %d", envAssetMaxUploadBytes, c.AssetMaxUploadBytes)
+	}
+	if c.AssetSyncInterval <= 0 {
+		return fmt.Errorf("%s must be positive, got %s", envAssetSyncInterval, c.AssetSyncInterval)
+	}
+	if c.AssetInventoryInterval <= 0 {
+		return fmt.Errorf("%s must be positive, got %s", envAssetInventoryInterval, c.AssetInventoryInterval)
+	}
+
+	if c.AssetContentBaseURL == "" {
+		return nil
+	}
+	u, err := url.Parse(c.AssetContentBaseURL)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid URL: %w", envAssetContentBaseURL, c.AssetContentBaseURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s %q must use http or https", envAssetContentBaseURL, c.AssetContentBaseURL)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s %q must include a host", envAssetContentBaseURL, c.AssetContentBaseURL)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s: url must not include userinfo/credentials", envAssetContentBaseURL)
+	}
+	return nil
+}
+
 func getEnvDefault(lookup func(string) (string, bool), key, def string) string {
 	if v, ok := lookup(key); ok {
 		return v
@@ -1179,6 +1318,16 @@ func (c Config) LogValue() slog.Value {
 		slog.String("resolume_id", c.ResolumeID),
 		slog.Duration("resolume_poll_interval", c.ResolumePollInterval),
 		slog.Bool("resolume_websocket_disabled", c.ResolumeWebSocketDisabled),
+		// Track E seam E5/E6: none of these four is a credential, so all
+		// are logged directly.
+		slog.String("asset_dir", c.AssetDir),
+		slog.Int64("asset_max_upload_bytes", c.AssetMaxUploadBytes),
+		// Not a credential (validateAssetConfig forbids userinfo, same as
+		// resolume_url above), so logged directly. Empty means the sync
+		// service is disabled — see AssetContentBaseURL's own doc comment.
+		slog.String("asset_content_base_url", c.AssetContentBaseURL),
+		slog.Duration("asset_sync_interval", c.AssetSyncInterval),
+		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 	)
 }
 

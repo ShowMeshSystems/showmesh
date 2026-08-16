@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
@@ -204,6 +206,27 @@ func Run() int {
 		return 1
 	}
 
+	// Track E seam E5/E6: the asset manifest's sync service (ADR-028
+	// decision 7). Constructed unconditionally, over the SAME
+	// *broker.BrokerManager (bm) inventory just subscribed through, since
+	// asset.fetch commands are dispatched on the control-plane broker
+	// exactly like every other node command. assetSync.Run itself checks
+	// cfg.AssetContentBaseURL and logs+returns without starting a loop when
+	// it is empty (see assetsync.Service.Run's own doc comment) — there is
+	// no separate "if configured" gate here, matching that method's own
+	// contract rather than duplicating its condition.
+	assetSync := assetsync.NewService(st, bm, logger, cfg.AssetContentBaseURL, cfg.AssetInventoryInterval)
+
+	// The volume backend owns the asset bytes; SQLite holds only their
+	// metadata (ADR-028). A backend that cannot be opened is fatal, because
+	// the alternative is an upload surface that accepts a request and has
+	// nowhere to put it.
+	assetBackend, assetBackendErr := assetstore.NewVolumeBackend(cfg.AssetDir)
+	if assetBackendErr != nil {
+		logger.Error("failed to open the asset store directory", "dir", cfg.AssetDir, "error", assetBackendErr)
+		return 1
+	}
+
 	// fppRunner is constructed here — BEFORE apiDeps, not after it the way
 	// this file had every other FPP collector wiring line ordered before
 	// the 2026-08-13 post-dispatch poll nudge — so apiDeps.Nudger
@@ -365,6 +388,38 @@ func Run() int {
 		// api.ConfigStore directly (see that interface's doc comment), no
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
+		// Track E: *store.Store satisfies api.AssetStore directly, the same
+		// way it satisfies Config above. AssetBackend and AssetMaxUploadBytes
+		// are the upload handler's two other halves; the byte limit lives in
+		// config rather than in the handler so the CLI can derive its own
+		// transfer budget from the same number.
+		Assets:              st,
+		AssetBackend:        assetBackend,
+		AssetMaxUploadBytes: cfg.AssetMaxUploadBytes,
+		// AssetManifests is seam E5's own dependency: *store.Store, not an
+		// interface (see that field's own doc comment for why), wired the
+		// same *st already used for Config/Assets/Commands/Discovery above.
+		// AssetInventoryInterval is the same cfg.AssetInventoryInterval
+		// assetSync was already constructed from above, so the manifest's
+		// staleness window and the agent's own report cadence can never
+		// silently disagree about which number they mean.
+		AssetManifests:         st,
+		AssetInventoryInterval: cfg.AssetInventoryInterval,
+		// AssetSyncNudger wires the SAME *assetsync.Service constructed
+		// above straight in: its Nudge method already satisfies
+		// api.AssetSyncNudger with no adapter needed (the identical
+		// property fppRunnerNudger's own doc comment notes for
+		// *collector.Runner one field over). This is what makes an upload
+		// or a show activation trigger a sync pass immediately instead of
+		// waiting out cfg.AssetSyncInterval (up to 5 minutes) — the
+		// capability existed and was tested but had no production caller
+		// until this line.
+		AssetSyncNudger: assetSync,
+		// AssetSyncEnabled mirrors assetSync.Enabled() (cfg.
+		// AssetContentBaseURL != ""), read from the SAME already-constructed
+		// Service rather than re-deriving the emptiness check here, so this
+		// can never disagree with what Service.Run itself decided.
+		AssetSyncEnabled: assetSync.Enabled(),
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must
@@ -659,7 +714,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(4)
+	backgroundWG.Add(5)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -667,6 +722,16 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		fppRunner.Run(ctx)
+	}()
+	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
+	// (assetsync/sync.go), joined via the identical backgroundWG so
+	// shutdown waits for it cleanly like every other background loop here.
+	// It is a no-op loop (logs once and returns) when
+	// cfg.AssetContentBaseURL is unset — see assetSync's own construction
+	// comment above.
+	go func() {
+		defer backgroundWG.Done()
+		assetSync.Run(ctx, cfg.AssetSyncInterval)
 	}()
 	// resolumeCompositionWire.Run owns Track D seam D-2/B's own periodic
 	// refresh loop (resolumewiring.go), started unconditionally — see

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 )
 
 // lookupFrom builds a lookup function for LoadConfigFrom backed by an
@@ -56,6 +58,15 @@ func TestLoadConfigDefaults(t *testing.T) {
 		// "defaults regardless of whether the feature is active" posture
 		// FPPMQTTTopicPrefix already has, see ResolumeID's doc comment.
 		ResolumeID: "resolume",
+
+		// Track E seam E5/E6: SHOWMESH_ASSET_CONTENT_BASE_URL is unset (the
+		// sync service never runs), but the other four asset fields still
+		// default — the identical "defaults regardless of whether the
+		// feature is active" posture ResolumeID already has.
+		AssetDir:               "/var/lib/showmesh/assets",
+		AssetMaxUploadBytes:    assetstore.DefaultMaxUploadBytes,
+		AssetSyncInterval:      defaultAssetSyncInterval,
+		AssetInventoryInterval: defaultAssetInventoryInterval,
 	}
 
 	// reflect.DeepEqual, not ==: FPPEndpoints is a slice, which made Config
@@ -95,6 +106,11 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 
 		FPPMQTTTopicPrefix: "falcon/player",
 		ResolumeID:         "resolume",
+
+		AssetDir:               "/data/showmesh/assets",
+		AssetMaxUploadBytes:    assetstore.DefaultMaxUploadBytes,
+		AssetSyncInterval:      defaultAssetSyncInterval,
+		AssetInventoryInterval: defaultAssetInventoryInterval,
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
@@ -336,6 +352,71 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 				"SHOWMESH_RESOLUME_ID":   "player-01",
 			},
 			wantVar: "SHOWMESH_RESOLUME_ID",
+		},
+		{
+			name:    "asset dir empty",
+			env:     map[string]string{"SHOWMESH_ASSET_DIR": ""},
+			wantVar: "SHOWMESH_ASSET_DIR",
+		},
+		{
+			name:    "asset max upload bytes not an integer",
+			env:     map[string]string{"SHOWMESH_ASSET_MAX_UPLOAD_BYTES": "not-a-number"},
+			wantVar: "SHOWMESH_ASSET_MAX_UPLOAD_BYTES",
+		},
+		{
+			name:    "asset max upload bytes zero",
+			env:     map[string]string{"SHOWMESH_ASSET_MAX_UPLOAD_BYTES": "0"},
+			wantVar: "SHOWMESH_ASSET_MAX_UPLOAD_BYTES",
+		},
+		{
+			name:    "asset max upload bytes negative",
+			env:     map[string]string{"SHOWMESH_ASSET_MAX_UPLOAD_BYTES": "-1"},
+			wantVar: "SHOWMESH_ASSET_MAX_UPLOAD_BYTES",
+		},
+		{
+			name:    "asset sync interval not a duration",
+			env:     map[string]string{"SHOWMESH_ASSET_SYNC_INTERVAL": "soon"},
+			wantVar: "SHOWMESH_ASSET_SYNC_INTERVAL",
+		},
+		{
+			name:    "asset sync interval zero",
+			env:     map[string]string{"SHOWMESH_ASSET_SYNC_INTERVAL": "0s"},
+			wantVar: "SHOWMESH_ASSET_SYNC_INTERVAL",
+		},
+		{
+			name:    "asset inventory interval not a duration",
+			env:     map[string]string{"SHOWMESH_ASSET_INVENTORY_INTERVAL": "soon"},
+			wantVar: "SHOWMESH_ASSET_INVENTORY_INTERVAL",
+		},
+		{
+			name:    "asset inventory interval zero",
+			env:     map[string]string{"SHOWMESH_ASSET_INVENTORY_INTERVAL": "0s"},
+			wantVar: "SHOWMESH_ASSET_INVENTORY_INTERVAL",
+		},
+		{
+			name:    "asset content base url invalid",
+			env:     map[string]string{"SHOWMESH_ASSET_CONTENT_BASE_URL": "://not a url:::"},
+			wantVar: "SHOWMESH_ASSET_CONTENT_BASE_URL",
+		},
+		{
+			name:    "asset content base url missing scheme",
+			env:     map[string]string{"SHOWMESH_ASSET_CONTENT_BASE_URL": "coordinator.example:8080"},
+			wantVar: "SHOWMESH_ASSET_CONTENT_BASE_URL",
+		},
+		{
+			name:    "asset content base url unsupported scheme",
+			env:     map[string]string{"SHOWMESH_ASSET_CONTENT_BASE_URL": "ftp://coordinator.example:8080"},
+			wantVar: "SHOWMESH_ASSET_CONTENT_BASE_URL",
+		},
+		{
+			name:    "asset content base url with no host",
+			env:     map[string]string{"SHOWMESH_ASSET_CONTENT_BASE_URL": "http://"},
+			wantVar: "SHOWMESH_ASSET_CONTENT_BASE_URL",
+		},
+		{
+			name:    "asset content base url with userinfo",
+			env:     map[string]string{"SHOWMESH_ASSET_CONTENT_BASE_URL": "http://user:pass@coordinator.example:8080"},
+			wantVar: "SHOWMESH_ASSET_CONTENT_BASE_URL",
 		},
 	}
 
@@ -1007,5 +1088,98 @@ func TestConfigLogValueResolumeFieldsVisible(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "resolume-main") {
 		t.Errorf("Config.LogValue() output = %s, want it to name the configured Resolume id", rendered)
+	}
+}
+
+// --- Track E seam E5/E6: the asset manifest and sync service (ADR-028) ---
+
+// TestLoadConfigAssetDefaults proves every asset field defaults sensibly
+// with nothing set: AssetDir under DataDir, AssetContentBaseURL empty (the
+// sync service does not run), and the other three fields at their stated
+// defaults.
+func TestLoadConfigAssetDefaults(t *testing.T) {
+	cfg, err := LoadConfigFrom(lookupFrom(nil))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.AssetDir != "/var/lib/showmesh/assets" {
+		t.Errorf("AssetDir = %q, want %q", cfg.AssetDir, "/var/lib/showmesh/assets")
+	}
+	if cfg.AssetMaxUploadBytes != assetstore.DefaultMaxUploadBytes {
+		t.Errorf("AssetMaxUploadBytes = %d, want %d", cfg.AssetMaxUploadBytes, assetstore.DefaultMaxUploadBytes)
+	}
+	if cfg.AssetContentBaseURL != "" {
+		t.Errorf("AssetContentBaseURL = %q, want empty when SHOWMESH_ASSET_CONTENT_BASE_URL is unset", cfg.AssetContentBaseURL)
+	}
+	if cfg.AssetSyncInterval != defaultAssetSyncInterval {
+		t.Errorf("AssetSyncInterval = %s, want default %s", cfg.AssetSyncInterval, defaultAssetSyncInterval)
+	}
+	if cfg.AssetInventoryInterval != defaultAssetInventoryInterval {
+		t.Errorf("AssetInventoryInterval = %s, want default %s", cfg.AssetInventoryInterval, defaultAssetInventoryInterval)
+	}
+}
+
+// TestLoadConfigAssetDirDefaultsUnderDataDir proves AssetDir's default
+// follows SHOWMESH_DATA_DIR rather than being fixed against
+// DefaultDataDir, so a deployment that relocates its data directory does
+// not end up with assets on a different volume than everything else.
+func TestLoadConfigAssetDirDefaultsUnderDataDir(t *testing.T) {
+	env := map[string]string{"SHOWMESH_DATA_DIR": "/mnt/showmesh-data"}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.AssetDir != "/mnt/showmesh-data/assets" {
+		t.Errorf("AssetDir = %q, want %q", cfg.AssetDir, "/mnt/showmesh-data/assets")
+	}
+}
+
+// TestLoadConfigAssetOverridesFromEnv proves every asset field is
+// independently overridable, and that a non-empty
+// SHOWMESH_ASSET_CONTENT_BASE_URL round-trips (this is the "sync service
+// runs" case every other asset test deliberately leaves unset).
+func TestLoadConfigAssetOverridesFromEnv(t *testing.T) {
+	env := map[string]string{
+		"SHOWMESH_ASSET_DIR":                "/data/assets",
+		"SHOWMESH_ASSET_MAX_UPLOAD_BYTES":   "1048576",
+		"SHOWMESH_ASSET_CONTENT_BASE_URL":   "https://coordinator.example:8443",
+		"SHOWMESH_ASSET_SYNC_INTERVAL":      "90s",
+		"SHOWMESH_ASSET_INVENTORY_INTERVAL": "30s",
+	}
+
+	cfg, err := LoadConfigFrom(lookupFrom(env))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.AssetDir != "/data/assets" {
+		t.Errorf("AssetDir = %q, want %q", cfg.AssetDir, "/data/assets")
+	}
+	if cfg.AssetMaxUploadBytes != 1048576 {
+		t.Errorf("AssetMaxUploadBytes = %d, want %d", cfg.AssetMaxUploadBytes, 1048576)
+	}
+	if cfg.AssetContentBaseURL != "https://coordinator.example:8443" {
+		t.Errorf("AssetContentBaseURL = %q, want %q", cfg.AssetContentBaseURL, "https://coordinator.example:8443")
+	}
+	if cfg.AssetSyncInterval != 90*time.Second {
+		t.Errorf("AssetSyncInterval = %s, want %s", cfg.AssetSyncInterval, 90*time.Second)
+	}
+	if cfg.AssetInventoryInterval != 30*time.Second {
+		t.Errorf("AssetInventoryInterval = %s, want %s", cfg.AssetInventoryInterval, 30*time.Second)
+	}
+}
+
+// TestConfigLogValueAssetContentBaseURLVisibleNoUserinfoPossible mirrors
+// TestConfigLogValueResolumeFieldsVisible: AssetContentBaseURL carries no
+// credential (validateAssetConfig rejects userinfo outright, see the
+// "asset content base url with userinfo" case in
+// TestLoadConfigValidationFailures), so LogValue logs it in the clear.
+func TestConfigLogValueAssetContentBaseURLVisible(t *testing.T) {
+	cfg := Config{AssetContentBaseURL: "https://coordinator.example:8443"}
+
+	rendered := renderLogValue(t, cfg)
+
+	if !strings.Contains(rendered, "coordinator.example:8443") {
+		t.Errorf("Config.LogValue() output = %s, want it to name the configured asset content base URL", rendered)
 	}
 }

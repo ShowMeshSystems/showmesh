@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -211,6 +213,80 @@ type Dependencies struct {
 	// unsupported, matching this struct's standing "an unwired dependency
 	// is not this API failing" posture.
 	ResolumeActions ResolumeActionDispatcher
+
+	// Assets is Track E seam E3/E4's asset metadata read half — see
+	// [AssetStore]'s own doc comment for why its write half is composed
+	// against Identity.AuditedWrite instead of a method here. A nil field
+	// is replaced by [noAssetStore], under which every read reports "not
+	// found"/empty, matching this struct's standing "an unwired dependency
+	// is not this API failing" posture.
+	Assets AssetStore
+
+	// AssetBackend stores and serves asset bytes, content-addressed by
+	// sha256 (ADR-028 decision 4) — see assetstore.Backend. A nil field is
+	// replaced by [noAssetBackend], under which POST /assets refuses
+	// loudly (matching every other unwired write dependency's posture) and
+	// GET /assets/{id}/content reports the blob not found.
+	AssetBackend assetstore.Backend
+
+	// AssetMaxUploadBytes bounds a single asset upload (SHOWMESH_ASSET_MAX_UPLOAD_BYTES).
+	// A value <= 0 is replaced by [assetstore.DefaultMaxUploadBytes] —
+	// the same "nothing told this API otherwise" posture as every other
+	// unwired/unset numeric dependency in this struct.
+	AssetMaxUploadBytes int64
+
+	// AssetManifests is Track E seam E5's asset manifest surface
+	// (GET /assets/manifest, GET /nodes/{nodeId}/assets — assetmanifest.go).
+	// It is a concrete *store.Store, not an interface, unlike every other
+	// field in this struct: assetsync.BuildManifest/BuildNodeManifest
+	// (ComputeNodeManifest is the ONLY function in this codebase permitted
+	// to decide a node's asset readiness — see that package's own doc
+	// comment) take *store.Store directly, because computing one node's
+	// manifest reads config objects, node declarations, and asset
+	// inventory across more than ten store methods, and a narrow
+	// interface here would just be assetsync's own dependency surface
+	// duplicated with no decoupling benefit — the identical reasoning
+	// [CommandStore]'s doc comment (interfaces.go) gives for importing
+	// store's record types directly one field over. A nil field is NOT
+	// defaulted to a no-op (there is no safe no-op *store.Store): both
+	// handlers check for nil explicitly and render every node's manifest
+	// "unknown" with a reason naming the missing wiring, rather than
+	// panicking on a nil dereference.
+	AssetManifests *store.Store
+
+	// AssetInventoryInterval is SHOWMESH_ASSET_INVENTORY_INTERVAL
+	// ([config.Config.AssetInventoryInterval]), threaded through for the
+	// identical "this package does not read the environment or config
+	// package state on its own" reason [FPPEndpointsEnvVarSet] documents.
+	// assetsync.StalenessWindow(AssetInventoryInterval) is the ONE staleness
+	// computation every manifest response rests on. A value <= 0 is
+	// replaced by [defaultAssetManifestInventoryInterval].
+	AssetInventoryInterval time.Duration
+
+	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see
+	// [AssetSyncNudger]'s own doc comment. In practice the real value is
+	// *assetsync.Service, wired by coordinator.go. A nil field is replaced
+	// by [noAssetSyncNudger], under which Nudge is a no-op: an upload or a
+	// show activation degrades to waiting out the service's own interval,
+	// matching this struct's standing "an unwired dependency is not this
+	// API failing" posture.
+	AssetSyncNudger AssetSyncNudger
+
+	// AssetSyncEnabled mirrors *assetsync.Service.Enabled()
+	// (cfg.AssetContentBaseURL != ""), threaded through for the identical
+	// "this package does not read the environment or config package state
+	// on its own" reason [FPPEndpointsEnvVarSet] documents. Consumed by
+	// assetmanifest.go's not_ready reason: config.Config.
+	// AssetContentBaseURL's own doc comment and assetsync/sync.go's startup
+	// log line both promise that an unset base URL is stated as the reason
+	// no node can be confirmed ready, and this field is what makes that
+	// true rather than an unkept promise. The zero value (false) is the
+	// same "nothing told this API otherwise" posture as every other unwired
+	// dependency here — a test or embedder that has not wired this in gets
+	// the disabled-sync note appended to every not_ready reason, which is
+	// the conservative reading when this coordinator has not said
+	// otherwise.
+	AssetSyncEnabled bool
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -221,6 +297,11 @@ type Dependencies struct {
 // drifts from this interface, this line fails to compile rather than the
 // drift surfacing only once someone tries to wire the two together.
 var _ CommandStore = (*store.Store)(nil)
+
+// storeSatisfiesAssetStore is [AssetStore]'s identical compile-time
+// assertion — *store.Store's GetAsset/ListAssets already satisfy it with
+// no adapter needed.
+var _ AssetStore = (*store.Store)(nil)
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -261,8 +342,41 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.ResolumeActions == nil {
 		d.ResolumeActions = noResolumeActionDispatcher{}
 	}
+	if d.Assets == nil {
+		d.Assets = noAssetStore{}
+	}
+	if d.AssetBackend == nil {
+		d.AssetBackend = noAssetBackend{}
+	}
+	if d.AssetMaxUploadBytes <= 0 {
+		d.AssetMaxUploadBytes = assetstore.DefaultMaxUploadBytes
+	}
+	if d.AssetInventoryInterval <= 0 {
+		d.AssetInventoryInterval = defaultAssetManifestInventoryInterval
+	}
+	if d.AssetSyncNudger == nil {
+		d.AssetSyncNudger = noAssetSyncNudger{}
+	}
 	return d
 }
+
+// noAssetSyncNudger is [Dependencies.AssetSyncNudger]'s nil-safe default:
+// Nudge does nothing, which is exactly the pre-nudge behavior (wait out
+// [assetsync.Service]'s own interval) — matching [noFPPPollNudger]'s
+// identical shape one field over.
+type noAssetSyncNudger struct{}
+
+func (noAssetSyncNudger) Nudge() {}
+
+// defaultAssetManifestInventoryInterval mirrors
+// internal/coordinator/config's own defaultAssetInventoryInterval (2
+// minutes). Duplicated, not imported: that constant is unexported, and
+// this package must not import internal/coordinator/config for a value —
+// the same posture [Dependencies.FPPEndpointsEnvVarSet]'s doc comment
+// states for reading the environment. Only reached when
+// [Dependencies.AssetInventoryInterval] is left unset, which production
+// wiring never does (config.Load always computes a positive value).
+const defaultAssetManifestInventoryInterval = 2 * time.Minute
 
 // noFPPPollNudger is [Dependencies.Nudger]'s nil-safe default: NudgePoll
 // always reports false, which every caller already treats identically to
@@ -442,6 +556,45 @@ func (noMacroRunner) ListRuns(context.Context, MacroRunFilter) ([]store.MacroRun
 
 func (noMacroRunner) SnapshotRuns(context.Context) ([]store.MacroRunRecord, error) {
 	return nil, nil
+}
+
+// noAssetStore is [Dependencies.Assets]'s nil-safe default. GetAsset
+// answers [store.ErrAssetNotFound] and ListAssets answers empty-and-
+// successful — a coordinator with no AssetStore wired in has registered no
+// assets, which is the honest answer for both reads, matching
+// [noCommandStore]'s identical posture for its own read methods.
+type noAssetStore struct{}
+
+func (noAssetStore) GetAsset(context.Context, string) (store.AssetRecord, error) {
+	return store.AssetRecord{}, store.ErrAssetNotFound
+}
+
+func (noAssetStore) ListAssets(context.Context, store.AssetFilter) ([]store.AssetRecord, error) {
+	return nil, nil
+}
+
+// errAssetBackendNotConfigured is [noAssetBackend.Put]'s uniform failure,
+// matching [errCommandStoreNotConfigured]'s identical posture: a write
+// dependency nobody has wired in refuses loudly rather than fabricating a
+// blob that was never staged.
+var errAssetBackendNotConfigured = errors.New("api: no assetstore.Backend was wired into this API's Dependencies")
+
+// noAssetBackend is [Dependencies.AssetBackend]'s nil-safe default. Put
+// refuses loudly (a write); Open/Stat answer [assetstore.ErrNotFound] — a
+// coordinator with no backend wired in holds no blob under any key, which
+// is the honest answer for those two reads.
+type noAssetBackend struct{}
+
+func (noAssetBackend) Put(context.Context, io.Reader, int64) (assetstore.Blob, error) {
+	return assetstore.Blob{}, errAssetBackendNotConfigured
+}
+
+func (noAssetBackend) Open(context.Context, string) (io.ReadSeekCloser, int64, error) {
+	return nil, 0, assetstore.ErrNotFound
+}
+
+func (noAssetBackend) Stat(context.Context, string) (int64, error) {
+	return 0, assetstore.ErrNotFound
 }
 
 // scopeConfigWrite is [identity.ScopeConfigWrite] as an addressable
@@ -880,6 +1033,67 @@ func New(deps Dependencies, opts Options) *API {
 	// resolumeaction.go.
 	mux.HandleFunc("GET /api/v1/resolume/actions", h.handleListResolumeActions)
 	mux.HandleFunc("POST /api/v1/resolume/actions", h.writeGuard(&scopeResolumeAction, h.handleDispatchResolumeAction))
+
+	// --- Track E: show, surface, and the active-show pointer ---
+	//
+	// Three new configuration kinds (show, show.surface, show.active —
+	// TRACK-E-SESSION-SPEC.md section 2), following show.action/show.macro's
+	// own route shape immediately above: reads use
+	// readAnyGuard(showConfigReadScopes, ...) (show:macro:run OR
+	// config:write), writes use writeGuard(&scopeConfigWrite, ...). "show" and
+	// "show.surface" are collections with the usual four routes each;
+	// "show.active" is a singleton (fixed id, no {id} path segment) with
+	// three: GET, PUT, and its own revisions route. "show.active" is a
+	// distinct literal path segment from "show" — net/http.ServeMux's
+	// pattern matching is by segment, so this route can never be swallowed
+	// by "GET /api/v1/config/show/{id}" (see this package's own
+	// TestShowActiveRouteIsNotSwallowedByShowIDRoute).
+	mux.HandleFunc("GET /api/v1/config/show", h.readAnyGuard(showConfigReadScopes, h.handleListShows))
+	mux.HandleFunc("GET /api/v1/config/show/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShow))
+	mux.HandleFunc("PUT /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShow))
+	mux.HandleFunc("GET /api/v1/config/show/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.surface", h.readAnyGuard(showConfigReadScopes, h.handleListShowSurfaces))
+	mux.HandleFunc("GET /api/v1/config/show.surface/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurface))
+	mux.HandleFunc("PUT /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowSurface))
+	mux.HandleFunc("GET /api/v1/config/show.surface/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurfaceRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.active", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActive))
+	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
+	mux.HandleFunc("GET /api/v1/config/show.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActiveRevisions))
+
+	// --- Track E: the asset store ---
+	//
+	// Seam E3/E4 (ADR-028). POST is a multipart upload behind asset:write
+	// (admin only, identity/types.go) via writeGuard, exactly like every
+	// other write in this package — CSRF and scope enforcement come free
+	// from that one guard. GET (list, one, and its bytes) all stay open by
+	// default: reads never require asset:write. Listing and single-asset
+	// reads use readAnyGuard(showConfigReadScopes, ...), the identical
+	// posture every other Track E config kind uses, because an asset row
+	// is exactly that: configuration metadata, not telemetry. The content
+	// route uses the plain node:read scope instead — it is what an AGENT
+	// authenticates with to fetch its own bytes (TRACK-E-SESSION-SPEC.md
+	// section 5.2's asset.fetch operation), and node:read is what an agent
+	// credential already holds; requiring show:macro:run/config:write here
+	// would make every node fetch need a principal shaped for a human
+	// operator instead of a machine one.
+	mux.HandleFunc("POST /api/v1/assets", h.writeGuard(&scopeAssetWrite, h.handlePostAssetUpload))
+	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
+	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
+	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
+
+	// Seam E5 (assetmanifest.go): "what should a node hold" versus "what
+	// does it hold" — read-only, same showConfigReadScopes posture as
+	// every other Track E config-metadata read above, never asset:write.
+	// "GET /api/v1/assets/manifest" and "GET /api/v1/assets/{id}" both
+	// match the literal path "/api/v1/assets/manifest"; net/http.ServeMux
+	// (Go 1.22+) resolves that in favor of the more specific, all-literal
+	// pattern regardless of registration order — the identical property
+	// "/posts/latest" vs "/posts/{id}" demonstrates in that package's own
+	// doc comment — so this is not a route ordering hazard.
+	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
 
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.

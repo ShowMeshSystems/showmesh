@@ -51,6 +51,23 @@ HOST_PORT="${SHOWMESH_TEST_MQTT_PORT:-11883}"
 export SHOWMESH_TEST_HEARTBEAT_INTERVAL="${SHOWMESH_TEST_HEARTBEAT_INTERVAL:-300ms}"
 export SHOWMESH_TEST_STALENESS_WINDOW="${SHOWMESH_TEST_STALENESS_WINDOW:-1s}"
 
+# Track E (ADR-028 asset store) compressed timing knobs. Unlike the pair
+# above, there is no separate SHOWMESH_TEST_* override for these: the
+# coordinator's sync service and the agent's inventory publisher already
+# read these exact names as ordinary config (SHOWMESH_ASSET_SYNC_INTERVAL,
+# SHOWMESH_ASSET_INVENTORY_INTERVAL), so exporting them here IS the
+# override, and test/integration/harness_test.go forwards whatever is in
+# this process's own environment into every coordinator/agent subprocess it
+# starts (see envAssetSyncInterval/envAssetInventoryInterval). Kept in
+# roughly the same ratio the production defaults use (5 minute coordinator
+# sync against a 2 minute agent inventory cadence, i.e. sync is the larger
+# of the two) so an asset-sync test here runs in well under a second per
+# tick rather than minutes; the manifest's own staleness window is 3x the
+# inventory interval (assetsync.StalenessWindow), so 250ms here yields a
+# 750ms staleness window.
+export SHOWMESH_ASSET_INVENTORY_INTERVAL="${SHOWMESH_ASSET_INVENTORY_INTERVAL:-250ms}"
+export SHOWMESH_ASSET_SYNC_INTERVAL="${SHOWMESH_ASSET_SYNC_INTERVAL:-750ms}"
+
 export SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${HOST_PORT}"
 export SHOWMESH_TEST_MOSQUITTO_CONTAINER="$CONTAINER_NAME"
 

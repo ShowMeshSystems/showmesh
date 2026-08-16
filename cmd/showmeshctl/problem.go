@@ -171,6 +171,24 @@ const (
 	// the same argument this CLI, must keep legible: "a run that completed
 	// without confirmation must not render the same as" a run that aborted.
 	exitMacroRunAborted = 15
+
+	// exitAssetsNotReady: "assets manifest --require-ready" found at least
+	// one node not_ready — a fresh, complete inventory report is MISSING a
+	// named asset. "checked, and it is missing."
+	exitAssetsNotReady = 20
+
+	// exitAssetsUnknown: "assets manifest --require-ready" found at least
+	// one node unknown, and none not_ready. "cannot tell" — no report has
+	// ever arrived, the last one is stale, it said complete:false, or no
+	// active show is configured. Deliberately distinct from
+	// exitAssetsNotReady (20): a script that collapses "I checked and it is
+	// missing" into "I cannot tell" (or the reverse) will either start a
+	// show it should not, or block one it should not — the exact error
+	// this project keeps finding in new places (see manifest.go's own
+	// "complete: true is the licence to assert absence" rule, which is
+	// what keeps these two states from ever being produced for the same
+	// reason in the first place).
+	exitAssetsUnknown = 21
 )
 
 // cliError carries an exit code alongside a human-readable message, so

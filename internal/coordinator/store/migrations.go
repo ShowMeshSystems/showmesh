@@ -36,6 +36,7 @@ var migrations = []migration{
 	{version: 5, sql: schemaV5},
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
+	{version: 8, sql: schemaV8},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -947,6 +948,104 @@ CREATE TABLE macro_run_steps (
 	command_id            TEXT,
 	attribution_degraded  INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (run_id, step_index)
+);
+`
+
+// schemaV8 adds Track E's asset store tables (ADR-028): assets holds one
+// row of metadata per artifact — never bytes, which live in the pluggable
+// backend the assetstore package addresses (decision 4) — and
+// node_asset_inventory/node_asset_reports hold what a node actually
+// reports it holds. Repository methods live in assets.go and
+// node_assets.go, following the *Store/*Tx-form-over-one-querier-body
+// pattern every writer since schemaV6 uses (see tx.go's [Tx] doc comment).
+// This is a pure-addition migration — nothing from schemaV1 through
+// schemaV7 is touched.
+//
+// assets_identity (ADR-028 decision 1: "identity is show plus logical
+// sequence plus target plus content hash") is the permanent, never-pruned
+// identity of an artifact — it has no WHERE clause, so it also blocks
+// re-registering a hash that was already used and later superseded, which
+// is correct: that exact identity already has a row, and a caller finding
+// one via this index gets the idempotent "already exists" answer
+// (assets.go's ErrAssetExists) rather than a second row for content this
+// store has already seen under that identity.
+//
+// assets_current is the structural half of that same decision: at most one
+// row per (show_id, sequence_id, target_kind, target_id) may have
+// superseded_at IS NULL, so "two current assets for one target" cannot
+// exist even transiently — a query bug or a missed supersede on some
+// future write path fails the INSERT instead of silently serving two
+// answers. runtime_filename is deliberately outside both indexes and every
+// lookup this package performs: ADR-028 decision 1's whole point is that
+// xLights gives three different artifacts for three different targets the
+// identical filename, so a store keyed on it would resolve one node's
+// asset to another node's content.
+//
+// node_asset_inventory is evidence, not desired state — what a node's own
+// agent last reported actually being on its disk, replaced wholesale on
+// every sync report (assets.go's ReplaceNodeAssetInventory: delete this
+// node's rows, insert the new set, all in one transaction, so a reader
+// never observes a half-replaced inventory).
+//
+// node_asset_reports exists so "we have never heard from this node" (no
+// row) is distinguishable from "this node reported holding nothing"
+// (a row with zero corresponding node_asset_inventory rows) — the fourth
+// time this package has needed a table whose mere absence of a row is
+// itself the meaningful, distinct state (see migrations.go's schemaV6
+// doc comment on node_declarations for the earlier three). complete is
+// INTEGER NOT NULL, unlike macro_runs.completed's deliberately nullable
+// pair (schemaV7): an inventory report is never "not yet decided" the way
+// an in-flight run's outcome is — the agent either finished a directory
+// walk and hashed every file, or it did not, and reason states which, per
+// spec §4.2 ("never reports complete: true off a partial walk").
+const schemaV8 = `
+CREATE TABLE assets (
+    id                         TEXT PRIMARY KEY,
+    show_id                    TEXT NOT NULL,
+    sequence_id                TEXT NOT NULL,
+    target_kind                TEXT NOT NULL,   -- 'node' | 'show'
+    target_id                  TEXT NOT NULL,   -- node id, or '' when target_kind='show'
+    media_type                 TEXT NOT NULL,   -- 'fseq' | 'audio' | 'media'
+    content_hash               TEXT NOT NULL,   -- 'sha256:<hex>'
+    runtime_filename           TEXT NOT NULL,
+    size_bytes                 INTEGER NOT NULL,
+    backend                    TEXT NOT NULL,   -- 'volume'
+    storage_key                TEXT NOT NULL,
+    created_at                 TEXT NOT NULL,
+    created_by_principal_id    TEXT NOT NULL,
+    created_by_principal_name  TEXT NOT NULL,
+    superseded_at              TEXT
+);
+
+-- ADR-028 decision 1: identity is show + logical sequence + target + content hash.
+CREATE UNIQUE INDEX assets_identity
+    ON assets (show_id, sequence_id, target_kind, target_id, content_hash);
+
+-- Exactly one CURRENT asset per (show, sequence, target), enforced structurally
+-- rather than by a convention a later query could forget.
+CREATE UNIQUE INDEX assets_current
+    ON assets (show_id, sequence_id, target_kind, target_id)
+    WHERE superseded_at IS NULL;
+
+CREATE INDEX assets_by_target ON assets (target_kind, target_id);
+
+-- What a node reports it actually holds. Evidence, not bookkeeping.
+CREATE TABLE node_asset_inventory (
+    node_id          TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    runtime_filename TEXT NOT NULL,
+    size_bytes       INTEGER NOT NULL,
+    verified_at      TEXT NOT NULL,
+    PRIMARY KEY (node_id, content_hash)
+);
+
+-- The report ITSELF, so "we have never heard from this node" is distinguishable
+-- from "this node holds nothing".
+CREATE TABLE node_asset_reports (
+    node_id     TEXT PRIMARY KEY,
+    reported_at TEXT NOT NULL,
+    complete    INTEGER NOT NULL,
+    reason      TEXT NOT NULL
 );
 `
 

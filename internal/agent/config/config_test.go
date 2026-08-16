@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
@@ -47,14 +48,17 @@ func TestLoadConfigDefaultsWithExplicitNodeID(t *testing.T) {
 	}
 
 	want := Config{
-		NodeID:       "media-03",
-		NodeLabel:    "",
-		MQTTBroker:   "tcp://localhost:1883",
-		MQTTClientID: "showmesh-agent-media-03",
-		MQTTUsername: "",
-		MQTTPassword: "",
-		LogLevel:     "info",
-		Capabilities: capability.Set{},
+		NodeID:                 "media-03",
+		NodeLabel:              "",
+		MQTTBroker:             "tcp://localhost:1883",
+		MQTTClientID:           "showmesh-agent-media-03",
+		MQTTUsername:           "",
+		MQTTPassword:           "",
+		LogLevel:               "info",
+		Capabilities:           capability.Set{},
+		AssetDir:               "./assets",
+		AgentAPIToken:          "",
+		AssetInventoryInterval: 2 * time.Minute,
 	}
 
 	if !configsEqual(cfg, want) {
@@ -119,14 +123,17 @@ func TestLoadConfigEmptyExplicitNodeIDFallsBackToHostname(t *testing.T) {
 
 func TestLoadConfigOverridesFromEnv(t *testing.T) {
 	env := map[string]string{
-		envNodeID:           "media-03",
-		envNodeLabel:        "Media Node 03",
-		envMQTTBroker:       "tcp://broker.example.com:1883",
-		envMQTTClientID:     "test-client",
-		envMQTTUsername:     "alice",
-		envMQTTPassword:     "s3cret",
-		envLogLevel:         "debug",
-		envNodeCapabilities: "matrix.render:2,transport.ndi.send",
+		envNodeID:                 "media-03",
+		envNodeLabel:              "Media Node 03",
+		envMQTTBroker:             "tcp://broker.example.com:1883",
+		envMQTTClientID:           "test-client",
+		envMQTTUsername:           "alice",
+		envMQTTPassword:           "s3cret",
+		envLogLevel:               "debug",
+		envNodeCapabilities:       "matrix.render:2,transport.ndi.send",
+		envAssetDir:               "/var/lib/showmesh/assets",
+		envAgentAPIToken:          "tok-abc",
+		envAssetInventoryInterval: "30s",
 	}
 
 	cfg, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
@@ -146,10 +153,113 @@ func TestLoadConfigOverridesFromEnv(t *testing.T) {
 			{ID: "matrix.render", Version: 2},
 			{ID: "transport.ndi.send", Version: 1},
 		},
+		AssetDir:               "/var/lib/showmesh/assets",
+		AgentAPIToken:          "tok-abc",
+		AssetInventoryInterval: 30 * time.Second,
 	}
 
 	if !configsEqual(cfg, want) {
 		t.Errorf("LoadConfigFrom(overrides) = %s, want %s", redactedConfig(cfg), redactedConfig(want))
+	}
+}
+
+// TestLoadConfigAssetInventoryIntervalValidationFailures proves a malformed
+// SHOWMESH_ASSET_INVENTORY_INTERVAL is a startup error naming the variable,
+// matching this package's posture for every other typed field.
+//
+// Every case also asserts the raw offending value appears in the error.
+// Config.Validate has its own, independent "AssetInventoryInterval must be
+// positive" guard (defense in depth against a future caller constructing a
+// Config directly, bypassing LoadConfigFrom's env parsing), and an earlier
+// version of this test asserted only "the error mentions the variable name"
+// — which every one of these three cases satisfies EVEN WITH the
+// LoadConfigFrom-level parse/positivity checks deleted, because
+// Validate's own fallback message also mentions the variable name. Checking
+// for the raw value pins this test to the parse-time error specifically,
+// so deleting either guard on its own is caught: deleting LoadConfigFrom's
+// checks makes this test fail (Validate's message never includes the raw
+// string), and deleting Validate's own check (proven separately) does not
+// mask a LoadConfigFrom regression either.
+func TestLoadConfigAssetInventoryIntervalValidationFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "not a duration", raw: "soon"},
+		{name: "zero", raw: "0s"},
+		{name: "negative", raw: "-5m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := map[string]string{envNodeID: "media-03", envAssetInventoryInterval: tt.raw}
+			_, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
+			if err == nil {
+				t.Fatalf("LoadConfigFrom() error = nil, want an error for %s %q", envAssetInventoryInterval, tt.raw)
+			}
+			if !strings.Contains(err.Error(), envAssetInventoryInterval) {
+				t.Errorf("error = %q, want it to mention %s", err.Error(), envAssetInventoryInterval)
+			}
+			if !strings.Contains(err.Error(), tt.raw) {
+				t.Errorf("error = %q, want it to name the offending raw value %q (pins this to LoadConfigFrom's own parse-time check, not Validate's generic fallback)", err.Error(), tt.raw)
+			}
+		})
+	}
+}
+
+// TestConfigValidateRejectsNonPositiveAssetInventoryInterval exercises
+// Config.Validate's own AssetInventoryInterval guard directly, independent
+// of LoadConfigFrom's env-parsing layer — the defense-in-depth check
+// TestLoadConfigAssetInventoryIntervalValidationFailures's tightened
+// raw-value assertion deliberately does NOT exercise (that test now pins
+// itself to the OTHER layer). A Config built directly (as a future caller
+// might, bypassing LoadConfigFrom) with a non-positive interval must still
+// be rejected.
+func TestConfigValidateRejectsNonPositiveAssetInventoryInterval(t *testing.T) {
+	base := Config{
+		NodeID:                 "media-03",
+		MQTTBroker:             defaultBroker,
+		LogLevel:               defaultLogLevel,
+		AssetDir:               defaultAssetDir,
+		AssetInventoryInterval: 0,
+	}
+	if err := base.Validate(); err == nil {
+		t.Fatalf("Validate() error = nil, want an error for a zero AssetInventoryInterval")
+	} else if !strings.Contains(err.Error(), envAssetInventoryInterval) {
+		t.Errorf("error = %q, want it to mention %s", err.Error(), envAssetInventoryInterval)
+	}
+}
+
+// TestLoadConfigEmptyAssetDirRejected proves an explicitly-empty
+// SHOWMESH_ASSET_DIR is a startup error rather than a silent empty-string
+// asset directory (which would resolve every asset path relative to the
+// process's working directory with no visible warning).
+func TestLoadConfigEmptyAssetDirRejected(t *testing.T) {
+	env := map[string]string{envNodeID: "media-03", envAssetDir: ""}
+	_, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
+	if err == nil {
+		t.Fatalf("LoadConfigFrom() error = nil, want an error for an empty %s", envAssetDir)
+	}
+	if !strings.Contains(err.Error(), envAssetDir) {
+		t.Errorf("error = %q, want it to mention %s", err.Error(), envAssetDir)
+	}
+}
+
+// TestConfigLogValueRedactsAgentAPIToken mirrors
+// TestConfigLogValueRedactsPassword for the new agent API token field.
+func TestConfigLogValueRedactsAgentAPIToken(t *testing.T) {
+	cfg := Config{
+		NodeID:        "media-03",
+		AgentAPIToken: "s3cret-token-must-not-appear",
+	}
+
+	rendered := renderLogValue(t, cfg)
+
+	if strings.Contains(rendered, cfg.AgentAPIToken) {
+		t.Fatalf("Config.LogValue() output contains the raw token: %s", rendered)
+	}
+	if !strings.Contains(rendered, redactedPassword) {
+		t.Errorf("Config.LogValue() output = %s, want it to contain the redaction placeholder %q", rendered, redactedPassword)
 	}
 }
 
@@ -302,7 +412,10 @@ func configsEqual(a, b Config) bool {
 		a.MQTTClientID != b.MQTTClientID ||
 		a.MQTTUsername != b.MQTTUsername ||
 		a.MQTTPassword != b.MQTTPassword ||
-		a.LogLevel != b.LogLevel {
+		a.LogLevel != b.LogLevel ||
+		a.AssetDir != b.AssetDir ||
+		a.AgentAPIToken != b.AgentAPIToken ||
+		a.AssetInventoryInterval != b.AssetInventoryInterval {
 		return false
 	}
 	if len(a.Capabilities) != len(b.Capabilities) {
