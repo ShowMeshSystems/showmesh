@@ -222,13 +222,17 @@ func (s *Store) ListPrincipals(ctx context.Context) ([]PrincipalRecord, error) {
 	return out, nil
 }
 
-// HasAnyPrincipal reports whether at least one principal row exists —
-// first-run state per ADR-024 decision 9, which [identity.Service.HasAnyPrincipal]
-// exposes directly.
+// HasAnyPrincipal reports whether at least one principal a human ever
+// created exists — first-run state per ADR-024 decision 9, which
+// [identity.Service.HasAnyPrincipal] exposes directly. [ReservedPrincipalID]
+// is excluded: it is created by [Store.EnsureReservedPrincipal] at every
+// startup regardless of whether an operator has ever claimed this
+// deployment, so counting it here would make bootstrap a permanent no-op on
+// any coordinator running Track D seam D-3a's wiring.
 func (s *Store) HasAnyPrincipal(ctx context.Context) (bool, error) {
 	guardNotInTx(ctx, "Store.HasAnyPrincipal")
 	var exists int64
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM principals)`).Scan(&exists); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM principals WHERE id != ?)`, ReservedPrincipalID).Scan(&exists); err != nil {
 		return false, fmt.Errorf("store: check any principal exists: %w", err)
 	}
 	return exists != 0, nil
