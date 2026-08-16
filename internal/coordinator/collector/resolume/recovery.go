@@ -574,21 +574,35 @@ func (r *Recovery) setLastReport(report RestoreReport) {
 	r.mu.Unlock()
 }
 
-// captureCrashTarget snapshots the current recovery record as §4's restore
-// target — "what was on the wall a moment ago" — and is [Collector.Options.OnUnreachableTransition]'s
-// own hook, called SYNCHRONOUSLY from the collector's liveness-poll
-// goroutine the instant a reachable->unreachable transition is detected,
-// never from a spawned goroutine: internal/coordinator/collector.Runner
-// never calls Poll concurrently with itself for one collector, so a
-// synchronous capture here is guaranteed to complete before any LATER poll
-// call (including the eventual return's own up-transition) can begin —
-// which is what removes the race [Recovery.HandleReachableTransition] used
-// to run against an intervening survey. Nothing can corrupt the record
-// between a crash and the return that
-// follows it (no confirmed action can dispatch, and no survey runs, while
-// Resolume is unreachable), so this snapshot is exactly the record's state
-// as of the crash for as long as it takes Resolume to come back.
-func (r *Recovery) captureCrashTarget(at time.Time) {
+// CaptureCrashTarget snapshots the current recovery record as §4's restore
+// target — "what was on the wall a moment ago" — and is the intended
+// implementation of [Collector.Options.OnUnreachableTransition], bound at
+// the coordinator's own wiring layer (resolumewiring.go/coordinator.go)
+// through the same atomic.Pointer late-binding cell OnReachableTransition
+// already uses, since the *Recovery this closes over cannot exist until
+// after the *Collector that constructs it does. Exported (unlike the rest
+// of this type's internals) for exactly that reason: the binding happens
+// in package coordinator, which cannot reach an unexported method.
+//
+// Called SYNCHRONOUSLY from the collector's liveness-poll goroutine the
+// instant a reachable->unreachable transition is detected, never from a
+// spawned goroutine: internal/coordinator/collector.Runner never calls
+// Poll concurrently with itself for one collector, so a synchronous
+// capture here is guaranteed to complete before any LATER poll call
+// (including the eventual return's own up-transition) can begin — which is
+// what removes the race [Recovery.HandleReachableTransition] used to run
+// against an intervening survey. Nothing can corrupt the record between a
+// crash and the return that follows it (no confirmed action can dispatch,
+// and no survey runs, while Resolume is unreachable), so this snapshot is
+// exactly the record's state as of the crash for as long as it takes
+// Resolume to come back.
+//
+// Takes no timestamp: every entry in the snapshot already carries its own
+// EstablishedAt from whatever action or survey produced it, and this
+// package has no other use for "when the crash itself was detected" — an
+// earlier version threaded one through unused, which is the shape of bug
+// a caller could not see from the signature alone.
+func (r *Recovery) CaptureCrashTarget() {
 	target := r.collector.RecoveryRecord()
 	r.crashMu.Lock()
 	r.crashTarget = target

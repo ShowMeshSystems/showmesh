@@ -150,7 +150,7 @@ func TestMacroRunResolumeReRunsResolutionAgainstTheCurrentComposition(t *testing
 			sink := &fppSink{st: st, logger: logger}
 			runner := collector.NewRunner(sink, logger)
 
-			wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil)
+			wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 			if err != nil {
 				t.Fatalf("newResolumeWiring: %v", err)
 			}

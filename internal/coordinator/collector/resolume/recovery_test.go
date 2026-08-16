@@ -124,9 +124,9 @@ func newRecoveryFixture(t *testing.T, settle time.Duration) *recoveryFixture {
 	var recoveryPtr *Recovery
 	f.collector = newTestCollector(t, srv.URL, Options{
 		Now: fixedClock(&now), CompositionStore: store,
-		OnUnreachableTransition: func(at time.Time) {
+		OnUnreachableTransition: func(time.Time) {
 			if recoveryPtr != nil {
-				recoveryPtr.captureCrashTarget(at)
+				recoveryPtr.CaptureCrashTarget()
 			}
 		},
 	})
@@ -594,6 +594,65 @@ func TestRestoreReportsPartialWithReasonEveryTimeSomethingIsSkipped(t *testing.T
 	layerTwo := findRestoreLayer(t, report, "Whole House 2")
 	if layerTwo.Result != RestoreResultSkipped || layerTwo.Reason == "" {
 		t.Fatalf("layer two = %+v, want skipped with a reason", layerTwo)
+	}
+}
+
+// --- Review finding B2: the manual restore's own target must survive an
+// identity-unconfirmed survey ------------------------------------------
+
+// TestManualRestoreRetainsUsableTargetAfterUnconfirmedIdentitySurvey is
+// review finding B2's own regression test: an ordinary survey taken while
+// composition identity is NOT confirmed true (§2's "reachable is not
+// ready" post-restart load window, or any other survey that cannot
+// resolve identity) must never demote an action-sourced recovery entry —
+// an unconfirmed-identity survey is not evidence about our composition.
+// Before the fix, [Collector.survey] called recoveryUpdateFromSurvey
+// unconditionally, so this exact survey read layer one's cleared
+// active_clip as genuinely dark and overwrote the pre-crash action-sourced
+// entry, leaving [Collector.RecoveryRecord] reporting "unknown" for a
+// layer the manual restore (§7.1's own "second pass") should still have
+// been able to act on. Breaking: the `if identity.Outcome == IdentityTrue`
+// guard around the recoveryUpdateFromSurvey call in collector.go's own
+// survey() reverted to an unconditional call — confirmed this test goes
+// red (both the record assertion, State became unknown instead of clip,
+// and the restore assertion, ClipKnown became false), then restored.
+func TestManualRestoreRetainsUsableTargetAfterUnconfirmedIdentitySurvey(t *testing.T) {
+	f := newRecoveryFixture(t, 0)
+	f.dispatchAndConfirm(ActionLaunchClip, ActionParams{ClipID: testClipA})
+	f.simulateCrash(t)
+
+	// Arena comes back, but composition identity cannot resolve on THIS
+	// survey — modeled the same way TestGateRefusesOnIdentityNotTrue's own
+	// unknown_end_to_end subtest models §2's post-restart load window:
+	// every clip id 404s and layer one's active clip is cleared.
+	f.arena.layers[testLayerOne].activeClip = nil
+	delete(f.arena.clips, testClipA)
+	delete(f.arena.clips, testClipB)
+	delete(f.arena.clips, testPersistA)
+
+	snap := f.collector.SurveyNow(context.Background(), true)
+	if snap.Identity == IdentityTrue {
+		t.Fatalf("fixture setup: identity resolved true despite the corrupted arena; this test's own load-window simulation is not exercising the survey it needs to")
+	}
+
+	record := f.collector.RecoveryRecord()
+	layerOne := findRecoveryEntry(t, record, "Whole House 1")
+	if layerOne.State != RecoveryLayerClip || layerOne.Source != RecoverySourceAction {
+		t.Fatalf("layer one record = %+v, want the pre-crash action-sourced clip entry to survive a survey taken while identity is not confirmed true", layerOne)
+	}
+
+	// RunManualRestore's own first line reads exactly this record — proof
+	// that "the record still has a usable target" and "the manual restore
+	// path still has a usable target" are the same fact. ClipKnown is set
+	// only when restoreLayer's target.State falls through the Dark/Unknown
+	// switch, i.e. only when the record entry above was actually usable;
+	// whether the ensuing dispatch itself is then approved (a separate,
+	// unrelated identity-freshness concern for THIS survey's own stale
+	// reading) is not what this finding is about.
+	report := f.recovery.RunManualRestore(context.Background())
+	layerOneRestore := findRestoreLayer(t, report, "Whole House 1")
+	if !layerOneRestore.ClipKnown {
+		t.Fatalf("manual restore layer one = %+v, want ClipKnown true — the record must still hold a usable target after a crash-and-return sequence", layerOneRestore)
 	}
 }
 

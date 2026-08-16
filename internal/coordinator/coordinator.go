@@ -286,19 +286,30 @@ func Run() int {
 	// SHOWMESH_RESOLUME_URL is unset — no goroutine, no warning storm, no
 	// failed-connection signals for a feature the operator did not enable.
 	// resolumeRecoveryHolder is Track D seam D-3a's own late-binding cell:
-	// the Collector's own OnReachableTransition callback must be supplied
-	// at construction time (immediately below), but the *resolume.Recovery
-	// it calls cannot exist until AFTER the Collector and its
-	// ActionDispatcher do — see this cell's own store below, and
-	// resolumerecoverywiring.go's own top comment. Safe under the race
-	// detector: nothing can invoke the callback before fppRunner.Run(ctx)
-	// starts polling, several lines below where this cell is stored.
+	// the Collector's own OnReachableTransition AND OnUnreachableTransition
+	// callbacks must both be supplied at construction time (immediately
+	// below), but the *resolume.Recovery either one calls cannot exist
+	// until AFTER the Collector and its ActionDispatcher do — see this
+	// cell's own store below, and resolumerecoverywiring.go's own top
+	// comment. Safe under the race detector: nothing can invoke either
+	// callback before fppRunner.Run(ctx) starts polling, several lines
+	// below where this cell is stored. Review finding B1 (2026-08-16):
+	// only the reachable half of this pair used to be wired here, so a
+	// real crash never reached [resolume.Recovery.CaptureCrashTarget] and
+	// takeCrashTarget always came back empty on the return that followed.
 	var resolumeRecoveryHolder atomic.Pointer[resolume.Recovery]
-	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger, func(returnedAt time.Time) {
-		if rec := resolumeRecoveryHolder.Load(); rec != nil {
-			rec.HandleReachableTransition(ctx, returnedAt)
-		}
-	})
+	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger,
+		func(returnedAt time.Time) {
+			if rec := resolumeRecoveryHolder.Load(); rec != nil {
+				rec.HandleReachableTransition(ctx, returnedAt)
+			}
+		},
+		func(time.Time) {
+			if rec := resolumeRecoveryHolder.Load(); rec != nil {
+				rec.CaptureCrashTarget()
+			}
+		},
+	)
 	if err != nil {
 		logger.Error("failed to construct resolume collector/watcher", "error", err)
 		_ = bm.Disconnect(ctx)

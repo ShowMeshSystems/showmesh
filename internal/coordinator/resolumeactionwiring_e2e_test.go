@@ -210,7 +210,7 @@ func TestResolumeActionEndToEndLaunchClipReachesArena(t *testing.T) {
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
 
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestResolumeActionEndToEndUnresolvedReferenceIssuesNoHTTPRequest(t *testing
 	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-noreq"}
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestResolumeActionEndToEndDeckMismatchIssuesNoHTTPRequest(t *testing.T) {
 	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-2"}
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 	cfg := config.Config{ResolumeURL: srv.URL, ResolumeID: "resolume-e2e-audit"}
 	sink := &fppSink{st: st, logger: logger}
 	runner := collector.NewRunner(sink, logger)
-	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil)
+	wire, err := newResolumeWiring(ctx, cfg, runner, compWiring.store, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}

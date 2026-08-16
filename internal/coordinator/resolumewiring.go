@@ -265,7 +265,24 @@ func (w resolumeWiring) RunWatcherSupervisor(ctx context.Context) {
 // transition. nil means no crash-recovery gate is wired in (no live
 // Resolume instance configured — see this function's own cfg.ResolumeURL
 // gate).
-func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger, onReachableTransition func(time.Time)) (resolumeWiring, error) {
+//
+// onUnreachableTransition is the same seam's OTHER hook
+// (resolume.Options.OnUnreachableTransition): called by the collector,
+// SYNCHRONOUSLY from its own liveness-poll goroutine (never spawned — see
+// that Options field's own doc comment), on every reachable->unreachable
+// transition, i.e. the crash itself. Production wires this to
+// *resolume.Recovery.CaptureCrashTarget through the identical
+// atomic.Pointer late-binding cell onReachableTransition's own production
+// closure uses (coordinator.go), because the *Recovery neither closure
+// can call into exists yet at THIS function's own call time. Review
+// finding B1 (2026-08-16): this parameter did not previously exist, so
+// production never supplied anything for
+// [resolume.Options.OnUnreachableTransition] and a real crash left
+// Recovery's own crash-target snapshot permanently empty. nil (every
+// caller in this package's own test suite besides the one wiring-level
+// test built for that finding) means no crash-recovery gate is wired in,
+// identical to onReachableTransition's own nil case.
+func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, logger *slog.Logger, onReachableTransition func(time.Time), onUnreachableTransition func(time.Time)) (resolumeWiring, error) {
 	if cfg.ResolumeURL == "" {
 		return resolumeWiring{status: resolumeCollectorStatusLister{configured: false}}, nil
 	}
@@ -300,11 +317,22 @@ func newResolumeWiring(ctx context.Context, cfg config.Config, runner *collector
 	}
 
 	resolumeCollector, err := resolume.New(cfg.ResolumeID, cfg.ResolumeURL, resolume.Options{
-		HTTPClient:            resolumeHTTPClient,
-		Logger:                logger,
-		CompositionStore:      compositionStore,
-		Footprint:             footprint,
-		OnReachableTransition: onReachableTransition,
+		HTTPClient:              resolumeHTTPClient,
+		Logger:                  logger,
+		CompositionStore:        compositionStore,
+		Footprint:               footprint,
+		OnReachableTransition:   onReachableTransition,
+		OnUnreachableTransition: onUnreachableTransition,
+		// TransitionSurveySettle configures the collector's OWN
+		// transition-triggered survey (review finding B3) from the
+		// identical config value *resolume.Recovery's own confirming
+		// survey already uses (newResolumeRecoveryWiring's own
+		// cfg.ResolumeRecoverySettle argument, coordinator.go) — one
+		// number, read twice, rather than two settle durations that could
+		// drift apart. See [resolume.Options.TransitionSurveySettle]'s own
+		// doc comment for why each enforcement point still needs its own
+		// copy.
+		TransitionSurveySettle: cfg.ResolumeRecoverySettle,
 	})
 	if err != nil {
 		return resolumeWiring{}, fmt.Errorf("resolume collector %q: %w", cfg.ResolumeID, err)

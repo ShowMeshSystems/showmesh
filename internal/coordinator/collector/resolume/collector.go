@@ -247,9 +247,26 @@ type Options struct {
 	// with itself for one collector, so a synchronous call here is
 	// guaranteed ordered against every subsequent call. Must be fast and
 	// must never issue a request to Resolume — see
-	// [Recovery.captureCrashTarget], the only intended implementation.
+	// [Recovery.CaptureCrashTarget], the only intended implementation.
 	// nil means no hook.
 	OnUnreachableTransition func(at time.Time)
+
+	// TransitionSurveySettle is Track D seam D-3a §5 term 2's own settle
+	// delay, applied to THIS Collector's own transition-triggered survey
+	// (the noteLivenessAndCheckTransition trigger below) on a genuine
+	// crash-return: the ~30-read survey must not land on the same poll
+	// cycle that first observes the return (criterion 11). [Recovery]'s
+	// own explicit confirming survey (recovery.go,
+	// Recovery.HandleReachableTransition) applies an equal delay
+	// independently via its own RecoveryOptions.Settle — production
+	// wiring (resolumewiring.go) configures both from the SAME
+	// cfg.ResolumeRecoverySettle value rather than letting them drift,
+	// but each enforces its own copy, because this Collector must hold
+	// the rule even with no Recovery wired at all. Zero (the default)
+	// disables deferral entirely — every pre-existing test in this
+	// package, none of which sets this field, keeps behaving exactly as
+	// before.
+	TransitionSurveySettle time.Duration
 }
 
 // Collector polls one Resolume Arena instance's REST API. On the liveness
@@ -339,6 +356,17 @@ type Collector struct {
 	lastLivenessReachable  bool
 	lastTransitionSurveyAt time.Time // zero means "never yet" — the first transition-triggered survey this Collector ever runs is never rate-limited
 
+	// transitionSurveySettle is [Options.TransitionSurveySettle], stored
+	// verbatim; zero disables deferral (see that field's own doc comment).
+	transitionSurveySettle time.Duration
+
+	// transitionSurveyDueAt is when a survey deferred by a genuine
+	// crash-return may run — the zero value means none is currently
+	// deferred. Set only inside [Collector.noteLivenessAndCheckTransition]'s
+	// own gateTransition branch; consumed by
+	// [Collector.takeDueDeferredTransitionSurvey].
+	transitionSurveyDueAt time.Time
+
 	// lastSeenCompositionRevision mirrors [CompositionStore]'s own "0 ==
 	// nothing loaded yet" convention exactly (idmap.go): starting this at
 	// the Go zero value means a Collector constructed before anything was
@@ -424,6 +452,7 @@ func New(id string, baseURL string, opts Options) (*Collector, error) {
 		footprint:               footprint,
 		onReachableTransition:   opts.OnReachableTransition,
 		onUnreachableTransition: opts.OnUnreachableTransition,
+		transitionSurveySettle:  opts.TransitionSurveySettle,
 	}, nil
 }
 
@@ -637,12 +666,17 @@ func (c *Collector) SurveyNow(ctx context.Context, afterReconnect bool) SurveySn
 //     describing the previous show. Never rate-limited: an upload is an
 //     explicit operator action, not something that can flap.
 //
-// Either trigger runs the survey in THIS poll cycle, not a queued one for
-// next time — unlike [Collector.RequestSurvey], which only sets a flag
-// [Collector.takePendingSurvey] consumes on a LATER call. Both triggers are
-// evaluated only once this cycle's liveness result is already known, so
-// there is nothing to check, and nothing rate-limited, on a throttled skip
-// (due == false above) or on a liveness failure.
+// Both triggers are evaluated only once this cycle's liveness result is
+// already known, so there is nothing to check, and nothing rate-limited,
+// on a throttled skip (due == false above) or on a liveness failure.
+// compositionRevisionChanged runs its survey in THIS poll cycle, not a
+// queued one for next time. The first trigger does too, UNLESS this
+// success is a GENUINE crash-return (gateTransition) and
+// [Options.TransitionSurveySettle] is configured — TRACK-D-D3A-CRASH-RECOVERY-SPEC.md
+// §5 term 2 / criterion 11: that survey is deferred until the settle
+// window elapses, picked up by [Collector.takeDueDeferredTransitionSurvey]
+// on a later call, with no external trigger required — see
+// [Collector.noteLivenessAndCheckTransition]'s own doc comment.
 //
 // complete is ALWAYS true when this poll actually ran (liveness, or
 // liveness plus survey): see [surveySourceName]'s own doc comment for why
@@ -690,6 +724,10 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	surveyAfterReconnect := afterReconnect
 
 	if c.noteLivenessAndCheckTransition(true, now) {
+		runSurvey = true
+		surveyAfterReconnect = true
+	}
+	if c.takeDueDeferredTransitionSurvey(now) {
 		runSurvey = true
 		surveyAfterReconnect = true
 	}
@@ -768,6 +806,36 @@ func (c *Collector) noteLivenessAndCheckTransition(reachable bool, now time.Time
 		return false
 	}
 	c.lastTransitionSurveyAt = now
+
+	// Track D seam D-3a §5 term 2 / criterion 11: a GENUINE crash-return
+	// (gateTransition — never this Collector's first-ever liveness
+	// result, which has no crash to settle from) must not survey on the
+	// SAME cycle that observes the return. The rate-limit check above
+	// still decides WHETHER this transition earns a survey at all; this
+	// only changes WHEN an approved one actually runs — deferred until
+	// transitionSurveySettle elapses, then picked up by a later
+	// [Collector.Poll] call via [Collector.takeDueDeferredTransitionSurvey],
+	// with no external trigger required.
+	if gateTransition && c.transitionSurveySettle > 0 {
+		c.transitionSurveyDueAt = now.Add(c.transitionSurveySettle)
+		return false
+	}
+	return true
+}
+
+// takeDueDeferredTransitionSurvey reports whether a survey deferred by
+// [Collector.noteLivenessAndCheckTransition]'s own settle gate is due, and
+// clears the deferral if so. Called once per successful [Collector.Poll]
+// cycle. Returns false, leaving any deferral in place, both when nothing
+// is deferred and when the settle window has not yet elapsed — a later
+// Poll call re-checks it the identical way.
+func (c *Collector) takeDueDeferredTransitionSurvey(now time.Time) bool {
+	c.transitionMu.Lock()
+	defer c.transitionMu.Unlock()
+	if c.transitionSurveyDueAt.IsZero() || now.Before(c.transitionSurveyDueAt) {
+		return false
+	}
+	c.transitionSurveyDueAt = time.Time{}
 	return true
 }
 
@@ -1113,10 +1181,6 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 	sample := tc.IdentitySample(selectedID)
 
 	layerResults := c.readLayers(ctx, tc)
-	// Track D seam D-3a §4 rule 2/§2.3: a survey updates every layer it
-	// read, and only those — fed here, from the reads this survey already
-	// performed, never a separate poll of its own (criterion 8).
-	c.recoveryUpdateFromSurvey(layerResults, surveyedAt)
 	groupResults := c.readGroups(ctx, tc)
 
 	clipIDs := clipFetchOrder(sample, tc.Layers(), layerResults)
@@ -1144,6 +1208,18 @@ func (c *Collector) survey(ctx context.Context, afterReconnect bool, surveyedAt 
 		c.identityConfirmed = true
 	}
 	loadWindow := !c.identityConfirmed
+
+	// Track D seam D-3a §4 rule 2/§2.3, gated on THIS survey confirming
+	// our composition is actually loaded (review finding B2): an
+	// unconfirmed-identity survey — mid-load-window, or reading the wrong
+	// composition — is not evidence about our composition and must never
+	// demote an action-sourced recovery entry, because that demotion is
+	// exactly what left the manual restore with nothing usable after a
+	// crash. Fed from the reads this survey already performed, never a
+	// separate poll of its own (criterion 8).
+	if identity.Outcome == IdentityTrue {
+		c.recoveryUpdateFromSurvey(layerResults, surveyedAt)
+	}
 
 	// Track D seam D-3's action vocabulary consumes this survey's identity
 	// and selected-deck result — never a fresh read of its own — via

@@ -110,7 +110,7 @@ func TestResolumeWiringSurfacesReachableObservation(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(context.Background(), cfg, runner, &resolume.CompositionStore{}, testLogger(), nil)
+	wire, err := newResolumeWiring(context.Background(), cfg, runner, &resolume.CompositionStore{}, testLogger(), nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestResolumeWiringDisabledWhenURLUnset(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 
-	wire, err := newResolumeWiring(context.Background(), config.Config{}, runner, &resolume.CompositionStore{}, testLogger(), nil)
+	wire, err := newResolumeWiring(context.Background(), config.Config{}, runner, &resolume.CompositionStore{}, testLogger(), nil, nil)
 	if err != nil {
 		t.Fatalf("newResolumeWiring: %v", err)
 	}
