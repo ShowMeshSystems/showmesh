@@ -1,17 +1,15 @@
 package api
 
 import (
-	"bufio"
-	"context"
 	"net/http"
-	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
-// This file is Track D seam E's own handler-level test suite: GET
+// This file is the handler-level test suite for Resolume-as-observability: GET
 // /resolume/instances, GET /resolume/instances/{id}, and their appearance
 // in GET /snapshot. Every test drives the real handler/mapping code (this
 // package's own standing rule — see fakes_test.go's top comment), never a
@@ -220,78 +218,67 @@ func TestResolumeInstanceCompositionNullBeforeUploadNamedAfter(t *testing.T) {
 	if comp["name"] != "Holiday Test Show" {
 		t.Errorf("composition.name = %v, want %q", comp["name"], "Holiday Test Show")
 	}
-	if comp["revision"] != float64(1) {
-		t.Errorf("composition.revision = %v, want 1", comp["revision"])
-	}
-	if comp["activatedAt"] == nil || comp["activatedAt"] == "" {
-		t.Errorf("composition.activatedAt is absent")
-	}
 }
 
-// resolumeArenaThatMustNeverBeContacted is a real HTTP server standing in
-// for a live Arena: any request it receives fails the test immediately.
-// Used by TestResolumeInstancesRoutesNeverContactArena (acceptance
-// criterion 9) — spec section 3's "no new HTTP request to Arena, and no
-// change to the poll loop" is a property of resolumeinstances.go, stream.go
-// and mapping.go's Resolume additions specifically, and this pins it
-// against a runtime check rather than only a static "this file has no
-// http.Client field" reading.
-func resolumeArenaThatMustNeverBeContacted(t *testing.T) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("a Resolume Arena stub received a request while serving a Track D seam E route: %s %s — none of GET /resolume/instances, GET /resolume/instances/{id}, or the change stream may ever contact Resolume (ADR-032 decision 2)", r.Method, r.URL)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// TestResolumeInstancesRoutesNeverContactArena is acceptance criterion 9.
-// resolumeArenaThatMustNeverBeContacted's handler fails the test the
-// instant it receives anything; this drives the list route, the
-// single-instance route, the snapshot route, and one real SSE render pass
-// (the stream.go code path) and proves none of them ever reach it.
-func TestResolumeInstancesRoutesNeverContactArena(t *testing.T) {
-	arena := resolumeArenaThatMustNeverBeContacted(t)
-	_ = arena // stood up and running; nothing in this seam holds any field capable of reaching it
-
+// TestResolumeInstanceCompositionOmitsRevisionAndActivatedAt is finding 4's
+// own test (owner ruling, 2026-08-16): GET /resolume/instances is an open
+// read with no credential by default, so revision and activatedAt — who
+// changed the loaded show and when — must not appear on it; they stay on
+// the gated GET /config/resolume/composition, which already carries both.
+func TestResolumeInstanceCompositionOmitsRevisionAndActivatedAt(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	fixture := resolumeInstanceFixture(t)
-	deps := resolumeInstancesTestDeps(&fakeResolumeLister{views: []ResolumeInstanceView{fixture}})
-	testAPI := newStreamTestAPI(deps)
+	deps := configTestDeps(svc, st)
+	deps.Resolume = &fakeResolumeLister{views: []ResolumeInstanceView{fixture}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
-	for _, target := range []string{
-		"/api/v1/resolume/instances",
-		"/api/v1/resolume/instances/resolume",
-		"/api/v1/snapshot",
-	} {
-		resp, body := doRequest(t, testAPI.Handler, "GET", target, nil)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s: status = %d, want 200; body: %s", target, resp.StatusCode, body)
-		}
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	content := mustReadResolumeCompositionTestdata(t, "complete.avc")
+	uploadResp, uploadBody := doResolumeCompositionUpload(t, api.Handler, "Holiday Test Show.avc", content,
+		map[string]string{"Authorization": "Bearer " + token})
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("composition upload: status = %d, want 200; body: %s", uploadResp.StatusCode, uploadBody)
 	}
 
-	// One real SSE render pass: the OTHER place this seam's mapping code
-	// runs (Hub.render in stream.go), which the three plain GETs above
-	// never exercise on their own.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go testAPI.Hub.Run(ctx)
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/resolume/instances/resolume", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	inst, _ := m["instance"].(map[string]any)
+	comp, ok := inst["composition"].(map[string]any)
+	if !ok {
+		t.Fatalf("composition = %v, want an object", inst["composition"])
+	}
+	if _, present := comp["revision"]; present {
+		t.Errorf("composition carries \"revision\" on the open read; it must stay on the gated GET /config/resolume/composition: %v", comp)
+	}
+	if _, present := comp["activatedAt"]; present {
+		t.Errorf("composition carries \"activatedAt\" on the open read; it must stay on the gated GET /config/resolume/composition: %v", comp)
+	}
+}
 
-	srv := httptest.NewServer(testAPI.Handler)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/api/v1/stream")
+// TestPackageNeverImportsACollector is acceptance criterion 9, replacing
+// an earlier version of this file's own decorative httptest.Server (owner
+// review finding 2, 2026-08-16): that server's URL was handed to nothing,
+// so no production path could ever learn it, and the test could not fail
+// no matter what the handler code did. This asserts the actual property
+// mechanically instead — mirroring cmd/showmeshctl/importgraph_test.go and
+// this repo's collector/resolume/guardosc_test.go's identical `go list
+// -deps` technique: internal/coordinator/api transitively imports no
+// internal/coordinator/collector/... package, so it structurally holds no
+// client capable of reaching Arena, FPP, or any other collector-owned
+// transport. It fails the moment such an import lands.
+func TestPackageNeverImportsACollector(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
 	if err != nil {
-		t.Fatalf("GET /api/v1/stream: %v", err)
+		t.Fatalf("go list -deps . failed: %v\noutput:\n%s", err, out)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	r := bufio.NewReader(resp.Body)
-
-	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
-		t.Fatalf("first event = %q, want stream.start", event)
-	}
-	testAPI.Hub.Notify()
-	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "resolume.changed" {
-		t.Fatalf("event after Notify = %q, want resolume.changed (the first render pass for a never-before-seen instance)", event)
+	const forbiddenBase = "github.com/showmeshsystems/showmesh/internal/coordinator/collector"
+	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if dep == forbiddenBase || strings.HasPrefix(dep, forbiddenBase+"/") {
+			t.Errorf("internal/coordinator/api transitively imports %q — GET /resolume/instances, GET /resolume/instances/{id}, and the change stream must be servable from stored evidence alone", dep)
+		}
 	}
 }

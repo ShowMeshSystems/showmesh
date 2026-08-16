@@ -54,7 +54,7 @@ func (f *fakeFPPLister) ListInstances(context.Context) ([]FPPInstanceView, error
 }
 
 // fakeResolumeLister is [ResolumeLister]'s own fake, mirroring
-// [fakeFPPLister]'s shape exactly (Track D seam E).
+// [fakeFPPLister]'s shape exactly.
 type fakeResolumeLister struct {
 	views []ResolumeInstanceView
 	err   error

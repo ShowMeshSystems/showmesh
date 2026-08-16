@@ -796,9 +796,9 @@ func TestStreamWedgedSubscriberIsReclaimedByWriteDeadline(t *testing.T) {
 	t.Fatalf("wedged subscriber %d was never reclaimed within the wait bound (streamWriteTimeout=%s)", id, streamWriteTimeout)
 }
 
-// mutableResolumeLister is [mutableFPPLister]'s Track D seam E sibling: a
-// thread-safe [ResolumeLister] test double whose views can be replaced
-// between two hub render passes.
+// mutableResolumeLister mirrors [mutableFPPLister]: a thread-safe
+// [ResolumeLister] test double whose views can be replaced between two hub
+// render passes.
 type mutableResolumeLister struct {
 	mu    sync.Mutex
 	views []ResolumeInstanceView

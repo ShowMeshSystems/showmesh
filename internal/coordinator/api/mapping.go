@@ -581,27 +581,43 @@ var healthCriticalSignals = map[observation.SignalID]func(value any) observation
 // cannot see, because a signal with zero observations never becomes a
 // member to begin with.
 func deriveInstanceHealth(obs []observation.Observation, now time.Time) observation.Health {
-	members := make([]observation.AggregateMember, 0, len(healthCriticalSignals))
 	fppdStateHealthy := false
-	for _, o := range obs {
-		if o.Absence == observation.StateUnsupported {
-			continue
-		}
-		whenCurrent, critical := healthCriticalSignals[o.Signal]
-		if !critical {
-			continue
-		}
-		h := observation.DeriveHealth(o, now, whenCurrent)
-		members = append(members, observation.AggregateMember{Health: h, Critical: true})
-		if o.Signal == "fpp.fppd.state" && h == observation.HealthHealthy {
+	health := deriveHealthFromCriticalSignals(obs, now, healthCriticalSignals, func(sig observation.SignalID, h observation.Health) {
+		if sig == "fpp.fppd.state" && h == observation.HealthHealthy {
 			fppdStateHealthy = true
 		}
-	}
-	health := observation.AggregateHealth(members)
+	})
 	if health == observation.HealthHealthy && !fppdStateHealthy {
 		return observation.HealthUnknown
 	}
 	return health
+}
+
+// deriveHealthFromCriticalSignals is the one aggregator loop every
+// resource's own derive*Health function calls, parameterized on that
+// resource's own critical-signal map — see [healthCriticalSignals] and
+// [resolumeHealthCriticalSignals]. onMember, when non-nil, is invoked with
+// each critical, non-unsupported observation's signal and resolved Health
+// as its AggregateMember is built, so a resource-specific rule (deriveInstanceHealth's
+// fpp.fppd.state cap) can inspect one signal without a second copy of this
+// loop.
+func deriveHealthFromCriticalSignals(obs []observation.Observation, now time.Time, critical map[observation.SignalID]func(value any) observation.Health, onMember func(sig observation.SignalID, h observation.Health)) observation.Health {
+	members := make([]observation.AggregateMember, 0, len(critical))
+	for _, o := range obs {
+		if o.Absence == observation.StateUnsupported {
+			continue
+		}
+		whenCurrent, ok := critical[o.Signal]
+		if !ok {
+			continue
+		}
+		h := observation.DeriveHealth(o, now, whenCurrent)
+		members = append(members, observation.AggregateMember{Health: h, Critical: true})
+		if onMember != nil {
+			onMember(o.Signal, h)
+		}
+	}
+	return observation.AggregateHealth(members)
 }
 
 // mapFPPInstance renders one [FPPInstanceView] as a [v1.FPPInstance].
@@ -635,33 +651,33 @@ func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
 
 // --- Resolume instances ---
 
-// resolumeHealthCriticalSignals is Track D seam E's own health-critical set,
-// beside [healthCriticalSignals] rather than folded into it: the two
-// resources have unrelated signal vocabularies and unrelated rollup rules
-// (no fppdState-shaped third cap here), so a shared map would only invite
-// the two to drift against each other silently. Signal IDs are inlined
-// string literals, not imported from internal/coordinator/collector/resolume,
-// for the identical reason healthCriticalSignals inlines "fpp.reachable":
-// this file renders evidence from whichever source produced it, and
-// importing one concrete collector package to borrow a string constant
-// would make that source-agnostic promise a lie in the one file that most
-// needs to keep it honest.
+// resolumeHealthCriticalSignals is Resolume's own health-critical set,
+// beside [healthCriticalSignals] rather than folded into it: unrelated
+// signal vocabularies, no fppdState-shaped cap. Signal IDs are inlined
+// string literals rather than imported from
+// internal/coordinator/collector/resolume for the identical
+// source-agnostic reason [healthCriticalSignals] inlines "fpp.reachable".
 var resolumeHealthCriticalSignals = map[observation.SignalID]func(value any) observation.Health{
-	// "resolume.reachable" mirrors "fpp.reachable" exactly: true is
-	// healthy, anything else (including a wrong type) is failed.
+	// "resolume.reachable" mirrors "fpp.reachable": true is healthy,
+	// anything else is failed.
 	"resolume.reachable": func(value any) observation.Health {
 		if b, ok := value.(bool); ok && b {
 			return observation.HealthHealthy
 		}
 		return observation.HealthFailed
 	},
-	// "resolume.composition.identified" carries a descriptive string, not a
-	// bare bool (resolume.Collector's own identityObservation): exactly
-	// "identified" is healthy, a "not_identified"/"deck_mismatch" prefix is
-	// degraded — the operator may legitimately have loaded a different
-	// composition, which is a thing to surface, not a system failure — and
-	// anything else (including "unknown: ..." during the post-connect load
-	// window, or an unrecognized type) is unknown.
+	// "resolume.composition.identified" carries a descriptive string
+	// (resolume.Collector's own identityObservation), not a bare bool.
+	// Exactly "identified" is healthy. A "not_identified" prefix is
+	// degraded: the operator may legitimately have loaded a different
+	// composition, which is a thing to surface, not a system failure. A
+	// "deck_mismatch" prefix is unknown, not degraded (owner amendment,
+	// 2026-08-16): it means the sampled clips did not resolve because the
+	// selected deck changed mid-check, so identity could not be
+	// determined — that is an absence of evidence, and claiming degraded
+	// would assert ShowMesh found something wrong with the composition
+	// when it did not. Anything else (the "unknown: ..." load-window
+	// case, or an unrecognized type) is unknown.
 	"resolume.composition.identified": func(value any) observation.Health {
 		s, ok := value.(string)
 		if !ok {
@@ -670,7 +686,7 @@ var resolumeHealthCriticalSignals = map[observation.SignalID]func(value any) obs
 		switch {
 		case s == "identified":
 			return observation.HealthHealthy
-		case strings.HasPrefix(s, "not_identified") || strings.HasPrefix(s, "deck_mismatch"):
+		case strings.HasPrefix(s, "not_identified"):
 			return observation.HealthDegraded
 		default:
 			return observation.HealthUnknown
@@ -678,28 +694,12 @@ var resolumeHealthCriticalSignals = map[observation.SignalID]func(value any) obs
 	},
 }
 
-// deriveResolumeHealth aggregates a Resolume instance's RESOLVED observations
-// into one [observation.Health], mirroring [deriveInstanceHealth]'s shape
-// against [resolumeHealthCriticalSignals] instead of [healthCriticalSignals]
-// and calling the identical [observation.AggregateHealth]/[observation.DeriveHealth]
-// aggregator rather than a second implementation of it. An unsupported
-// observation never becomes a member (it is a positive "cannot answer this",
-// not missing evidence); a signal absent from the critical map is
-// informational and is skipped, never padding the aggregate.
+// deriveResolumeHealth aggregates a Resolume instance's RESOLVED
+// observations into one [observation.Health] against
+// [resolumeHealthCriticalSignals], via the same
+// [deriveHealthFromCriticalSignals] loop [deriveInstanceHealth] uses.
 func deriveResolumeHealth(obs []observation.Observation, now time.Time) observation.Health {
-	members := make([]observation.AggregateMember, 0, len(resolumeHealthCriticalSignals))
-	for _, o := range obs {
-		if o.Absence == observation.StateUnsupported {
-			continue
-		}
-		whenCurrent, critical := resolumeHealthCriticalSignals[o.Signal]
-		if !critical {
-			continue
-		}
-		h := observation.DeriveHealth(o, now, whenCurrent)
-		members = append(members, observation.AggregateMember{Health: h, Critical: true})
-	}
-	return observation.AggregateHealth(members)
+	return deriveHealthFromCriticalSignals(obs, now, resolumeHealthCriticalSignals, nil)
 }
 
 // mapResolumeInstance renders one [ResolumeInstanceView] as a

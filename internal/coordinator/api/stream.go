@@ -235,10 +235,10 @@ type pendingFrame struct {
 	instance *v1.FPPInstance
 	ev       *v1.Event
 
-	// resolumeInstance is set only for a "resolume.changed" pendingFrame
-	// (Track D seam E), mirroring instance's role for "fpp.changed" — full-
-	// frame only, no ADR-023 delta narrowing: this resource has no delta
-	// event kind, so audience is always the zero value (audienceAll).
+	// resolumeInstance is set only for a "resolume.changed" pendingFrame,
+	// mirroring instance's role for "fpp.changed" — full-frame only, no
+	// ADR-023 delta narrowing: this resource has no delta event kind, so
+	// audience is always the zero value (audienceAll).
 	resolumeInstance *v1.ResolumeInstance
 
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
@@ -507,12 +507,10 @@ func (h *Hub) render(ctx context.Context) {
 		h.evictRendered("macrorun:", present)
 	}
 
-	// Track D seam E: every configured Resolume instance, full-frame only —
-	// no ADR-023 delta narrowing exists for this resource. composition is
-	// coordinator-wide stored configuration (resolumecomposition.go), fetched
-	// once per render pass and shared across every instance rendered in it,
-	// mirroring fetchDeclarationContext's identical "once per pass, not once
-	// per resource" reasoning above.
+	// Every configured Resolume instance, full-frame only — no ADR-023
+	// delta narrowing exists for this resource. composition is
+	// coordinator-wide stored configuration, fetched once per render pass
+	// and shared across every instance rendered in it.
 	if rviews, err := h.deps.Resolume.ListInstances(ctx); err != nil {
 		h.logger.Warn("stream hub: list resolume instances failed", "error", err)
 	} else if composition, err := resolumeInstanceComposition(ctx, h.deps.Config); err != nil {
@@ -634,15 +632,9 @@ func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	return proj
 }
 
-// resolumeInstanceDiffProjection is [fppInstanceDiffProjection]'s Track D
-// seam E sibling: a Resolume instance carries the identical evidence-churn
-// problem a re-poll of an unchanged value produces (Step 5 review finding
-// 3, one resource kind over) — CollectedAt advances every ~10s poll, and
-// ObservedAt/Source flip whenever a survey re-confirms a value that did not
-// actually change. Both are masked via [maskEvidenceForDiff], the SAME
-// function [fppInstanceDiffProjection] uses, never a second implementation
-// of the rule — see that function's own doc comment for what happened the
-// one time this masking rule had two copies.
+// resolumeInstanceDiffProjection mirrors [fppInstanceDiffProjection] for a
+// Resolume instance, masking evidence via the SAME [maskEvidenceForDiff]
+// function rather than a second implementation of the rule.
 func resolumeInstanceDiffProjection(inst v1.ResolumeInstance) v1.ResolumeInstance {
 	proj := inst
 	proj.Observations = make([]v1.Evidence, len(inst.Observations))

@@ -212,7 +212,7 @@ type Dependencies struct {
 	// is not this API failing" posture.
 	ResolumeActions ResolumeActionDispatcher
 
-	// Resolume is Track D seam E's own observability dependency: whatever
+	// Resolume is this API's observability dependency: whatever
 	// Resolume instances this coordinator has configured, with their
 	// currently-held observations. A nil field is replaced by
 	// [noResolumeLister], under which GET /resolume/instances reports an

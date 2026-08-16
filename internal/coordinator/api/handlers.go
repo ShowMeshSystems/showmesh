@@ -475,19 +475,20 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		runs = append(runs, mapMacroRunSummary(run))
 	}
 
-	// Track D seam E: every configured Resolume instance, rendered exactly
-	// as GET /resolume/instances renders it — fatal to omit under ADR-020
-	// decision 3, matching MacroRuns above: a client applying resolume.changed
-	// deltas on top of this snapshot must have something to apply them to.
+	// Every configured Resolume instance, rendered exactly as GET
+	// /resolume/instances renders it — fatal to omit under ADR-020 decision
+	// 3, matching MacroRuns above. The composition read is skipped when
+	// there are no views and degrades to null on a config-store error
+	// rather than failing the whole snapshot — see
+	// resolumeCompositionDegradeOnError's own doc comment.
 	resolumeViews, err := h.deps.Resolume.ListInstances(ctx)
 	if err != nil {
 		h.writeInternalError(w, now, "list resolume instances", err)
 		return
 	}
-	resolumeComposition, err := resolumeInstanceComposition(ctx, h.deps.Config)
-	if err != nil {
-		h.writeInternalError(w, now, "get resolume composition", err)
-		return
+	var resolumeComposition *v1.ResolumeInstanceComposition
+	if len(resolumeViews) > 0 {
+		resolumeComposition = resolumeCompositionDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
 	}
 	resolumeInstances := make([]v1.ResolumeInstance, 0, len(resolumeViews))
 	for _, rv := range resolumeViews {

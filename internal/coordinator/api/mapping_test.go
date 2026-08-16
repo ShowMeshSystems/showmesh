@@ -379,7 +379,7 @@ func TestMapFPPInstanceResolvesMultiSourceObservations(t *testing.T) {
 	}
 }
 
-// --- Track D seam E: deriveResolumeHealth ---
+// --- deriveResolumeHealth ---
 //
 // This section is [TestDeriveInstanceHealth*]'s Resolume sibling, against
 // [resolumeHealthCriticalSignals]/[deriveResolumeHealth] instead of
@@ -448,8 +448,28 @@ func TestDeriveResolumeHealthCompositionNotIdentifiedIsDegraded(t *testing.T) {
 	if got != observation.HealthDegraded {
 		t.Errorf("deriveResolumeHealth(composition.identified=not_identified) = %q, want %q, not %q", got, observation.HealthDegraded, observation.HealthFailed)
 	}
-	if got == observation.HealthFailed {
-		t.Fatalf("deriveResolumeHealth must never report failed for a composition mismatch")
+}
+
+// TestDeriveResolumeHealthCompositionDeckMismatchIsUnknown is finding 1's
+// second regression guard (owner review, 2026-08-16), companion to
+// TestIdentityObservationEmitsForDeckMismatch in the collector package: a
+// deck_mismatch reading means the sampled clips did not resolve because
+// the selected deck changed mid-check — an absence of evidence about
+// identity, never a finding about the composition — so it must roll up to
+// neither of the two different wrong answers.
+func TestDeriveResolumeHealthCompositionDeckMismatchIsUnknown(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.reachable", true, now),
+		resolumeHealthCurrentObs(t, "resolume.composition.identified",
+			"deck_mismatch: the selected deck changed while this identity check was running (expected deck id 2000000000001, now selected Deck Two (id 2000000000002))", now),
+	}
+	got := deriveResolumeHealth(obs, now)
+	if got == observation.HealthHealthy {
+		t.Errorf("deriveResolumeHealth(deck_mismatch) = healthy: that deletes the fact that identity could not be determined")
+	}
+	if got == observation.HealthDegraded {
+		t.Errorf("deriveResolumeHealth(deck_mismatch) = degraded: that asserts a fault in the composition ShowMesh cannot support — it could not check, which is unknown")
 	}
 }
 
@@ -473,6 +493,14 @@ func TestDeriveResolumeHealthCompositionUnknownDuringLoadWindowIsUnknown(t *test
 // are wrong in opposite directions and either would hide the fact that
 // nothing current is known.
 func TestDeriveResolumeHealthAgedOutReachableIsUnknown(t *testing.T) {
+	// Pin map membership first: without this, deleting "resolume.reachable"
+	// from resolumeHealthCriticalSignals entirely would also make this test
+	// pass, because zero critical members aggregates to unknown too — the
+	// assertion below would then be meaningless.
+	if _, ok := resolumeHealthCriticalSignals["resolume.reachable"]; !ok {
+		t.Fatalf(`resolumeHealthCriticalSignals is missing "resolume.reachable"`)
+	}
+
 	observedAt := time.Now().Add(-time.Hour)
 	now := time.Now() // now is well past observedAt+ValidFor, below
 	agedOut := healthMustObs(observation.Measured(resolumeHealthRes, "resolume.reachable", true, observedAt,
@@ -481,12 +509,6 @@ func TestDeriveResolumeHealthAgedOutReachableIsUnknown(t *testing.T) {
 	got := deriveResolumeHealth([]observation.Observation{agedOut}, now)
 	if got != observation.HealthUnknown {
 		t.Errorf("deriveResolumeHealth(aged-out reachable=true) = %q, want %q", got, observation.HealthUnknown)
-	}
-	if got == observation.HealthHealthy {
-		t.Fatalf("an aged-out resolume.reachable must never read healthy — the last reading having said true is not current evidence")
-	}
-	if got == observation.HealthFailed {
-		t.Fatalf("an aged-out resolume.reachable must never read failed — staleness is not the same claim as a measured false")
 	}
 }
 

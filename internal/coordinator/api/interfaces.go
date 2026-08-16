@@ -57,12 +57,11 @@ type FPPLister interface {
 }
 
 // ResolumeInstanceView is what this package needs from one configured
-// Resolume Arena instance's collector state (Track D seam E): its identity
-// and whatever observations the collector currently holds. Unlike
-// [FPPInstanceView] there is no Endpoint/LastPollAt/LastPollError here —
-// v1.ResolumeInstance's payload is InstanceID/Health/Observations/
-// Composition only, and Health/Composition are derived elsewhere
-// (mapping.go/resolumecomposition.go), never carried on this view.
+// Resolume Arena instance's collector state: its identity and whatever
+// observations the collector currently holds. Unlike [FPPInstanceView]
+// there is no Endpoint/LastPollAt/LastPollError here — Health/Composition
+// are derived elsewhere (mapping.go/resolumecomposition.go), never carried
+// on this view.
 type ResolumeInstanceView struct {
 	InstanceID   string
 	Observations []observation.Observation
@@ -70,9 +69,9 @@ type ResolumeInstanceView struct {
 
 // ResolumeLister lists the coordinator's configured Resolume instances and
 // their current collector state, mirroring [FPPLister]'s shape. The list
-// holds at most one element today (SHOWMESH_RESOLUME_ID) and stays a list
-// deliberately: Track D seam E spec section 2.2 rule 5 — "a singleton-shaped
-// API that later grows a second member is a breaking change."
+// holds at most one element today (SHOWMESH_RESOLUME_ID) and stays a list:
+// a singleton-shaped API that later grows a second member would be a
+// breaking change.
 type ResolumeLister interface {
 	ListInstances(ctx context.Context) ([]ResolumeInstanceView, error)
 }

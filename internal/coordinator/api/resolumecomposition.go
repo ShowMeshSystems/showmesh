@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -557,10 +558,25 @@ func resolumeInstanceComposition(ctx context.Context, cfg ConfigStore) (*v1.Reso
 	}
 
 	return &v1.ResolumeInstanceComposition{
-		Name:        payload.Composition.Name,
-		Revision:    rev.Revision,
-		ActivatedAt: formatTime(obj.UpdatedAt),
+		Name: payload.Composition.Name,
 	}, nil
+}
+
+// resolumeCompositionDegradeOnError reads the stored Resolume composition
+// via [resolumeInstanceComposition], logging and returning nil on a
+// config-store error rather than propagating it (owner review finding 3,
+// 2026-08-16). Composition is stored configuration; a caller here still
+// has real ListInstances evidence to render (reachability, health), and a
+// storage hiccup reading composition must not cost the operator that view
+// too — CLAUDE.md constraint 23 and ADR-024 decision 7 scope a failure to
+// "you cannot act", never "you cannot see".
+func resolumeCompositionDegradeOnError(ctx context.Context, cfg ConfigStore, logger *slog.Logger, action string) *v1.ResolumeInstanceComposition {
+	composition, err := resolumeInstanceComposition(ctx, cfg)
+	if err != nil {
+		logger.Warn("resolume composition read failed; rendering composition: null", "action", action, "error", err)
+		return nil
+	}
+	return composition
 }
 
 // mapResolumeCompositionSummary renders payload's own metadata plus its
