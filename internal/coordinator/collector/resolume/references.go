@@ -8,27 +8,19 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/resolumecomp"
 )
 
-// This file is Track D seam B (ADR-037 decisions 1-6): the label vocabulary
-// every operator-facing surface must render an object as, and the pure
-// resolve step that turns a named reference back into the [ObjectID] the
-// wire to Resolume still addresses by. Nothing here issues an HTTP request
-// or reads anything off a live Collector — every function takes only a
-// *[TrackedComposition] and a reference, so a caller with no dispatcher, no
-// client and no server (a macro's author-time validation path, ADR-037's
-// own Open section) can call it exactly the way [ActionDispatcher.Dispatch]
-// does.
+// This file holds the label vocabulary every operator-facing surface
+// renders an object as, and the pure resolve step that turns a named
+// reference into the ObjectID Resolume is still addressed by on the wire.
+// Every function here takes only a *TrackedComposition and issues no HTTP
+// request.
 
-// --- Labels (ADR-037 decision 4) -------------------------------------------
+// --- Labels ------------------------------------------------------------
 //
-// One function per object kind, called from here and from
-// internal/coordinator/api's composition read surface — never a second,
-// independently written labeller for the same kind. Every label is
-// compared byte-for-byte, case-sensitive, no trimming: the measured
+// One function per object kind; every caller uses these, never a second
+// labeller. Compared byte-for-byte, case-sensitive: the measured
 // composition contains a layer authored as "Peak + Under " (a trailing
-// space) and a clip name containing a full-width vertical bar. Names are
-// operator-typed strings, not identifiers, and trimming one would make
-// "Peak + Under " and a hypothetical "Peak + Under" the same reference —
-// silently addressing whichever one this package happened to find first.
+// space) and a clip name containing a full-width vertical bar, so trimming
+// would silently address the wrong object.
 
 // LayerLabel returns a layer's operator-facing label from its own 0-based
 // index and authored name: the name when non-empty, otherwise the
@@ -90,35 +82,31 @@ func PersistentClipLabel(position int, name string) (label string, generated boo
 // among layers, for a caller working directly against a parsed
 // [resolumecomp.Composition] rather than a built [TrackedComposition] — the
 // composition read surface (internal/coordinator/api) is exactly that
-// caller: it has no ObjectID to resolve through and needs a clip's layer
-// label purely to compute [ClipTripleKey]. Mirrors [clipLayerLabel]'s
-// identical "unknown layer" fallback for an index that resolves to nothing.
-func LayerLabelByIndex(layers []resolumecomp.Layer, layerIndex int) string {
+// caller. known is false when no layer has that index; like
+// [clipLayerLabel], the caller must never treat two such clips as sharing
+// a layer just because both are unresolved.
+//
+// A duplicate index keeps the LAST match, agreeing with
+// BuildTrackedComposition's own layerIndexToID (idmap.go), which is a
+// plain map write and so keeps the last one seen too.
+func LayerLabelByIndex(layers []resolumecomp.Layer, layerIndex int) (label string, known bool) {
 	for _, l := range layers {
 		if l.Index == layerIndex {
-			label, _ := LayerLabel(l.Index, l.Name)
-			return label
+			label, _ = LayerLabel(l.Index, l.Name)
+			known = true
 		}
 	}
-	return "an unknown layer"
+	return label, known
 }
 
-// --- Ambiguity (ADR-037 amendment, 2026-08-16) ------------------------------
+// --- Ambiguity -----------------------------------------------------------
 //
 // Measured against the operator's real composition: seven (deck, layer,
 // label) triples on one deck alone are shared by more than one clip,
 // covering 16 of 36 clips, and two of the four persistent clips share a
-// label too. A clip whose triple collides with another's can never be told
-// apart by any [ClipReference] this package accepts — adding "layer" does
-// not help, because the colliding clips already agree on their own layer
-// too. ADR-037 decision 5 ("an error at bind time, not a coin flip at
-// showtime") extends to this case as "flagged before anything is bound at
-// all": the composition read surface marks it so an operator finds every
-// such clip in one pass instead of discovering them one refused macro at a
-// time. The only remedy is renaming one of them in Resolume and
-// re-uploading; this package never invents a column term or an ordinal to
-// break the tie, because either would be a positional reference wearing a
-// name (ADR-037's own rejection of positional addressing).
+// label too. A clip whose triple collides with another's cannot be told
+// apart by any reference, including one naming its own layer, since the
+// colliding clips already agree on it too.
 
 // ClipTripleKey is the (deck, layer, label) tuple two distinct clips must
 // not share. Deck is "" for a persistent clip (mirroring
@@ -264,14 +252,12 @@ func ResolveColumn(tc *TrackedComposition, deckReference, columnReference string
 
 // --- Clip: deck-scoped or persistent, optionally disambiguated by layer ----
 
-// ClipReference is launchClip's own reference vocabulary (TRACK-D-SEAM-B-NAMES-SPEC.md
-// §2.1). Deck is conditional rather than optional: exactly one of "Deck
-// named" or "Persistent true" may hold, checked by [ResolveClip] itself
-// before either candidate set is even searched, because a clip reference
-// without its deck cannot tell "this clip was replaced" from "this clip's
-// deck simply is not showing" (ADR-032 decision 6) and inferring
-// "persistent" from an absent deck would make an omitted field silently
-// change which object is addressed.
+// ClipReference is launchClip's own reference vocabulary. Deck is
+// conditional rather than optional: exactly one of "Deck named" or
+// "Persistent true" may hold, checked by [ResolveClip] itself before
+// either candidate set is even searched, since a clip reference without
+// its deck cannot tell "this clip was replaced" from "this clip's deck
+// simply is not showing" (ADR-032 decision 6).
 type ClipReference struct {
 	Clip       string
 	Deck       string
@@ -280,18 +266,19 @@ type ClipReference struct {
 }
 
 // clipLayerLabel renders the label of the layer a clip's own resolved
-// LayerID names, for an ambiguity refusal's disambiguating detail (§2.3:
-// "for a clip, each candidate's layer label"). A clip whose layerIndex does
-// not resolve to any tracked layer names "an unknown layer" rather than
-// panicking or fabricating an id.
-func clipLayerLabel(tc *TrackedComposition, layerID *ObjectID) string {
+// LayerID names, and reports whether one was actually found. A clip whose
+// layerIndex does not resolve to any tracked layer has no label at all —
+// known is false, and the caller must never treat that as a value a
+// "layer" reference could name: "an unknown layer" is prose for a human,
+// not a candidate for string equality against ref.Layer.
+func clipLayerLabel(tc *TrackedComposition, layerID *ObjectID) (label string, known bool) {
 	if layerID != nil {
 		if l, ok := tc.LayerByID(*layerID); ok {
 			label, _ := LayerLabel(l.Index, l.Name)
-			return label
+			return label, true
 		}
 	}
-	return "an unknown layer"
+	return "", false
 }
 
 // ResolveClip resolves ref against tc. Persistent and non-persistent clips
@@ -314,10 +301,12 @@ func ResolveClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error) {
 
 // clipCandidate pairs a matched clip with the layer label an ambiguity
 // refusal names — computed once per match rather than re-derived at
-// message-formatting time.
+// message-formatting time. layerKnown is false when the clip's own
+// layerIndex did not resolve to a tracked layer at all.
 type clipCandidate struct {
 	id         ObjectID
 	layerLabel string
+	layerKnown bool
 }
 
 func resolveDeckClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error) {
@@ -335,13 +324,15 @@ func resolveDeckClip(tc *TrackedComposition, ref ClipReference) (ObjectID, error
 		if !labelEquals(ref.Clip, label) {
 			continue
 		}
-		layerLabel := clipLayerLabel(tc, c.LayerID)
+		layerLabel, layerKnown := clipLayerLabel(tc, c.LayerID)
 		// A layer disambiguator that does not match NARROWS the candidate
-		// set to zero — it is never a fallback to the unfiltered set (§2.1).
-		if ref.Layer != "" && ref.Layer != layerLabel {
+		// set to zero — never a fallback to the unfiltered set. An unknown
+		// layer can never match: it has no name a reference could ever
+		// carry.
+		if ref.Layer != "" && (!layerKnown || ref.Layer != layerLabel) {
 			continue
 		}
-		matched = append(matched, clipCandidate{c.ID, layerLabel})
+		matched = append(matched, clipCandidate{c.ID, layerLabel, layerKnown})
 	}
 	return resolveClipCandidates(matched, ref, ref.Deck)
 }
@@ -353,11 +344,11 @@ func resolvePersistentClip(tc *TrackedComposition, ref ClipReference) (ObjectID,
 		if !labelEquals(ref.Clip, label) {
 			continue
 		}
-		layerLabel := clipLayerLabel(tc, c.LayerID)
-		if ref.Layer != "" && ref.Layer != layerLabel {
+		layerLabel, layerKnown := clipLayerLabel(tc, c.LayerID)
+		if ref.Layer != "" && (!layerKnown || ref.Layer != layerLabel) {
 			continue
 		}
-		matched = append(matched, clipCandidate{c.ID, layerLabel})
+		matched = append(matched, clipCandidate{c.ID, layerLabel, layerKnown})
 	}
 	return resolveClipCandidates(matched, ref, "")
 }
@@ -382,22 +373,28 @@ func resolveClipCandidates(matched []clipCandidate, ref ClipReference, deckDesc 
 		layers := make([]string, len(matched))
 		layerCounts := make(map[string]int, len(matched))
 		for i, m := range matched {
-			layers[i] = fmt.Sprintf("on layer %q", m.layerLabel)
-			layerCounts[m.layerLabel]++
-		}
-		// ADR-037 amendment (2026-08-16): if two or more of the matched
-		// candidates share the identical layer too, "add a layer" is not a
-		// remedy that works for them — they already agree on their own
-		// layer, which is exactly what a layer disambiguator narrows on.
-		// Measured against the operator's real composition: this is the
-		// common case, not the rare one (16 of 36 clips on one deck alone).
-		for _, n := range layerCounts {
-			if n > 1 {
-				return 0, fmt.Errorf(
-					"more than one clip named %q %s (%s); these clips also share the same layer, so no reference can "+
-						"ever tell them apart — rename one of them in Resolume and re-upload the composition",
-					ref.Clip, scope, strings.Join(layers, ", "))
+			if m.layerKnown {
+				layers[i] = fmt.Sprintf("on layer %q", m.layerLabel)
+				layerCounts[m.layerLabel]++
+			} else {
+				// Not a real label: never rendered with %q, and never
+				// grouped with another unknown-layer candidate, since two
+				// clips this package cannot name a layer for are not
+				// thereby known to share one.
+				layers[i] = "on a layer this composition cannot identify"
+				layerCounts[fmt.Sprintf("\x00unknown-%d", i)]++
 			}
+		}
+		// Renaming is the only remedy exactly when EVERY matched candidate
+		// already agrees on one layer: adding that layer to the reference
+		// would still leave all of them matching. If even one candidate
+		// differs, naming its layer resolves the reference right now, so
+		// "add a layer" stays the correct advice for the whole refusal.
+		if len(layerCounts) == 1 {
+			return 0, fmt.Errorf(
+				"more than one clip named %q %s (%s); these clips also share the same layer, so no reference can "+
+					"ever tell them apart — rename one of them in Resolume and re-upload the composition",
+				ref.Clip, scope, strings.Join(layers, ", "))
 		}
 		return 0, fmt.Errorf(
 			`more than one clip named %q %s (%s); add a "layer" to this reference to disambiguate`,

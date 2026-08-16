@@ -1231,7 +1231,7 @@ export interface components {
         };
         /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition — a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
         ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
-        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) — neither or both is refused as `400`. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` (never a stale-reference error and never a silent deck change) — see ResolumeActionResult.outcome. */
+        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) — `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference — see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
         ResolumeLaunchClipActionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -1248,7 +1248,7 @@ export interface components {
                 layer?: string;
                 /** @description True when `clip` names a persistent clip (no `deck` allowed). Absent or false means a deck clip, and `deck` is then required. */
                 persistent?: boolean;
-            };
+            } & (unknown | unknown);
         };
         /** @description `action: "clearLayer"`: clears (disconnects) a layer's active clip, named by `params.layer`. */
         ResolumeClearLayerActionRequest: {
@@ -1364,6 +1364,8 @@ export interface components {
             dispatchedAt: string | null;
             /** Format: date-time */
             resolvedAt: string | null;
+            /** @description The Resolume object id this action's own name reference resolved to, kept visible for debugging (ADR-037 removes the id from what an operator types, not from the record). Absent for `blackout`, which addresses nothing, and for a refusal reached before any name was resolved. */
+            resolvedId?: string;
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
