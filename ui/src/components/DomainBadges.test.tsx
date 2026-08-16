@@ -1,6 +1,12 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ControlPlaneBadge, DeclarationBadge } from './DomainBadges'
+import {
+  ControlPlaneBadge,
+  DeclarationBadge,
+  ResolumeHealthBadge,
+  ResolumeRecoveryLayerStateBadge,
+  ResolumeRestoreResultBadge,
+} from './DomainBadges'
 
 // See EvidenceValue.test.tsx for why this is registered explicitly here.
 afterEach(cleanup)
@@ -78,5 +84,61 @@ describe('DeclarationBadge', () => {
     const unrecognized = 'archived' as unknown as Parameters<typeof DeclarationBadge>[0]['discoveryState']
     expect(() => render(<DeclarationBadge declared={true} discoveryState={unrecognized} />)).not.toThrow()
     expect(screen.getByText(/unrecognized/i)).toBeInTheDocument()
+  })
+})
+
+// Track D seam D-4 (build contract §2.1/acceptance criterion 2): "unknown
+// is its own tone and must not collapse into warning" applies to
+// ResolumeHealthBadge exactly as it does to FPPHealthBadge.
+describe('ResolumeHealthBadge', () => {
+  it('renders "unknown" with the unknown tone, never as healthy or as warning', () => {
+    render(<ResolumeHealthBadge health="unknown" />)
+    const badge = screen.getByText('unknown').closest('.status-badge')
+    expect(badge?.className).toContain('status-badge--unknown')
+    expect(badge?.className).not.toContain('status-badge--good')
+    expect(badge?.className).not.toContain('status-badge--warn')
+  })
+
+  it('renders "healthy" with the good tone', () => {
+    render(<ResolumeHealthBadge health="healthy" />)
+    const badge = screen.getByText('healthy').closest('.status-badge')
+    expect(badge?.className).toContain('status-badge--good')
+  })
+
+  it('renders "failed" with the bad tone, distinct from unknown', () => {
+    render(<ResolumeHealthBadge health="failed" />)
+    const badge = screen.getByText('failed').closest('.status-badge')
+    expect(badge?.className).toContain('status-badge--bad')
+  })
+})
+
+// Acceptance criterion 8: a recovery layer whose state is "unknown" gets
+// its OWN badge, never dark or blank.
+describe('ResolumeRecoveryLayerStateBadge', () => {
+  it('renders "unknown" with a visible, non-empty label', () => {
+    render(<ResolumeRecoveryLayerStateBadge state="unknown" />)
+    const label = screen.getByText('unknown')
+    expect(label.textContent?.trim().length).toBeGreaterThan(0)
+  })
+
+  it('renders "clip" and "dark" states distinctly from "unknown"', () => {
+    const { unmount } = render(<ResolumeRecoveryLayerStateBadge state="clip" />)
+    expect(screen.getByText(/clip loaded/)).toBeInTheDocument()
+    unmount()
+    render(<ResolumeRecoveryLayerStateBadge state="dark" />)
+    expect(screen.getByText(/dark/)).toBeInTheDocument()
+  })
+})
+
+describe('ResolumeRestoreResultBadge', () => {
+  it('renders "restored", "skipped", and "failed" with distinct tones', () => {
+    const { unmount: u1 } = render(<ResolumeRestoreResultBadge result="restored" />)
+    expect(screen.getByText('restored').closest('.status-badge')?.className).toContain('status-badge--good')
+    u1()
+    const { unmount: u2 } = render(<ResolumeRestoreResultBadge result="skipped" />)
+    expect(screen.getByText('skipped').closest('.status-badge')?.className).toContain('status-badge--unknown')
+    u2()
+    render(<ResolumeRestoreResultBadge result="failed" />)
+    expect(screen.getByText('failed').closest('.status-badge')?.className).toContain('status-badge--bad')
   })
 })

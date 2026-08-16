@@ -123,6 +123,29 @@ export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRec
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 
+// Track D seam D-4: Resolume as an observability resource (seam E) and the
+// seven-action vocabulary (D-3/seam B). Aliased for the identical reason
+// as every type above (ADR-015). `ResolumeInstance` IS part of `Model`
+// (below) — unlike the composition/recovery types above, it is a resource
+// ADR-020's change stream models (`resolume.changed`).
+export type ResolumeInstanceComposition = components['schemas']['ResolumeInstanceComposition']
+export type ResolumeInstance = components['schemas']['ResolumeInstance']
+export type ResolumeInstancesResponse = components['schemas']['ResolumeInstancesResponse']
+export type ResolumeInstanceResponse = components['schemas']['ResolumeInstanceResponse']
+export type ResolumeActionParam = components['schemas']['ResolumeActionParam']
+export type ResolumeAction = components['schemas']['ResolumeAction']
+export type ResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
+export type ResolumeActionResult = components['schemas']['ResolumeActionResult']
+export type ResolumeActionResponse = components['schemas']['ResolumeActionResponse']
+// The full stored composition id map (decks, layer groups, layers,
+// columns, clips, persistent clips) — distinct from
+// ResolumeCompositionSummary above, which is the display-only subset.
+export type ResolumeCompositionDeckSummary = components['schemas']['ResolumeCompositionDeckSummary']
+export type ResolumeCompositionLayerGroup = components['schemas']['ResolumeCompositionLayerGroup']
+export type ResolumeCompositionLayer = components['schemas']['ResolumeCompositionLayer']
+export type ResolumeCompositionColumn = components['schemas']['ResolumeCompositionColumn']
+export type ResolumeCompositionClip = components['schemas']['ResolumeCompositionClip']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare
@@ -200,6 +223,15 @@ export interface Model {
    * event, mirroring applyFppObservationsChanged's identical posture.
    */
   macroRuns: MacroRunSummary[]
+  /**
+   * Track D seam D-4: every configured Resolume instance, exactly as
+   * `Snapshot.resolume` carries them — an empty array on a coordinator
+   * with none configured, never null. Replaced wholesale on every
+   * snapshot and upserted in place by `resolume.changed` frames (see
+   * store.ts's applyResolumeChanged). No delta variant exists, so unlike
+   * `fpp`, every observation rides every frame.
+   */
+  resolume: ResolumeInstance[]
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */
   events: Event[]
   /**
@@ -253,6 +285,7 @@ export function initialModel(): Model {
     fpp: [],
     collectors: [],
     macroRuns: [],
+    resolume: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

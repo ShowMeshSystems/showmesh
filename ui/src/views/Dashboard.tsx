@@ -10,7 +10,8 @@ import { FleetSignalBadge } from '../components/FleetSignalBadge'
 import { findObservation } from '../app/fppSignals'
 import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard'
 import { STATE_ICON, STATE_TONE } from '../app/evidenceState'
-import type { FPPInstance, Node } from '../app/types'
+import { EvidenceValue } from '../components/EvidenceValue'
+import type { FPPInstance, Node, ResolumeInstance } from '../app/types'
 
 // The default view (spec section 6.4). OBSERVABILITY section 6.2's last
 // line: "the default view prioritizes active critical conditions, then
@@ -75,6 +76,30 @@ function attentionFromFPP(instances: FPPInstance[]): AttentionItem[] {
   return items
 }
 
+// Track D seam D-4 (build contract §2.1): the identical rule
+// attentionFromFPP above already applies, over the identical five-value
+// health vocabulary (ResolumeInstance.health is structurally the same
+// enum as FPPInstance.health) — 'unknown' gets its own attention item
+// rather than reading as fine, and 'suppressed' is deliberately excluded
+// for the same reason it is above.
+function attentionFromResolume(instances: ResolumeInstance[]): AttentionItem[] {
+  const items: AttentionItem[] = []
+  for (const instance of instances) {
+    if (instance.health === 'failed') {
+      items.push({ tone: 'critical', text: `Resolume instance "${instance.instanceId}" is failed`, to: '/resolume' })
+    } else if (instance.health === 'degraded') {
+      items.push({ tone: 'warning', text: `Resolume instance "${instance.instanceId}" is degraded`, to: '/resolume' })
+    } else if (instance.health === 'unknown') {
+      items.push({
+        tone: 'unknown',
+        text: `Resolume instance "${instance.instanceId}" health is unknown`,
+        to: '/resolume',
+      })
+    }
+  }
+  return items
+}
+
 function attentionFromNodes(nodes: Node[]): AttentionItem[] {
   const items: AttentionItem[] = []
   for (const node of nodes) {
@@ -99,7 +124,12 @@ function sortByTone(items: AttentionItem[]): AttentionItem[] {
 export function Dashboard() {
   const model = useModelContext()
 
-  const attention = sortByTone([...attentionFromFPP(model.fpp), ...attentionFromNodes(model.nodes)])
+  const attention = sortByTone([
+    ...attentionFromFPP(model.fpp),
+    ...attentionFromResolume(model.resolume),
+    ...attentionFromNodes(model.nodes),
+  ])
+  const resolumeInstance = model.resolume[0]
 
   const onlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'online').length
   const offlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'offline').length
@@ -223,6 +253,51 @@ export function Dashboard() {
               )}
             </dd>
           </dl>
+        </section>
+      </PanelErrorBoundary>
+
+      {/* Track D seam D-4 (build contract §2.1): reachability with
+          provenance/freshness through the shared EvidenceValue, the loaded
+          composition's name or a stated "no composition uploaded," and an
+          "unconfigured" render rather than an error or an empty box when
+          GET /resolume/instances answers with an empty array by design. */}
+      <PanelErrorBoundary panelLabel="Resolume">
+        <section className="panel">
+          <h2 className="panel__title">Resolume</h2>
+          {resolumeInstance === undefined ? (
+            <p className="text-muted">Resolume is not configured on this coordinator.</p>
+          ) : (
+            <>
+              <Link className="entity-link" to="/resolume">
+                <strong>{resolumeInstance.instanceId}</strong>
+              </Link>
+              <EvidenceValue
+                label="reachable"
+                evidence={
+                  findObservation(resolumeInstance.observations, 'resolume.reachable') ?? {
+                    signal: 'resolume.reachable',
+                    value: null,
+                    unit: null,
+                    state: 'not_collected',
+                    reason: 'never collected',
+                    observedAt: null,
+                    collectedAt: null,
+                    source: 'resolume',
+                    quality: 'direct',
+                    validForSeconds: null,
+                  }
+                }
+                serverTime={model.serverTime}
+                serverTimeReceivedAt={model.serverTimeReceivedAt}
+                connected={model.connection.kind === 'live'}
+              />
+              <p className="text-muted">
+                {resolumeInstance.composition === null
+                  ? 'No composition uploaded.'
+                  : `Loaded composition: ${resolumeInstance.composition.name}`}
+              </p>
+            </>
+          )}
         </section>
       </PanelErrorBoundary>
 

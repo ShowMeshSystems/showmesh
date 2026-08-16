@@ -4,6 +4,14 @@ import { getShowAction, getShowActionRevisions, putShowAction, type ConfigRevisi
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
+import {
+  clipOptions,
+  columnOptions,
+  deckOptions,
+  layerOptions,
+  type ClipPickerOption,
+} from '../app/resolumeComposition'
+import { resolumeCompositionOrNull, useResolumeComposition } from '../app/useResolumeComposition'
 import { ScopedButton } from '../components/ScopedButton'
 import type { ActionIntegration, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
 
@@ -39,6 +47,20 @@ const FPP_PRIMITIVES = [
 ]
 const MQTT_EXPECT_KINDS = ['none', 'boolean', 'number', 'text', 'match'] as const
 
+// The fixed seven-action vocabulary Track D D-3 registered
+// (GET /resolume/actions' own registry) — same "hardcoded here, resolved
+// through the server's own registry rather than a second copy" posture as
+// FPP_PRIMITIVES above, for the identical reason.
+const RESOLUME_ACTIONS = [
+  'launchClip',
+  'clearLayer',
+  'blackout',
+  'launchColumn',
+  'selectDeck',
+  'setLayerBypass',
+  'setLayerMaster',
+]
+
 interface FormState {
   show: string
   label: string
@@ -59,6 +81,17 @@ interface FormState {
   expectTopic: string
   expectValue: string
   expectDeadlineSeconds: string
+  // resolume fields (ADR-037 decision 8, build contract §2.4): every
+  // reference is a NAME, never an object id — the same picker vocabulary
+  // as the controller page (ResolumeActionController.tsx).
+  resolumeAction: string
+  resolumeDeck: string
+  resolumeClip: string
+  resolumePersistent: boolean
+  resolumeLayer: string
+  resolumeColumn: string
+  resolumeBypassed: boolean
+  resolumeMaster: string
 }
 
 function emptyForm(): FormState {
@@ -80,11 +113,34 @@ function emptyForm(): FormState {
     expectTopic: '',
     expectValue: '',
     expectDeadlineSeconds: '',
+    resolumeAction: '',
+    resolumeDeck: '',
+    resolumeClip: '',
+    resolumePersistent: false,
+    resolumeLayer: '',
+    resolumeColumn: '',
+    resolumeBypassed: false,
+    resolumeMaster: '',
   }
+}
+
+function refString(ref: Record<string, unknown> | undefined, key: string): string {
+  const v = ref?.[key]
+  return typeof v === 'string' ? v : ''
+}
+
+function refBoolean(ref: Record<string, unknown> | undefined, key: string): boolean {
+  return ref?.[key] === true
+}
+
+function refNumber(ref: Record<string, unknown> | undefined, key: string): string {
+  const v = ref?.[key]
+  return typeof v === 'number' ? String(v) : ''
 }
 
 function formFromPayload(payload: ConfigShowAction): FormState {
   const target = payload.target
+  const ref = target.ref
   return {
     show: payload.show,
     label: payload.label,
@@ -103,6 +159,14 @@ function formFromPayload(payload: ConfigShowAction): FormState {
     expectTopic: target.expect?.topic ?? '',
     expectValue: target.expect?.value ?? '',
     expectDeadlineSeconds: target.expect?.deadlineSeconds === undefined ? '' : String(target.expect.deadlineSeconds),
+    resolumeAction: target.action ?? '',
+    resolumeDeck: refString(ref, 'deck'),
+    resolumeClip: refString(ref, 'clip'),
+    resolumePersistent: refBoolean(ref, 'persistent'),
+    resolumeLayer: refString(ref, 'layer'),
+    resolumeColumn: refString(ref, 'column'),
+    resolumeBypassed: refBoolean(ref, 'bypassed'),
+    resolumeMaster: refNumber(ref, 'master'),
   }
 }
 
@@ -111,8 +175,19 @@ function formFromPayload(payload: ConfigShowAction): FormState {
  * validation message. This is a MIRROR, not the authority (see this
  * file's own header comment) — every check here also exists server-side;
  * this only saves a round trip for the common typo/omission case.
+ *
+ * `resolumeClips` (review finding 6): the SAME clip option list the form
+ * rendered — needed here only to recover `duplicateName`/`layerName` for
+ * the clip actually picked, exactly like ResolumeActionController.tsx's
+ * own `handleGo` does. Without it, a clip disambiguated as "Snow (on
+ * Layer B)" in the picker saved a bare `clip: "Snow"` with no `layer`,
+ * so the picker showed the disambiguation and the saved macro discarded
+ * it — ambiguous again the moment it runs.
  */
-function buildPayload(form: FormState): { payload: ConfigShowAction } | { error: string } {
+function buildPayload(
+  form: FormState,
+  resolumeClips: readonly ClipPickerOption[],
+): { payload: ConfigShowAction } | { error: string } {
   if (form.show.trim() === '') return { error: 'Show is required.' }
   if (form.label.trim() === '') return { error: 'Label is required.' }
   if (form.safetyClass === '') {
@@ -153,6 +228,79 @@ function buildPayload(form: FormState): { payload: ConfigShowAction } | { error:
           // section 5.3) at the TypeScript layer, so the spread is
           // conditional rather than always including a `params: undefined` key.
           ...(params !== undefined ? { params } : {}),
+        },
+      },
+    }
+  }
+
+  if (form.integration === 'resolume') {
+    if (form.resolumeAction === '') return { error: 'Resolume action is required.' }
+    const ref: Record<string, unknown> = {}
+    switch (form.resolumeAction) {
+      case 'launchClip': {
+        if (form.resolumeClip.trim() === '') return { error: 'Clip is required for launchClip.' }
+        if (!form.resolumePersistent && form.resolumeDeck.trim() === '') {
+          return { error: 'Deck is required for launchClip unless the clip is persistent.' }
+        }
+        ref.clip = form.resolumeClip.trim()
+        if (form.resolumePersistent) {
+          ref.persistent = true
+        } else {
+          ref.deck = form.resolumeDeck.trim()
+        }
+        // `ref.layer` disambiguates a clip name shared by more than one
+        // clip in this scope (ADR-037) — sent automatically whenever the
+        // selected clip's own name is a duplicate, matching
+        // ResolumeActionController.tsx's identical rule.
+        const selectedClip = resolumeClips.find((c) => c.value === form.resolumeClip.trim())
+        if (selectedClip?.duplicateName) ref.layer = selectedClip.layerName
+        break
+      }
+      case 'clearLayer':
+      case 'setLayerBypass':
+      case 'setLayerMaster':
+        if (form.resolumeLayer.trim() === '') return { error: `Layer is required for ${form.resolumeAction}.` }
+        ref.layer = form.resolumeLayer.trim()
+        if (form.resolumeAction === 'setLayerBypass') ref.bypassed = form.resolumeBypassed
+        if (form.resolumeAction === 'setLayerMaster') {
+          if (form.resolumeMaster.trim() === '') return { error: 'Master value is required for setLayerMaster.' }
+          const master = Number(form.resolumeMaster)
+          if (!Number.isFinite(master)) return { error: 'Master value must be a number.' }
+          ref.master = master
+        }
+        break
+      case 'launchColumn':
+        if (form.resolumeColumn.trim() === '') return { error: 'Column is required for launchColumn.' }
+        if (form.resolumeDeck.trim() === '') return { error: 'Deck is required for launchColumn.' }
+        ref.column = form.resolumeColumn.trim()
+        ref.deck = form.resolumeDeck.trim()
+        break
+      case 'selectDeck':
+        if (form.resolumeDeck.trim() === '') return { error: 'Deck is required for selectDeck.' }
+        ref.deck = form.resolumeDeck.trim()
+        break
+      case 'blackout':
+        // No parameters — ref stays empty.
+        break
+      default:
+        return { error: `Unrecognized Resolume action "${form.resolumeAction}".` }
+    }
+    return {
+      payload: {
+        show: form.show.trim(),
+        label: form.label.trim(),
+        description: form.description,
+        safetyClass: form.safetyClass,
+        target: {
+          integration: 'resolume',
+          action: form.resolumeAction,
+          // Every Resolume action is coordinator-required (there is no
+          // local fallback for a coordinator-hosted adapter) — this
+          // target carries no localFallback field itself (that lives on
+          // the MACRO STEP, not the action — see MacroDetail.tsx), but the
+          // ref shape is exactly what that step's own coordinator-required
+          // constraint assumes exists.
+          ...(Object.keys(ref).length > 0 ? { ref } : {}),
         },
       },
     }
@@ -256,12 +404,46 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const savingRef = useRef(false) // see Configuration.tsx's own savingRef for why this guards instead of `saving` state
 
+  // Track D seam D-4 (build contract §2.4): the same composition-driven
+  // pickers the controller page uses (ResolumeActionController.tsx),
+  // reused here so an authored action's references are names too.
+  // Review finding 7: fetched ONLY while the operator has the `resolume`
+  // integration selected — this is a `config:write`-gated request, and
+  // visiting an ordinary `fpp` or `mqtt` action used to issue it anyway,
+  // 403ing for most sessions for no reason the form ever needed.
+  const resolumeCompositionState = useResolumeComposition('show-action-detail', form.integration === 'resolume')
+  const resolumeComposition = resolumeCompositionOrNull(resolumeCompositionState)
+  const resolumeDecks = deckOptions(resolumeComposition)
+  const resolumeLayers = layerOptions(resolumeComposition)
+
+  // Review finding 8: the deck picker's own <select> must key on the
+  // deck's id, never its (possibly ambiguous) name — see
+  // ResolumeActionController.tsx's identical `Picker` comment for why an
+  // HTML <select> cannot otherwise distinguish two same-named decks.
+  // `form.resolumeDeck` keeps holding the NAME (what buildPayload sends
+  // and what an existing action's stored ref carries); `resolumeDeckId`
+  // is UI-only state driving the picker and the clip/column scoping
+  // below, kept in sync by the effect after it.
+  const [resolumeDeckId, setResolumeDeckId] = useState('')
+
+  const resolumeColumns = columnOptions(resolumeComposition, resolumeDeckId === '' ? null : resolumeDeckId)
+  const resolumeClips = form.resolumePersistent
+    ? clipOptions(resolumeComposition, { persistent: true })
+    : resolumeDeckId === ''
+      ? []
+      : clipOptions(resolumeComposition, { deckId: resolumeDeckId })
+
   useEffect(() => {
     if (isNew) return
     if (existingId === undefined) return
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
+    // A newly-navigated-to action's deck id is unknown until resolved
+    // (below) against ITS OWN composition state — clearing it here stops
+    // the previously-viewed action's id from leaking into this one while
+    // that resolution is pending.
+    setResolumeDeckId('')
     Promise.all([getShowAction(existingId), getShowActionRevisions(existingId)])
       .then(([config, revisionsResp]) => {
         if (cancelled) return
@@ -277,6 +459,24 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
     }
   }, [existingId, readGate.allowed, isNew])
 
+  // Resolves `resolumeDeckId` from the stored deck NAME once the
+  // composition is loaded. Best-effort only when that name is itself
+  // ambiguous (two decks sharing it): this picks the first match, purely
+  // for what the picker shows pre-populated — buildPayload always sends
+  // `form.resolumeDeck` (the name actually stored) untouched, so loading
+  // an existing action and saving it again without touching this field
+  // changes nothing. An explicit pick through the picker's own onChange
+  // always sets both the id and the name together and is never
+  // overwritten here (the `current !== ''` guard).
+  useEffect(() => {
+    if (resolumeComposition === null) return
+    if (form.resolumeDeck === '') return
+    setResolumeDeckId((current) => {
+      if (current !== '') return current
+      return deckOptions(resolumeComposition).find((d) => d.value === form.resolumeDeck)?.key ?? current
+    })
+  }, [resolumeComposition, form.resolumeDeck])
+
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
     const id = isNew ? newId.trim() : existingId
@@ -284,7 +484,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
       setSaveError('An action id is required.')
       return
     }
-    const built = buildPayload(form)
+    const built = buildPayload(form, resolumeClips)
     if ('error' in built) {
       setSaveError(built.error)
       return
@@ -393,6 +593,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
           >
             <option value="fpp">FPP primitive</option>
             <option value="mqtt">External MQTT command</option>
+            <option value="resolume">Resolume action</option>
           </select>
         </label>
 
@@ -428,7 +629,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               />
             </label>
           </>
-        ) : (
+        ) : form.integration === 'mqtt' ? (
           <>
             <label className="form-field">
               Broker (required — this deployment&rsquo;s declared broker identifier, never defaulted)
@@ -522,6 +723,190 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                   />
                 </label>
               </>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-muted">
+              Every Resolume action is coordinator-required — Resolume holds no local fallback for
+              a coordinator-hosted adapter. This macro step must use the
+              &ldquo;coordinator-required&rdquo; local fallback class; see the macro editor.
+            </p>
+            {/* Review finding 7: these pickers render from
+                resolumeCompositionOrNull alone, which is null in EVERY one
+                of the states below — a non-admin used to see four empty
+                "Choose one" dropdowns with no reason at all. Follows the
+                same branches ResolumeView.tsx's own inventory panel
+                handles. */}
+            {resolumeCompositionState.kind === 'loading' && (
+              <p className="text-muted">Loading the stored composition…</p>
+            )}
+            {resolumeCompositionState.kind === 'not_stored' && (
+              <p className="text-muted" role="status">
+                {resolumeCompositionState.reason}
+              </p>
+            )}
+            {resolumeCompositionState.kind === 'forbidden' && (
+              <p className="panel panel--warning" role="alert">
+                {resolumeCompositionState.reason}
+              </p>
+            )}
+            {resolumeCompositionState.kind === 'unauthorized' && (
+              <p className="panel panel--warning" role="alert">
+                {resolumeCompositionState.reason}
+              </p>
+            )}
+            {resolumeCompositionState.kind === 'error' && (
+              <p className="panel panel--error" role="alert">
+                {resolumeCompositionState.message}
+              </p>
+            )}
+            <label className="form-field">
+              Action
+              <select
+                value={form.resolumeAction}
+                onChange={(e) => setForm({ ...form, resolumeAction: e.target.value })}
+              >
+                <option value="" disabled>
+                  Choose one
+                </option>
+                {RESOLUME_ACTIONS.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {(form.resolumeAction === 'launchClip' ||
+              form.resolumeAction === 'launchColumn' ||
+              form.resolumeAction === 'selectDeck') && (
+              <label className="form-field">
+                Deck
+                <select
+                  value={resolumeDeckId}
+                  onChange={(e) => {
+                    const id = e.target.value
+                    const name = resolumeDecks.find((d) => d.key === id)?.value ?? ''
+                    setResolumeDeckId(id)
+                    setForm({ ...form, resolumeDeck: name })
+                  }}
+                  disabled={form.resolumeAction === 'launchClip' && form.resolumePersistent}
+                >
+                  <option value="" disabled>
+                    Choose one
+                  </option>
+                  {resolumeDecks.map((d) => (
+                    <option key={d.key} value={d.key}>
+                      {d.label}
+                      {d.nameGenerated ? ' (generated)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {form.resolumeAction === 'launchClip' && (
+              <>
+                <label className="form-field form-field--checkbox">
+                  <input
+                    type="checkbox"
+                    checked={form.resolumePersistent}
+                    onChange={(e) =>
+                      setForm({ ...form, resolumePersistent: e.target.checked, resolumeClip: '' })
+                    }
+                  />
+                  Persistent clip (lives outside any deck)
+                </label>
+                <label className="form-field">
+                  Clip
+                  <select
+                    value={form.resolumeClip}
+                    onChange={(e) => setForm({ ...form, resolumeClip: e.target.value })}
+                  >
+                    <option value="" disabled>
+                      Choose one
+                    </option>
+                    {resolumeClips.map((c) => (
+                      <option key={c.key} value={c.value}>
+                        {c.label}
+                        {c.nameGenerated ? ' (generated)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {resolumeClips.some((c) => c.ambiguous) && (
+                  <p className="text-muted" role="status">
+                    One or more clips in this list are ambiguous in Resolume itself — see the
+                    ambiguous clips list on the Resolume view for what to rename.
+                  </p>
+                )}
+              </>
+            )}
+
+            {(form.resolumeAction === 'clearLayer' ||
+              form.resolumeAction === 'setLayerBypass' ||
+              form.resolumeAction === 'setLayerMaster') && (
+              <label className="form-field">
+                Layer
+                <select
+                  value={form.resolumeLayer}
+                  onChange={(e) => setForm({ ...form, resolumeLayer: e.target.value })}
+                >
+                  <option value="" disabled>
+                    Choose one
+                  </option>
+                  {resolumeLayers.map((l) => (
+                    <option key={l.key} value={l.value}>
+                      {l.label}
+                      {l.nameGenerated ? ' (generated)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {form.resolumeAction === 'launchColumn' && (
+              <label className="form-field">
+                Column
+                <select
+                  value={form.resolumeColumn}
+                  onChange={(e) => setForm({ ...form, resolumeColumn: e.target.value })}
+                >
+                  <option value="" disabled>
+                    Choose one
+                  </option>
+                  {resolumeColumns.map((c) => (
+                    <option key={c.key} value={c.value}>
+                      {c.label}
+                      {c.nameGenerated ? ' (generated)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {form.resolumeAction === 'setLayerBypass' && (
+              <label className="form-field form-field--checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.resolumeBypassed}
+                  onChange={(e) => setForm({ ...form, resolumeBypassed: e.target.checked })}
+                />
+                Bypassed
+              </label>
+            )}
+
+            {form.resolumeAction === 'setLayerMaster' && (
+              <label className="form-field">
+                Master value
+                <input
+                  type="number"
+                  step="any"
+                  value={form.resolumeMaster}
+                  onChange={(e) => setForm({ ...form, resolumeMaster: e.target.value })}
+                />
+              </label>
             )}
           </>
         )}

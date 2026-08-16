@@ -22,6 +22,7 @@ function model(
     fpp: [],
     collectors: [],
     macroRuns: [],
+    resolume: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
