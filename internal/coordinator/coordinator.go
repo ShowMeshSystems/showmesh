@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
@@ -203,6 +204,17 @@ func Run() int {
 		_ = st.Close()
 		return 1
 	}
+
+	// Track E seam E5/E6: the asset manifest's sync service (ADR-028
+	// decision 7). Constructed unconditionally, over the SAME
+	// *broker.BrokerManager (bm) inventory just subscribed through, since
+	// asset.fetch commands are dispatched on the control-plane broker
+	// exactly like every other node command. assetSync.Run itself checks
+	// cfg.AssetContentBaseURL and logs+returns without starting a loop when
+	// it is empty (see assetsync.Service.Run's own doc comment) — there is
+	// no separate "if configured" gate here, matching that method's own
+	// contract rather than duplicating its condition.
+	assetSync := assetsync.NewService(st, bm, logger, cfg.AssetContentBaseURL, cfg.AssetInventoryInterval)
 
 	// fppRunner is constructed here — BEFORE apiDeps, not after it the way
 	// this file had every other FPP collector wiring line ordered before
@@ -659,7 +671,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(4)
+	backgroundWG.Add(5)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -667,6 +679,16 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		fppRunner.Run(ctx)
+	}()
+	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
+	// (assetsync/sync.go), joined via the identical backgroundWG so
+	// shutdown waits for it cleanly like every other background loop here.
+	// It is a no-op loop (logs once and returns) when
+	// cfg.AssetContentBaseURL is unset — see assetSync's own construction
+	// comment above.
+	go func() {
+		defer backgroundWG.Done()
+		assetSync.Run(ctx, cfg.AssetSyncInterval)
 	}()
 	// resolumeCompositionWire.Run owns Track D seam D-2/B's own periodic
 	// refresh loop (resolumewiring.go), started unconditionally — see

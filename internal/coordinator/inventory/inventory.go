@@ -313,9 +313,12 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 	case mqttproto.TopicKindLWT:
 		m.handleLWT(ctx, topic.NodeID, msg)
 	case mqttproto.TopicKindObserved:
-		if topic.Subpath == "health" {
+		switch topic.Subpath {
+		case "health":
 			m.handleHealth(ctx, topic.NodeID, msg)
-		} else {
+		case "assets":
+			m.handleAssetInventory(ctx, topic.NodeID, msg)
+		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
 		}
@@ -467,6 +470,61 @@ func (m *Manager) handleHealth(ctx context.Context, nodeID string, msg broker.Me
 	}
 	m.notify()
 	m.recordLivenessTransition(ctx, nodeID)
+}
+
+// handleAssetInventory ingests a node's asset inventory report (Track E
+// seam E5/E6; ADR-028) into store.ReplaceNodeAssetInventory.
+//
+// A RETAINED delivery — the subscribe-time replay this coordinator gets
+// on every (re)connect, per mqttproto.ObservedDeliveryPolicy — is
+// deliberately NOT persisted as a fresh report. hello/lwt/health handle
+// this identical situation via classify's nil ObservedAt ("age unknown");
+// store.NodeAssetReportRecord.ReportedAt is a plain time.Time, not a
+// *time.Time, so there is no equivalent "unknown" value to write here.
+// Stamping m.now() on a retained replay would manufacture freshness for a
+// report that may be hours old — exactly the "a retained MQTT message is
+// not a fresh one" defect Step 5's lessons name — so this delivery is
+// simply skipped: whatever row already exists (or none) is left exactly
+// as accurate as it was, and the agent's own periodic republish
+// (SHOWMESH_ASSET_INVENTORY_INTERVAL) supplies a genuinely live report
+// before that row's staleness window elapses.
+func (m *Manager) handleAssetInventory(ctx context.Context, nodeID string, msg broker.Message) {
+	if msg.Retained {
+		m.logger.Debug("ignoring retained asset inventory replay", "node_id", nodeID)
+		return
+	}
+
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("asset inventory", nodeID, err)
+		return
+	}
+	inv, err := mqttproto.DecodeAssetInventoryPayload(env)
+	if err != nil {
+		m.logMalformed("asset inventory", nodeID, err)
+		return
+	}
+
+	// ReportedAt is this coordinator's OWN receipt time (m.now()), never
+	// the envelope's SentAt: this is the same evidence this record's
+	// freshness is later checked against (assetsync.StalenessWindow
+	// compares it to the coordinator's own "now"), so both sides of that
+	// comparison must live in the same clock domain — ADR-011's rule
+	// applied to a report instead of a heartbeat.
+	items := make([]store.NodeAssetInventoryRecord, 0, len(inv.Assets))
+	for _, a := range inv.Assets {
+		items = append(items, store.NodeAssetInventoryRecord{
+			NodeID: nodeID, ContentHash: a.ContentHash, RuntimeFilename: a.Filename,
+			SizeBytes: a.SizeBytes, VerifiedAt: a.VerifiedAt,
+		})
+	}
+	report := store.NodeAssetReportRecord{NodeID: nodeID, ReportedAt: m.now(), Complete: inv.Complete, Reason: inv.Reason}
+
+	if err := m.store.ReplaceNodeAssetInventory(ctx, nodeID, items, report); err != nil {
+		m.logger.Error("failed to store asset inventory", "node_id", nodeID, "error", err)
+		return
+	}
+	m.notify()
 }
 
 func (m *Manager) logMalformed(kind, nodeID string, err error) {

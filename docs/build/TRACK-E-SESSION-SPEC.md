@@ -415,8 +415,16 @@ Derived, never stored as a second copy:
    empty expectation that reads as fine.
 2. Expected assets for node *N* = every current (`superseded_at IS NULL`) asset whose
    `show_id` is the active show and whose target is either `node`/*N* or `show`.
-3. A node that has a `show.surface` assigned to it in the active show but no current
-   asset for that surface's sequence is a **stated gap**, not an omission.
+3. A node that has a `show.surface` assigned to it in the active show, but no coverage
+   for a sequence the rest of the show already has assets for, is a **stated gap**, not
+   an omission.
+
+   *Corrected 2026-08-16.* An earlier version of this clause said "no current asset for
+   that surface's sequence". A `show.surface` carries no sequence reference and should
+   not: sequences are show-level (a song), and a surface is the channel extraction that
+   every sequence is rendered through. The gap is therefore inferred from the show's own
+   asset rows, which is what the builder implemented. If a real surface-to-sequence link
+   is ever needed, that is an owner decision, not a schema tweak.
 
 ### 4.2 What a node actually holds
 
