@@ -201,6 +201,51 @@
       "reason": null
     }
   ],
-  "macroRuns": []
+  "macroRuns": [],
+  "resolume": [
+    {
+      "instanceId": "resolume",
+      "health": "healthy",
+      "observations": [
+        {
+          "signal": "resolume.composition.identified",
+          "value": "identified",
+          "unit": null,
+          "state": "current",
+          "reason": null,
+          "observedAt": "2026-08-10T21:14:15-05:00",
+          "collectedAt": "2026-08-10T21:14:15.2-05:00",
+          "source": "resolume-survey",
+          "quality": "direct",
+          "validForSeconds": 900
+        },
+        {
+          "signal": "resolume.composition.name",
+          "value": null,
+          "unit": null,
+          "state": "unsupported",
+          "reason": "this Arena build does not expose this value without reading the full composition, which this system never does",
+          "observedAt": null,
+          "collectedAt": "2026-08-10T21:14:15.2-05:00",
+          "source": "resolume-survey",
+          "quality": "direct",
+          "validForSeconds": null
+        },
+        {
+          "signal": "resolume.reachable",
+          "value": true,
+          "unit": null,
+          "state": "current",
+          "reason": null,
+          "observedAt": "2026-08-10T21:14:15-05:00",
+          "collectedAt": "2026-08-10T21:14:15.2-05:00",
+          "source": "resolume-rest",
+          "quality": "derived",
+          "validForSeconds": 30
+        }
+      ],
+      "composition": null
+    }
+  ]
 }
 

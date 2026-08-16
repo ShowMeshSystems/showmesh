@@ -128,6 +128,35 @@ func fppInstanceFixture(t *testing.T) FPPInstanceView {
 	}
 }
 
+// resolumeInstanceFixture carries one current reachable observation, one
+// current composition.identified observation, and one permanently
+// unsupported composition.name observation (mirroring what
+// resolume.Collector actually produces — see collector.go's
+// compositionNameObservation), so a rendering built from this fixture
+// exercises every one of Evidence's states this seam's own acceptance
+// criteria name: current, and unsupported.
+func resolumeInstanceFixture(t *testing.T) ResolumeInstanceView {
+	t.Helper()
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: "resolume"}
+	reachableAt := t3339(t, "2026-08-10T21:14:15-05:00")
+	collectedAt := t3339(t, "2026-08-10T21:14:15.200-05:00")
+
+	return ResolumeInstanceView{
+		InstanceID: "resolume",
+		Observations: []observation.Observation{
+			mustObs(observation.Measured(res, "resolume.reachable", true, reachableAt,
+				observation.WithSource("resolume-rest"), observation.WithValidFor(30*time.Second),
+				observation.WithCollectedAt(collectedAt), observation.WithQuality(observation.QualityDerived))),
+			mustObs(observation.Measured(res, "resolume.composition.identified", "identified", reachableAt,
+				observation.WithSource("resolume-survey"), observation.WithValidFor(15*time.Minute),
+				observation.WithCollectedAt(collectedAt))),
+			mustObs(observation.Unsupported(res, "resolume.composition.name",
+				"this Arena build does not expose this value without reading the full composition, which this system never does",
+				observation.WithSource("resolume-survey"), observation.WithCollectedAt(collectedAt))),
+		},
+	}
+}
+
 func eventFixture() EventRecord {
 	return EventRecord{
 		Seq:        37,

@@ -53,6 +53,17 @@ func (f *fakeFPPLister) ListInstances(context.Context) ([]FPPInstanceView, error
 	return f.views, f.err
 }
 
+// fakeResolumeLister is [ResolumeLister]'s own fake, mirroring
+// [fakeFPPLister]'s shape exactly (Track D seam E).
+type fakeResolumeLister struct {
+	views []ResolumeInstanceView
+	err   error
+}
+
+func (f *fakeResolumeLister) ListInstances(context.Context) ([]ResolumeInstanceView, error) {
+	return f.views, f.err
+}
+
 type fakeObservationLister struct {
 	obs []observation.Observation
 	err error

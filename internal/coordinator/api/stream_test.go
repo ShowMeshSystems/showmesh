@@ -796,6 +796,255 @@ func TestStreamWedgedSubscriberIsReclaimedByWriteDeadline(t *testing.T) {
 	t.Fatalf("wedged subscriber %d was never reclaimed within the wait bound (streamWriteTimeout=%s)", id, streamWriteTimeout)
 }
 
+// mutableResolumeLister is [mutableFPPLister]'s Track D seam E sibling: a
+// thread-safe [ResolumeLister] test double whose views can be replaced
+// between two hub render passes.
+type mutableResolumeLister struct {
+	mu    sync.Mutex
+	views []ResolumeInstanceView
+}
+
+func (f *mutableResolumeLister) setViews(views []ResolumeInstanceView) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.views = views
+}
+
+func (f *mutableResolumeLister) ListInstances(context.Context) ([]ResolumeInstanceView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.views, nil
+}
+
+// resolumeStreamObs builds a tier-1 Measured observation for the given
+// signal on Resolume instance "resolume", mirroring [streamObs]'s FPP
+// shape one resource kind over.
+func resolumeStreamObs(t *testing.T, signal observation.SignalID, value any, observedAt time.Time, validFor time.Duration) observation.Observation {
+	t.Helper()
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: "resolume"}
+	o, err := observation.Measured(res, signal, value, observedAt,
+		observation.WithSource("resolume-rest"), observation.WithValidFor(validFor), observation.WithCollectedAt(observedAt))
+	if err != nil {
+		t.Fatalf("building fixture observation: %v", err)
+	}
+	return o
+}
+
+// TestStreamResolumeChangedDeliveredOnNotify proves a Resolume instance's
+// first appearance produces exactly one resolume.changed frame on the
+// change stream — the positive half of acceptance criterion 4.
+func TestStreamResolumeChangedDeliveredOnNotify(t *testing.T) {
+	resolume := &mutableResolumeLister{}
+	resolume.setViews([]ResolumeInstanceView{{
+		InstanceID:   "resolume",
+		Observations: []observation.Observation{resolumeStreamObs(t, "resolume.reachable", true, testNow, 30*time.Second)},
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{}, Resolume: resolume,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	api.Hub.Notify()
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "resolume.changed" {
+		t.Fatalf("event = %q, want resolume.changed", event)
+	}
+	var payload struct {
+		Instance struct {
+			InstanceID string `json:"instanceId"`
+		} `json:"instance"`
+	}
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatalf("decoding resolume.changed data: %v\ndata: %s", err, data)
+	}
+	if payload.Instance.InstanceID != "resolume" {
+		t.Errorf("instance.instanceId = %q, want %q", payload.Instance.InstanceID, "resolume")
+	}
+}
+
+// TestStreamResolumeChangedNotResentWhenNothingChanged is acceptance
+// criterion 4's negative half — the quiet-system property — mirroring
+// [TestStreamFPPChangedNotResentWhenOnlyCollectionBookkeepingMoves] exactly:
+// a second poll attempt whose value, unit, state, reason, and quality are
+// all byte-identical to the first, with only CollectedAt/ObservedAt
+// advancing, must not produce a second resolume.changed frame.
+func TestStreamResolumeChangedNotResentWhenNothingChanged(t *testing.T) {
+	resolume := &mutableResolumeLister{}
+	pollAt1 := testNow
+	resolume.setViews([]ResolumeInstanceView{{
+		InstanceID:   "resolume",
+		Observations: []observation.Observation{resolumeStreamObs(t, "resolume.reachable", true, pollAt1, 30*time.Second)},
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{}, Resolume: resolume,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	// First poll: genuinely new, so exactly one resolume.changed.
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "resolume.changed" {
+		t.Fatalf("first Notify: event = %q, want resolume.changed", event)
+	}
+
+	// Second poll: the identical reading, confirmed again — only
+	// ObservedAt/CollectedAt advance, simulating the collector's next
+	// scheduled ~10s liveness poll finding nothing changed.
+	pollAt2 := pollAt1.Add(10 * time.Second)
+	resolume.setViews([]ResolumeInstanceView{{
+		InstanceID:   "resolume",
+		Observations: []observation.Observation{resolumeStreamObs(t, "resolume.reachable", true, pollAt2, 30*time.Second)},
+	}})
+	api.Hub.Notify()
+
+	select {
+	case ev := <-func() chan string {
+		ch := make(chan string, 1)
+		go func() {
+			event, _, err := nextRealEvent(r)
+			if err == nil {
+				ch <- event
+			}
+		}()
+		return ch
+	}():
+		t.Fatalf("second poll with only collection bookkeeping changed produced a spurious %q event; the hub is diffing on collectedAt/observedAt — a quiet system must stay quiet", ev)
+	case <-time.After(1 * time.Second):
+		// Correct: StreamTickInterval is an hour in newStreamTestAPI, so
+		// nothing else could legitimately produce a frame in this window.
+	}
+}
+
+// TestStreamResolumeReachableFalseMovesResourceWithReason is acceptance
+// criterion 5, D-3a section 10.6 property 1's own regression guard:
+// resolume.reachable transitioning to false is a real change and must
+// broadcast resolume:<id>, and the frame must carry the failure's reason
+// (never a bare "reachable: false" with the evidence stripped) — this is
+// what lets an external process learn Arena is gone from the stream alone.
+func TestStreamResolumeReachableFalseMovesResourceWithReason(t *testing.T) {
+	resolume := &mutableResolumeLister{}
+	pollAt1 := testNow
+	resolume.setViews([]ResolumeInstanceView{{
+		InstanceID:   "resolume",
+		Observations: []observation.Observation{resolumeStreamObs(t, "resolume.reachable", true, pollAt1, 30*time.Second)},
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{}, Resolume: resolume,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+	api.Hub.Notify()
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "resolume.changed" {
+		t.Fatalf("first Notify: event = %q, want resolume.changed", event)
+	}
+
+	// Arena goes unreachable: resolume.reachable becomes a collection_failed
+	// absence carrying a reason — the shape resolume.Collector.Poll actually
+	// produces on a failed /product call (collector.go's Collector.failed).
+	res := observation.ResourceRef{Kind: observation.ResourceResolume, ID: "resolume"}
+	failed, err := observation.CollectionFailed(res, "resolume.reachable", "connection refused",
+		observation.WithSource("resolume-rest"), observation.WithCollectedAt(pollAt1.Add(10*time.Second)))
+	if err != nil {
+		t.Fatalf("building failure fixture: %v", err)
+	}
+	resolume.setViews([]ResolumeInstanceView{{InstanceID: "resolume", Observations: []observation.Observation{failed}}})
+	api.Hub.Notify()
+
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "resolume.changed" {
+		t.Fatalf("event after reachable->false = %q, want resolume.changed", event)
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		t.Fatalf("decoding resolume.changed data: %v\ndata: %s", err, data)
+	}
+	// A collection_failed absence (not a measured false — this is what
+	// resolume.Collector.Poll actually produces on a failed /product call)
+	// rolls up to "unknown", never "failed": [observation.DeriveHealth]
+	// returns HealthUnknown for any non-current state without even calling
+	// this map's per-signal function, mirroring
+	// [healthCriticalSignals]'s identical "fpp.reachable" dead-code note in
+	// mapping.go for the FPP case — ADR-011 forbids a confident FAILED
+	// verdict from an absence of evidence.
+	inst, _ := m["instance"].(map[string]any)
+	if inst["health"] != "unknown" {
+		t.Errorf("instance.health = %v, want %q", inst["health"], "unknown")
+	}
+	obs, _ := inst["observations"].([]any)
+	var found bool
+	for _, o := range obs {
+		row, _ := o.(map[string]any)
+		if row["signal"] != "resolume.reachable" {
+			continue
+		}
+		found = true
+		if row["state"] != "collection_failed" {
+			t.Errorf("resolume.reachable state = %v, want %q", row["state"], "collection_failed")
+		}
+		if row["reason"] == nil || row["reason"] == "" {
+			t.Errorf("resolume.reachable reason is absent on the reachable->false frame; an external process learning Arena is gone from the stream needs it")
+		}
+	}
+	if !found {
+		t.Fatalf("resolume.reachable is missing from the resolume.changed frame's observations: %s", data)
+	}
+}
+
 // mutableFPPLister is a thread-safe [FPPLister] test double whose views can
 // be replaced between two hub render passes — [fakeFPPLister] in
 // fakes_test.go has no equivalent to fakeNodeLister's setViews, and that

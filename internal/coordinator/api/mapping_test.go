@@ -378,3 +378,155 @@ func TestMapFPPInstanceResolvesMultiSourceObservations(t *testing.T) {
 		t.Fatalf("mapFPPInstance emitted %d Evidence rows for fpp.status from two collector sources, want exactly 1 — ResolveObservations must run in mapFPPInstance (mapping.go)", count)
 	}
 }
+
+// --- Track D seam E: deriveResolumeHealth ---
+//
+// This section is [TestDeriveInstanceHealth*]'s Resolume sibling, against
+// [resolumeHealthCriticalSignals]/[deriveResolumeHealth] instead of
+// [healthCriticalSignals]/[deriveInstanceHealth] — same aggregator
+// (observation.AggregateHealth/DeriveHealth), a different, smaller
+// two-signal critical map with no third fppdState-shaped cap.
+
+var resolumeHealthRes = observation.ResourceRef{Kind: observation.ResourceResolume, ID: "resolume"}
+
+func resolumeHealthCurrentObs(t *testing.T, signal observation.SignalID, value any, now time.Time) observation.Observation {
+	t.Helper()
+	return healthMustObs(observation.Measured(resolumeHealthRes, signal, value, now, observation.WithSource("resolume-rest")))
+}
+
+// TestDeriveResolumeHealthNoCriticalEvidenceIsUnknown mirrors
+// TestDeriveInstanceHealthNoCriticalEvidenceIsUnknown: zero observations, and
+// separately only informational ones, both report unknown.
+func TestDeriveResolumeHealthNoCriticalEvidenceIsUnknown(t *testing.T) {
+	now := time.Now()
+	if got := deriveResolumeHealth(nil, now); got != observation.HealthUnknown {
+		t.Errorf("deriveResolumeHealth(nil) = %q, want %q", got, observation.HealthUnknown)
+	}
+	informational := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.product", "Arena 7.23.2", now),
+	}
+	if got := deriveResolumeHealth(informational, now); got != observation.HealthUnknown {
+		t.Errorf("deriveResolumeHealth(only informational) = %q, want %q", got, observation.HealthUnknown)
+	}
+}
+
+// TestDeriveResolumeHealthReachableTrueAndIdentifiedIsHealthy is the
+// baseline positive case.
+func TestDeriveResolumeHealthReachableTrueAndIdentifiedIsHealthy(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.reachable", true, now),
+		resolumeHealthCurrentObs(t, "resolume.composition.identified", "identified", now),
+	}
+	if got := deriveResolumeHealth(obs, now); got != observation.HealthHealthy {
+		t.Errorf("deriveResolumeHealth(reachable=true, identified) = %q, want %q", got, observation.HealthHealthy)
+	}
+}
+
+// TestDeriveResolumeHealthReachableFalseIsFailed proves
+// resolume.reachable's "otherwise failed" branch — this seam's spec table
+// pins this exactly, mirroring fpp.reachable's identical rule.
+func TestDeriveResolumeHealthReachableFalseIsFailed(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{resolumeHealthCurrentObs(t, "resolume.reachable", false, now)}
+	if got := deriveResolumeHealth(obs, now); got != observation.HealthFailed {
+		t.Errorf("deriveResolumeHealth(reachable=false) = %q, want %q", got, observation.HealthFailed)
+	}
+}
+
+// TestDeriveResolumeHealthCompositionNotIdentifiedIsDegraded is acceptance
+// criterion 7: a "not_identified" reading rolls the instance up to degraded,
+// never failed — the operator may legitimately have loaded a different
+// composition, which is a thing to surface, not a system failure.
+func TestDeriveResolumeHealthCompositionNotIdentifiedIsDegraded(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.reachable", true, now),
+		resolumeHealthCurrentObs(t, "resolume.composition.identified", "not_identified: missing 2 sampled clips", now),
+	}
+	got := deriveResolumeHealth(obs, now)
+	if got != observation.HealthDegraded {
+		t.Errorf("deriveResolumeHealth(composition.identified=not_identified) = %q, want %q, not %q", got, observation.HealthDegraded, observation.HealthFailed)
+	}
+	if got == observation.HealthFailed {
+		t.Fatalf("deriveResolumeHealth must never report failed for a composition mismatch")
+	}
+}
+
+// TestDeriveResolumeHealthCompositionUnknownDuringLoadWindowIsUnknown proves
+// the third value in the spec table's row: "unknown: ..." (the post-connect
+// load window) reads unknown, distinct from both healthy and degraded.
+func TestDeriveResolumeHealthCompositionUnknownDuringLoadWindowIsUnknown(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.reachable", true, now),
+		resolumeHealthCurrentObs(t, "resolume.composition.identified", "unknown: still within the post-connect load window", now),
+	}
+	if got := deriveResolumeHealth(obs, now); got != observation.HealthUnknown {
+		t.Errorf("deriveResolumeHealth(composition.identified=unknown) = %q, want %q", got, observation.HealthUnknown)
+	}
+}
+
+// TestDeriveResolumeHealthAgedOutReachableIsUnknown is acceptance criterion
+// 6: an aged-out (stale) resolume.reachable observation rolls the instance
+// up to unknown — three separate assertions, because "healthy" and "failed"
+// are wrong in opposite directions and either would hide the fact that
+// nothing current is known.
+func TestDeriveResolumeHealthAgedOutReachableIsUnknown(t *testing.T) {
+	observedAt := time.Now().Add(-time.Hour)
+	now := time.Now() // now is well past observedAt+ValidFor, below
+	agedOut := healthMustObs(observation.Measured(resolumeHealthRes, "resolume.reachable", true, observedAt,
+		observation.WithSource("resolume-rest"), observation.WithValidFor(30*time.Second)))
+
+	got := deriveResolumeHealth([]observation.Observation{agedOut}, now)
+	if got != observation.HealthUnknown {
+		t.Errorf("deriveResolumeHealth(aged-out reachable=true) = %q, want %q", got, observation.HealthUnknown)
+	}
+	if got == observation.HealthHealthy {
+		t.Fatalf("an aged-out resolume.reachable must never read healthy — the last reading having said true is not current evidence")
+	}
+	if got == observation.HealthFailed {
+		t.Fatalf("an aged-out resolume.reachable must never read failed — staleness is not the same claim as a measured false")
+	}
+}
+
+// TestDeriveResolumeHealthUnsupportedCriticalSignalContributesNothing mirrors
+// TestDeriveInstanceHealthUnsupportedCriticalSignalContributesNothing: a
+// legitimately unsupported critical signal must not drag the aggregate to
+// unknown.
+func TestDeriveResolumeHealthUnsupportedCriticalSignalContributesNothing(t *testing.T) {
+	now := time.Now()
+	obs := []observation.Observation{
+		resolumeHealthCurrentObs(t, "resolume.reachable", true, now),
+		healthMustObs(observation.Unsupported(resolumeHealthRes, "resolume.composition.identified",
+			"no composition has been uploaded to this coordinator yet", observation.WithSource("resolume-survey"))),
+	}
+	if got := deriveResolumeHealth(obs, now); got != observation.HealthHealthy {
+		t.Errorf("deriveResolumeHealth(composition.identified unsupported, reachable healthy) = %q, want %q", got, observation.HealthHealthy)
+	}
+}
+
+// TestMapResolumeInstanceResolvesMultiSourceObservations proves
+// mapResolumeInstance runs ResolveObservations exactly once, mirroring
+// TestMapFPPInstanceResolvesMultiSourceObservations.
+func TestMapResolumeInstanceResolvesMultiSourceObservations(t *testing.T) {
+	now := time.Now()
+	a := healthMustObs(observation.Measured(resolumeHealthRes, "resolume.product", "Arena 7.23.2", now, observation.WithSource("resolume-rest")))
+	b := healthMustObs(observation.Measured(resolumeHealthRes, "resolume.product", "Arena 7.23.2", now.Add(-time.Second), observation.WithSource("resolume-rest")))
+
+	rv := ResolumeInstanceView{InstanceID: "resolume", Observations: []observation.Observation{a, b}}
+	inst := mapResolumeInstance(rv, nil, now)
+
+	count := 0
+	for _, ev := range inst.Observations {
+		if ev.Signal == "resolume.product" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("mapResolumeInstance emitted %d Evidence rows for resolume.product, want exactly 1 — ResolveObservations must run in mapResolumeInstance (mapping.go)", count)
+	}
+	if inst.Composition != nil {
+		t.Errorf("Composition = %+v, want nil when the caller passed nil", inst.Composition)
+	}
+}
