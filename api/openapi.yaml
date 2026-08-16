@@ -717,8 +717,8 @@ paths:
         `data:` is always exactly one line of compact (no embedded
         newlines) JSON — never pretty-printed, never split across
         multiple `data:` lines. No other SSE field (`event:`, `data:`) is
-        ever emitted for these six types, and no other event type is
-        defined; a client encountering an `event:` name not in this table
+        ever emitted for the event types in the table above, and no other
+        event type is defined; a client encountering an `event:` name not in this table
         should ignore that frame rather than fail, in the same
         unknown-field-tolerant spirit as contract section 6.2's
         additive-only rule for JSON fields.
@@ -1426,7 +1426,7 @@ paths:
   /resolume/instances:
     get:
       operationId: listResolumeInstances
-      summary: Resolume as a first-class observability resource (Track D seam E)
+      summary: Resolume as a first-class observability resource
       description: >-
         Everything ShowMesh already holds for its configured Resolume
         instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its
@@ -1461,7 +1461,7 @@ paths:
   /resolume/instances/{instanceId}:
     get:
       operationId: getResolumeInstance
-      summary: One Resolume instance (Track D seam E)
+      summary: One Resolume instance
       description: >-
         Unlike the list route, no match here — including on an
         unconfigured coordinator — is the ordinary resource-not-found
@@ -2742,24 +2742,21 @@ components:
     ResolumeInstanceComposition:
       type: object
       description: >-
-        The composition ShowMesh holds as configuration for this instance
-        (ADR-032), never a live read of Arena. Mirrors the reduced summary
-        ResolumeCompositionUploadResponse/ResolumeCompositionResponse
-        already carry (name, revision, activatedAt).
-      required: [name, revision, activatedAt]
+        Which show is loaded, from the composition ShowMesh holds as
+        configuration (ADR-032), never a live read of Arena. Name only —
+        owner ruling, 2026-08-16: this is an open read with no credential
+        by default, the same class as an FPP playlist name. Revision and
+        activatedAt are administrative provenance and stay on the gated
+        GET /config/resolume/composition.
+      required: [name]
       properties:
         name:
           type: string
-        revision:
-          type: integer
-        activatedAt:
-          type: string
-          format: date-time
     ResolumeInstance:
       type: object
       description: >-
-        One configured Resolume Arena instance's current representation
-        (Track D seam E). Mirrors FPPInstance's conventions: observations
+        One configured Resolume Arena instance's current representation.
+        Mirrors FPPInstance's conventions: observations
         is never null, and composition is null before any composition has
         ever been uploaded.
       required: [instanceId, health, observations, composition]
@@ -3294,9 +3291,9 @@ components:
         resolume:
           type: array
           description: >-
-            Track D seam E: every configured Resolume instance, rendered
-            exactly as GET /resolume/instances renders it. Never null: an
-            unconfigured coordinator reports an empty array.
+            Every configured Resolume instance, rendered exactly as GET
+            /resolume/instances renders it. Never null: an unconfigured
+            coordinator reports an empty array.
           items:
             $ref: "#/components/schemas/ResolumeInstance"
     PrincipalSummary:
@@ -4322,7 +4319,7 @@ components:
           $ref: "#/components/schemas/FPPInstance"
     ResolumeChangedEvent:
       type: object
-      description: The payload of a resolume.changed event (Track D seam E).
+      description: The payload of a resolume.changed event.
       required: [seq, serverTime, instance]
       properties:
         seq:

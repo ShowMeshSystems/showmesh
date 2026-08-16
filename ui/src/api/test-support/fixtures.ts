@@ -107,8 +107,8 @@ export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     // on every snapshot, defaulting empty here the same way `nodes`/`fpp`
     // above do — a test that cares about in-flight runs overrides this.
     macroRuns: [],
-    // Track D seam E: required on every snapshot, same defaulting pattern
-    // as `macroRuns` above.
+    // Required on every snapshot, same defaulting pattern as `macroRuns`
+    // above.
     resolume: [],
     ...overrides,
   }

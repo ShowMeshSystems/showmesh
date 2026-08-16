@@ -248,7 +248,7 @@ export interface paths {
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
-         *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for these six types, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
+         *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
          *
          *     **Delta frames are opt-in per connection (ADR-023).** A request to this exact path with no query string, or with any `deltas` value other than the literal `1`, gets precisely what this endpoint produced before `fpp.observations.changed` existed — byte for byte, with no `fpp.observations.changed` event ever appearing on that connection. This is what makes the addition additive rather than a silent break under ADR-020's own additive-only rule (contract section 6.2, "within a major version the contract is additive-only... clients must ignore unknown fields"): no existing client's behavior changes, and a client that has never heard of deltas cannot be affected by them.
          *
@@ -428,7 +428,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Resolume as a first-class observability resource (Track D seam E)
+         * Resolume as a first-class observability resource
          * @description Everything ShowMesh already holds for its configured Resolume instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its `resolume.*` observations and the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. No request to Resolume is ever made serving this route. Gated by `observation:read` — the same guard `GET /observations` uses, since this is telemetry, not configuration, unlike `GET /config/resolume/composition` (which uses `config:write`).
          *     An unconfigured coordinator returns `200` with an empty `instances` array, never `null` and never a `404` — "nothing is configured" is a fact about the deployment, not an error.
          */
@@ -449,7 +449,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One Resolume instance (Track D seam E)
+         * One Resolume instance
          * @description Unlike the list route, no match here — including on an unconfigured coordinator — is the ordinary resource-not-found shape, matching `GET /fpp/{instanceId}`'s identical posture for a bare, single-resource GET.
          */
         get: operations["getResolumeInstance"];
@@ -888,14 +888,11 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
-        /** @description The composition ShowMesh holds as configuration for this instance (ADR-032), never a live read of Arena. Mirrors the reduced summary ResolumeCompositionUploadResponse/ResolumeCompositionResponse already carry (name, revision, activatedAt). */
+        /** @description Which show is loaded, from the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. Name only — owner ruling, 2026-08-16: this is an open read with no credential by default, the same class as an FPP playlist name. Revision and activatedAt are administrative provenance and stay on the gated GET /config/resolume/composition. */
         ResolumeInstanceComposition: {
             name: string;
-            revision: number;
-            /** Format: date-time */
-            activatedAt: string;
         };
-        /** @description One configured Resolume Arena instance's current representation (Track D seam E). Mirrors FPPInstance's conventions: observations is never null, and composition is null before any composition has ever been uploaded. */
+        /** @description One configured Resolume Arena instance's current representation. Mirrors FPPInstance's conventions: observations is never null, and composition is null before any composition has ever been uploaded. */
         ResolumeInstance: {
             instanceId: string;
             /** @enum {string} */
@@ -1052,7 +1049,7 @@ export interface components {
             collectors: components["schemas"]["CollectorStatus"][];
             /** @description Step 9: every in-flight macro run, plus a bounded window of recently finished ones (STEP-9-SPEC.md section 6.6). Fatal to omit per ADR-020 decision 3: the change stream emits no id, so a client connecting for the first time during an in-flight run has no other way to learn the run exists. */
             macroRuns: components["schemas"]["MacroRunSummary"][];
-            /** @description Track D seam E: every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
+            /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
             resolume: components["schemas"]["ResolumeInstance"][];
         };
         /** @description A principal's own non-secret identity (ADR-024). */
@@ -1438,7 +1435,7 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
-        /** @description The payload of a resolume.changed event (Track D seam E). */
+        /** @description The payload of a resolume.changed event. */
         ResolumeChangedEvent: {
             seq: number;
             /** Format: date-time */
