@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -629,6 +630,102 @@ func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
 		Observations:  obsEvidence,
 		LastPollAt:    formatTimePtr(fv.LastPollAt),
 		LastPollError: fv.LastPollError,
+	}
+}
+
+// --- Resolume instances ---
+
+// resolumeHealthCriticalSignals is Track D seam E's own health-critical set,
+// beside [healthCriticalSignals] rather than folded into it: the two
+// resources have unrelated signal vocabularies and unrelated rollup rules
+// (no fppdState-shaped third cap here), so a shared map would only invite
+// the two to drift against each other silently. Signal IDs are inlined
+// string literals, not imported from internal/coordinator/collector/resolume,
+// for the identical reason healthCriticalSignals inlines "fpp.reachable":
+// this file renders evidence from whichever source produced it, and
+// importing one concrete collector package to borrow a string constant
+// would make that source-agnostic promise a lie in the one file that most
+// needs to keep it honest.
+var resolumeHealthCriticalSignals = map[observation.SignalID]func(value any) observation.Health{
+	// "resolume.reachable" mirrors "fpp.reachable" exactly: true is
+	// healthy, anything else (including a wrong type) is failed.
+	"resolume.reachable": func(value any) observation.Health {
+		if b, ok := value.(bool); ok && b {
+			return observation.HealthHealthy
+		}
+		return observation.HealthFailed
+	},
+	// "resolume.composition.identified" carries a descriptive string, not a
+	// bare bool (resolume.Collector's own identityObservation): exactly
+	// "identified" is healthy, a "not_identified"/"deck_mismatch" prefix is
+	// degraded — the operator may legitimately have loaded a different
+	// composition, which is a thing to surface, not a system failure — and
+	// anything else (including "unknown: ..." during the post-connect load
+	// window, or an unrecognized type) is unknown.
+	"resolume.composition.identified": func(value any) observation.Health {
+		s, ok := value.(string)
+		if !ok {
+			return observation.HealthUnknown
+		}
+		switch {
+		case s == "identified":
+			return observation.HealthHealthy
+		case strings.HasPrefix(s, "not_identified") || strings.HasPrefix(s, "deck_mismatch"):
+			return observation.HealthDegraded
+		default:
+			return observation.HealthUnknown
+		}
+	},
+}
+
+// deriveResolumeHealth aggregates a Resolume instance's RESOLVED observations
+// into one [observation.Health], mirroring [deriveInstanceHealth]'s shape
+// against [resolumeHealthCriticalSignals] instead of [healthCriticalSignals]
+// and calling the identical [observation.AggregateHealth]/[observation.DeriveHealth]
+// aggregator rather than a second implementation of it. An unsupported
+// observation never becomes a member (it is a positive "cannot answer this",
+// not missing evidence); a signal absent from the critical map is
+// informational and is skipped, never padding the aggregate.
+func deriveResolumeHealth(obs []observation.Observation, now time.Time) observation.Health {
+	members := make([]observation.AggregateMember, 0, len(resolumeHealthCriticalSignals))
+	for _, o := range obs {
+		if o.Absence == observation.StateUnsupported {
+			continue
+		}
+		whenCurrent, critical := resolumeHealthCriticalSignals[o.Signal]
+		if !critical {
+			continue
+		}
+		h := observation.DeriveHealth(o, now, whenCurrent)
+		members = append(members, observation.AggregateMember{Health: h, Critical: true})
+	}
+	return observation.AggregateHealth(members)
+}
+
+// mapResolumeInstance renders one [ResolumeInstanceView] as a
+// [v1.ResolumeInstance], at the given now. Mirrors [mapFPPInstance]'s shape:
+// [ResolveObservations] runs here, once, so every caller — GET
+// /resolume/instances, GET /resolume/instances/{id}, the snapshot's
+// resolume section, and every resolume.changed stream event — resolves
+// identically. composition is computed by the caller (resolumecomposition.go's
+// resolumeInstanceComposition), never here: it is coordinator-wide stored
+// configuration, not per-instance collector state, so every caller in this
+// package computes it exactly once per response rather than once per
+// instance.
+func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstanceComposition, now time.Time) v1.ResolumeInstance {
+	resolved := ResolveObservations(rv.Observations)
+	sortObservations(resolved)
+
+	obsEvidence := make([]v1.Evidence, 0, len(resolved))
+	for _, o := range resolved {
+		obsEvidence = append(obsEvidence, mapEvidence(o, now))
+	}
+
+	return v1.ResolumeInstance{
+		InstanceID:   rv.InstanceID,
+		Health:       string(deriveResolumeHealth(resolved, now)),
+		Observations: obsEvidence,
+		Composition:  composition,
 	}
 }
 

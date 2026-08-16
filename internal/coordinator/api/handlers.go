@@ -475,6 +475,25 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		runs = append(runs, mapMacroRunSummary(run))
 	}
 
+	// Track D seam E: every configured Resolume instance, rendered exactly
+	// as GET /resolume/instances renders it — fatal to omit under ADR-020
+	// decision 3, matching MacroRuns above: a client applying resolume.changed
+	// deltas on top of this snapshot must have something to apply them to.
+	resolumeViews, err := h.deps.Resolume.ListInstances(ctx)
+	if err != nil {
+		h.writeInternalError(w, now, "list resolume instances", err)
+		return
+	}
+	resolumeComposition, err := resolumeInstanceComposition(ctx, h.deps.Config)
+	if err != nil {
+		h.writeInternalError(w, now, "get resolume composition", err)
+		return
+	}
+	resolumeInstances := make([]v1.ResolumeInstance, 0, len(resolumeViews))
+	for _, rv := range resolumeViews {
+		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -482,6 +501,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		FPP:            v1.FPPSection{Instances: instances},
 		Collectors:     collectors,
 		MacroRuns:      runs,
+		Resolume:       resolumeInstances,
 	})
 }
 

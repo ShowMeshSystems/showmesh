@@ -235,6 +235,12 @@ type pendingFrame struct {
 	instance *v1.FPPInstance
 	ev       *v1.Event
 
+	// resolumeInstance is set only for a "resolume.changed" pendingFrame
+	// (Track D seam E), mirroring instance's role for "fpp.changed" — full-
+	// frame only, no ADR-023 delta narrowing: this resource has no delta
+	// event kind, so audience is always the zero value (audienceAll).
+	resolumeInstance *v1.ResolumeInstance
+
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
 	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
 	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
@@ -272,6 +278,8 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "macroRun.changed", ev
+	case "resolume.changed":
+		return "resolume.changed", v1.ResolumeChangedEvent{Seq: seq, ServerTime: pf.serverTime, Instance: *pf.resolumeInstance}
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -499,6 +507,35 @@ func (h *Hub) render(ctx context.Context) {
 		h.evictRendered("macrorun:", present)
 	}
 
+	// Track D seam E: every configured Resolume instance, full-frame only —
+	// no ADR-023 delta narrowing exists for this resource. composition is
+	// coordinator-wide stored configuration (resolumecomposition.go), fetched
+	// once per render pass and shared across every instance rendered in it,
+	// mirroring fetchDeclarationContext's identical "once per pass, not once
+	// per resource" reasoning above.
+	if rviews, err := h.deps.Resolume.ListInstances(ctx); err != nil {
+		h.logger.Warn("stream hub: list resolume instances failed", "error", err)
+	} else if composition, err := resolumeInstanceComposition(ctx, h.deps.Config); err != nil {
+		// The store erroring is not evidence Resolume is gone: skip this
+		// resource kind for the pass, mirroring every other dependency-error
+		// branch in this method — never publish an empty Resolume list on a
+		// transient read failure.
+		h.logger.Warn("stream hub: get resolume composition failed", "error", err)
+	} else {
+		present := make(map[string]struct{}, len(rviews))
+		for _, rv := range rviews {
+			key := "resolume:" + rv.InstanceID
+			present[key] = struct{}{}
+			inst := mapResolumeInstance(rv, composition, now)
+			proj := resolumeInstanceDiffProjection(inst)
+			if h.updateRendered(key, proj) {
+				i := inst
+				pending = append(pending, pendingFrame{event: "resolume.changed", serverTime: formatTime(now), resolumeInstance: &i})
+			}
+		}
+		h.evictRendered("resolume:", present)
+	}
+
 	pending = append(pending, h.renderNewEvents(ctx, now)...)
 
 	for _, pf := range pending {
@@ -592,6 +629,24 @@ func fppInstanceDiffProjection(inst v1.FPPInstance) v1.FPPInstance {
 	for i, o := range inst.Observations {
 		// Delegated, never repeated: see maskEvidenceForDiff's doc comment
 		// for what happened the one time these were two implementations.
+		proj.Observations[i] = maskEvidenceForDiff(o)
+	}
+	return proj
+}
+
+// resolumeInstanceDiffProjection is [fppInstanceDiffProjection]'s Track D
+// seam E sibling: a Resolume instance carries the identical evidence-churn
+// problem a re-poll of an unchanged value produces (Step 5 review finding
+// 3, one resource kind over) — CollectedAt advances every ~10s poll, and
+// ObservedAt/Source flip whenever a survey re-confirms a value that did not
+// actually change. Both are masked via [maskEvidenceForDiff], the SAME
+// function [fppInstanceDiffProjection] uses, never a second implementation
+// of the rule — see that function's own doc comment for what happened the
+// one time this masking rule had two copies.
+func resolumeInstanceDiffProjection(inst v1.ResolumeInstance) v1.ResolumeInstance {
+	proj := inst
+	proj.Observations = make([]v1.Evidence, len(inst.Observations))
+	for i, o := range inst.Observations {
 		proj.Observations[i] = maskEvidenceForDiff(o)
 	}
 	return proj

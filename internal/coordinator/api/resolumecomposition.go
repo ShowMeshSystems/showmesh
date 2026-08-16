@@ -524,6 +524,45 @@ func readResolumeCompositionFilePart(r *http.Request) (fileBytes []byte, filenam
 	return fileBytes, filename, nil
 }
 
+// resolumeInstanceComposition reads the stored resolume.composition config
+// revision and renders it as a [v1.ResolumeInstanceComposition] (Track D
+// seam E) — the reduced summary a Resolume instance's own payload needs,
+// not the full id map GET /config/resolume/composition renders. nil, nil is
+// the correctly-distinguished "nothing uploaded yet" case (no config object
+// for this kind, or one declared but never activated), mirroring
+// [handlers.handleGetResolumeComposition]'s identical two guards — this is
+// the ONE place both that handler and every Resolume instance renderer
+// (mapping.go's mapResolumeInstance, called from resolumeinstances.go's
+// handlers, handleSnapshot, and Hub.render) compute this fact, so they
+// cannot answer it inconsistently.
+func resolumeInstanceComposition(ctx context.Context, cfg ConfigStore) (*v1.ResolumeInstanceComposition, error) {
+	obj, err := cfg.GetConfigObject(ctx, resolumeCompositionConfigKind, resolumeCompositionObjectIDConst)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get resolume.composition config object: %w", err)
+	}
+	if obj.CurrentRevision == 0 {
+		return nil, nil
+	}
+
+	rev, err := cfg.GetConfigRevision(ctx, resolumeCompositionConfigKind, resolumeCompositionObjectIDConst, obj.CurrentRevision)
+	if err != nil {
+		return nil, fmt.Errorf("get resolume.composition config revision %d: %w", obj.CurrentRevision, err)
+	}
+	payload, err := decodeResolumeCompositionPayload(rev.PayloadJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode resolume.composition config payload: %w", err)
+	}
+
+	return &v1.ResolumeInstanceComposition{
+		Name:        payload.Composition.Name,
+		Revision:    rev.Revision,
+		ActivatedAt: formatTime(obj.UpdatedAt),
+	}, nil
+}
+
 // mapResolumeCompositionSummary renders payload's own metadata plus its
 // parsed [resolumecomp.Composition] into the wire summary shared by
 // POST's own response and the "composition" member of GET's.

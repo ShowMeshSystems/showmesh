@@ -25,6 +25,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // resolumeCollectorSourceID is this collector's own id in GET
@@ -57,6 +58,37 @@ func (l resolumeCollectorStatusLister) CollectorStatuses(context.Context) ([]api
 		return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+}
+
+// resolumeInstanceLister adapts *store.Store plus the coordinator's
+// resolved SHOWMESH_RESOLUME_ID into api.ResolumeLister (Track D seam E),
+// mirroring fppInstanceLister's shape one file over: instanceID is resolved
+// at CONSTRUCTION time here, unlike fppInstanceLister's live-per-call
+// endpoints — deliberately, because this instance's identity does not
+// change without a coordinator restart (SHOWMESH_RESOLUME_ID is not a
+// runtime-editable configuration surface the way fpp.endpoints is), so
+// there is no equivalent "removed via the API but still served" hazard
+// fppInstanceLister's own doc comment records for itself. An empty
+// instanceID (SHOWMESH_RESOLUME_URL unset) means ListInstances always
+// answers an empty slice — Track D seam E spec section 2.2 rule 4's "an
+// unconfigured coordinator returns an empty array."
+type resolumeInstanceLister struct {
+	st         *store.Store
+	instanceID string
+}
+
+func (l resolumeInstanceLister) ListInstances(ctx context.Context) ([]api.ResolumeInstanceView, error) {
+	if l.instanceID == "" {
+		return nil, nil
+	}
+	obs, err := l.st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceResolume,
+		ResourceID:   l.instanceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("coordinator: list resolume instance observations for %q: %w", l.instanceID, err)
+	}
+	return []api.ResolumeInstanceView{{InstanceID: l.instanceID, Observations: obs}}, nil
 }
 
 // resolumeWiring is what newResolumeWiring hands back to coordinator.go's
