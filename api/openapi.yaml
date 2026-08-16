@@ -4474,18 +4474,13 @@ components:
         /config/show.action/{id}/revisions, GET
         /config/show.macro/{id}/revisions, GET
         /config/show/{id}/revisions, GET
-        /config/show.surface/{id}/revisions, and GET
-        /config/show.active/revisions, newest first — one shape shared
-        across every configuration kind's own revision history route
-        (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
-        Step 7-only and never revisited when this schema gained two more
-        callers; Track E added three more).
-        /config/show.macro/{id}/revisions, and GET
+        /config/show.surface/{id}/revisions, GET
+        /config/show.active/revisions, and GET
         /config/resolume.recovery/revisions, newest first — one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
-        Step 7-only and never revisited when this schema gained two more
-        callers; Track D seam D-3a added a fourth).
+        Step 7-only and never revisited when this schema gained more
+        callers; Track E added three more and Track D seam D-3a another).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -4493,8 +4488,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active]
-          enum: [fpp.endpoints, show.action, show.macro, resolume.recovery]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery]
         revisions:
           type: array
           items:
