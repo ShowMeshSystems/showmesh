@@ -78,7 +78,7 @@ func TestAssetFetchOperationHappyPath(t *testing.T) {
 	hash := sha256Hash(content)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -127,7 +127,7 @@ func TestAssetFetchOperationHashMismatchDiscardsAndFails(t *testing.T) {
 	wrongHash := sha256Hash([]byte("this is not what gets served"))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -167,7 +167,7 @@ func TestAssetFetchOperationSizeMismatchDiscardsAndFails(t *testing.T) {
 	hash := sha256Hash(content)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -297,7 +297,7 @@ func TestAssetFetchOperationSendsBearerTokenWhenSet(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -323,7 +323,7 @@ func TestAssetFetchOperationNoTokenSendsNoAuthHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawRequest = true
 		gotAuth = r.Header.Get("Authorization")
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -359,7 +359,7 @@ func TestDownloadToStagingResumesViaRange(t *testing.T) {
 		gotRange = rangeHeader
 		if rangeHeader == "" {
 			w.WriteHeader(http.StatusOK)
-			w.Write(full)
+			_, _ = w.Write(full)
 			return
 		}
 		// Parse "bytes=<offset>-"
@@ -371,7 +371,7 @@ func TestDownloadToStagingResumesViaRange(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusPartialContent)
-		w.Write(full[offset:])
+		_, _ = w.Write(full[offset:])
 	}))
 	defer srv.Close()
 
@@ -557,7 +557,7 @@ func TestEnumerateAssetsHashFailureIsIncomplete(t *testing.T) {
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	defer os.Chmod(path, 0o644) // let TempDir cleanup remove it
+	defer func() { _ = os.Chmod(path, 0o644) }() // let TempDir cleanup remove it
 
 	_, complete, reason := enumerateAssets(dir, map[string]hashCacheEntry{}, time.Now)
 	if complete {

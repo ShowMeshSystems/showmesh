@@ -209,7 +209,7 @@ func readBackAsset(path, wantHash string) (confirmed bool, size int64) {
 	if err != nil {
 		return false, 0
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	n, err := io.Copy(h, f)
@@ -254,7 +254,7 @@ func downloadToStaging(ctx context.Context, dir, token, rawURL, contentHash stri
 	if err != nil {
 		return "", "", 0, fmt.Errorf("requesting %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	openFlags := os.O_CREATE | os.O_WRONLY
 	writeOffset := int64(0)
@@ -274,7 +274,7 @@ func downloadToStaging(ctx context.Context, dir, token, rawURL, contentHash stri
 	if err != nil {
 		return "", "", 0, fmt.Errorf("opening staging file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if writeOffset > 0 {
@@ -285,10 +285,10 @@ func downloadToStaging(ctx context.Context, dir, token, rawURL, contentHash stri
 			return "", "", 0, fmt.Errorf("re-reading staged bytes for resume hash: %w", err)
 		}
 		if _, err := io.CopyN(h, existing, writeOffset); err != nil {
-			existing.Close()
+			_ = existing.Close()
 			return "", "", 0, fmt.Errorf("re-reading staged bytes for resume hash: %w", err)
 		}
-		existing.Close()
+		_ = existing.Close()
 	}
 
 	written, err := io.Copy(io.MultiWriter(f, h), resp.Body)
@@ -388,7 +388,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

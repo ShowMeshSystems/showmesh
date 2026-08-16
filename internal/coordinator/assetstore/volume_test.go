@@ -258,7 +258,7 @@ func TestVolumeBackendOpenServesWhatWasPut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	if size != blob.SizeBytes {
 		t.Fatalf("Open size = %d, want %d", size, blob.SizeBytes)
@@ -370,7 +370,7 @@ func TestVolumeBackendThreeSameFilenameDifferentTargets(t *testing.T) {
 			t.Fatalf("Open for %s: %v", target, err)
 		}
 		got, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			t.Fatalf("read %s: %v", target, err)
 		}

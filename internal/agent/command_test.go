@@ -728,7 +728,7 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 	hash := sha256Hash(content)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
