@@ -254,6 +254,28 @@ The third-party product name discussed under "Conflicts found" in the audio sess
 
 ---
 
+## 2026-08-16 (Local Node toolchain unblocked `make check`, and the repository now says which Node it wants)
+
+**Goal:** resolve the punch-list item that had `make check` failing on every branch, including `main`, so build sessions can run their own gates again.
+
+**Completed:** `make check` exits 0 on `main` again. The cause was a shadowed `node`, not a missing one. A hermes install at 12:54 the same day had planted `node`, `npm` and `npx` symlinks in `~/.local/bin` pointing at its bundled Node 26.7.0, and `~/.zshrc` prepends `~/.local/bin` *after* nvm loads, so those three sat in front of nvm's Node 22 on every interactive shell. Under Node 25 or 26 the UI suite fails 82 tests in 3 files with `Expected signal ("AbortSignal {}") to be an instance of AbortSignal`, a cross-realm mismatch between jsdom's `AbortSignal` and the `undici` those majors bundle. The three symlinks were removed — hermes itself is a Python program invoked through absolute paths and resolves its own bundled Node internally, and its source documents `HERMES_NODE_SKIP_LINKS=1` precisely so it "does not shadow the user's own node/npm on PATH", which its install path does not pass.
+
+Two repository changes came out of it, both about the next occurrence rather than this one. **`.nvmrc` (`22`) at the root**, with `.github/workflows/ci.yml` switched from a literal `node-version: "22"` to `node-version-file: .nvmrc`, so the Node major CI runs and the one enforced locally cannot drift. And **`ui-node-check`, a new prerequisite of `ui-install`**, which reads `.nvmrc` and refuses the UI targets on a different major, printing the version found, the version wanted, and the resolved `node` path.
+
+**The reason for the guard is the recurrence, and it is certain rather than hypothetical.** The `ln -sf` in hermes' `node-bootstrap.sh` is unconditional, so its next install or update re-plants those symlinks. The failure it produces names neither Node nor a version, so it reads as a repository defect: the previous session spent a diagnosis on it and wrote a 25-line punch-list entry concluding, correctly, that nothing in the repository should change to accommodate the newer Node. **That conclusion still stands — the guard does not accommodate the wrong Node, it names it.**
+
+**One fact in the punch-list entry was wrong and is corrected there:** it recorded "No Node 22 is installed locally any more". nvm held v22.21.1 and v22.16.0 throughout and its `default` alias was already `22`. Nothing was installed to fix this; three symlinks were deleted. **A tool that is on PATH but loses a precedence contest looks exactly like a tool that is absent**, and the difference decides whether the fix is an install or a deletion.
+
+**Decisions made:** none rising to an ADR. The repository's target Node major is now stated in one place (`.nvmrc`) that CI and the Makefile both read, rather than in two literals and a `@types/node` range.
+
+**Questions raised with the owner:** none.
+
+**Deferred:** Homebrew's `/opt/homebrew/bin/node` (v25.8.2) was left in place. It loses to nvm in an interactive shell, and unlinking it would break brew-installed tools that shebang `node`. It does win in a non-interactive login shell, where `.zshrc` is never sourced and nvm therefore never loads — measured, and the reason `zsh -lc` reports a different `node` than the shell an operator types in. The guard catches that case rather than the 82 failures.
+
+**Verification gates:** `make ui-node-check` passes on Node 22 and exits 2 on Node 26, forced by prepending `~/.hermes/node/bin` to PATH. **`make check` exits 0**: `go vet` clean, `go test -count=1 ./...` green across 27 packages, 523 of 523 UI tests green in 49 files, UI build clean, `ui-gen-check` byte-identical. `make test-integration` was not run this session — it uses no Node and nothing changed here reaches it. The CI change to `node-version-file` has not yet been exercised on a runner.
+
+---
+
 ## 2026-08-16 (Track D seam D-3a reviewed before building it, and six owner decisions)
 
 **Goal:** review Track D's open items and the D-3a crash-recovery specification, find every question a builder would have to guess at, and get them answered before a build session opens. No code.

@@ -13,7 +13,7 @@ The Audio Engine is the playback and routing system for all audience-facing audi
 
 It owns how audio is rendered and distributed. It does not own what the show is doing — FPP remains the scheduler and sequence authority ([ADR-001](../decisions/ADR-001-fpp-is-authoritative.md)). The Audio Engine acts on show state rather than producing it.
 
-This document owns the audio subsystem's architecture. Health presentation and alerting for audio resources belong to [OBSERVABILITY](OBSERVABILITY.md); how any of it is displayed belongs to [OPERATOR-UI](OPERATOR-UI.md).
+This document owns the audio subsystem's architecture. [RESTING-MODE](RESTING-MODE.md) owns when background and announcement sessions are created and faded around the operating-night lifecycle. Health presentation and alerting for audio resources belong to [OBSERVABILITY](OBSERVABILITY.md); how any of it is displayed belongs to [OPERATOR-UI](OPERATOR-UI.md).
 
 ## 2. Authority model
 

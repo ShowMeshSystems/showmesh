@@ -23,6 +23,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-013](RES-013-telemetry-storage-and-alerting.md) | Telemetry storage and alerting | planned | high | RES-010, RES-011, RES-012 |
 | [RES-014](RES-014-control-provider-model.md) | Control-provider model | unresearched | medium | RES-012 |
 | [RES-015](RES-015-fpp-plugin-distribution-model.md) | FPP plugin repository, distribution, and on-host integration | planned (L1) | high | — |
+| [RES-016](RES-016-pulsemesh-audio-integration.md) | PulseMesh upload, transcode, playback, and audio-authority integration | planned (L0) | high | — |
 
 RES-009 is not a terminal record: each failure row is exercised against the assembled system as soon as the relevant path exists, and findings drive hardening.
 

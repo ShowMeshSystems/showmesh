@@ -6,7 +6,7 @@ ADRs record durable choices and their consequences. They do not replace research
 
 | ADR | Decision | Status |
 |---|---|---|
-| [ADR-001](ADR-001-fpp-is-authoritative.md) | FPP is the authoritative scheduler | Accepted |
+| [ADR-001](ADR-001-fpp-is-authoritative.md) | FPP is the authoritative scheduler | Accepted (scheduled-start scope narrowed by ADR-038) |
 | [ADR-002](ADR-002-capability-based-nodes.md) | Nodes are modeled by capabilities | Accepted |
 | [ADR-003](ADR-003-desired-and-observed-state.md) | Desired and observed state remain separate | Accepted |
 | [ADR-004](ADR-004-layered-commands-and-fallback.md) | Use primitives, macros, and reduced local fallback | Accepted (narrowed by ADR-016, ADR-019) |
@@ -42,6 +42,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-035](ADR-035-a-run-always-runs-every-step.md) | A run always runs every step | Accepted (supersedes ADR-031 decision 2's default; narrows ADR-024 decision 11) |
 | [ADR-036](ADR-036-dispatch-configuration-applies-without-a-restart.md) | Configuration that governs dispatch applies without a restart | Accepted |
 | [ADR-037](ADR-037-resolume-references-are-names-not-ids.md) | A Resolume reference is a name, not an object id | Accepted (owner, 2026-08-15; not yet implemented) |
+| [ADR-038](ADR-038-fpp-authorizes-night-sessions.md) | FPP authorizes night sessions; ShowMesh advances them | Accepted (owner, 2026-08-16; not yet implemented) |
 
 **There is no ADR-034, and that is deliberate.** ADR-035 and ADR-036 were issued on the `step-9-wave-3` branch as 033 and 034, colliding with show mode, which Track D issued on `main` the same day. They were renumbered when that branch merged on 2026-08-15; 034 was left unused rather than reassigned, so that the number in an older reference is never ambiguous.
 

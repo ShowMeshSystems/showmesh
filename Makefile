@@ -157,8 +157,31 @@ run-coordinator: build
 # committed, unmodified package-lock.json is fast when node_modules is
 # already current and is what CI needs to trust the exact locked tree
 # rather than whatever `npm install` would resolve today.
+
+# Refuses to run the UI targets on a Node major other than .nvmrc's, which
+# is the one CI uses. Measured 2026-08-16 on macOS: Node 25 and 26 fail 82
+# jsdom tests in 3 files with `Expected signal ("AbortSignal {}") to be an
+# instance of AbortSignal`, a cross-realm mismatch between jsdom's
+# AbortSignal and the undici those majors bundle. The failure names neither
+# Node nor the version, so without this guard a shadowed `node` on PATH
+# reads as a repository defect.
+.PHONY: ui-node-check
+ui-node-check:
+	@want=$$(cat .nvmrc); \
+	have=$$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1); \
+	if [ -z "$$have" ]; then \
+		echo "No node on PATH. This repository targets Node $$want (.nvmrc)."; \
+		exit 1; \
+	fi; \
+	if [ "$$have" != "$$want" ]; then \
+		echo "Node $$have is first on PATH; this repository targets Node $$want (.nvmrc)."; \
+		echo "Run 'nvm use' here, or put a Node $$want ahead of it on PATH."; \
+		echo "  node: $$(command -v node)"; \
+		exit 1; \
+	fi
+
 .PHONY: ui-install
-ui-install:
+ui-install: ui-node-check
 	cd ui && npm ci
 
 .PHONY: ui-lint

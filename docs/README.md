@@ -6,6 +6,7 @@
 - [Observability specification](architecture/OBSERVABILITY.md) — signal model, collectors, dashboard, preview monitoring, diagnostics, readiness evidence, and alerting.
 - [Operator UI specification](architecture/OPERATOR-UI.md) — the browser client architecture: isolation, API contract, real-time updates, staleness handling, information architecture, and responsiveness. What the dashboard displays stays in the observability specification.
 - [Audio Engine specification](architecture/AUDIO-ENGINE.md) — authority model, playback sessions, drift policy, clock domains, buses and routing, output adapters, mixing, and failure behavior for audience-facing audio.
+- [Resting Mode and Night Session specification](architecture/RESTING-MODE.md) — the FPP-authorized show loop, content-derived inter-show timing, transition choreography, final-show behavior, and safe power/thermal boundaries.
 - [Reference installation](reference-installation.md) — the concrete hardware, network, and timing topology that anchors research test matrices.
 - [Research tracker](research/README.md) — open technical questions and the evidence required to resolve them.
 - [Architecture decision records](decisions/README.md) — durable decisions, their context, and consequences.
@@ -13,7 +14,7 @@
 - [Build log](build/BUILD-LOG.md) — the chronological session record of implementation work.
 - [Engineering lessons](build/LESSONS.md) — defects this project has shipped and caught, and the conventions that came out of them.
 
-Work is organised into parallel delivery tracks as well as numbered build steps. The track documents live alongside the build plan: [Track B](build/TRACK-B-nodes-and-projection.md) nodes and projection, [Track C](build/TRACK-C-audio-node.md) the audio node, [Track D](build/TRACK-D-resolume.md) Resolume control and timecode, [Track E](build/TRACK-E-show-authoring-and-assets.md) show authoring and assets.
+Work is organised into parallel delivery tracks as well as numbered build steps. The track documents live alongside the build plan: [Track B](build/TRACK-B-nodes-and-projection.md) nodes and projection, [Track C](build/TRACK-C-audio-node.md) the audio node, [Track D](build/TRACK-D-resolume.md) Resolume control and timecode, [Track E](build/TRACK-E-show-authoring-and-assets.md) show authoring and assets, and [Track F](build/TRACK-F-resting-mode.md) resting mode and night-session control.
 
 ## Bench captures
 

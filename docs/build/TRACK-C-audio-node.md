@@ -54,7 +54,7 @@ FPP's own audio output goes unused. That is ADR-017 and it is why `Volume Set` w
 
 - **PipeWire or raw ALSA.** RES-007 lists this as an open question affecting alignment, and it is the kind of choice that is cheap now and expensive to reverse once the engine is built on it.
 - ~~What the show audio actually is, and where it comes from.~~ **Answered 2026-08-13: it belongs to [Track E](TRACK-E-show-authoring-and-assets.md)**, which owns one asset store and one sync service for every node type, so the delivery and freshness problem is solved once rather than twice as this bullet asked. [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md) decision 5 also settles the ADR-017 question directly: **playback is always from node-local storage**, and no playback path may reach the store.
-- **What background and resting audio does between shows**, since ARCHITECTURE Phase 1 names deterministic fades into and out of shows as day-0-adjacent scope.
+- ~~What background and resting audio does between shows.~~ **Answered 2026-08-16 by [RESTING-MODE](../architecture/RESTING-MODE.md) and [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md):** resting audio is a ShowMesh background session with configurable gain, loop, fade, and source policy. The exact resting FSEQ supplies inter-show duration; the night-session controller supplies transition cues; this track supplies the audio operations and evidence they invoke.
 
 ## Acceptance criteria
 

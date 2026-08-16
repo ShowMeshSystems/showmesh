@@ -241,6 +241,8 @@ any state -> blackout
 
 `blackout` is an emergency presentation state, not proof that equipment is powered down. `maintenance` suppresses expected alerts but does not disable safety checks.
 
+The repeated operating-night lifecycle, its distinction from Program/Show Mode, and the content-derived transition clock are specified in [RESTING-MODE](RESTING-MODE.md). Per [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md), FPP owns the calendar and authorizes the session while ShowMesh advances individual rest/show cycles inside it.
+
 ### 7.2 Resource state
 
 Each managed resource records:
@@ -345,6 +347,7 @@ Detection, degraded operation, autonomous recovery, operator notification, and p
 
 - Native FPP lifecycle commands.
 - Resting/background audio with deterministic fades into and out of shows, on a ShowMesh audio node rather than FPP's own output.
+- FPP-authorized night-session control whose inter-show duration comes from the exact deployed resting FSEQ, with graceful final-show and end-of-night behavior.
 - Documented manual audio recovery, which ADR-019 makes mandatory rather than optional.
 - Stable projection through Resolume using at least one proven transport.
 - Readiness checks, blackout, and reduced coordinator-loss fallback.
