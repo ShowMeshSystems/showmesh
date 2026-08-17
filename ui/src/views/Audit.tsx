@@ -75,10 +75,26 @@ export function Audit() {
       )}
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
+          {/* ADR-020: absent evidence is stated, never omitted. GET /audit
+              pages from the OLDEST entry, so a full window is the oldest
+              window the API exposes and the most recent activity may lie
+              beyond it — said out loud rather than presenting an old
+              window as the audit log. */}
+          {state.entries.length === limit && (
+            <p className="panel panel--error" role="status">
+              This window is full: it holds the <strong>oldest</strong> {limit} retained entries the
+              API exposes, and newer entries beyond this window may exist and are not shown —
+              including the most recent activity.
+              {limit < MAX_LIMIT
+                ? ' Use "Show more" to widen the window.'
+                : ` ${MAX_LIMIT} is the API's own maximum window; it cannot page further.`}
+            </p>
+          )}
           {state.entries.length === 0 ? (
             <p className="text-muted">No audit entries retained.</p>
           ) : (
             <div className="table-scroll">
+              <p className="text-muted">Entries are shown latest-first within this fetched window.</p>
               <table className="config-table">
                 <thead>
                   <tr>
@@ -93,11 +109,12 @@ export function Audit() {
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Newest first for readability — the wire order (store's
-                      own doc comment: ascending by an id this response
-                      never exposes) is oldest-first, reversed here purely
-                      for display; nothing depends on this array's order
-                      beyond this render. */}
+                  {/* Latest-of-this-window first for readability — the wire
+                      order (store's own doc comment: ascending by an id
+                      this response never exposes) is oldest-first, reversed
+                      here purely for display. NOT labeled "newest first":
+                      when the window is full, its last entry is only the
+                      newest of the oldest window, not the newest retained. */}
                   {[...state.entries].reverse().map((entry, index) => (
                     <tr key={`${entry.timestamp}-${index}`}>
                       <td>{formatAbsolute(entry.timestamp)}</td>
@@ -120,12 +137,6 @@ export function Audit() {
             <button type="button" onClick={() => setLimit((l) => Math.min(l + PAGE_SIZE, MAX_LIMIT))}>
               Show more
             </button>
-          )}
-          {state.entries.length === MAX_LIMIT && (
-            <p className="text-muted">
-              Showing the API&rsquo;s own maximum of {MAX_LIMIT} oldest-retained entries — see this
-              page&rsquo;s own note in the build report about paging further than that.
-            </p>
           )}
         </>
       )}

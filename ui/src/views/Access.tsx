@@ -30,7 +30,13 @@ import { ScopedButton } from '../components/ScopedButton'
 const PRINCIPAL_READ_SCOPE = 'principal:read'
 const PRINCIPAL_WRITE_SCOPE = 'principal:write'
 
-const ROLES = ['viewer', 'operator', 'admin', 'scheduler'] as const
+// The assignable roles: the wire enum (PrincipalObject.role) minus
+// 'recovery', which belongs only to the reserved recovery principal and is
+// deliberately not assignable here. The Record keying makes any drift from
+// the generated enum a type error rather than a silently stale list.
+type AssignableRole = Exclude<PrincipalObject['role'], 'recovery'>
+const ROLE_SET: Record<AssignableRole, true> = { viewer: true, operator: true, admin: true, scheduler: true }
+const ROLES = Object.keys(ROLE_SET) as AssignableRole[]
 
 type LoadState =
   | { kind: 'loading' }
@@ -367,6 +373,7 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
   const [issuedValue, setIssuedValue] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const [reloadGeneration, setReloadGeneration] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -382,12 +389,13 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
     return () => {
       cancelled = true
     }
-    // reload deliberately triggered by the (principalID, tokens===null)
-    // reset below, not by a generation counter — see reload().
-  }, [principalID])
+  }, [principalID, reloadGeneration])
 
   function reload(): void {
+    // Show the loading state and bump the generation so the effect above
+    // actually re-fetches (its deps include reloadGeneration).
     setTokens(null)
+    setReloadGeneration((g) => g + 1)
   }
 
   async function handleIssue(): Promise<void> {

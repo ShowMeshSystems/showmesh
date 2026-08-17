@@ -218,6 +218,76 @@ describe('Configuration: FPP MQTT section', () => {
     )
   })
 
+  // A host row with only one of (instance id, HostName) filled cannot be
+  // represented in the map-shaped payload — the old behavior silently
+  // dropped it, the save "succeeded", and the reload erased the
+  // operator's half-entered row. The save is blocked instead, naming the
+  // row; the server still owns validation of what is sent (ADR-030).
+  it('blocks the save with an inline error naming a half-filled host row, sending no PUT', async () => {
+    getFPPMQTTConfig.mockResolvedValue(activeFPPMQTTConfig)
+    getFPPMQTTConfigRevisions.mockResolvedValue(emptyFPPMQTTRevisions)
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('tcp://10.0.1.5:1883')
+    await user.click(screen.getByRole('button', { name: /add host/i }))
+    await user.type(screen.getByLabelText('Host 2 instance id'), 'player-02')
+
+    await user.click(screen.getByRole('button', { name: /save fpp mqtt configuration/i }))
+
+    const section = await fppMQTTSection()
+    const alert = await within(section).findByRole('alert')
+    expect(alert).toHaveTextContent(/host 2/i)
+    expect(alert).toHaveTextContent(/both an instance id and a hostname/i)
+    expect(putFPPMQTTConfig).not.toHaveBeenCalled()
+    // The half-entered row is still on screen, not erased.
+    expect(screen.getByDisplayValue('player-02')).toBeInTheDocument()
+  })
+
+  it('blocks the save with an inline error on duplicate trimmed instance ids, never collapsing last-wins', async () => {
+    getFPPMQTTConfig.mockResolvedValue(activeFPPMQTTConfig)
+    getFPPMQTTConfigRevisions.mockResolvedValue(emptyFPPMQTTRevisions)
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('tcp://10.0.1.5:1883')
+    await user.click(screen.getByRole('button', { name: /add host/i }))
+    // Trims to the same id as the existing 'player-01' row.
+    await user.type(screen.getByLabelText('Host 2 instance id'), ' player-01 ')
+    await user.type(screen.getByLabelText('Host 2 HostName'), 'FPP-Other')
+
+    await user.click(screen.getByRole('button', { name: /save fpp mqtt configuration/i }))
+
+    const section = await fppMQTTSection()
+    const alert = await within(section).findByRole('alert')
+    expect(alert).toHaveTextContent(/host 2/i)
+    expect(alert).toHaveTextContent(/player-01/)
+    expect(alert).toHaveTextContent(/unique/i)
+    expect(putFPPMQTTConfig).not.toHaveBeenCalled()
+  })
+
+  it('skips a fully blank host row (no operator input) rather than refusing the save', async () => {
+    getFPPMQTTConfig.mockResolvedValue(activeFPPMQTTConfig)
+    getFPPMQTTConfigRevisions.mockResolvedValue(emptyFPPMQTTRevisions)
+    putFPPMQTTConfig.mockResolvedValue({ ...activeFPPMQTTConfig, revision: 2 })
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('tcp://10.0.1.5:1883')
+    await user.click(screen.getByRole('button', { name: /add host/i }))
+
+    await user.click(screen.getByRole('button', { name: /save fpp mqtt configuration/i }))
+
+    await waitFor(() =>
+      expect(putFPPMQTTConfig).toHaveBeenCalledWith({
+        brokerURL: 'tcp://10.0.1.5:1883',
+        username: 'showmesh',
+        topicPrefix: 'falcon/player',
+        hosts: { 'player-01': 'FPP-Player' },
+      }),
+    )
+  })
+
   it("renders the coordinator's 409 refusal (SHOWMESH_FPP_MQTT_BROKER_URL still set) as an actionable message", async () => {
     getFPPMQTTConfig.mockResolvedValue(activeFPPMQTTConfig)
     getFPPMQTTConfigRevisions.mockResolvedValue(emptyFPPMQTTRevisions)

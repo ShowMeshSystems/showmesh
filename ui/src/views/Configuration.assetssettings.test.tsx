@@ -212,6 +212,38 @@ describe('Configuration: assets.settings section', () => {
     )
   })
 
+  // The PUT is a partial update (per-field optional, absent means
+  // keep-stored/default). In the first-time zero-to-one setup path the
+  // numeric fields start blank, and Number('') is 0 — a blank numeric
+  // field must be OMITTED from the payload, never sent as an explicit 0.
+  it('omits blank numeric fields from the PUT instead of coercing them to 0', async () => {
+    getAssetsSettingsConfig.mockRejectedValue(
+      new ApiError('no assets.settings configuration has been created yet; PUT one to create it', 404,
+        'https://showmesh.dev/problems/resource-not-found'),
+    )
+    getAssetsSettingsConfigRevisions.mockResolvedValue(emptyAssetsSettingsRevisions)
+    putAssetsSettingsConfig.mockResolvedValue(activeAssetsSettingsConfig)
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await assetsSettingsSection()
+    await user.type(screen.getByLabelText('Asset content base URL'), 'https://coordinator.example')
+    // A field the operator explicitly filled still goes out as typed.
+    await user.type(screen.getByLabelText('Asset sync interval seconds'), '600')
+
+    await user.click(screen.getByRole('button', { name: /save asset settings/i }))
+
+    await waitFor(() =>
+      expect(putAssetsSettingsConfig).toHaveBeenCalledWith({
+        contentBaseUrl: 'https://coordinator.example',
+        syncIntervalSeconds: 600,
+      }),
+    )
+    const sentRequest = putAssetsSettingsConfig.mock.calls.at(0)?.at(0)
+    expect(sentRequest).not.toHaveProperty('maxUploadBytes')
+    expect(sentRequest).not.toHaveProperty('inventoryIntervalSeconds')
+  })
+
   it("renders the coordinator's 409 refusal (a SHOWMESH_ASSET_* variable still set) as an actionable message", async () => {
     getAssetsSettingsConfig.mockResolvedValue(activeAssetsSettingsConfig)
     getAssetsSettingsConfigRevisions.mockResolvedValue(emptyAssetsSettingsRevisions)

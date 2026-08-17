@@ -14,6 +14,7 @@ import {
   getAssetsSettingsConfigRevisions,
   putAssetsSettingsConfig,
   type AssetsSettingsConfigResponse,
+  type ConfigAssetsSettingsPutPayload,
   type ConfigFPPEndpoint,
   type ConfigFPPMQTTPutRequest,
   type ConfigRevisionMeta,
@@ -582,11 +583,30 @@ function FPPMQTTSection() {
     setSaving(true)
     setSaveError(null)
     try {
+      // hosts is a map on the wire, so a half-filled or duplicate-id row
+      // CANNOT be represented in the payload — sending anyway would
+      // silently drop or collapse the operator's input and the reload
+      // would erase it. Blocked here with the row named instead; the
+      // server still owns validation of what IS sent (ADR-030).
       const hosts: Record<string, string> = {}
-      for (const row of hostRows) {
+      for (const [index, row] of hostRows.entries()) {
         const id = row.id.trim()
         const hostName = row.hostName.trim()
-        if (id !== '' && hostName !== '') hosts[id] = hostName
+        // A fully blank row carries no operator input: skipped, not an error.
+        if (id === '' && hostName === '') continue
+        if (id === '' || hostName === '') {
+          setSaveError(
+            `Host ${index + 1} needs both an instance id and a HostName — fill in the ${
+              id === '' ? 'instance id' : 'HostName'
+            } or remove the row.`,
+          )
+          return
+        }
+        if (Object.hasOwn(hosts, id)) {
+          setSaveError(`Host ${index + 1} repeats instance id "${id}" — instance ids must be unique.`)
+          return
+        }
+        hosts[id] = hostName
       }
       // brokerURL/username/topicPrefix/hosts are always sent: this form
       // loads and displays every one of them (unlike the password), so
@@ -772,12 +792,12 @@ function FPPMQTTSection() {
 // AssetsSettingsSection is Track G seam G-4's own addition (ADR-039): the
 // assets.settings editor, alongside FPPEndpointsSection/
 // ResolumeInstancesSection above. SHOWMESH_ASSET_DIR has no control here —
-// it stays environment-only (ADR-039 decision 2). Unlike the API's own PUT
-// (which accepts a partial update, per-field optional — ADR-039 decision
-// 5), this form always sends all four fields together: it always holds
-// the currently loaded value for every field, so a full write is exactly
-// as correct as a partial one and needs no extra "which fields changed"
-// bookkeeping here (ADR-030: "the UI holds no authoring logic; validation
+// it stays environment-only (ADR-039 decision 2). The PUT is a partial update
+// (per-field optional, absent means keep-stored/default — ADR-039
+// decision 5): a filled field is sent as typed, and a blank numeric
+// field is omitted rather than coerced to Number('') === 0, which
+// matters in the first-time zero-to-one setup path where every field
+// starts blank (ADR-030: "the UI holds no authoring logic; validation
 // is server-side").
 function AssetsSettingsSection() {
   const [state, setState] = useState<AssetSettingsLoadState>({ kind: 'loading' })
@@ -831,12 +851,21 @@ function AssetsSettingsSection() {
     setSaving(true)
     setSaveError(null)
     try {
-      await putAssetsSettingsConfig({
+      // A blank numeric field is OMITTED, never sent as Number('') === 0:
+      // the PUT is a partial update (every field independently optional,
+      // absent means keep-stored/default — ConfigAssetsSettingsPutPayload's
+      // own doc comment), and an explicit 0 is refused. contentBaseUrl is
+      // always sent: an empty string is its real "sync disabled" value.
+      const maxUpload = maxUploadBytes.trim()
+      const syncInterval = syncIntervalSeconds.trim()
+      const inventoryInterval = inventoryIntervalSeconds.trim()
+      const request: ConfigAssetsSettingsPutPayload = {
         contentBaseUrl: contentBaseURL.trim(),
-        maxUploadBytes: Number(maxUploadBytes),
-        syncIntervalSeconds: Number(syncIntervalSeconds),
-        inventoryIntervalSeconds: Number(inventoryIntervalSeconds),
-      })
+        ...(maxUpload !== '' ? { maxUploadBytes: Number(maxUpload) } : {}),
+        ...(syncInterval !== '' ? { syncIntervalSeconds: Number(syncInterval) } : {}),
+        ...(inventoryInterval !== '' ? { inventoryIntervalSeconds: Number(inventoryInterval) } : {}),
+      }
+      await putAssetsSettingsConfig(request)
       setReloadGeneration((g) => g + 1)
     } catch (err) {
       setSaveError(describeApiError(err))
