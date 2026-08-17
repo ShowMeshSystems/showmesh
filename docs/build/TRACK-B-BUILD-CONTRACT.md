@@ -84,9 +84,11 @@ GStreamer element that reads an FSEQ file, so *something* in ShowMesh has to
 turn channel bytes into pixels. The boundary this track builds to:
 
 - **ShowMesh does**: seek to a frame in the local FSEQ, decompress the block,
-  extract the surface's channel range, and write `width x height x 3` raw
-  bytes into the pipeline's stdin. At a virtual-matrix geometry this is a
-  small buffer, not a video frame.
+  extract the surface's channel range, and write one raw matrix-sized buffer
+  into the pipeline. At a virtual-matrix geometry this is a small buffer, not
+  a video frame. The **pixel format of that buffer is a spec field, decided by
+  measurement** — see ruling 5, which supersedes an earlier draft of this line
+  that named RGB.
 - **GStreamer does**: everything after that byte lands. Scaling to canvas
   dimensions, colour conversion, frame pacing against the pipeline clock,
   SpeedHQ encode, and NDI transport.
@@ -158,6 +160,53 @@ restarts with no coordinator reachable resumes rendering.
 This mirrors `asset.fetch` exactly and adds no new distribution mechanism. It
 also keeps ADR-028's rule intact: the node never resolves an asset by
 filename, because the coordinator resolved it by identity before dispatch.
+
+### Ruling 5 amended by measurement: the pipeline is threaded deliberately
+
+**Added 2026-08-17 from the owner's B0 measurements**, which arrived after the
+rulings above were written and which change the shape of the pipeline rather
+than a detail of it.
+
+**The B0 spike encoded at 86% of one core with no queue in the pipeline.**
+Frame generation, SpeedHQ encode and NDI send therefore shared a single
+GStreamer streaming thread while the rest of the machine sat near idle. **The
+ceiling this track is building against is per-core, not per-machine**, and the
+14% of one core left over is the entire budget the renderer would inherit if
+it were simply hung off the front of the spike's pipeline shape.
+
+So:
+
+- **A `queue` is a first-class element of the pipeline spec, not a tuning
+  detail.** Thread boundaries are chosen and expressed, and the default spec
+  carries one before the sink from B2a onward. A queue added only when
+  something turns out to be slow is a queue added after the measurement that
+  would have justified it.
+- **The pipeline is staged, not extended.** B3's source stage and B4's sink
+  stage must each be able to sit on their own thread. "The spike's pipeline
+  with FSEQ extraction bolted on the front" is the specific design this
+  paragraph exists to forbid.
+
+**Pixel format is an explicit field of the spec and is hardcoded nowhere.**
+The 86% figure was measured on a zero-conversion path, so a `videoconvert`
+added later spends budget never measured as spare, and the owner's guidance
+is to emit UYVY from the extraction where possible.
+
+**One tension is recorded rather than resolved, because it needs a
+measurement this track will produce.** The zero-conversion result was measured
+with **no scaling**: the spike's source emitted the sink's native format at
+canvas dimensions. The real path extracts a small virtual matrix that must be
+scaled up to canvas dimensions, so some scaling and probably some conversion
+cost is unavoidable, and where it is cheapest to pay it is exactly the
+question B3 must answer with numbers rather than argument. What B2a owes is
+that nothing forecloses the answer.
+
+**Recovery stays unverified and must not be assumed.** Spike run 5 never ran,
+so nothing says the NDI sender and Resolume survive each other's restart. No
+code, comment or test name may assert that a restart re-establishes the
+downstream connection. A pipeline that restarts cleanly while its downstream
+never returns must be visible as its own condition: **"the process is up" is
+not "frames are arriving somewhere"**, and reporting the first as health is
+how this track would ship a black wall that monitors green.
 
 ## Seam B2: pipeline supervision
 
@@ -253,6 +302,24 @@ FSEQ at the frame the MultiSync timeline reports.
 - `Timeline.SetStepTime` is called from the FSEQ's own step time on every file
   change. Step time is not carried on the wire and the 25 ms default is a
   guess about the file, not knowledge of it.
+  **FSEQ step time is a single byte**, so 30 fps is stored as `33` and a
+  sequence played at exactly 33 ms drifts about 1.2 seconds per hour
+  (RES-017). Do **not** "correct" this to 33.333: FPP reads the same byte, so
+  ShowMesh matching FPP is what keeps the surface in step with the lighting,
+  which is the acceptance criterion. Matching the true frame rate instead
+  would drift ShowMesh away from the show. Say so where the value is read,
+  because it reads like a bug.
+- **Do not assume channels come in RGB triplets.** Real per-target files
+  measured in RES-017 carry channel counts of 45241, 22876 and 19884, none a
+  multiple of three. An extractor that assumes triplets shears the image. The
+  surface's own `geometry` and `pixelFormat` decide pixel layout, and
+  `showsurface.go` already enforces
+  `width * height * channelsPerPixel == channelCount` — trust that, not the
+  file's total.
+- **An absent channel must never decode to zero.** A channel outside the
+  file's sparse ranges is not black; it is not present. This is the `"ma":
+  null` defect from Step 5 in a new disguise and it is the third subsystem to
+  meet it.
 - The frame writer: a goroutine that, per frame period, reads the timeline
   position, extracts the channel range, writes the buffer to the pipeline's
   stdin, and counts what it did. Late and dropped frames are counted and
@@ -357,9 +424,16 @@ Straight to `docs/private/PUNCH-LIST.md`, not marked done:
   MultiSync timeline and Resolume displays the surface's content in step with
   the lighting." The bench `fppd` can drive MultiSync; a wall cannot be
   checked from here.
-- A real xLights-rendered FSEQ. Every asset this project has moved is
-  synthetic bytes, which is already a punch-list item from Track E. **A
-  synthetic FSEQ proves the parser against this project's own assumptions
-  about the format**, which is exactly the shape of test this repository has
-  been burned by before.
+- Sender/receiver restart recovery, until spike run 5 lands.
+
+**One item came off this list before it was written.** RES-017's research pass
+found **198 real xLights-written `.fseq` files on the development machine**,
+including an FPP host's own `sequences/` directory, and parsed all of them.
+So `pkg/fseq` is testable against real per-target xLights output rather than
+against synthetic bytes, which is a materially stronger position than Track E
+had and closes the "a synthetic FSEQ proves the parser against this project's
+own assumptions about the format" objection for the parser specifically. It
+does **not** close Track E's punch-list item, which is about an FSEQ moving
+end to end through the store to a node and being rendered; that still has not
+happened.
 - Sender/receiver restart recovery, until spike run 5 lands.
