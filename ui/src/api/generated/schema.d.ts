@@ -1080,7 +1080,7 @@ export interface components {
         };
         ResourceRef: {
             /** @enum {string} */
-            kind: "node" | "fpp" | "coordinator" | "resolume";
+            kind: "node" | "fpp" | "coordinator" | "resolume" | "surface";
             id: string;
         };
         Capability: {
@@ -1119,6 +1119,8 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
+            /** @description Track B seam B2b: whatever surface.* observations this coordinator currently holds for the render pipeline(s) this node has reported, one entry per signal. Never omitted; an empty array means this node has never published a render report. Each entry's resource names the SURFACE it concerns (ADR-026), not this node. */
+            render: components["schemas"]["ObservationEntry"][];
         };
         /**
          * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run — never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
@@ -2981,7 +2983,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Restrict to observations about resources of this kind. */
-                resourceKind?: "node" | "fpp" | "coordinator" | "resolume";
+                resourceKind?: "node" | "fpp" | "coordinator" | "resolume" | "surface";
                 /** @description Restrict to observations about this specific resource ID. */
                 resourceId?: string;
                 /** @description Restrict to observations of this exact signal ID. */
