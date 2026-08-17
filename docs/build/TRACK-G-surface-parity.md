@@ -90,6 +90,24 @@ as seam G-8, when the owner said it should be resolved within this track.
 It ships as its own pull request so it can be declined independently of
 the rest of the track.
 
+### A fifth Class 1 item, found by G-7's own guard rather than by this audit
+
+`SHOWMESH_INTEGRATION_BROKERS` (`internal/coordinator/config/integrationbrokers.go`)
+declares the external MQTT brokers a `show.action`'s `mqtt` target may name.
+It is genuinely operator-facing, it fails
+[ADR-039](../decisions/ADR-039-operator-configuration-is-store-backed.md)
+decision 2's own test, and it was never converted to a store-backed kind.
+
+**This audit missed it**, because the audit enumerated environment
+variables by reading `config.go`, and this constant lives in a sibling file
+of the same package. Seam G-7's inventory test parses the whole package and
+found it on its first run.
+
+It is **not fixed by Track G**. It is recorded in the guard's
+`knownGapEnvVars` group with a stated reason, so the test passes while
+asserting something true rather than something convenient, and it is in
+`docs/private/DECISION-QUEUE.md` with options for the owner.
+
 ### A fourth finding, which is a known lesson recurring
 
 `ScopePrincipalWrite = "principal:write"` is declared at
