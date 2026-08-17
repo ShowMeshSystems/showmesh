@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -75,6 +76,15 @@ type Snapshot struct {
 	LastExitCode *int
 	LastStderr   string
 
+	// FramesWritten, FramesLate, and FramesDropped are B3's frame writer
+	// counters, cumulative for the life of the current surface assignment
+	// (reset to 0 by a fresh Apply, never by a pipeline crash/restart — the
+	// frame writer goroutine outlives any one gst-launch-1.0 attempt and
+	// keeps counting through a restart). Zero in every seam before B3.
+	FramesWritten int64
+	FramesLate    int64
+	FramesDropped int64
+
 	// Transport and TransportAvailable are always "" / nil in this seam —
 	// B2a's pipeline has no real output stage, so there is nothing to
 	// report and nothing has been probed. See [mqttproto.
@@ -129,10 +139,11 @@ type runner struct {
 	stop chan struct{}
 	done chan struct{}
 
-	mu      sync.Mutex
-	snap    Snapshot
-	pid     int   // 0 when no process is currently running; diagnostics only, never part of the wire report
-	procGen int64 // see bumpProcGen and setRunningIfCurrent
+	mu          sync.Mutex
+	snap        Snapshot
+	pid         int           // 0 when no process is currently running; diagnostics only, never part of the wire report
+	currentProc ProcessHandle // nil when no process is currently running; see stdin()
+	procGen     int64         // see bumpProcGen and setRunningIfCurrent
 }
 
 // bumpProcGen advances the generation identifying which process attempt is
@@ -221,6 +232,33 @@ func (r *runner) setCounters(restartCount, consecutiveFailures int64, lastExitCo
 	r.mu.Unlock()
 }
 
+// setFrameCounts overwrites the reported frame counters, called by B3's
+// FrameWriter as it runs. Deliberately does not touch State/Reason/Since/
+// ObservedAt: frame counts are a separate evidence stream from pipeline
+// lifecycle state and must not perturb AwaitState's post-dispatch
+// confirmation check (see [Supervisor.AwaitState]).
+func (r *runner) setFrameCounts(written, late, dropped int64) {
+	r.mu.Lock()
+	r.snap.FramesWritten = written
+	r.snap.FramesLate = late
+	r.snap.FramesDropped = dropped
+	r.mu.Unlock()
+}
+
+// stdin returns the currently-running process's stdin writer, or an error
+// if nothing is currently running. Called on every frame tick (never
+// cached across ticks) so a mid-session pipeline restart is picked up on
+// the very next frame rather than writing into a dead process's pipe.
+func (r *runner) stdin() (io.Writer, error) {
+	r.mu.Lock()
+	p := r.currentProc
+	r.mu.Unlock()
+	if p == nil {
+		return nil, fmt.Errorf("pipeline: surface %q has no running process", r.surfaceID)
+	}
+	return p.Stdin()
+}
+
 // Snapshot returns exactly what is stored, including its own ObservedAt —
 // it must NOT stamp ObservedAt from the current clock read. ObservedAt is
 // evidence of when the reported state was actually confirmed (set by
@@ -290,6 +328,7 @@ func (r *runner) loop() {
 		exitCh = nil
 		r.mu.Lock()
 		r.pid = 0
+		r.currentProc = nil
 		r.mu.Unlock()
 		r.bumpProcGen() // this attempt is no longer current; see F10
 	}
@@ -333,6 +372,7 @@ func (r *runner) loop() {
 
 		r.mu.Lock()
 		r.pid = p.Pid()
+		r.currentProc = p
 		r.mu.Unlock()
 
 		go func() {
@@ -357,10 +397,15 @@ func (r *runner) loop() {
 				backoff = r.policy.initialBackoff
 				consecFails = 0
 				r.setCounters(restartCount, 0, nil, "")
+				// A fresh Apply is a new rendering session: frame counts
+				// from whatever surface (or spec) was previously applied to
+				// this ID describe a session that has ended, not this one.
+				r.setFrameCounts(0, 0, 0)
 				attemptStart()
 			case cmdClear:
 				stopCurrent()
 				haveSpec = false
+				r.setFrameCounts(0, 0, 0)
 				r.setState(StateStopped, "cleared by operator")
 			case cmdRestart:
 				stopCurrent()
@@ -383,6 +428,7 @@ func (r *runner) loop() {
 			exitCh = nil
 			r.mu.Lock()
 			r.pid = 0
+			r.currentProc = nil
 			r.mu.Unlock()
 			// This attempt is dead whether or not a restart follows —
 			// bump now so a marker still in flight from it (F10) is
@@ -579,6 +625,36 @@ func (s *Supervisor) Pid(surfaceID string) (int, bool) {
 	}
 	pid := r.Pid()
 	return pid, pid != 0
+}
+
+// Stdin returns surfaceID's currently-running process's stdin writer, for
+// B3's frame writer. Returns an error if no runner exists for surfaceID or
+// nothing is currently running for it — the caller (the frame writer) treats
+// that as "nowhere to write this frame" and counts it, per this package's
+// "never restart or stop the pipeline from here" rule; the supervisor's own
+// crash detection is what reacts to a dead process.
+func (s *Supervisor) Stdin(surfaceID string) (io.Writer, error) {
+	s.mu.Lock()
+	r, ok := s.runners[surfaceID]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("pipeline: no runner for surface %q", surfaceID)
+	}
+	return r.stdin()
+}
+
+// SetFrameCounts overwrites surfaceID's reported frame counters. A no-op
+// (never creates a runner) if surfaceID has never been applied — the frame
+// writer that would call this only exists after Apply has already created
+// one.
+func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int64) {
+	s.mu.Lock()
+	r, ok := s.runners[surfaceID]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	r.setFrameCounts(written, late, dropped)
 }
 
 // SnapshotAll reports every surface this Supervisor currently knows about,

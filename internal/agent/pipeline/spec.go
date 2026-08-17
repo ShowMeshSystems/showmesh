@@ -159,6 +159,116 @@ func DefaultTestPatternSpec(surfaceID string) Spec {
 	}
 }
 
+// GstVideoFormatForPixelFormat maps a show.surface.geometry.pixelFormat
+// value (config.ShowSurfacePixelFormatRGB / ...RGBW) to a GStreamer
+// video/x-raw "format" string. ok is false for an unrecognized input,
+// including rgbw — GStreamer's raw-video format registry has no packed
+// 4-byte-per-pixel RGBW format, so B3 does not invent a mapping for it;
+// see FSEQSourceSpec's doc comment for the consequence.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED: "RGB" is chosen because it is a
+// direct, unconverted byte-for-byte copy of what an rgb-format FSEQ frame
+// already contains (RES-017: a channel is one byte, and rgb order is
+// channel order) — matching ADR-040 decision 3's "emit the sink's native
+// format where possible" guidance is a placement decision for whoever adds
+// the sink stage (B4), not this function's job.
+func GstVideoFormatForPixelFormat(pixelFormat string) (format string, ok bool) {
+	switch pixelFormat {
+	case "rgb":
+		return "RGB", true
+	default:
+		return "", false
+	}
+}
+
+// FSEQSourceSpec builds a surface's real pipeline: a source stage reading
+// raw frame buffers from this process's own stdin (fed by B3's frame
+// writer — see frame.go) instead of B2a's videotestsrc, chained through the
+// same queue-before-sink discipline [DefaultTestPatternSpec] established,
+// into a placeholder fakesink (B4 replaces this with the real NDI sink
+// stage; see build contract seam B4).
+//
+// width/height/pixelFormat/frameRate come from the surface's own
+// show.surface.geometry and .frameRate — this function performs no
+// scaling or conversion of its own (ADR-040 decision 2: ShowMesh may
+// locate/decompress/copy bytes, never scale or convert), so the buffer
+// this pipeline receives on stdin must already be exactly
+// width*height*channelsPerPixel(pixelFormat) bytes, raw, per frame.
+//
+// Returns an error for a pixel format this package cannot express as a
+// GStreamer raw-video format (see [GstVideoFormatForPixelFormat]) — rgbw,
+// today — rather than silently guessing one.
+func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, frameRate int) (Spec, error) {
+	gstFormat, ok := GstVideoFormatForPixelFormat(pixelFormat)
+	if !ok {
+		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known GStreamer raw-video mapping", surfaceID, pixelFormat)
+	}
+	if width < 1 || height < 1 {
+		return Spec{}, fmt.Errorf("pipeline: surface %q: geometry %dx%d is invalid", surfaceID, width, height)
+	}
+	if frameRate < 1 {
+		return Spec{}, fmt.Errorf("pipeline: surface %q: frameRate %d is invalid", surfaceID, frameRate)
+	}
+
+	return Spec{
+		SurfaceID:   surfaceID,
+		PixelFormat: gstFormat,
+		Stages: []Stage{
+			{
+				Label: "source",
+				Elements: []Element{
+					{
+						// fdsrc reading fd 0 (this process's own stdin) is
+						// how frames arrive without linking appsrc/go-gst
+						// (build contract ruling 1 — a supervised
+						// subprocess, no in-process GStreamer binding).
+						//
+						// is-live=true matters beyond description: a
+						// non-live source must PREROLL (block the
+						// READY->PAUSED transition until one buffer reaches
+						// the sink) before gst-launch ever reports PLAYING,
+						// which measured real: a fresh gst-launch-1.0
+						// process fed no bytes yet never left "starting."
+						// is-live=true skips preroll (PAUSED needs no
+						// buffer for a live source), matching the real
+						// shape of this source — frames arrive in real
+						// time from the MultiSync-driven writer, never
+						// from a seekable, already-complete file.
+						Factory: "fdsrc",
+						Properties: []Property{
+							{Key: "fd", Value: "0"},
+							{Key: "is-live", Value: "true"},
+						},
+					},
+					{
+						// rawvideoparse turns the undelimited byte stream
+						// on stdin into framed video/x-raw buffers at
+						// exactly this surface's geometry; it does no
+						// scaling or conversion of its own.
+						Factory: "rawvideoparse",
+						Properties: []Property{
+							{Key: "width", Value: fmt.Sprintf("%d", width)},
+							{Key: "height", Value: fmt.Sprintf("%d", height)},
+							{Key: "format", Value: gstFormat},
+							{Key: "framerate", Value: fmt.Sprintf("%d/1", frameRate)},
+						},
+					},
+				},
+			},
+			QueueStage("queue-sink", defaultQueueMaxSizeBuffers, defaultQueueLeaky),
+			{
+				Label: "sink",
+				Elements: []Element{{
+					Factory: "fakesink",
+					Properties: []Property{
+						{Key: "sync", Value: "false"},
+					},
+				}},
+			},
+		},
+	}, nil
+}
+
 // BuildArgv turns Spec into gst-launch-1.0's argv (excluding the binary
 // itself), one string per token, joined by gst-launch's own "!" link
 // syntax between elements. An empty Stage (see [CapsFilterStage]'s

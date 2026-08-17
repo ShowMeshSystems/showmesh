@@ -93,6 +93,19 @@ type Config struct {
 	// AssetInventoryInterval's default: a stuck or crash-looping render
 	// pipeline is show-affecting in a way a stale asset list is not.
 	RenderReportInterval time.Duration
+
+	// MultiSyncListenAddr is the local "host:port" the render node's
+	// MultiSync listener binds. Defaults to "" meaning
+	// pkg/multisync.NewListener's own default (":32320", the fixed FPP
+	// control port). Tests and any co-located non-production run MUST
+	// override this to a non-32320 port; see pkg/multisync's ADR-013
+	// warning on why this agent never sets AllowPortSharing.
+	MultiSyncListenAddr string
+
+	// MultiSyncInterface restricts the MultiSync multicast group join to
+	// one named network interface. Empty means join every suitable
+	// interface (pkg/multisync.NewListener's own default).
+	MultiSyncInterface string
 }
 
 const (
@@ -114,6 +127,8 @@ const (
 	envAgentAPIToken          = "SHOWMESH_AGENT_API_TOKEN"
 	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
 	envRenderReportInterval   = "SHOWMESH_RENDER_REPORT_INTERVAL"
+	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
+	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 
 	defaultBroker                 = "tcp://localhost:1883"
 	defaultLogLevel               = "info"
@@ -218,6 +233,8 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AgentAPIToken:          getEnvDefault(lookup, envAgentAPIToken, ""),
 		AssetInventoryInterval: assetInventoryInterval,
 		RenderReportInterval:   renderReportInterval,
+		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
+		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -391,5 +408,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("agent_api_token", token),
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 		slog.Duration("render_report_interval", c.RenderReportInterval),
+		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
+		slog.String("multisync_interface", c.MultiSyncInterface),
 	)
 }
