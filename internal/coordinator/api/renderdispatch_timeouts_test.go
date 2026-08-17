@@ -22,13 +22,13 @@ func TestRenderTimeoutsNestStrictly(t *testing.T) {
 	handler := int(renderHandlerWriteDeadline().Seconds())
 	cli := cliMinRenderCommandClientTimeoutSecond
 
-	if !(agent < confirm) {
+	if agent >= confirm {
 		t.Fatalf("agent renderConfirmDeadline (%ds) must be strictly less than the coordinator's renderCommandConfirmDeadline (%ds)", agent, confirm)
 	}
-	if !(confirm < handler) {
+	if confirm >= handler {
 		t.Fatalf("renderCommandConfirmDeadline (%ds) must be strictly less than renderHandlerWriteDeadline() (%ds)", confirm, handler)
 	}
-	if !(handler < cli) {
+	if handler >= cli {
 		t.Fatalf("renderHandlerWriteDeadline() (%ds) must be strictly less than the CLI's minRenderCommandClientTimeout (%ds)", handler, cli)
 	}
 }
@@ -42,7 +42,7 @@ func TestRenderTimeoutsNestStrictly(t *testing.T) {
 // by coincidence of the current 15s/10s values — this test pins the
 // margin's own sign directly rather than relying on that coincidence).
 func TestRenderHandlerWriteDeadlineMarginIsPositive(t *testing.T) {
-	if !(renderHandlerWriteDeadlineMargin > 0) {
+	if renderHandlerWriteDeadlineMargin <= 0 {
 		t.Fatalf("renderHandlerWriteDeadlineMargin = %s, want > 0", renderHandlerWriteDeadlineMargin)
 	}
 }
