@@ -2,9 +2,14 @@
 
 [Build plan](BUILD-PLAN.md) · [Build log](BUILD-LOG.md) · [ADR-014](../decisions/ADR-014-operator-ui-is-a-client.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md) · [ADR-036](../decisions/ADR-036-dispatch-configuration-applies-without-a-restart.md)
 
-**Status:** specified and built 2026-08-17. All seven seams are complete and
-open as pull requests; none has merged to `main`. Owner called the track
-critical and scheduled it ahead of Track B.
+**Status:** merged to `main` 2026-08-17 (PR #12, merge commit `c31cf7f`),
+after a four-agent pre-merge review whose fold fixed two blocking defects
+(the deferred-migration reconcile teardown in all three config managers,
+and the Access view's token list never re-fetching), a shutdown panic
+(eight background goroutines against `backgroundWG.Add(7)`), and
+mutation-confirmed bypass holes in both G-7 guards. Gates run on the fold:
+`make check`, `make test-integration`, `make test-integration-fpp`, plus
+full CI. Owner called the track critical and scheduled it ahead of Track B.
 
 | Seam | What it closes | PR |
 |---|---|---|
