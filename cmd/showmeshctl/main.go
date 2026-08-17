@@ -323,6 +323,15 @@ Exit codes:
      script that collapses "checked and missing" into "cannot tell", or the
      reverse, will either start a show it should not or block one it
      should not)
+  22 render unavailable ("render status" only: this node has never
+     published a render report at all — distinct from a node that HAS
+     reported and is simply stale/unknown/failed, which prints normally
+     and exits 0)
+  23 render pipeline down ("render apply"/"render clear"/"render restart"
+     only: the confirmation wait ended with DIRECT evidence the surface's
+     pipeline is in its "failed" state — distinct from exit 9, which
+     covers every other unconfirmed case, including a deadline that
+     simply elapsed with no evidence either way)
 `)
 }
 

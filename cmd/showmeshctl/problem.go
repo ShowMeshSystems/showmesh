@@ -189,6 +189,24 @@ const (
 	// what keeps these two states from ever being produced for the same
 	// reason in the first place).
 	exitAssetsUnknown = 21
+
+	// exitRenderUnavailable: a "render status" subcommand found no render
+	// evidence at all for the requested node — it has never published a
+	// render report, distinct from a node that HAS reported and is
+	// simply stale/unknown/failed (those print normally and exit 0:
+	// "reported, here is what it said" is not an error). "cannot tell
+	// anything about this node's render pipeline."
+	exitRenderUnavailable = 22
+
+	// exitRenderPipelineDown: a "render apply"/"render clear"/
+	// "render restart" subcommand's own confirmation wait ended with the
+	// surface's pipeline observed in its "failed" state — distinct from
+	// [exitCommandUnconfirmed] (9), which covers every OTHER unconfirmed
+	// case (the deadline elapsed with no evidence either way, or evidence
+	// exists but is stale/unknown). This is the sharper of the two: the
+	// coordinator has DIRECT evidence the pipeline is down, not merely an
+	// absence of evidence that it came up.
+	exitRenderPipelineDown = 23
 )
 
 // cliError carries an exit code alongside a human-readable message, so

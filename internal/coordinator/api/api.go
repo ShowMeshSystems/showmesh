@@ -44,6 +44,20 @@ type Dependencies struct {
 	// in this package that predates this field.
 	Render NodeRenderLister
 
+	// RenderPublisher is Track B seam B2b-front's own dependency — see
+	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
+	// replaced by [noRenderPublisher], under which every render.* dispatch
+	// fails with an internal error naming the missing wiring, matching
+	// [Dependencies.Commands]'s identical no-op default posture.
+	RenderPublisher RenderPublisher
+
+	// AssetManifests is ALSO this seam's own dependency for resolving a
+	// surface's current FSEQ asset by identity (ADR-028) — see
+	// [Dependencies.AssetManifests]'s own doc comment below (Track E seam
+	// E5). Reusing that field rather than adding a second one means the
+	// asset-resolution answer render.surface.apply gets can never
+	// disagree with what GET /assets/manifest reports for the same node.
+
 	// Identity is ADR-024's principal, session, token, bootstrap, and
 	// audit surface — internal/coordinator/identity.Service, already
 	// built (Step 6's own dependency, not this package's to define). A
@@ -374,6 +388,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Render == nil {
 		d.Render = noNodeRenderLister{}
 	}
+	if d.RenderPublisher == nil {
+		d.RenderPublisher = noRenderPublisher{}
+	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
 	}
@@ -554,6 +571,17 @@ func (noConfigStore) ListConfigObjects(context.Context, string) ([]store.ConfigO
 // write dependency nobody has wired in refuses loudly rather than
 // fabricating a success no state change actually backs.
 var errCommandStoreNotConfigured = errors.New("api: no CommandStore was wired into this API's Dependencies")
+
+// noRenderPublisher is [Dependencies.RenderPublisher]'s no-op default:
+// every render.* dispatch fails loudly rather than silently pretending a
+// command reached a node.
+type noRenderPublisher struct{}
+
+var errRenderPublisherNotConfigured = errors.New("api: no render command publisher is configured on this coordinator")
+
+func (noRenderPublisher) Publish(context.Context, string, byte, bool, []byte) error {
+	return errRenderPublisherNotConfigured
+}
 
 type noCommandStore struct{}
 
@@ -994,6 +1022,14 @@ func New(deps Dependencies, opts Options) *API {
 	// supplies decision 6's CSRF check on top of the scope check —
 	// fppcommand_handler.go owns everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
+
+	// Track B seam B2b-front: dispatch the three agent render.* operations
+	// (renderdispatch.go). Guarded by render:command, matching
+	// fpp:command/resolume:action's identical "reads open, this write
+	// isn't" posture.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/apply", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceApply))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/clear", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceClear))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/restart", h.writeGuard(&scopeRenderCommand, h.handleRenderPipelineRestart))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))

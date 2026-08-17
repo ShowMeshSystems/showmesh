@@ -107,6 +107,21 @@ type node struct {
 	// zero value (every pointer field nil) is what this program renders
 	// for that case, not a special "declaration unknown" branch.
 	Declaration nodeDeclaration `json:"declaration"`
+
+	// Render is Track B seam B2b's addition, additive per contract §6.2:
+	// whatever surface.* observations this coordinator currently holds
+	// for this node's render pipeline(s), one [observationEntry] per
+	// signal. Never null on a coordinator that has this field — an empty
+	// slice means this node has never published a render report, which
+	// "render status" (cmd_render.go) reports as [exitRenderUnavailable].
+	Render []observationEntry `json:"render"`
+}
+
+// observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:
+// an [evidence] value plus which resource it concerns.
+type observationEntry struct {
+	Resource resourceRef `json:"resource"`
+	evidence
 }
 
 // nodeDeclaration is node.declaration (RES-008 D2/D6). See
