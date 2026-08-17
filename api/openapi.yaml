@@ -460,6 +460,160 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/apply:
+    post:
+      operationId: dispatchRenderSurfaceApply
+      summary: Dispatch render.surface.apply to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Resolves the surface's COMPLETE
+        self-contained assignment — its show.surface configuration plus
+        the coordinator-resolved runtime filename and content hash of its
+        current FSEQ asset for `sequenceId` (identity: show + sequence +
+        target + content hash, never a filename — ADR-028) — and dispatches
+        it to the node over MQTT (build contract ruling 4: the node is
+        told its surface, it does not discover it). Refuses with `400`
+        naming exactly what could not be resolved (no active show, the
+        surface is not assigned to this node, no current asset for the
+        requested sequence, or more than one current asset matches it)
+        rather than ever dispatching a partial assignment. Confirms by
+        `surface.pipeline.state` evidence dated at or after dispatch
+        (ADR-003); a `200` is never conflated with the pipeline having
+        actually reached `running` — see RenderCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderApplyRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/clear:
+    post:
+      operationId: dispatchRenderSurfaceClear
+      summary: Dispatch render.surface.clear to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Stops the surface's pipeline and clears
+        its persisted assignment. Confirms by `surface.pipeline.state`
+        evidence reporting `stopped`, dated at or after dispatch
+        (ADR-003).
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderSurfaceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/restart:
+    post:
+      operationId: dispatchRenderPipelineRestart
+      summary: Dispatch render.pipeline.restart to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Clears any fast-failure lockout and
+        restarts the surface's pipeline from its currently-applied spec.
+        Confirms by `surface.pipeline.state` evidence reporting `running`,
+        dated at or after dispatch (ADR-003).
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderSurfaceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -4051,6 +4205,108 @@ components:
             Optional; this action takes no parameters — a non-empty
             `params` object is a `400`.
           additionalProperties: false
+    RenderApplyRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply.
+      required: [sequenceId]
+      additionalProperties: false
+      properties:
+        sequenceId:
+          type: string
+          description: >-
+            Which of the show's sequences to resolve the surface's current
+            FSEQ asset from — see this operation's own description for the
+            identity rule (show + sequence + target + content hash).
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key dispatches nothing and returns the original
+            command's own result, flagged `replay: true`.
+    RenderSurfaceRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/clear
+        and .../restart, which take no parameters of their own beyond the
+        path's surfaceId.
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key dispatches nothing and returns the original
+            command's own result, flagged `replay: true`.
+    RenderCommandResponse:
+      type: object
+      description: >-
+        The body of a successful (200) response from any of this seam's
+        three dispatch endpoints.
+      required: [serverTime, command]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/RenderCommandResult"
+    RenderCommandResult:
+      type: object
+      description: >-
+        What happened to one dispatched (or replayed) render.* command.
+        outcome is never "successful" merely because the publish to the
+        node succeeded (ADR-003): it is exactly "confirmed" or
+        "unconfirmed" once resolved, decided by confirming
+        `surface.pipeline.state` evidence dated at or after dispatch.
+      required:
+        [commandId, idempotencyKey, action, nodeId, surfaceId, replay,
+         outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt]
+      additionalProperties: false
+      properties:
+        commandId:
+          type: string
+        idempotencyKey:
+          type: string
+        action:
+          type: string
+          enum:
+            ["render.surface.apply", "render.surface.clear", "render.pipeline.restart"]
+        nodeId:
+          type: string
+        surfaceId:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            the command described here was NOT dispatched by this
+            request — it is the ORIGINAL command's already-recorded
+            result.
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", ""]
+          description: >-
+            Empty only for a REPLAY response returned before the original
+            request's own dispatch/confirmation has finished — matching
+            FPPCommandResult.outcome's identical accepted-empty case.
+        outcomeState:
+          type: string
+          description: >-
+            pkg/observation's six-value evidence-state vocabulary — the
+            state of the evidence this outcome was actually decided from.
+          enum:
+            [current, stale, unknown_age, not_collected, collection_failed,
+             unsupported]
+        outcomeReason:
+          type: string
+          description: A short, human-readable explanation. Always non-empty.
+        dispatchedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.

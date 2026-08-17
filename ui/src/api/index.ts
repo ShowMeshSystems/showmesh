@@ -41,6 +41,9 @@ export type {
   ConfigRenderRestartPolicy,
   ConfigRenderSettingsPayload,
   RenderSettingsConfigResponse,
+  // Track B seam B2b-front: the three render.* dispatch endpoints.
+  ObservationEntry,
+  RenderCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,
@@ -103,6 +106,9 @@ export {
   nextFPPPlaylistItem,
   prevFPPPlaylistItem,
   setFPPVolume,
+  applyRenderSurface,
+  clearRenderSurface,
+  restartRenderPipeline,
   runDiscovery,
   declareNode,
   deleteNodeDeclaration,

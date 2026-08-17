@@ -433,6 +433,16 @@ func Run() int {
 		// adapter needed, the same "the real dependency already has this
 		// method set" pattern api.ConfigStore's own wiring below uses.
 		Render: renderStore,
+		// RenderPublisher is Track B seam B2b-front's own dependency: the
+		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
+		// built from above already satisfies api.RenderPublisher with no
+		// adapter needed, the identical property assetSync's own wiring
+		// comment notes for itself. Wiring it in is what makes
+		// POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/apply|
+		// clear|restart do anything other than always answer an internal
+		// error naming the missing wiring, against api.noRenderPublisher's
+		// no-op default.
+		RenderPublisher: bm,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.

@@ -11,8 +11,10 @@ import {
   ApiClient,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
   MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS,
+  MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS,
   MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS,
   MIN_RESOLUME_RECOVERY_RESTORE_SERVER_BOUND_MS,
+  RENDER_COMMAND_REQUEST_TIMEOUT_MS,
   RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
   RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
 } from './client'
@@ -372,6 +374,41 @@ describe('RESOLUME_ACTION_REQUEST_TIMEOUT_MS', () => {
     })
 
     clock.advance(RESOLUME_ACTION_REQUEST_TIMEOUT_MS - 1)
+    if (release.fn === null) throw new Error('release.fn not set')
+    release.fn()
+
+    const result = await resultPromise
+    expect(result).toEqual({ ok: true })
+  })
+})
+
+describe('RENDER_COMMAND_REQUEST_TIMEOUT_MS', () => {
+  it('is never below the reconciled server write deadline plus round-trip margin', () => {
+    // Mirrors renderdispatch_timeouts_test.go's own strict-ordering check
+    // on the Go side: the target is server deadline PLUS a margin for the
+    // round trip, never the server deadline alone.
+    expect(RENDER_COMMAND_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS)
+  })
+
+  it('actually waits this long: a response arriving just before the deadline still succeeds', async () => {
+    const release: { fn: (() => void) | null } = { fn: null }
+    const s = await server((_req, res) => {
+      release.fn = () => respondJson(res, 200, { ok: true })
+    })
+
+    const clock = new FakeClock()
+    const client = new ApiClient(s.baseUrl, fetch, RENDER_COMMAND_REQUEST_TIMEOUT_MS, clock)
+
+    const resultPromise = client.postJson<{ ok: boolean }>(
+      '/nodes/media-01/render/surfaces/wall-1/clear',
+      { idempotencyKey: 'k1' },
+      new AbortController().signal,
+    )
+    await waitFor(() => release.fn !== null, {
+      message: 'the POST was never received by the test server',
+    })
+
+    clock.advance(RENDER_COMMAND_REQUEST_TIMEOUT_MS - 1)
     if (release.fn === null) throw new Error('release.fn not set')
     release.fn()
 
