@@ -115,6 +115,16 @@ const (
 	// coordinatorConfig.assetInventoryInterval.
 	envAssetSyncInterval      = "SHOWMESH_ASSET_SYNC_INTERVAL"
 	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
+
+	// envRenderReportInterval is envAssetInventoryInterval's identical twin
+	// for the agent's render report ticker (internal/agent/config's own
+	// SHOWMESH_RENDER_REPORT_INTERVAL — real production config, no
+	// separate test-only override needed). Forwarded by startAgent exactly
+	// like envAssetInventoryInterval; kill_test.go sets it in the test
+	// process's own environment so a killed pipeline's restart is visible
+	// through the coordinator's real render report cadence within a bounded
+	// wait, rather than only at the 15s production default.
+	envRenderReportInterval = "SHOWMESH_RENDER_REPORT_INTERVAL"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -507,6 +517,9 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	}
 	if raw := os.Getenv(envAssetInventoryInterval); raw != "" {
 		env = append(env, envAssetInventoryInterval+"="+raw)
+	}
+	if raw := os.Getenv(envRenderReportInterval); raw != "" {
+		env = append(env, envRenderReportInterval+"="+raw)
 	}
 	if cfg.capabilities != "" {
 		env = append(env, "SHOWMESH_NODE_CAPABILITIES="+cfg.capabilities)
