@@ -42,11 +42,38 @@ const (
 	// required-whenever-false rule) — an actionable reason, never a bare
 	// "unavailable."
 	SignalSurfaceTransportReason observation.SignalID = "surface.transport.reason"
+
+	// Four signals minted 2026-08-17 for the review's finding 7
+	// (docs/build/IDENTIFIER-REGISTER.md): what a surface is actually
+	// drawing, not just whether its pipeline reports "running". One
+	// [mqttproto.RenderSurfaceReport] field each, mirroring
+	// TimelineState/TimelinePositionMS/Drawing/IdleMode.
+	SignalSurfaceTimelineState      observation.SignalID = "surface.timeline.state"
+	SignalSurfaceTimelinePositionMS observation.SignalID = "surface.timeline.position_ms"
+	SignalSurfaceOutputMode         observation.SignalID = "surface.output.mode"
+	// SignalSurfaceOutputIdleMode is only ever emitted alongside
+	// SignalSurfaceOutputMode="idle" — absent (NotCollected, stated) while
+	// drawing content, mirroring SignalSurfaceTransportReason's identical
+	// required-whenever-the-flag-says-so pattern.
+	SignalSurfaceOutputIdleMode observation.SignalID = "surface.output.idle_mode"
 )
 
-// AllSignalIDs is every signal this package ever emits, in the order
-// [Collector.Poll] builds them for one surface — used by tests that need to
-// enumerate the full vocabulary without hand-maintaining a second list.
+// Two more signals minted alongside the four above, but under the "node"
+// resource kind, not "surface": one MultiSync listener serves every
+// surface on a node, so attributing its failure to a surface would report
+// one fact N times and imply N independent faults (the review's own
+// correction). See [nodeMultiSyncObservations].
+const (
+	SignalNodeMultiSyncListening observation.SignalID = "node.multisync.listening"
+	SignalNodeMultiSyncReason    observation.SignalID = "node.multisync.reason"
+)
+
+// AllSignalIDs is every SURFACE-resource signal this package ever emits, in
+// the order [Collector.Poll] builds them for one surface — used by tests
+// that need to enumerate the full per-surface vocabulary without
+// hand-maintaining a second list. Does NOT include the node.multisync.*
+// signals: those are node-resource, not surface-resource — see
+// [AllNodeSignalIDs].
 var AllSignalIDs = []observation.SignalID{
 	SignalSurfacePipelineState,
 	SignalSurfaceReason,
@@ -58,6 +85,19 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceFramesRate,
 	SignalSurfaceTransportAvailable,
 	SignalSurfaceTransportReason,
+	SignalSurfaceTimelineState,
+	SignalSurfaceTimelinePositionMS,
+	SignalSurfaceOutputMode,
+	SignalSurfaceOutputIdleMode,
+}
+
+// AllNodeSignalIDs is every NODE-resource signal this package emits, in the
+// order [nodeMultiSyncObservations] builds them — [AllSignalIDs]'s
+// counterpart for the two signals that are about the node itself, not one
+// of its surfaces.
+var AllNodeSignalIDs = []observation.SignalID{
+	SignalNodeMultiSyncListening,
+	SignalNodeMultiSyncReason,
 }
 
 // DefaultPollInterval is this collector's recommended [collector.Runner]

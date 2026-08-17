@@ -3537,12 +3537,16 @@ components:
         render:
           type: array
           description: >-
-            Track B seam B2b: whatever surface.* observations this
-            coordinator currently holds for the render pipeline(s) this
-            node has reported, one entry per signal. Never omitted; an
-            empty array means this node has never published a render
-            report. Each entry's resource names the SURFACE it concerns
-            (ADR-026), not this node.
+            Track B seam B2b: whatever render-pipeline observations this
+            coordinator currently holds for this node, one entry per
+            signal. Never omitted; an empty array means this node has never
+            published a render report. Most entries' resource names the
+            SURFACE they concern (ADR-026), not this node — the exception
+            (finding 7) is the two `node.multisync.*` signals, which name
+            this node directly, because one MultiSync listener serves every
+            surface a node supervises and attributing its status to a
+            surface would report one fact once per surface as though each
+            were independent.
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:

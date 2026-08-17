@@ -374,12 +374,14 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // fetches exactly once per render/response rather than once per node.
 //
 // renderObs is Track B seam B2b's addition: whatever
-// [NodeRenderLister.NodeRenderObservations] currently holds for nv.NodeID
-// — every element's Resource names the surface it concerns (never
-// nv.NodeID itself; see that interface's doc comment), so this is a plain
-// pass-through render, not a per-node filter. nil (no render evidence at
-// all) renders as an empty array, never an omitted field, matching every
-// other "absent evidence is stated, never omitted" collection on [v1.Node].
+// [NodeRenderLister.NodeRenderObservations] currently holds for nv.NodeID.
+// This is a plain pass-through render, not a per-node filter: most
+// elements' Resource names a SURFACE nv.NodeID reported on, but the two
+// node.multisync.* signals (finding 7) name nv.NodeID directly, since one
+// MultiSync listener serves every surface a node supervises. nil (no
+// render evidence at all) renders as an empty array, never an omitted
+// field, matching every other "absent evidence is stated, never omitted"
+// collection on [v1.Node].
 func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs []observation.Observation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {

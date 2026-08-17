@@ -36,7 +36,11 @@ func TestRunMultiSyncListenerBindFailureSetsStatus(t *testing.T) {
 	// reaches its blocking Run call, so no goroutine is needed here.
 	runMultiSyncListener(ctx, addr, "", timeline, status, discardLogger())
 
-	listening, reason := status.get()
+	// afterCall is captured AFTER runMultiSyncListener already returned, so
+	// a correctly-stamped observedAt (set DURING that call) must be at or
+	// before it.
+	afterCall := time.Now()
+	listening, reason, observedAt := status.get()
 	if listening {
 		t.Fatalf("listening = true after binding onto an already-occupied address, want false")
 	}
@@ -47,6 +51,15 @@ func TestRunMultiSyncListenerBindFailureSetsStatus(t *testing.T) {
 	// status.set was actually called with the real outcome.
 	if !strings.Contains(reason, addr) {
 		t.Fatalf("reason = %q, want it to name the address that failed to bind (%q) — a generic or default reason means status.set was never called with the real bind error", reason, addr)
+	}
+	// observedAt must be a real, recent timestamp (finding 7's coordinator
+	// half reads this as the node-reported evidence time), never the zero
+	// value newMultiSyncStatus's own default carries before any set call.
+	if observedAt.IsZero() {
+		t.Fatalf("observedAt is zero after a real bind attempt, want a real timestamp")
+	}
+	if observedAt.After(afterCall) {
+		t.Fatalf("observedAt %s is after the call that produced it returned (%s)", observedAt, afterCall)
 	}
 }
 
@@ -71,7 +84,7 @@ func TestRunMultiSyncListenerSuccessSetsStatusListening(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if listening, _ := status.get(); listening {
+		if listening, _, _ := status.get(); listening {
 			cancel()
 			<-done
 			return

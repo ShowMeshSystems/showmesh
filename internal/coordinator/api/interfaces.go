@@ -86,12 +86,12 @@ type ResolumeLister interface {
 // cannot simply filter ListObservations by node the way FPPInstanceView
 // does.
 type NodeRenderLister interface {
-	// NodeRenderObservations returns every surface.* observation this
-	// coordinator currently holds for nodeID's most recently reported
-	// render assignment, or nil if none has ever been received. Never
-	// blocks on I/O — this renders an in-memory cache, matching
-	// [FPPPollNudger.NudgePoll]'s identical "must not block" contract one
-	// dependency over.
+	// NodeRenderObservations returns every surface.* AND node.multisync.*
+	// observation this coordinator currently holds for nodeID's most
+	// recently reported render assignment, or nil if none has ever been
+	// received. Never blocks on I/O — this renders an in-memory cache,
+	// matching [FPPPollNudger.NudgePoll]'s identical "must not block"
+	// contract one dependency over.
 	NodeRenderObservations(nodeID string) []observation.Observation
 }
 

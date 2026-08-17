@@ -754,6 +754,19 @@ type RenderPayload struct {
 	// non-listening node is a real gap, just not one this wire boundary
 	// can refuse without breaking additive compatibility (ADR-020).
 	MultiSyncReason string `json:"multiSyncReason"`
+
+	// MultiSyncObservedAt is the node's own clock at the moment the
+	// MultiSync listener's status (MultiSyncListening/MultiSyncReason) was
+	// last determined — a real bind attempt, success, or failure — never
+	// the moment this report happens to publish. The coordinator's
+	// noderender collector uses this as the observation's ObservedAt
+	// (evidence time), keeping CollectedAt as its own receipt time,
+	// exactly like RenderSurfaceReport.ObservedAt does one field up for
+	// pipeline state. Zero (IsZero()) means genuinely never determined yet
+	// (ADR-011: zero/nil is unknown, never defaulted to "now" or to a
+	// healthy value) — not enforced as required by Validate, for the
+	// identical additive-compatibility reason MultiSyncReason is not.
+	MultiSyncObservedAt time.Time `json:"multiSyncObservedAt"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID

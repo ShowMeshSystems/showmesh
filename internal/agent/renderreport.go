@@ -64,7 +64,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	defer cancel()
 
 	gstPath, gstOK, _ := pipeline.ResolveGstLaunch()
-	msListening, msReason := msStatus.get()
+	msListening, msReason, msObservedAt := msStatus.get()
 
 	snapshots := sup.SnapshotAll()
 	// Surfaces is built as a non-nil, possibly-empty slice regardless of
@@ -77,11 +77,12 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	env, err := mqttproto.NewRenderEnvelope(now, nodeID, mqttproto.RenderPayload{
-		GstLaunchPath:      gstPath,
-		GstLaunchAvailable: gstOK,
-		Surfaces:           surfaces,
-		MultiSyncListening: msListening,
-		MultiSyncReason:    msReason,
+		GstLaunchPath:       gstPath,
+		GstLaunchAvailable:  gstOK,
+		Surfaces:            surfaces,
+		MultiSyncListening:  msListening,
+		MultiSyncReason:     msReason,
+		MultiSyncObservedAt: msObservedAt,
 	})
 	if err != nil {
 		logger.Error("failed to build render report envelope", "error", err)

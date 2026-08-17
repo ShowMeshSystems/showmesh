@@ -97,6 +97,7 @@ func (c *Collector) Poll(_ context.Context) ([]observation.Observation, bool) {
 
 	for nodeID, rep := range snap {
 		obs = append(obs, surfaceObservations(nodeID, rep)...)
+		obs = append(obs, nodeMultiSyncObservations(nodeID, rep)...)
 
 		cur := make(map[string]struct{}, len(rep.payload.Surfaces))
 		for _, sf := range rep.payload.Surfaces {
@@ -116,22 +117,24 @@ func (c *Collector) Poll(_ context.Context) ([]observation.Observation, bool) {
 	return obs, true
 }
 
-// NodeRenderObservations returns every surface.* observation this
-// coordinator currently holds for nodeID's most recently reported render
-// assignment, or nil if nodeID has never published one. This is the node
-// read path's synthesize-at-read-time counterpart to internal/coordinator/
-// api/mapping.go's nodeEvidenceObservations: it renders the SAME cache
-// [Collector.Poll] does, on demand, for a single node, without waiting for
-// or duplicating a poll cycle — the identical relationship [Store] bears to
-// both. It never renders the dropped-surface absence [Collector.Poll]
-// synthesizes, since that is inherently a cross-poll diff this per-node
-// on-demand read has no memory of.
+// NodeRenderObservations returns every surface.* AND node.multisync.*
+// observation this coordinator currently holds for nodeID's most recently
+// reported render assignment, or nil if nodeID has never published one.
+// This is the node read path's synthesize-at-read-time counterpart to
+// internal/coordinator/api/mapping.go's nodeEvidenceObservations: it
+// renders the SAME cache [Collector.Poll] does, on demand, for a single
+// node, without waiting for or duplicating a poll cycle — the identical
+// relationship [Store] bears to both. It never renders the dropped-surface
+// absence [Collector.Poll] synthesizes, since that is inherently a
+// cross-poll diff this per-node on-demand read has no memory of.
 func (s *Store) NodeRenderObservations(nodeID string) []observation.Observation {
 	rep, ok := s.get(nodeID)
 	if !ok {
 		return nil
 	}
-	return surfaceObservations(nodeID, rep)
+	obs := surfaceObservations(nodeID, rep)
+	obs = append(obs, nodeMultiSyncObservations(nodeID, rep)...)
+	return obs
 }
 
 // surfaceObservations renders one node's report into observations, one
@@ -150,14 +153,25 @@ func surfaceObservations(nodeID string, rep report) []observation.Observation {
 func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: sf.SurfaceID}
 
+	// sf.ObservedAt is THIS surface's own evidence timestamp — the node's
+	// clock at the moment the supervisor actually sampled this report
+	// (runner.setState/setFrameCounts/setDrawState — internal/agent/
+	// pipeline/supervisor.go), distinct from rep.receivedAt (this
+	// coordinator's own receipt/bookkeeping time, which stays CollectedAt
+	// via buildValue). Using it as ObservedAt is what makes "a fresh
+	// ObservedAt means the state actually moved" true all the way to the
+	// observation layer, not just inside the agent's own Supervisor —
+	// review fix, finding 2/finding 7.
+	observedAt := sf.ObservedAt
+
 	obs := []observation.Observation{
-		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, rep),
-		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, rep),
-		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, rep),
-		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, rep),
+		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, observedAt, rep),
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -169,7 +183,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		obs = append(obs, notCollected(res, SignalSurfaceFramesRate, SourceFor(nodeID),
 			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, rep))
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, observedAt, rep))
 	}
 
 	// TransportAvailable is nil whenever this surface's transport has never
@@ -190,29 +204,121 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		)
 	} else {
 		obs = append(obs,
-			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep),
-			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, observedAt, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, observedAt, rep),
 		)
+	}
+
+	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, observedAt, rep)...)
+
+	return obs
+}
+
+// surfaceDrawStateObservations renders finding 7's four new fields: what
+// this surface is actually drawing, not just whether its pipeline reports
+// "running" (build contract: "the process is up" is not "frames are
+// arriving somewhere"). sf.Drawing == "" means this surface has no active
+// FrameWriter at all — a Track B seam B2a test-pattern-only pipeline with
+// no FSEQ assigned — so all four signals are NotCollected together with
+// one reason, rather than a fabricated empty string or zero position.
+func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
+	if sf.Drawing == "" {
+		reason := "this surface has no active frame writer (e.g. a test-pattern-only pipeline with no FSEQ assigned)"
+		return []observation.Observation{
+			notCollected(res, SignalSurfaceTimelineState, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceOutputMode, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceOutputIdleMode, SourceFor(nodeID), reason, rep.receivedAt),
+		}
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, res, SignalSurfaceTimelineState, sf.TimelineState, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceOutputMode, sf.Drawing, observedAt, rep),
+	}
+
+	// TimelinePositionMS is nil whenever the writer is drawing idle output
+	// instead of content — a position is not meaningful there (see
+	// pipeline.Snapshot.TimelinePositionMS's own doc comment) — never a
+	// fabricated zero or the last content position echoed back.
+	if sf.TimelinePositionMS == nil {
+		obs = append(obs, notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID),
+			"no timeline position while drawing idle output", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceTimelinePositionMS, *sf.TimelinePositionMS, observedAt, rep))
+	}
+
+	// IdleMode is only meaningful while Drawing=="idle" — absent (stated,
+	// never a fabricated "") while drawing content, mirroring
+	// SignalSurfaceTransportReason's identical required-whenever pattern.
+	if sf.Drawing == mqttproto.RenderDrawingIdle {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceOutputIdleMode, sf.IdleMode, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSurfaceOutputIdleMode, SourceFor(nodeID),
+			"not applicable while drawing content", rep.receivedAt))
 	}
 
 	return obs
 }
 
+// nodeMultiSyncObservations renders the two node-level signals from
+// [mqttproto.RenderPayload.MultiSyncListening]/MultiSyncReason. Resource
+// kind is [observation.ResourceNode], deliberately not surface: one
+// MultiSync listener serves every surface a node supervises, so attributing
+// its failure to a surface would report one fact N times and imply N
+// independent faults.
+//
+// rep.payload.MultiSyncObservedAt.IsZero() means this node has never
+// determined a real outcome yet (either it predates this field, or its
+// listener goroutine has not made its first bind attempt) — NotCollected,
+// never a fabricated "not listening" reported as though it were evidence.
+func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+
+	if rep.payload.MultiSyncObservedAt.IsZero() {
+		reason := "this node has not reported multisync listener status yet"
+		return []observation.Observation{
+			notCollected(res, SignalNodeMultiSyncListening, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalNodeMultiSyncReason, SourceFor(nodeID), reason, rep.receivedAt),
+		}
+	}
+
+	observedAt := rep.payload.MultiSyncObservedAt
+	return []observation.Observation{
+		buildValue(nodeID, res, SignalNodeMultiSyncListening, rep.payload.MultiSyncListening, observedAt, rep),
+		buildValue(nodeID, res, SignalNodeMultiSyncReason, rep.payload.MultiSyncReason, observedAt, rep),
+	}
+}
+
 // buildValue is where this package's own version of ADR-011's retained/live
 // rule is enforced, for every value-bearing signal it produces — the
-// identical shape fppmqtt.Collector.buildObservation uses one package over:
+// identical shape fppmqtt.Collector.buildObservation uses one package over,
+// EXTENDED (review fix, finding 2/finding 7): observedAt is now the caller's
+// own per-field, NODE-REPORTED evidence timestamp (sf.ObservedAt for a
+// surface field, rep.payload.MultiSyncObservedAt for a node field) rather
+// than always defaulting to this coordinator's own receipt time. The render
+// pipeline is unlike a raw FPP MQTT topic: every field this package renders
+// already carries a real "when did this become true" timestamp, stamped by
+// [runner.setState]/[runner.setFrameCounts]/[runner.setDrawState] at the
+// moment of a genuine transition or sample — using it as ObservedAt is what
+// keeps "a fresh ObservedAt means the state actually moved" true all the
+// way to the observation layer, the exact invariant finding 2 established
+// inside the agent's own Supervisor.
 //
 //   - rep.retained: [observation.MeasuredUnknownAge]. ObservedAt is nil,
-//     never rep.receivedAt.
-//   - live: [observation.Measured] with rep.receivedAt as ObservedAt — the
-//     moment this collector actually recorded the delivery.
+//     never observedAt and never rep.receivedAt — a retained MQTT delivery's
+//     own age is unknown regardless of what timestamp the payload claims,
+//     unchanged from before this parameter existed.
+//   - live: [observation.Measured] with observedAt — the node's own clock
+//     at the moment IT recorded this evidence, not this coordinator's.
 //
-// CollectedAt is rep.receivedAt in both branches: that is when this
-// package's cache actually recorded the evidence (Store.Put), not the later
-// moment Poll happens to run — Poll only ever renders a cache, it does not
-// itself collect anything. Source is [SourceFor](nodeID), not [SourceName]
-// directly — see that function's doc comment for why.
-func buildValue(nodeID string, res observation.ResourceRef, sig observation.SignalID, value any, rep report) observation.Observation {
+// CollectedAt is rep.receivedAt in both branches, UNCHANGED: that is when
+// this package's cache actually recorded the evidence (Store.Put), not the
+// later moment Poll happens to run, and never the node's own clock — a
+// receiving side's own bookkeeping timestamp per pkg/observation's doc
+// comment. Source is [SourceFor](nodeID), not [SourceName] directly — see
+// that function's doc comment for why.
+func buildValue(nodeID string, res observation.ResourceRef, sig observation.SignalID, value any, observedAt time.Time, rep report) observation.Observation {
 	source := SourceFor(nodeID)
 	opts := []observation.Option{
 		observation.WithSource(source),
@@ -228,7 +334,7 @@ func buildValue(nodeID string, res observation.ResourceRef, sig observation.Sign
 	}
 
 	opts = append(opts, observation.WithValidFor(DefaultValidFor))
-	o, err := observation.Measured(res, sig, value, rep.receivedAt, opts...)
+	o, err := observation.Measured(res, sig, value, observedAt, opts...)
 	if err != nil {
 		return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)
 	}

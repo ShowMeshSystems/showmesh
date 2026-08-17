@@ -45,13 +45,24 @@ func findObs(t *testing.T, obs []observation.Observation, sig observation.Signal
 	return observation.Observation{}
 }
 
-// TestPollLiveDeliveryUsesReceiptTime proves the live branch of buildValue:
-// a non-retained report's ObservedAt is the coordinator's own receipt time,
-// never left nil.
-func TestPollLiveDeliveryUsesReceiptTime(t *testing.T) {
+// TestPollLiveDeliveryUsesNodeReportedObservedAt proves the live branch of
+// buildValue after the review's cross-seam fix: a non-retained report's
+// ObservedAt is the NODE's own evidence timestamp (sf.ObservedAt —
+// samplePayload sets it to a value deliberately different from
+// receivedAt), never this coordinator's receipt time and never nil.
+// Renamed from TestPollLiveDeliveryUsesReceiptTime, which asserted the
+// OLD, now-wrong behaviour: buildValue used to collapse ObservedAt and
+// CollectedAt onto the coordinator's own receipt time, which is exactly
+// the evidence-vs-collection conflation ADR-011/ADR-003 forbid and finding
+// 2 fixed one layer down inside the agent's own Supervisor. CollectedAt
+// (bookkeeping, not evidence) still IS receivedAt — see the assertion
+// below.
+func TestPollLiveDeliveryUsesNodeReportedObservedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), false, receivedAt)
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	nodeObservedAt := payload.Surfaces[0].ObservedAt
+	st.Put("render-01", payload, false, receivedAt)
 
 	c := New(st)
 	obs, complete := c.Poll(context.Background())
@@ -61,10 +72,13 @@ func TestPollLiveDeliveryUsesReceiptTime(t *testing.T) {
 
 	state := findObs(t, obs, SignalSurfacePipelineState)
 	if state.ObservedAt == nil {
-		t.Fatalf("live delivery: ObservedAt is nil, want %s", receivedAt)
+		t.Fatalf("live delivery: ObservedAt is nil, want %s", nodeObservedAt)
 	}
-	if !state.ObservedAt.Equal(receivedAt) {
-		t.Errorf("live delivery: ObservedAt = %s, want %s", state.ObservedAt, receivedAt)
+	if !state.ObservedAt.Equal(nodeObservedAt) {
+		t.Errorf("live delivery: ObservedAt = %s, want the node-reported %s (not receivedAt %s)", state.ObservedAt, nodeObservedAt, receivedAt)
+	}
+	if !state.CollectedAt.Equal(receivedAt) {
+		t.Errorf("live delivery: CollectedAt = %s, want the coordinator's own receipt time %s", state.CollectedAt, receivedAt)
 	}
 	if state.Value != mqttproto.RenderPipelineStateRunning {
 		t.Errorf("pipeline state value = %v, want %q", state.Value, mqttproto.RenderPipelineStateRunning)
@@ -204,41 +218,66 @@ func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
 
 // TestPollStaleIsNeverHealthy proves ADR-011's core rule survives this
 // package specifically: a live report that has aged past DefaultValidFor
-// must report StateStale, never current.
+// must report StateStale, never current. Staleness is measured from
+// ObservedAt (the node-reported evidence timestamp, per
+// TestPollLiveDeliveryUsesNodeReportedObservedAt), not from receivedAt —
+// this test's windows are computed against samplePayload's own
+// sf.ObservedAt for exactly that reason.
 func TestPollStaleIsNeverHealthy(t *testing.T) {
 	st := NewStore()
-	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), false, receivedAt)
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	nodeObservedAt := payload.Surfaces[0].ObservedAt
+	st.Put("render-01", payload, false, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 	state := findObs(t, obs, SignalSurfacePipelineState)
 
-	fresh := receivedAt.Add(DefaultValidFor - time.Second)
+	fresh := nodeObservedAt.Add(DefaultValidFor - time.Second)
 	if state.StateAt(fresh) != observation.StateCurrent {
 		t.Errorf("just before ValidFor elapses: StateAt = %s, want current", state.StateAt(fresh))
 	}
 
-	stale := receivedAt.Add(DefaultValidFor + time.Second)
+	stale := nodeObservedAt.Add(DefaultValidFor + time.Second)
 	if state.StateAt(stale) != observation.StateStale {
 		t.Errorf("after ValidFor elapses: StateAt = %s, want stale", state.StateAt(stale))
 	}
 }
 
-// TestPollNoSurfacesProducesNoObservations proves a node with no surface
-// assignment (or GstLaunchAvailable=false and Surfaces empty) reports
-// nothing, rather than fabricating a surface out of thin air.
-func TestPollNoSurfacesProducesNoObservations(t *testing.T) {
+// TestPollNoSurfacesProducesNoSurfaceObservations proves a node with no
+// surface assignment (or GstLaunchAvailable=false and Surfaces empty)
+// reports no SURFACE observations, rather than fabricating a surface out
+// of thin air. Renamed from TestPollNoSurfacesProducesNoObservations: this
+// node still produces its two node.multisync.* observations (finding 7),
+// since a MultiSync bind status exists independently of whether any
+// surface is currently assigned — those are asserted separately as
+// StateNotCollected here (MultiSyncObservedAt is zero in this fixture,
+// meaning this node has never reported a real bind outcome).
+func TestPollNoSurfacesProducesNoSurfaceObservations(t *testing.T) {
 	st := NewStore()
 	st.Put("render-01", mqttproto.RenderPayload{GstLaunchAvailable: false, Surfaces: nil}, false, time.Now())
 
 	c := New(st)
 	obs, complete := c.Poll(context.Background())
-	if len(obs) != 0 {
-		t.Errorf("Poll with no surfaces: got %d observations, want 0", len(obs))
-	}
 	if !complete {
 		t.Errorf("Poll: complete = false, want true")
+	}
+	for _, o := range obs {
+		if o.Resource.Kind == observation.ResourceSurface {
+			t.Errorf("Poll with no surfaces produced a surface observation: %+v, want none", o)
+		}
+	}
+
+	listening := findObs(t, obs, SignalNodeMultiSyncListening)
+	if listening.Resource.Kind != observation.ResourceNode || listening.Resource.ID != "render-01" {
+		t.Errorf("node.multisync.listening resource = %+v, want kind=node id=render-01", listening.Resource)
+	}
+	if listening.Absence != observation.StateNotCollected {
+		t.Errorf("node.multisync.listening: Absence = %q, want %q (this node has never reported a real bind outcome)", listening.Absence, observation.StateNotCollected)
+	}
+	reason := findObs(t, obs, SignalNodeMultiSyncReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("node.multisync.reason: Absence = %q, want %q", reason.Absence, observation.StateNotCollected)
 	}
 }
 
