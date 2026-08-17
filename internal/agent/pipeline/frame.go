@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/pkg/fseq"
@@ -82,7 +83,9 @@ type FrameWriter struct {
 	buf     []byte
 	idleBuf []byte
 
-	written, late, dropped int64
+	// Atomic because Counts reads them from a caller's goroutine while
+	// writeOneFrame is incrementing them on the frame loop's.
+	written, late, dropped atomic.Int64
 
 	// loggedRangeErrOnce and loggedWriteErrOnce keep this loop from log-
 	// spamming at up to 40Hz when a condition (e.g. the process is down, or
@@ -162,7 +165,7 @@ func (fw *FrameWriter) Stop() {
 
 // Counts returns the writer's cumulative written/late/dropped counts.
 func (fw *FrameWriter) Counts() (written, late, dropped int64) {
-	return fw.written, fw.late, fw.dropped
+	return fw.written.Load(), fw.late.Load(), fw.dropped.Load()
 }
 
 // writeOneFrame is one tick's worth of work: sample the timeline, select
@@ -181,7 +184,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	} else {
 		frameIdx := fw.frameIndexFor(snap.PositionMS)
 		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {
-			fw.dropped++
+			fw.dropped.Add(1)
 			if !fw.loggedRangeErr {
 				fw.loggedRangeErr = true
 				fw.logger.Warn("frame writer: channel range extraction failed; drawing idle output until this recovers",
@@ -196,7 +199,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 
 	w, err := fw.sup.Stdin(fw.surfaceID)
 	if err != nil {
-		fw.dropped++
+		fw.dropped.Add(1)
 		fw.reportCounts()
 		return
 	}
@@ -210,7 +213,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 		// the same death and restarts per its policy — this loop never
 		// calls Restart/Clear itself (ruling 3). The next tick simply
 		// tries again against whatever process is current then.
-		fw.dropped++
+		fw.dropped.Add(1)
 		if !fw.loggedWriteErr {
 			fw.loggedWriteErr = true
 			fw.logger.Warn("frame writer: stdin write failed; pipeline process likely restarting",
@@ -220,10 +223,10 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 		return
 	}
 	fw.loggedWriteErr = false
-	fw.written++
+	fw.written.Add(1)
 
 	if elapsed := time.Since(start); elapsed > fw.stepTime {
-		fw.late++
+		fw.late.Add(1)
 	}
 
 	fw.reportCounts()
@@ -258,7 +261,7 @@ func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
 }
 
 func (fw *FrameWriter) reportCounts() {
-	fw.sup.SetFrameCounts(fw.surfaceID, fw.written, fw.late, fw.dropped)
+	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load())
 }
 
 // Compile-time check that *fseq.File satisfies FrameSource.
