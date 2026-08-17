@@ -75,12 +75,21 @@ Where FPP Connect delivers directly to a node, that node registers the artifact 
 
 Reading media from an existing FPP host is a **read** and stays within the standing prohibition on writing to the deployed fleet.
 
+### 9. External delivery copies are representations, not source assets
+
+A synchronized third-party output may need ShowMesh to provision an asset into an external service before playback. That external copy, including any server-generated transcode, is a **delivery representation** of the authoritative ShowMesh asset. It does not acquire a second source identity and does not change the source asset's content hash.
+
+Delivery evidence is recorded separately by destination instance, immutable destination-configuration revision or fingerprint, and ShowMesh content hash, with a remote media identifier when the destination exposes one. An attempt, acknowledgement, destination-reported processing state, and operator audible verification are different evidence; none is silently promoted into another. This clarification does not add an external `targetKind` to the asset API or put a third-party service in the node manifest. A concrete adapter may justify a later schema decision after its interface is known.
+
+External provisioning follows decision 7: it occurs on ingestion, assignment, configuration change, and retry, never because playback started.
+
 ## Consequences
 
 - **The coordinator moves bytes now**, which it never did before. Upload size limits, timeouts, and disk-exhaustion behaviour are real concerns that did not previously apply to it, and ARCHITECTURE §11 already lists disk exhaustion as a failure mode to handle.
 - **Manual asset upload requires the operator to state the target node**, because identity requires it. This is the visible cost of decision 1 and the UI must make it unavoidable rather than defaultable.
 - Deduplication by content hash is possible where the same audio goes to several nodes, and is an optimisation rather than a requirement.
 - Assets accumulate across seasons and eventually need a retention policy. Not day-0.
+- External delivery state may be weaker than node-local hash readiness because a destination may expose no processing or readiness API. Optional-output uncertainty remains visible without blocking the local path; installation policy decides what evidence a required external output must present.
 - **Whole-show FSEQ distribution is now excluded by design.** If a future deployment has small enough channel counts to prefer it, that is a new decision rather than a configuration option.
 
 ## Alternatives considered
