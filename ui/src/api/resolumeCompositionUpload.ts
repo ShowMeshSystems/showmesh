@@ -34,6 +34,12 @@
  * [classifyProblemResponse]/[checkApiVersionHeaderValue] from `client.ts`
  * directly, so this path and the `fetch` path can never disagree about
  * which RFC 9457 `type` produces which error class.
+ *
+ * Track G seam G-8 reuses this for `POST /assets` (ADR-028), which needs
+ * extra form fields (`show`, `sequence`, `mediaType`, `targetKind`,
+ * `target`) appended to the same `FormData` BEFORE the `file` part — the
+ * server refuses a `file` part that arrives first. `fields` below is
+ * appended in insertion order, ahead of `file`, for exactly that reason.
  */
 import { checkApiVersionHeaderValue, classifyProblemResponse } from './client'
 import { AbortError, ApiError } from './errors'
@@ -66,6 +72,7 @@ export function uploadFileWithProgress<T>(
   file: File,
   onProgress: (progress: UploadProgress) => void,
   signal: AbortSignal,
+  fields?: Record<string, string>,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     if (signal.aborted) {
@@ -153,6 +160,13 @@ export function uploadFileWithProgress<T>(
     }
 
     const form = new FormData()
+    // Every non-file field, in insertion order, ahead of `file` — see this
+    // file's header comment on why the server requires that ordering.
+    if (fields !== undefined) {
+      for (const [key, value] of Object.entries(fields)) {
+        form.append(key, value)
+      }
+    }
     form.append('file', file)
     xhr.send(form)
   })

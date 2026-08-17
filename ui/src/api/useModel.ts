@@ -30,7 +30,10 @@ import type {
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
+  ConfigShowActive,
   ConfigShowMacro,
+  ConfigShowSurface,
+  ConfigShowWrite,
   CreatePrincipalRequest,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
@@ -65,6 +68,15 @@ type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse'
 type SchemaResolumeInstancesResponse = components['schemas']['ResolumeInstancesResponse']
 type SchemaResolumeInstanceResponse = components['schemas']['ResolumeInstanceResponse']
 type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
+// Track G seam G-8: the Operator UI for Track E.
+type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+type SchemaAssetResponse = components['schemas']['AssetResponse']
+type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
+type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
+type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaAuditResponse = components['schemas']['AuditResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -248,8 +260,11 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // configuration objects and the macro run surface. Same thin
 // pass-through pattern as every method above.
 
-export function listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
-  return store.listConfigObjects(kind)
+export function listConfigObjects(
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+  show?: string,
+): Promise<SchemaConfigObjectsListResponse> {
+  return store.listConfigObjects(kind, show)
 }
 
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
@@ -391,4 +406,75 @@ export function issuePrincipalToken(id: string, payload: IssueTokenRequest): Pro
 
 export function revokePrincipalToken(id: string, tokenId: string): Promise<void> {
   return store.revokePrincipalToken(id, tokenId)
+}
+
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028). Same thin pass-through pattern as every method above.
+
+export function getShow(id: string): Promise<SchemaShowConfigResponse> {
+  return store.getShow(id)
+}
+
+export function putShow(id: string, payload: ConfigShowWrite): Promise<SchemaShowConfigResponse> {
+  return store.putShow(id, payload)
+}
+
+export function getShowRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowRevisions(id)
+}
+
+export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+  return store.getShowSurface(id)
+}
+
+export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {
+  return store.putShowSurface(id, payload)
+}
+
+export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowSurfaceRevisions(id)
+}
+
+export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {
+  return store.getShowActive()
+}
+
+export function putShowActive(payload: ConfigShowActive): Promise<SchemaShowActiveConfigResponse> {
+  return store.putShowActive(payload)
+}
+
+export function getShowActiveRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getShowActiveRevisions()
+}
+
+export function listAssets(filter?: {
+  show?: string
+  sequence?: string
+  node?: string
+}): Promise<SchemaAssetsListResponse> {
+  return store.listAssets(filter)
+}
+
+export function uploadAsset(
+  file: File,
+  fields: { show: string; sequence: string; mediaType: 'fseq' | 'audio' | 'media'; targetKind: 'node' | 'show'; target?: string },
+  onProgress: (progress: UploadProgress) => void,
+): Promise<SchemaAssetResponse> {
+  return store.uploadAsset(file, fields, onProgress)
+}
+
+export function assetContentUrl(id: string): string {
+  return store.assetContentUrl(id)
+}
+
+export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
+  return store.getAssetManifest()
+}
+
+export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
+  return store.getNodeAssetManifest(nodeId)
+}
+
+export function listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+  return store.listAudit(filter)
 }

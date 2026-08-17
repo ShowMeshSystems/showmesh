@@ -43,6 +43,10 @@ const NAV_GROUPS: Array<{
       { to: '/resolume', label: 'Resolume', end: false },
       { to: '/capabilities', label: 'Capabilities', end: false },
       { to: '/events', label: 'Events', end: false },
+      // Track G seam G-8: read-only surfaces — a node's own asset
+      // readiness and the append-only audit log.
+      { to: '/assets/manifest', label: 'Asset manifest', end: false },
+      { to: '/audit', label: 'Audit log', end: false },
     ],
   },
   {
@@ -59,10 +63,22 @@ const NAV_GROUPS: Array<{
     // placement fault seam G-2 was scoped to fix by making the label true
     // rather than by changing it.
     items: [
-      { to: '/config', label: 'FPP & Resolume', end: false },
+      // `end: true`, unlike every other item in this list (Track G seam
+      // G-8 finding): NavLink's non-end matching is "current path starts
+      // with this path plus a segment boundary", and every new
+      // /config/show* route below satisfies that boundary against bare
+      // /config — this link would otherwise render as "active" on every
+      // page this seam added.
+      { to: '/config', label: 'FPP & Resolume', end: true },
       { to: '/actions', label: 'Show actions', end: false },
       // Track G seam G-5: identity administration's own nav entry.
       { to: '/access', label: 'Access', end: false },
+      // Track G seam G-8: Track E's authoring surfaces, previously
+      // reachable only from showmeshctl.
+      { to: '/config/show', label: 'Shows', end: false },
+      { to: '/config/show.surface', label: 'Surfaces', end: false },
+      { to: '/config/show.active', label: 'Active show', end: false },
+      { to: '/assets', label: 'Assets', end: false },
     ],
   },
 ]
