@@ -98,11 +98,10 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 }
 
 // toRenderSurfaceReport converts a pipeline.Snapshot (this package's
-// internal supervision state) to the wire type. A Reason is synthesized
-// when the pipeline is Running and the supervisor left one empty, because
-// mqttproto.RenderPayload.Validate requires one whenever PipelineState is
-// not "running" — Running itself carries no such requirement, so this is
-// purely defensive and should never fire in practice.
+// internal supervision state) to the wire type. Reason is passed through
+// as-is: pipeline.setState is required to stamp a real, non-empty reason
+// for every state other than Running (mqttproto.RenderPayload.Validate
+// enforces exactly that on the way out), so no synthesis happens here.
 func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 	lastStderr := truncateForWire(s.LastStderr, mqttproto.RenderStderrTruncatedSuffix)
 

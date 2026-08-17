@@ -284,7 +284,7 @@ func (r *runner) loop() {
 			return
 		}
 
-		r.setState(StateStarting, "")
+		r.setState(StateStarting, "pipeline started; PLAYING not yet observed")
 
 		ec := make(chan ExitResult, 1)
 		onRunning := func() {

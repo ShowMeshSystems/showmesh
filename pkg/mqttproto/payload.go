@@ -960,6 +960,16 @@ func NewAssetInventoryEnvelope(now func() time.Time, nodeID string, payload Asse
 // NewRenderEnvelope builds a complete, schema-tagged [Envelope] carrying
 // payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
 // [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+//
+// Unlike newEnvelope's other callers, this constructor calls
+// payload.Validate() itself before marshalling: newEnvelope never does, so a
+// caller-built payload that DecodeRenderPayload would refuse (e.g. a
+// non-running state with an empty reason) would otherwise be published
+// as-is and only fail on the receiving end, silently and per-message. The
+// producer must not emit what its own decoder rejects.
 func NewRenderEnvelope(now func() time.Time, nodeID string, payload RenderPayload) (Envelope, error) {
+	if err := payload.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("mqttproto: build render envelope: %w", err)
+	}
 	return newEnvelope(now, SchemaNodeRenderV1, nodeID, payload)
 }
