@@ -439,6 +439,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/render.settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The render.settings idle-output/restart-policy singleton (Track B seam B2c, ADR-039)
+         * @description Requires `config:write`, mirroring `GET /config/resolume.recovery`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         */
+        get: operations["getRenderSettingsConfig"];
+        /**
+         * Write a new render.settings revision (Track B seam B2c, ADR-039)
+         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write — `idleOutput` and the three members of `restartPolicy` — never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putRenderSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/render.settings/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * render.settings revision history, newest first (Track B seam B2c)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+         */
+        get: operations["getRenderSettingsConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/resolume/actions": {
         parameters: {
             query?: never;
@@ -1519,12 +1563,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, and GET /config/resolume.recovery/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more and Track D seam D-3a another). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, and GET /config/render.settings/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, and Track B seam B2c another). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "render.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -1869,6 +1913,31 @@ export interface components {
             kind: string;
             revision: number;
             payload: components["schemas"]["ConfigResolumeRecoveryPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description render.settings.restartPolicy (Track B seam B2c): the render pipeline supervisor's bounded exponential backoff — must not restart a pipeline that fails identically and immediately forever. */
+        ConfigRenderRestartPolicy: {
+            initialDelaySeconds: number;
+            maxDelaySeconds: number;
+            maxConsecutiveFastFailures: number;
+        };
+        /** @description The "render.settings" configuration kind's decoded payload (Track B seam B2c, ADR-039): the body PUT /config/render.settings accepts (a full replacement — every field required and non-null), and the "payload" member of GET /config/render.settings' response. `idleOutput` is what a surface draws while the MultiSync timeline is stopped, opened, or unknown (TRACK-B-BUILD-CONTRACT.md ruling 3 — sync loss changes the picture, never the sender). */
+        ConfigRenderSettingsPayload: {
+            /** @enum {string} */
+            idleOutput: "black" | "hold" | "diagnostic";
+            restartPolicy: components["schemas"]["ConfigRenderRestartPolicy"];
+        };
+        /** @description The body of GET and PUT /config/render.settings. Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written, mirroring ResolumeRecoveryConfigResponse's identical posture. */
+        RenderSettingsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigRenderSettingsPayload"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -3372,6 +3441,95 @@ export interface operations {
         };
     };
     getResolumeRecoveryConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRenderSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderSettingsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putRenderSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigRenderSettingsPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderSettingsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRenderSettingsConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

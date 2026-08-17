@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Configuration } from './Configuration'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
@@ -26,6 +26,20 @@ const { getFPPEndpointsConfig, putFPPEndpointsConfig, getFPPEndpointsConfigRevis
   putFPPEndpointsConfig: vi.fn(),
   getFPPEndpointsConfigRevisions: vi.fn(),
 }))
+// Track B seam B2c: this view also mounts RenderSettingsPanel
+// (config:write-gated, same as everything above), so its own three API
+// calls need mocking here too — otherwise every test in this file that
+// reaches an authenticated, permitted render triggers a real, unmocked
+// fetch from RenderSettingsPanel. Defaulted (beforeEach below) to a
+// resolved "never configured" response so tests that do not care about
+// render.settings see it settle quietly rather than producing a second,
+// unrelated error alert this file's own assertions were not written to
+// expect.
+const { getRenderSettingsConfig, putRenderSettingsConfig, getRenderSettingsConfigRevisions } = vi.hoisted(() => ({
+  getRenderSettingsConfig: vi.fn(),
+  putRenderSettingsConfig: vi.fn(),
+  getRenderSettingsConfigRevisions: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return {
@@ -33,7 +47,30 @@ vi.mock('../api', async (importOriginal) => {
     getFPPEndpointsConfig,
     putFPPEndpointsConfig,
     getFPPEndpointsConfigRevisions,
+    getRenderSettingsConfig,
+    putRenderSettingsConfig,
+    getRenderSettingsConfigRevisions,
   }
+})
+
+const defaultRenderSettingsConfig = {
+  serverTime: '2026-08-17T00:00:00Z',
+  kind: 'render.settings',
+  revision: 0,
+  payload: {
+    idleOutput: 'black',
+    restartPolicy: { initialDelaySeconds: 1, maxDelaySeconds: 30, maxConsecutiveFastFailures: 5 },
+  },
+  updatedAt: '2026-08-17T00:00:00Z',
+  createdByPrincipalId: null,
+  createdByPrincipalName: null,
+  source: 'default',
+}
+const emptyRenderSettingsRevisions = { serverTime: '2026-08-17T00:00:00Z', kind: 'render.settings', revisions: [] }
+
+beforeEach(() => {
+  getRenderSettingsConfig.mockResolvedValue(defaultRenderSettingsConfig)
+  getRenderSettingsConfigRevisions.mockResolvedValue(emptyRenderSettingsRevisions)
 })
 
 afterEach(() => {
@@ -41,6 +78,9 @@ afterEach(() => {
   getFPPEndpointsConfig.mockReset()
   putFPPEndpointsConfig.mockReset()
   getFPPEndpointsConfigRevisions.mockReset()
+  getRenderSettingsConfig.mockReset()
+  putRenderSettingsConfig.mockReset()
+  getRenderSettingsConfigRevisions.mockReset()
 })
 
 function renderConfiguration(model: Model) {

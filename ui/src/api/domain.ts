@@ -123,6 +123,14 @@ export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRec
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 
+// Track B seam B2c (ADR-039): the render.settings configuration singleton.
+// Aliased for the identical reason as every type above. Not part of
+// `Model` — this data is not a resource ADR-020's change stream models,
+// matching ResolumeRecoveryConfigResponse's own reasoning just above.
+export type ConfigRenderRestartPolicy = components['schemas']['ConfigRenderRestartPolicy']
+export type ConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
+export type RenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
+
 // Track D seam D-4: Resolume as an observability resource (seam E) and the
 // seven-action vocabulary (D-3/seam B). Aliased for the identical reason
 // as every type above (ADR-015). `ResolumeInstance` IS part of `Model`

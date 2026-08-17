@@ -1414,6 +1414,107 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/render.settings:
+    get:
+      operationId: getRenderSettingsConfig
+      summary: The render.settings idle-output/restart-policy singleton (Track B seam B2c, ADR-039)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/resolume.recovery`'s
+        own always-sensitive, never-404 posture: the payload has a
+        well-defined default, so this always answers `200`, with `revision`
+        `0` and `source` `"default"` when nothing has ever been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putRenderSettingsConfig
+      summary: Write a new render.settings revision (Track B seam B2c, ADR-039)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: every
+        field is required and non-null on every write — `idleOutput` and
+        the three members of `restartPolicy` — never merged against the
+        previous revision, so an absent key is refused by name rather than
+        silently defaulting or carrying the old value forward. On success,
+        appends a new immutable revision and activates it in the SAME
+        transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule) — with the audit store failing, the write is
+        refused and no revision is created. A cookie-authenticated request
+        additionally requires `Sec-Fetch-Site: same-origin` (ADR-024
+        decision 6); a bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigRenderSettingsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/render.settings/revisions:
+    get:
+      operationId: getRenderSettingsConfigRevisions
+      summary: render.settings revision history, newest first (Track B seam B2c)
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -4475,12 +4576,14 @@ components:
         /config/show.macro/{id}/revisions, GET
         /config/show/{id}/revisions, GET
         /config/show.surface/{id}/revisions, GET
-        /config/show.active/revisions, and GET
-        /config/resolume.recovery/revisions, newest first — one shape
+        /config/show.active/revisions, GET
+        /config/resolume.recovery/revisions, and GET
+        /config/render.settings/revisions, newest first — one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained more
-        callers; Track E added three more and Track D seam D-3a another).
+        callers; Track E added three more, Track D seam D-3a another, and
+        Track B seam B2c another).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -4488,7 +4591,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings]
         revisions:
           type: array
           items:
@@ -5339,6 +5442,72 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigResolumeRecoveryPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigRenderRestartPolicy:
+      type: object
+      description: >-
+        render.settings.restartPolicy (Track B seam B2c): the render
+        pipeline supervisor's bounded exponential backoff — must not restart
+        a pipeline that fails identically and immediately forever.
+      required: [initialDelaySeconds, maxDelaySeconds, maxConsecutiveFastFailures]
+      properties:
+        initialDelaySeconds:
+          type: integer
+          minimum: 1
+          maximum: 60
+        maxDelaySeconds:
+          type: integer
+          minimum: 1
+          maximum: 300
+        maxConsecutiveFastFailures:
+          type: integer
+          minimum: 1
+          maximum: 20
+    ConfigRenderSettingsPayload:
+      type: object
+      description: >-
+        The "render.settings" configuration kind's decoded payload (Track B
+        seam B2c, ADR-039): the body PUT /config/render.settings accepts
+        (a full replacement — every field required and non-null), and the
+        "payload" member of GET /config/render.settings' response.
+        `idleOutput` is what a surface draws while the MultiSync timeline is
+        stopped, opened, or unknown (TRACK-B-BUILD-CONTRACT.md ruling 3 —
+        sync loss changes the picture, never the sender).
+      required: [idleOutput, restartPolicy]
+      properties:
+        idleOutput:
+          type: string
+          enum: [black, hold, diagnostic]
+        restartPolicy:
+          $ref: "#/components/schemas/ConfigRenderRestartPolicy"
+    RenderSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/render.settings. Never `404`s: the
+        payload has a well-defined default, reported with `revision` `0` and
+        `source` `"default"` when nothing has ever been written, mirroring
+        ResolumeRecoveryConfigResponse's identical posture.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigRenderSettingsPayload"
         updatedAt:
           type: string
           format: date-time

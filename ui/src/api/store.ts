@@ -98,6 +98,9 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+// Track B seam B2c (ADR-039): the render.settings configuration singleton.
+type SchemaRenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
+type SchemaConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
@@ -596,6 +599,51 @@ export class ApiStore {
         undefined,
         controller.signal,
         RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track B seam B2c: render.settings (ADR-039) -----------------------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as the resolume.recovery config methods just above: not
+  // part of the SSE snapshot/delta stream.
+
+  /** `GET /api/v1/config/render.settings` (Track B seam B2c). Requires config:write. Never 404s — reports the built-in default. */
+  async getRenderSettingsConfig(): Promise<SchemaRenderSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaRenderSettingsConfigResponse>('/config/render.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/render.settings` (Track B seam B2c). Requires config:write. A full replacement — every field required. */
+  async putRenderSettingsConfig(
+    payload: SchemaConfigRenderSettingsPayload,
+  ): Promise<SchemaRenderSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaRenderSettingsConfigResponse>(
+        '/config/render.settings',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/render.settings/revisions` (Track B seam B2c). Requires config:write. */
+  async getRenderSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/render.settings/revisions',
+        controller.signal,
       )
     } finally {
       this.endSideCall(controller)
