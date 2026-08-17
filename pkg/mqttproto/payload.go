@@ -33,6 +33,11 @@ const (
 	// [AssetInventoryPayload], published retained on
 	// showmesh/nodes/<node-id>/observed/assets.
 	SchemaNodeAssetInventoryV1 = "showmesh.node.asset.inventory/v1"
+
+	// SchemaNodeRenderV1 is Track B seam B2a's addition: the schema for
+	// [RenderPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/render.
+	SchemaNodeRenderV1 = "showmesh.node.render/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -107,6 +112,12 @@ const (
 // ErrPayloadCapabilitySetTooLarge is wrapped by [HelloPayload.Validate] when
 // the capability set has more than [maxCapabilityCount] members.
 var ErrPayloadCapabilitySetTooLarge = errors.New("mqttproto: capability set exceeds the maximum allowed size")
+
+// ErrPayloadTooLarge is wrapped by [RenderPayload.Validate] when a bounded
+// slice or string field exceeds its stated cap — the general-purpose
+// sibling of [ErrPayloadCapabilitySetTooLarge], which stays named for the
+// one payload it was written for.
+var ErrPayloadTooLarge = errors.New("mqttproto: payload field exceeds the maximum allowed size")
 
 // ErrPayloadCapabilityIDTooLong is wrapped by [HelloPayload.Validate] when a
 // capability ID exceeds [maxCapabilityIDLength].
@@ -542,6 +553,146 @@ func (p AssetInventoryPayload) Validate() error {
 	return nil
 }
 
+// Open pipelineState vocabulary for [RenderSurfaceReport.PipelineState].
+// Deliberately a string, not a closed enum: [pkg/agent/pipeline] may need a
+// finer-grained state later, and a consumer that does not recognize one must
+// treat it as evidence-with-an-unrecognized-label, never as an error, per
+// this schema family's "the API is additive; clients ignore what they don't
+// know" convention (ADR-020).
+const (
+	RenderPipelineStateRunning     = "running"
+	RenderPipelineStateStarting    = "starting"
+	RenderPipelineStateRestarting  = "restarting"
+	RenderPipelineStateFailed      = "failed"
+	RenderPipelineStateStopped     = "stopped"
+	RenderPipelineStateUnsupported = "unsupported"
+)
+
+// maxRenderSurfaces bounds [RenderPayload.Surfaces], matching
+// [maxCapabilityCount]'s role: ADR-026 expresses N surfaces per node in the
+// schema even though v1 runs N=1, so this must not be 1. Deliberately small
+// relative to [maxCapabilityCount]: at [maxRenderStderrBytes] each, this
+// bound times that one must stay comfortably under [maxEnvelopeSize]
+// (8*4KiB = 32KiB), not merely under it — a conservative, unmeasured guess
+// at "far more surfaces than any real node will ever run, far short of the
+// envelope cap."
+const maxRenderSurfaces = 8
+
+// maxRenderStderrBytes bounds [RenderSurfaceReport.LastStderr] before
+// [RenderPayload.Validate] rejects the payload outright — the wire-boundary
+// backstop behind whatever cap internal/agent/pipeline already applies when
+// it captures a process's stderr. Truncation must happen, and be visible,
+// before the payload ever reaches this package; see LastStderr's own doc
+// comment.
+const maxRenderStderrBytes = 4 * 1024
+
+// RenderStderrTruncatedSuffix is appended by the publisher (never by this
+// package) when it cuts LastStderr down to [maxRenderStderrBytes], so a
+// truncated tail reads as truncated rather than as a stderr that happened to
+// end mid-sentence.
+const RenderStderrTruncatedSuffix = "...[truncated]"
+
+// RenderSurfaceReport is one surface's pipeline health, inside
+// [RenderPayload.Surfaces]. ADR-026 decision 3 requires N surfaces
+// expressible even though v1 runs exactly one.
+type RenderSurfaceReport struct {
+	// SurfaceID is the show.surface config object id this report concerns.
+	SurfaceID string `json:"surfaceId"`
+
+	// PipelineState is this surface's current supervised pipeline state; see
+	// the RenderPipelineState* constants for the minimum open vocabulary.
+	PipelineState string `json:"pipelineState"`
+
+	// Reason is required whenever PipelineState is not
+	// [RenderPipelineStateRunning] — absent evidence is stated, never
+	// omitted (ADR-020).
+	Reason string `json:"reason"`
+
+	// Since is when this surface entered PipelineState, on the node's own
+	// clock.
+	Since time.Time `json:"since"`
+
+	RestartCount        int64 `json:"restartCount"`
+	ConsecutiveFailures int64 `json:"consecutiveFailures"`
+
+	// LastExitCode is nil when no attempt has exited yet (still starting, or
+	// killed before any process was ever launched); non-nil is a genuine
+	// observed exit code, including 0.
+	LastExitCode *int `json:"lastExitCode"`
+
+	// LastStderr is the supervised process's most recent captured stderr
+	// tail, bounded to [maxRenderStderrBytes]. A truncated tail carries
+	// [RenderStderrTruncatedSuffix] so truncation is visible on the wire,
+	// never silent.
+	LastStderr string `json:"lastStderr"`
+
+	FramesWritten int64 `json:"framesWritten"`
+	FramesLate    int64 `json:"framesLate"`
+	FramesDropped int64 `json:"framesDropped"`
+
+	// Transport names the output transport this surface's pipeline is
+	// configured for (e.g. "ndi"); empty when not yet meaningful (seam B2a
+	// runs a test-pattern pipeline with no real output stage).
+	Transport string `json:"transport"`
+
+	// TransportAvailable is nil when the transport has not been probed
+	// (seam B2a never probes; B4 fills this in), true/false when it has —
+	// see ADR-011: nil is genuinely unknown, never defaulted to a boolean.
+	TransportAvailable *bool `json:"transportAvailable"`
+
+	// ObservedAt is when the supervisor actually sampled this report, on
+	// the node's own clock — the evidence timestamp ADR-003 requires,
+	// distinct from Since (when the state itself began).
+	ObservedAt time.Time `json:"observedAt"`
+}
+
+// RenderPayload is the payload of the showmesh.node.render/v1 schema,
+// published RETAINED to a node's observed/render topic ([ObservedTopic],
+// [ObservedDeliveryPolicy]): this node's supervised render pipeline health,
+// per surface.
+type RenderPayload struct {
+	// GstLaunchPath is the resolved gst-launch-1.0 path this node is using
+	// (from PATH, or SHOWMESH_GST_LAUNCH), or empty when unresolved.
+	GstLaunchPath string `json:"gstLaunchPath"`
+
+	// GstLaunchAvailable is false whenever the binary could not be located
+	// at all; every surface's PipelineState is then
+	// [RenderPipelineStateUnsupported], never a stale prior value, per this
+	// project's absent-evidence-is-stated rule.
+	GstLaunchAvailable bool `json:"gstLaunchAvailable"`
+
+	// Surfaces is nil-safe: this package's own encoder emits "surfaces":null
+	// for a nil slice and "surfaces":[] for an explicit empty one, matching
+	// AssetInventoryPayload.Assets's identical rule — a node holding no
+	// surface assignment reports "surfaces": [], never omits the key.
+	Surfaces []RenderSurfaceReport `json:"surfaces"`
+}
+
+// Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
+// non-empty, Reason required whenever PipelineState is not "running", and
+// LastStderr bounded to [maxRenderStderrBytes] — all four exist so this
+// payload can never exceed [maxEnvelopeSize] regardless of what a caller
+// tries to put in it.
+func (p RenderPayload) Validate() error {
+	if len(p.Surfaces) > maxRenderSurfaces {
+		return fmt.Errorf("%w: %d surfaces, max %d", ErrPayloadTooLarge, len(p.Surfaces), maxRenderSurfaces)
+	}
+	for i, s := range p.Surfaces {
+		if s.SurfaceID == "" {
+			return fmt.Errorf("%w: surfaces[%d].surfaceId", ErrPayloadMissingField, i)
+		}
+		if s.PipelineState != RenderPipelineStateRunning && s.Reason == "" {
+			return fmt.Errorf("%w: surfaces[%d].reason (required whenever pipelineState is not %q)",
+				ErrPayloadMissingField, i, RenderPipelineStateRunning)
+		}
+		if len(s.LastStderr) > maxRenderStderrBytes {
+			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
+				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
+		}
+	}
+	return nil
+}
+
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent
 // "payload" key, which unmarshals to a zero-length json.RawMessage) or is
@@ -700,6 +851,28 @@ func DecodeAssetInventoryPayload(env Envelope) (AssetInventoryPayload, error) {
 	return p, nil
 }
 
+// DecodeRenderPayload decodes env.Payload as a [RenderPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeRenderV1], an
+// error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
+// error wrapping [ErrPayloadMissingField] or [ErrPayloadTooLarge] (via
+// [RenderPayload.Validate]) if the payload is malformed.
+func DecodeRenderPayload(env Envelope) (RenderPayload, error) {
+	if env.Schema != SchemaNodeRenderV1 {
+		return RenderPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeRenderV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	var p RenderPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -782,4 +955,11 @@ func NewAgentEchoEnvelope(now func() time.Time, nodeID string, payload AgentEcho
 // argument).
 func NewAssetInventoryEnvelope(now func() time.Time, nodeID string, payload AssetInventoryPayload) (Envelope, error) {
 	return newEnvelope(now, SchemaNodeAssetInventoryV1, nodeID, payload)
+}
+
+// NewRenderEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+func NewRenderEnvelope(now func() time.Time, nodeID string, payload RenderPayload) (Envelope, error) {
+	return newEnvelope(now, SchemaNodeRenderV1, nodeID, payload)
 }
