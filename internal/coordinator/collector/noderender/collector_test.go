@@ -11,6 +11,11 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
+// sampleObservedAt is the node-reported evidence timestamp samplePayload's
+// surface carries — deliberately distinct from any receivedAt used in these
+// tests, so a test that mixes the two up fails loudly.
+var sampleObservedAt = time.Unix(2000, 0).UTC()
+
 func samplePayload(state string) mqttproto.RenderPayload {
 	return mqttproto.RenderPayload{
 		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
@@ -28,10 +33,18 @@ func samplePayload(state string) mqttproto.RenderPayload {
 				FramesDropped:       1,
 				Transport:           "ndi",
 				TransportAvailable:  boolPtr(true),
-				ObservedAt:          time.Unix(2000, 0).UTC(),
+				ObservedAt:          sampleObservedAt,
 			},
 		},
 	}
+}
+
+// samplePayloadNoObservedAt is samplePayload with the node reporting no
+// evidence timestamp at all (the zero value) — the genuinely-unknown case.
+func samplePayloadNoObservedAt(state string) mqttproto.RenderPayload {
+	p := samplePayload(state)
+	p.Surfaces[0].ObservedAt = time.Time{}
+	return p
 }
 
 func findObs(t *testing.T, obs []observation.Observation, sig observation.SignalID) observation.Observation {
@@ -45,19 +58,18 @@ func findObs(t *testing.T, obs []observation.Observation, sig observation.Signal
 	return observation.Observation{}
 }
 
-// TestPollLiveDeliveryUsesNodeReportedObservedAt proves the live branch of
-// buildValue after the review's cross-seam fix: a non-retained report's
-// ObservedAt is the NODE's own evidence timestamp (sf.ObservedAt —
-// samplePayload sets it to a value deliberately different from
-// receivedAt), never this coordinator's receipt time and never nil.
-// Renamed from TestPollLiveDeliveryUsesReceiptTime, which asserted the
-// OLD, now-wrong behaviour: buildValue used to collapse ObservedAt and
-// CollectedAt onto the coordinator's own receipt time, which is exactly
-// the evidence-vs-collection conflation ADR-011/ADR-003 forbid and finding
-// 2 fixed one layer down inside the agent's own Supervisor. CollectedAt
-// (bookkeeping, not evidence) still IS receivedAt — see the assertion
-// below.
-func TestPollLiveDeliveryUsesNodeReportedObservedAt(t *testing.T) {
+// TestPollUsesNodeReportedObservedAt proves Finding 3's fix: ObservedAt is
+// the node's own evidence timestamp (sampleObservedAt), never the
+// coordinator's receipt time, while CollectedAt stays the receipt time —
+// [pkg/observation]'s ObservedAt/CollectedAt split, actually honored here.
+// Renamed from TestPollLiveDeliveryUsesReceiptTime, which asserted the OLD,
+// now-wrong behaviour: buildValue used to collapse ObservedAt and
+// CollectedAt onto the coordinator's own receipt time, which is exactly the
+// evidence-vs-collection conflation ADR-011/ADR-003 forbid. Revert buildValue
+// to stamp rep.receivedAt as ObservedAt and this fails: state.ObservedAt
+// comes back equal to receivedAt (2026-08-17 12:00:00), not sampleObservedAt
+// (1970-01-01 00:33:20 UTC).
+func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
@@ -88,11 +100,12 @@ func TestPollLiveDeliveryUsesNodeReportedObservedAt(t *testing.T) {
 	}
 }
 
-// TestPollRetainedDeliveryIsUnknownAge is this package's own version of
-// fppmqtt's identically-named test: a retained delivery must never be
-// stamped with a receipt time as though that were when the condition
-// became true (ADR-011).
-func TestPollRetainedDeliveryIsUnknownAge(t *testing.T) {
+// TestPollRetainedWithNodeObservedAtStillUsesIt proves the reversal Finding
+// 3 requires: a retained MQTT delivery is no longer, by itself, a reason to
+// discard the evidence timestamp — this agent (unlike FPP) puts one on the
+// wire, so retained-ness of the MQTT delivery is irrelevant once the
+// payload itself carries real evidence.
+func TestPollRetainedWithNodeObservedAtStillUsesIt(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), true, receivedAt)
@@ -101,11 +114,33 @@ func TestPollRetainedDeliveryIsUnknownAge(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	state := findObs(t, obs, SignalSurfacePipelineState)
+	if state.ObservedAt == nil {
+		t.Fatalf("retained delivery with a node-reported observedAt: ObservedAt is nil, want %s", sampleObservedAt)
+	}
+	if !state.ObservedAt.Equal(sampleObservedAt) {
+		t.Errorf("retained delivery: ObservedAt = %s, want the node's own %s", state.ObservedAt, sampleObservedAt)
+	}
+}
+
+// TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
+// half of Finding 3: when the node itself reports no evidence timestamp
+// (the zero value), ObservedAt stays nil rather than being defaulted to
+// anything, including the receipt time — ADR-011's rule this project has
+// caught missing three times before.
+func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", samplePayloadNoObservedAt(mqttproto.RenderPipelineStateRunning), false, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalSurfacePipelineState)
 	if state.ObservedAt != nil {
-		t.Errorf("retained delivery: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
+		t.Errorf("no node-reported observedAt: ObservedAt = %s, want nil (unknown age)", state.ObservedAt)
 	}
 	if state.StateAt(receivedAt) != observation.StateUnknownAge {
-		t.Errorf("retained delivery: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
+		t.Errorf("no node-reported observedAt: StateAt = %s, want unknown_age", state.StateAt(receivedAt))
 	}
 }
 
@@ -217,12 +252,12 @@ func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
 }
 
 // TestPollStaleIsNeverHealthy proves ADR-011's core rule survives this
-// package specifically: a live report that has aged past DefaultValidFor
-// must report StateStale, never current. Staleness is measured from
-// ObservedAt (the node-reported evidence timestamp, per
-// TestPollLiveDeliveryUsesNodeReportedObservedAt), not from receivedAt —
-// this test's windows are computed against samplePayload's own
-// sf.ObservedAt for exactly that reason.
+// package specifically: a report whose node-reported ObservedAt has aged
+// past DefaultValidFor must report StateStale, never current. Staleness is
+// measured from ObservedAt (the node-reported evidence timestamp, per
+// TestPollUsesNodeReportedObservedAt), not from receivedAt — this test's
+// windows are computed against samplePayload's own sf.ObservedAt for
+// exactly that reason.
 func TestPollStaleIsNeverHealthy(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
@@ -320,9 +355,13 @@ func TestNodeRenderObservationsMatchesPoll(t *testing.T) {
 	if state01.Value != mqttproto.RenderPipelineStateFailed {
 		t.Errorf("render-01 state = %v, want %q", state01.Value, mqttproto.RenderPipelineStateFailed)
 	}
+	// render-02's delivery is retained, but its payload still carries a
+	// node-reported ObservedAt, which now wins regardless of retained-ness
+	// (Finding 3): a retained MQTT replay is not, by itself, evidence the
+	// timestamp is unknown.
 	state02 := findObs(t, fromRead02, SignalSurfacePipelineState)
-	if state02.ObservedAt != nil {
-		t.Errorf("render-02 (retained): ObservedAt = %s, want nil", state02.ObservedAt)
+	if state02.ObservedAt == nil || !state02.ObservedAt.Equal(sampleObservedAt) {
+		t.Errorf("render-02 (retained): ObservedAt = %v, want %s", state02.ObservedAt, sampleObservedAt)
 	}
 }
 

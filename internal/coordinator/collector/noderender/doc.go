@@ -16,13 +16,18 @@
 //
 // # The retained/live distinction (ADR-011)
 //
-// showmesh/nodes/<node-id>/observed/render is retained (see
-// pkg/mqttproto's ObservedDeliveryPolicy): a delivery replayed from the
-// broker's retained store is evidence of unknown age, possibly from a node
-// that no longer exists. [Store.Put] records whether a delivery was
-// retained, and [buildValue] is the one place that decides ObservedAt from
-// it, exactly like fppmqtt's buildObservation: retained means
-// [observation.MeasuredUnknownAge] (ObservedAt nil), live means
-// [observation.Measured] with the coordinator's own receipt time. Never the
-// reverse.
+// showmesh/nodes/<node-id>/observed/render is retained (see pkg/mqttproto's
+// ObservedDeliveryPolicy). Unlike fppmqtt's own buildObservation, this
+// package's [buildValue] does NOT gate ObservedAt on [Store.Put]'s retained
+// flag: every field this agent reports already carries its own
+// NODE-REPORTED evidence timestamp (sf.ObservedAt / MultiSyncObservedAt),
+// stamped at the moment of a genuine transition or sample, and that
+// timestamp is what decides ObservedAt regardless of whether the MQTT
+// delivery that carried it was retained or live. A retained delivery is
+// only a reason to treat age as unknown when the payload itself carries no
+// evidence timestamp — the node reporting the zero value — in which case
+// [buildValue] uses [observation.MeasuredUnknownAge] exactly as it would for
+// a live delivery with no timestamp. retained is still recorded on every
+// [report] and available to callers, but this package's ObservedAt decision
+// runs off the node's own clock, not off retained.
 package noderender

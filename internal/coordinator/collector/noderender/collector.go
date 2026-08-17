@@ -290,34 +290,35 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 	}
 }
 
-// buildValue is where this package's own version of ADR-011's retained/live
-// rule is enforced, for every value-bearing signal it produces — the
-// identical shape fppmqtt.Collector.buildObservation uses one package over,
-// EXTENDED (review fix, finding 2/finding 7): observedAt is now the caller's
-// own per-field, NODE-REPORTED evidence timestamp (sf.ObservedAt for a
-// surface field, rep.payload.MultiSyncObservedAt for a node field) rather
-// than always defaulting to this coordinator's own receipt time. The render
-// pipeline is unlike a raw FPP MQTT topic: every field this package renders
-// already carries a real "when did this become true" timestamp, stamped by
-// [runner.setState]/[runner.setFrameCounts]/[runner.setDrawState] at the
-// moment of a genuine transition or sample — using it as ObservedAt is what
-// keeps "a fresh ObservedAt means the state actually moved" true all the
-// way to the observation layer, the exact invariant finding 2 established
-// inside the agent's own Supervisor.
+// buildValue stamps ObservedAt from the caller's own per-field,
+// NODE-REPORTED evidence timestamp (sf.ObservedAt for a surface field,
+// rep.payload.MultiSyncObservedAt for a node field), unlike
+// fppmqtt.Collector.buildObservation one package over: FPP sends no sample
+// time on its own wire, so that collector has only rep.retained to reason
+// about age. This agent stamps every field it reports at the moment of a
+// genuine transition or sample ([runner.setState]/setFrameCounts/
+// setDrawState), so buildValue trusts THAT timestamp instead — the same
+// invariant finding 2 established inside the agent's own Supervisor, now
+// carried through to the observation layer (finding 2/finding 3/finding 7).
 //
-//   - rep.retained: [observation.MeasuredUnknownAge]. ObservedAt is nil,
-//     never observedAt and never rep.receivedAt — a retained MQTT delivery's
-//     own age is unknown regardless of what timestamp the payload claims,
-//     unchanged from before this parameter existed.
-//   - live: [observation.Measured] with observedAt — the node's own clock
-//     at the moment IT recorded this evidence, not this coordinator's.
+//   - observedAt.IsZero(): the node reported no evidence timestamp at all —
+//     [observation.MeasuredUnknownAge], ObservedAt left nil rather than
+//     defaulted to rep.receivedAt.
+//   - otherwise: [observation.Measured] with observedAt, REGARDLESS of
+//     rep.retained. A retained MQTT delivery is only a reason to treat age
+//     as unknown when the payload itself carries no evidence timestamp
+//     (that is fppmqtt's and inventory's hello/health/LWT case, which never
+//     puts a sample time on the wire); here the payload always does, so the
+//     retained flag adds no information the node's own timestamp lacks, and
+//     ordinary staleness (WithValidFor) still applies once ObservedAt ages
+//     past DefaultValidFor.
 //
-// CollectedAt is rep.receivedAt in both branches, UNCHANGED: that is when
-// this package's cache actually recorded the evidence (Store.Put), not the
-// later moment Poll happens to run, and never the node's own clock — a
-// receiving side's own bookkeeping timestamp per pkg/observation's doc
-// comment. Source is [SourceFor](nodeID), not [SourceName] directly — see
-// that function's doc comment for why.
+// CollectedAt is always rep.receivedAt: when this package's cache actually
+// recorded the evidence (Store.Put), never the node's own clock and never
+// the later moment Poll happens to run — a receiving side's own bookkeeping
+// timestamp per pkg/observation's doc comment. Source is [SourceFor]
+// (nodeID), not [SourceName] directly — see that function's doc comment for
+// why.
 func buildValue(nodeID string, res observation.ResourceRef, sig observation.SignalID, value any, observedAt time.Time, rep report) observation.Observation {
 	source := SourceFor(nodeID)
 	opts := []observation.Option{
@@ -325,7 +326,7 @@ func buildValue(nodeID string, res observation.ResourceRef, sig observation.Sign
 		observation.WithCollectedAt(rep.receivedAt),
 	}
 
-	if rep.retained {
+	if observedAt.IsZero() {
 		o, err := observation.MeasuredUnknownAge(res, sig, value, opts...)
 		if err != nil {
 			return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)

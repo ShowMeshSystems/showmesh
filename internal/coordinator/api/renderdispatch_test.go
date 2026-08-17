@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -195,6 +196,23 @@ func surfaceTransportAvailableObs(nodeID, surfaceID string, available bool, obse
 	))
 }
 
+// errInjectingConfigStore wraps a real *store.Store, satisfying ConfigStore
+// via embedding, but lets a test force GetConfigRevision to fail as a
+// stand-in for a transient coordinator-side store error (SQLite busy, disk
+// full, and the like) — the exact case Finding 5 is about: this must never
+// be reported as a node-side rejection.
+type errInjectingConfigStore struct {
+	*store.Store
+	getConfigRevisionErr error
+}
+
+func (e *errInjectingConfigStore) GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error) {
+	if e.getConfigRevisionErr != nil {
+		return store.ConfigRevisionRecord{}, e.getConfigRevisionErr
+	}
+	return e.Store.GetConfigRevision(ctx, kind, id, revision)
+}
+
 // --- Auth ---
 
 func TestRenderDispatchRefusedUnauthenticated(t *testing.T) {
@@ -288,6 +306,39 @@ func TestRenderApplyRefusesOnAmbiguousAsset(t *testing.T) {
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0", setup.pub.count())
+	}
+}
+
+// TestRenderApplyCoordinatorStoreFailureIsInternalErrorNeverDispatched
+// proves Finding 5's fix: a transient coordinator-side store error while
+// resolving render.surface.apply's params (here, GetConfigRevision) must
+// become a real 500, and must never dispatch a command carrying
+// "params": null that a node would refuse for reasons the coordinator
+// never actually experienced. Revert resolveRenderApplyParams's
+// GetConfigRevision path to `return nil, nil` and this test fails: the
+// handler proceeds to dispatch a nil-params command and returns 200.
+func TestRenderApplyCoordinatorStoreFailureIsInternalErrorNeverDispatched(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+
+	deps := setup.deps()
+	deps.Config = &errInjectingConfigStore{Store: setup.st, getConfigRevisionErr: errors.New("simulated transient sqlite error")}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (a coordinator-side store failure is not a caller-attributable refusal); body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 — a coordinator-side failure to resolve params must never dispatch a command with null params", setup.pub.count())
 	}
 }
 
@@ -448,6 +499,58 @@ func TestRenderApplyResolvesIdleOutputFromRenderSettings(t *testing.T) {
 	}
 	if result.Command.IdleOutput != config.RenderIdleOutputDiagnostic {
 		t.Fatalf("response command.idleOutput = %q, want %q — the resolved value must also be surfaced to the caller", result.Command.IdleOutput, config.RenderIdleOutputDiagnostic)
+	}
+}
+
+// TestRenderApplyIgnoresEvidenceSnapshottedBeforeDispatchEvenIfReceivedAfter
+// proves Finding 4's core scenario directly, independent of the restart
+// counter: a report the node SNAPSHOTTED (ObservedAt) before this command
+// was even dispatched, but which the coordinator only RECEIVED
+// (CollectedAt) afterward — an ordinary race on the agent's periodic
+// publish ticker — must not confirm. The old bug fenced on CollectedAt,
+// which this evidence clears; the fix fences on ObservedAt, which it does
+// not.
+func TestRenderApplyIgnoresEvidenceSnapshottedBeforeDispatchEvenIfReceivedAfter(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		// ObservedAt (node's own sample time) is BEFORE dispatch (testNow);
+		// CollectedAt (coordinator receipt) is AFTER it.
+		setup.obs.setObs([]observation.Observation{
+			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(-time.Millisecond), testNow.Add(time.Millisecond)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed — the evidence was snapshotted by the node BEFORE dispatch, only received after; body: %s", result.Command.Outcome, body)
 	}
 }
 
@@ -735,6 +838,118 @@ func TestRenderApplyDoesNotConfirmOnAbsence(t *testing.T) {
 	}
 	if result.Command.Outcome != "unconfirmed" {
 		t.Fatalf("outcome = %q, want unconfirmed — an absence is never evidence the surface reached \"running\"; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// --- render.pipeline.restart's own confirmation shape (Finding 4) ---
+//
+// wantState "running" is exactly what a healthy, never-restarted surface
+// already reports, so a fence keyed to the coordinator's receipt time (the
+// pre-fix bug) could trivially confirm off a pre-existing reading. An
+// EARLIER version of this fix additionally required
+// surface.pipeline.restart_count to move past a pre-dispatch baseline —
+// reverted after TestRenderApplyClearRestartAgainstRealAgent
+// (test/integration/render_dispatch_test.go) proved it against a real
+// agent: internal/agent/pipeline.runner's cmdRestart branch preserves the
+// existing restartCount (restartCount only increments on the crash-exit
+// branch, never on an operator-issued restart), so requiring it to
+// increase made every real restart command time out. The ObservedAt fence
+// alone is sufficient: runner.setState only stamps a fresh ObservedAt on a
+// REAL transition, and cmdRestart unconditionally runs
+// stopCurrent+attemptStart (Starting, then Running), so a stale
+// pre-dispatch "running" reading can never satisfy it.
+
+// TestRenderRestartIgnoresPreDispatchEvidence proves the ObservedAt fence
+// (shared with apply/clear via evaluateRenderSurfaceState) also governs
+// restart: a "running" reading whose node-reported ObservedAt predates
+// dispatch must not confirm — the classic 179-microsecond shape, reused
+// here for the newest command.
+func TestRenderRestartIgnoresPreDispatchEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	// A pre-existing "running" reading that predates dispatch — the exact
+	// state a restart wants, but stale evidence of it.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(-time.Hour), testNow.Add(-time.Hour)),
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/restart", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed — the only evidence on record predates this dispatch; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderRestartConfirmsOnFreshPostDispatchEvidence proves the other
+// half: once a "running" reading whose ObservedAt post-dates dispatch
+// arrives — the shape a genuine restart's Starting-then-Running transition
+// produces — the command confirms.
+func TestRenderRestartConfirmsOnFreshPostDispatchEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	// Stale pre-dispatch "running", exactly what a restart's target
+	// surface already reports before the command is even sent.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(-time.Minute), testNow.Add(-time.Minute)),
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		// A fresh reading, ObservedAt after dispatch — the real restart's
+		// eventual re-entry into "running".
+		setup.obs.setObs([]observation.Observation{
+			surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/restart", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	if action := setup.pub.payload[0].Payload.Action; action != "render.pipeline.restart" {
+		t.Fatalf("dispatched action = %q, want render.pipeline.restart", action)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed; body: %s", result.Command.Outcome, body)
 	}
 }
 
