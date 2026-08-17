@@ -120,6 +120,7 @@ type fakeFPPCommandServer struct {
 	requestTimes  []time.Time // real wall-clock time.Now() when each request was received
 	status        int
 	body          string
+	onRequest     func() // if set, called (outside f.mu) on every request received
 }
 
 func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.Server, *fakeFPPCommandServer) {
@@ -131,7 +132,11 @@ func newFakeFPPCommandServer(t *testing.T, status int, body string) (*httptest.S
 		f.requests = append(f.requests, r.URL.EscapedPath())
 		f.requestBodies = append(f.requestBodies, string(raw))
 		f.requestTimes = append(f.requestTimes, time.Now())
+		hook := f.onRequest
 		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		w.WriteHeader(f.status)
 		_, _ = w.Write([]byte(f.body))
 	}))
