@@ -699,7 +699,7 @@ export interface paths {
         };
         /**
          * Enumerate show.action objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` — never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`).
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` — never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`). show.action objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
          */
         get: operations["listShowActions"];
         put?: never;
@@ -757,7 +757,7 @@ export interface paths {
         };
         /**
          * Enumerate show.macro objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action.
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action. show.macro objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
          */
         get: operations["listShowMacros"];
         put?: never;
@@ -875,7 +875,7 @@ export interface paths {
         };
         /**
          * Enumerate show objects (Track E, ADR-027)
-         * @description Object ids with label (the show's own name), show (the show's own id — a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro — never toggled by `Options.CloseReads`.
+         * @description Object ids with label (the show's own name), show (the show's own id — a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro — never toggled by `Options.CloseReads`. show objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
          */
         get: operations["listShows"];
         put?: never;
@@ -933,7 +933,7 @@ export interface paths {
         };
         /**
          * Enumerate show.surface objects (Track E, ADR-026)
-         * @description Object ids with label (the surface's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. Same read posture as GET /config/show.
+         * @description Object ids with label (the surface's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>` and/or `?node=<id>` (both may be set at once; a surface must match every filter given). `?node=` exists so a caller that wants "which surfaces are assigned to this node" never has to fetch each candidate's full payload just to read its node field. Same read posture as GET /config/show.
          */
         get: operations["listShowSurfaces"];
         put?: never;
@@ -4044,6 +4044,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigObjectsListResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
@@ -4156,6 +4157,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigObjectsListResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
@@ -4370,6 +4372,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigObjectsListResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
@@ -4468,6 +4471,8 @@ export interface operations {
             query?: {
                 /** @description Narrow the list to surfaces belonging to this show id. */
                 show?: string;
+                /** @description Narrow the list to surfaces assigned to this node id. */
+                node?: string;
             };
             header?: never;
             path?: never;

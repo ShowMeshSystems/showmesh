@@ -11,22 +11,40 @@ import type { Model, ObservationEntry, RenderCommandResult, SessionResponse } fr
 // wiring to "render:command", grouping by surface, and rendering
 // confirmed/unconfirmed honestly per ADR-003) from store.ts's own network
 // behavior.
-// Finding 16: listConfigObjects/getShowSurface are the two calls
-// [useConfiguredSurfaceIds] makes to discover a configured-but-unapplied
-// surface — mocked here for the identical reason as the three command
-// verbs below, and defaulted to "nothing configured" so tests that never
-// set them keep the pre-fix behavior.
-const { applyRenderSurface, clearRenderSurface, restartRenderPipeline, listConfigObjects, getShowSurface } =
-  vi.hoisted(() => ({
-    applyRenderSurface: vi.fn(),
-    clearRenderSurface: vi.fn(),
-    restartRenderPipeline: vi.fn(),
-    listConfigObjects: vi.fn(),
-    getShowSurface: vi.fn(),
-  }))
+// Finding 16 / PR #14 review fix: [useConfiguredSurfaceIds] now makes ONE
+// call, listShowSurfacesForNode (GET /config/show.surface?node=), to
+// discover a configured-but-unapplied surface. listConfigObjects and
+// getShowSurface are ALSO mocked here, deliberately: the review's point
+// was that the old per-row getShowSurface fan-out must become unreachable
+// from this panel, not merely smaller, so several tests below assert
+// those two were never called rather than only asserting the new call
+// was.
+const {
+  applyRenderSurface,
+  clearRenderSurface,
+  restartRenderPipeline,
+  listConfigObjects,
+  getShowSurface,
+  listShowSurfacesForNode,
+} = vi.hoisted(() => ({
+  applyRenderSurface: vi.fn(),
+  clearRenderSurface: vi.fn(),
+  restartRenderPipeline: vi.fn(),
+  listConfigObjects: vi.fn(),
+  getShowSurface: vi.fn(),
+  listShowSurfacesForNode: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, applyRenderSurface, clearRenderSurface, restartRenderPipeline, listConfigObjects, getShowSurface }
+  return {
+    ...actual,
+    applyRenderSurface,
+    clearRenderSurface,
+    restartRenderPipeline,
+    listConfigObjects,
+    getShowSurface,
+    listShowSurfacesForNode,
+  }
 })
 
 afterEach(() => {
@@ -36,6 +54,7 @@ afterEach(() => {
   restartRenderPipeline.mockReset()
   listConfigObjects.mockReset()
   getShowSurface.mockReset()
+  listShowSurfacesForNode.mockReset()
 })
 
 const NOW = '2026-08-17T00:00:00.000Z'
@@ -161,29 +180,15 @@ describe('RenderSurfacePanel', () => {
   // Revert useConfiguredSurfaceIds (or the union into bySurface/order in
   // RenderSurfacePanel) and this test fails: it stays on "This node has
   // never published a render report" and finds no "Apply" button.
+  //
+  // PR #14 review fix: the server now does the node filtering (GET
+  // /config/show.surface?node=media-01), so the fixture is already
+  // narrowed to this node's surfaces — no getShowSurface round trip.
   it('renders apply/clear/restart for a configured surface that has never reported (Finding 16)', async () => {
-    listConfigObjects.mockResolvedValue({
+    listShowSurfacesForNode.mockResolvedValue({
       serverTime: NOW,
       kind: 'show.surface',
       objects: [{ id: 'wall-1', label: 'Wall', show: 'halloween', currentRevision: 1, updatedAt: NOW }],
-    })
-    getShowSurface.mockResolvedValue({
-      serverTime: NOW,
-      kind: 'show.surface',
-      id: 'wall-1',
-      revision: 1,
-      payload: {
-        show: 'halloween',
-        name: 'Wall',
-        node: 'media-01',
-        channelRange: { startChannel: 1, channelCount: 12 },
-        geometry: { width: 2, height: 2, pixelFormat: 'rgb' },
-        frameRate: 40,
-        output: { transport: 'ndi', ndi: { sourceName: 'wall-1' } },
-      },
-      updatedAt: NOW,
-      createdByPrincipalId: null,
-      createdByPrincipalName: null,
     })
     const model = makeModel({ session: signedIn({ scopes: ['render:command', 'show:macro:run'] }) })
     renderPanel(model, [])
@@ -192,31 +197,22 @@ describe('RenderSurfacePanel', () => {
     expect(screen.getByText(/never applied, so there is no render report yet/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
     expect(screen.queryByText(/has never published a render report/)).not.toBeInTheDocument()
+    expect(listShowSurfacesForNode).toHaveBeenCalledWith('media-01')
   })
 
-  it('does not union in a show.surface object assigned to a different node', async () => {
-    listConfigObjects.mockResolvedValue({
+  // A surface assigned to a different node must never appear, whether the
+  // exclusion happens server-side (the real API, filtered by ?node=) or —
+  // if the component regressed back toward client-side filtering — was
+  // supposed to happen in the browser. This test's fixture returns ONLY
+  // the requested node's surface, exactly what the real filtered endpoint
+  // would return, so a regression that re-introduced unfiltered fetching
+  // (listConfigObjects returning every surface) would leak "other-wall"
+  // into the union and fail this test.
+  it('renders nothing for a node with no surfaces in the (already node-filtered) response', async () => {
+    listShowSurfacesForNode.mockResolvedValue({
       serverTime: NOW,
       kind: 'show.surface',
-      objects: [{ id: 'other-wall', label: 'Other', show: 'halloween', currentRevision: 1, updatedAt: NOW }],
-    })
-    getShowSurface.mockResolvedValue({
-      serverTime: NOW,
-      kind: 'show.surface',
-      id: 'other-wall',
-      revision: 1,
-      payload: {
-        show: 'halloween',
-        name: 'Other',
-        node: 'media-02',
-        channelRange: { startChannel: 1, channelCount: 12 },
-        geometry: { width: 2, height: 2, pixelFormat: 'rgb' },
-        frameRate: 40,
-        output: { transport: 'ndi', ndi: { sourceName: 'other-wall' } },
-      },
-      updatedAt: NOW,
-      createdByPrincipalId: null,
-      createdByPrincipalName: null,
+      objects: [],
     })
     const model = makeModel({ session: signedIn({ scopes: ['render:command', 'show:macro:run'] }) })
     renderPanel(model, [])
@@ -229,6 +225,32 @@ describe('RenderSurfacePanel', () => {
     const model = makeModel({ session: signedIn({ scopes: ['render:command'] }) })
     renderPanel(model, [])
     expect(screen.getByText(/has never published a render report/)).toBeInTheDocument()
+    expect(listShowSurfacesForNode).not.toHaveBeenCalled()
     expect(listConfigObjects).not.toHaveBeenCalled()
+  })
+
+  // The core of the PR #14 review finding: the OLD per-row fan-out
+  // (listConfigObjects('show.surface') then one getShowSurface(id) per
+  // row) must be UNREACHABLE from this panel, not merely unused in this
+  // particular fixture. Assert their absence directly rather than only
+  // asserting the new call happened — a component that called both the
+  // new AND the old path would still pass a "new call happened" check.
+  it('never calls the old listConfigObjects/getShowSurface fan-out, even with multiple configured surfaces', async () => {
+    listShowSurfacesForNode.mockResolvedValue({
+      serverTime: NOW,
+      kind: 'show.surface',
+      objects: [
+        { id: 'wall-1', label: 'Wall', show: 'halloween', currentRevision: 1, updatedAt: NOW },
+        { id: 'wall-2', label: 'Wall 2', show: 'halloween', currentRevision: 1, updatedAt: NOW },
+      ],
+    })
+    const model = makeModel({ session: signedIn({ scopes: ['render:command', 'show:macro:run'] }) })
+    renderPanel(model, [])
+
+    expect(await screen.findByText('Surface: wall-1')).toBeInTheDocument()
+    expect(screen.getByText('Surface: wall-2')).toBeInTheDocument()
+    expect(listShowSurfacesForNode).toHaveBeenCalledTimes(1)
+    expect(listConfigObjects).not.toHaveBeenCalled()
+    expect(getShowSurface).not.toHaveBeenCalled()
   })
 })

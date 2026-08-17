@@ -97,6 +97,10 @@ func (h *handlers) listShowSummaries(ctx context.Context) ([]v1.ConfigObjectSumm
 
 func (h *handlers) handleListShows(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	if r.URL.Query().Has("node") {
+		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.ShowConfigKind))
+		return
+	}
 	objs, err := h.listShowSummaries(r.Context())
 	if err != nil {
 		h.writeInternalError(w, now, "list show config objects", err)
@@ -187,8 +191,17 @@ func mapShowConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj st
 
 // listShowSurfaceSummaries lists every "show.surface" config object with
 // an active revision, optionally narrowed to those whose "show" field
-// equals showFilter (empty means no filter).
-func (h *handlers) listShowSurfaceSummaries(ctx context.Context, showFilter string) ([]v1.ConfigObjectSummary, error) {
+// equals showFilter and/or whose "node" field equals nodeFilter (empty
+// means no filter on that axis; both may be set at once).
+//
+// The node filter exists so a client that only wants "which surfaces are
+// assigned to this node" (RenderSurfacePanel.tsx) never has to fetch every
+// candidate's full payload just to read payload.node — the review of PR
+// #14 found exactly that fan-out costing one HTTP call per configured
+// surface. Filtering here, against the same per-object decode the show
+// filter already does, keeps that a single list call regardless of how
+// many surfaces are configured.
+func (h *handlers) listShowSurfaceSummaries(ctx context.Context, showFilter, nodeFilter string) ([]v1.ConfigObjectSummary, error) {
 	objs, err := h.deps.Config.ListConfigObjects(ctx, config.ShowSurfaceConfigKind)
 	if err != nil {
 		return nil, fmt.Errorf("list show.surface config objects: %w", err)
@@ -205,11 +218,15 @@ func (h *handlers) listShowSurfaceSummaries(ctx context.Context, showFilter stri
 		var head struct {
 			Show string `json:"show"`
 			Name string `json:"name"`
+			Node string `json:"node"`
 		}
 		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
 			return nil, fmt.Errorf("decode show.surface config payload head for %q: %w", obj.ID, err)
 		}
 		if showFilter != "" && head.Show != showFilter {
+			continue
+		}
+		if nodeFilter != "" && head.Node != nodeFilter {
 			continue
 		}
 		out = append(out, v1.ConfigObjectSummary{
@@ -223,7 +240,8 @@ func (h *handlers) listShowSurfaceSummaries(ctx context.Context, showFilter stri
 func (h *handlers) handleListShowSurfaces(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	showFilter := r.URL.Query().Get("show")
-	objs, err := h.listShowSurfaceSummaries(r.Context(), showFilter)
+	nodeFilter := r.URL.Query().Get("node")
+	objs, err := h.listShowSurfaceSummaries(r.Context(), showFilter, nodeFilter)
 	if err != nil {
 		h.writeInternalError(w, now, "list show.surface config objects", err)
 		return

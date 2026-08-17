@@ -909,13 +909,30 @@ export class ApiStore {
   }
 
   /**
-   * `GET /api/v1/config/show.surface/{id}`. Finding 16: this is how the
-   * Operator UI learns a surface's assigned `node` — [listConfigObjects]'s
-   * summary carries `show`, not `node` (STEP-9-SPEC.md section 5.5's
-   * summary shape predates show.surface and was never widened), so the
-   * caller fetches each candidate object's full payload to filter by
-   * node. ADR-026 v1 scope is one surface per node, so this is a small,
-   * bounded fan-out, not an n+1 growth risk.
+   * `GET /api/v1/config/show.surface?node=<nodeId>` — server-side
+   * filtered, so this is how the Operator UI learns which show.surface
+   * objects are assigned to nodeId (payload.node) without a per-row
+   * detail fetch. Replaces the earlier approach of calling
+   * [listConfigObjects]('show.surface') and then [getShowSurface] once
+   * per candidate to read its node field (an external review of PR #14
+   * caught that as O(M) HTTP calls per render for a node with M
+   * configured surfaces — api.go's showobjects.go now filters server-side
+   * instead).
+   */
+  async listShowSurfacesForNode(nodeId: string): Promise<SchemaConfigObjectsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigObjectsListResponse>(
+        `/config/show.surface?node=${encodeURIComponent(nodeId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.surface/{id}`.
    */
   async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
     const controller = this.beginSideCall()
