@@ -102,6 +102,11 @@ func startRealProcess(ctx context.Context, path string, args []string, onRunning
 
 	h := &realProcess{cmd: cmd, done: make(chan ExitResult, 1)}
 
+	// os/exec's StdoutPipe/StderrPipe doc states this verbatim: Wait closes
+	// both pipes as soon as the process exits, so calling it before every
+	// pipe reader has finished loses in-flight output. h.scanners is joined
+	// before h.wait calls cmd.Wait() to honour that rule.
+	h.scanners.Add(2)
 	go h.watchStdout(stdout, onRunningMarker)
 	go h.watchStderr(stderr)
 	go h.wait()
@@ -118,12 +123,25 @@ type realProcess struct {
 	stderrTail       []byte
 	sawRunningMarker bool
 
+	// scanners is released once by each of watchStdout/watchStderr, however
+	// they exit (normal EOF or a scan error), so wait() never calls
+	// cmd.Wait() while a pipe reader is still in flight.
+	scanners sync.WaitGroup
+
 	killOnce sync.Once
 	killErr  error
 }
 
+// maxScanLineBytes bounds a single scanned line. Larger than the bufio
+// default (64 KiB) so ordinary long lines never trip it, but still finite:
+// a scan error must never stop draining, or the child blocks forever in
+// write(2) once the pipe's kernel buffer fills.
+const maxScanLineBytes = 1 << 20
+
 func (h *realProcess) watchStdout(r io.Reader, onRunningMarker func()) {
+	defer h.scanners.Done()
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanLineBytes)
 	fired := false
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -137,15 +155,26 @@ func (h *realProcess) watchStdout(r io.Reader, onRunningMarker func()) {
 			}
 		}
 	}
+	// A scan error (e.g. ErrTooLong) stops Scan from returning more lines,
+	// but the pipe itself is still open and the child can still be writing
+	// to it. Keep draining so the child's write(2) never blocks forever.
+	if scanner.Err() != nil {
+		_, _ = io.Copy(io.Discard, r)
+	}
 }
 
 func (h *realProcess) watchStderr(r io.Reader) {
+	defer h.scanners.Done()
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanLineBytes)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		h.mu.Lock()
 		h.stderrTail = appendBounded(h.stderrTail, line, maxStderrTailBytes)
 		h.mu.Unlock()
+	}
+	if scanner.Err() != nil {
+		_, _ = io.Copy(io.Discard, r)
 	}
 }
 
@@ -164,6 +193,7 @@ func appendBounded(tail, line []byte, max int) []byte {
 }
 
 func (h *realProcess) wait() {
+	h.scanners.Wait()
 	err := h.cmd.Wait()
 
 	h.mu.Lock()
