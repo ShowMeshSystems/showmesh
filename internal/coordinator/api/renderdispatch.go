@@ -572,6 +572,31 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 			"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
 			notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
 	}
+
+	// A surface this node explicitly stops reporting, with a reason
+	// (noderender.Collector.Poll's dropped-surface absence — see that
+	// package), IS evidence the pipeline is gone: ADR-003's "evidence that
+	// observed state moved", exactly as much as an explicit "stopped"
+	// value would be. The CollectedAt-vs-notBefore fence immediately above
+	// already applies to this row too, so this branch can only fire on
+	// absence evidence that post-dates dispatch — the fence this project
+	// has paid for once already (a command confirmed 179 microseconds
+	// after its own dispatch off a pre-dispatch reading) is not
+	// bypassed here. Only wantState=="stopped" (render.surface.clear)
+	// accepts this: render.surface.apply/render.pipeline.restart want
+	// "running", which an absence can never satisfy.
+	if wantState == mqttproto.RenderPipelineStateStopped && o.Absence == observation.StateNotCollected {
+		reason := o.Reason
+		if reason == "" {
+			reason = "surface.pipeline.state was explicitly reported absent"
+		}
+		// Formatted with the same `surface.pipeline.state = %q` prefix the
+		// value-observation branch below uses, so a caller reading the
+		// outcome reason sees the desired state was reached either way —
+		// only the parenthetical names how it was confirmed.
+		return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src)
+	}
+
 	state := o.StateAt(h.now())
 	if state != observation.StateCurrent {
 		reason := o.Reason

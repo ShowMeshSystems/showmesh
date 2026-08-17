@@ -171,6 +171,19 @@ func surfacePipelineStateObs(nodeID, surfaceID, state string, observedAt, collec
 	))
 }
 
+// surfaceDroppedAbsenceObs builds the exact absence evidence
+// noderender.Collector.Poll emits for a surface a node stops reporting —
+// see that package's Poll doc comment — so this file's tests can prove the
+// confirmation path against the real shape rather than a hand-picked one.
+func surfaceDroppedAbsenceObs(nodeID, surfaceID string, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.NotCollected(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		noderender.SignalSurfacePipelineState,
+		"node "+nodeID+" no longer reports this surface",
+		observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
+	))
+}
+
 // --- Auth ---
 
 func TestRenderDispatchRefusedUnauthenticated(t *testing.T) {
@@ -474,5 +487,151 @@ func TestRenderApplyIgnoresAnotherNodesConflictingEvidence(t *testing.T) {
 	if result.Command.Outcome != "unconfirmed" {
 		t.Fatalf("outcome = %q, want %q — media-01 itself never reported this surface, so another node's matching evidence must not confirm it",
 			result.Command.Outcome, "unconfirmed")
+	}
+}
+
+// --- render.surface.clear confirms on the dropped-surface absence too ---
+//
+// Supervisor.Clear (internal/agent/pipeline) no longer reports a cleared
+// surface as "stopped" forever — it stops reporting it entirely, and
+// noderender.Collector.Poll turns that into an explicit absence
+// observation (see collector.go's Poll doc comment). A clear command's
+// confirmation must accept that absence as confirming evidence, or a real
+// clear can never confirm again — see evaluateRenderSurfaceState's own
+// doc comment for the ADR-003 argument.
+
+// TestRenderClearConfirmsOnDroppedSurfaceAbsence proves the fix: a
+// clear dispatched to media-01, confirmed purely by noderender's absence
+// observation for wall-1 arriving after dispatch — never a "stopped"
+// value observation at all.
+func TestRenderClearConfirmsOnDroppedSurfaceAbsence(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// Evidence arrives shortly after dispatch, dated after testNow —
+	// proves the confirm loop actually polls for it.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfaceDroppedAbsenceObs("media-01", "wall-1", testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct {
+			Outcome       string `json:"outcome"`
+			OutcomeReason string `json:"outcomeReason"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed; body: %s", result.Command.Outcome, body)
+	}
+	// showmeshctl prints OutcomeReason as plain text, not OutcomeState
+	// (cmd_render_command.go's reportRenderCommandResult), and
+	// test/integration/render_dispatch_test.go's own CLI-level assertion
+	// checks THAT text for a literal `"stopped"` — pinned here too, against
+	// the DECODED field (not the raw JSON body, where the same quotes are
+	// escaped as \"stopped\"), so a regression is caught at the unit level
+	// before the much slower integration suite has to find it.
+	if !strings.Contains(result.Command.OutcomeReason, `"stopped"`) {
+		t.Errorf(`outcomeReason = %q, want it to name the confirmed "stopped" state even though it was reached via absence`, result.Command.OutcomeReason)
+	}
+}
+
+// TestRenderClearIgnoresAbsenceThatPredatesDispatch is the ADR-003 fence
+// this project has paid for before (CLAUDE.md: a command confirmed 179
+// microseconds after its own dispatch, off a pre-dispatch reading): an
+// absence observation that predates the clear dispatch must not confirm
+// it, even though it is the right surface, the right node, and an absence.
+func TestRenderClearIgnoresAbsenceThatPredatesDispatch(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// Stale: collected well BEFORE this request's own dispatch instant
+	// (testNow), e.g. left over from an earlier, unrelated clear.
+	setup.obs.setObs([]observation.Observation{surfaceDroppedAbsenceObs("media-01", "wall-1", testNow.Add(-time.Hour))})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed — the only evidence on record predates this dispatch; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderApplyDoesNotConfirmOnAbsence proves the absence-confirms
+// exception is scoped to render.surface.clear's "stopped" desired state
+// only: an apply (wanting "running") dispatched while the only evidence is
+// a fresh, post-dispatch absence must NOT confirm — an absent surface is
+// never evidence that it is running.
+func TestRenderApplyDoesNotConfirmOnAbsence(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfaceDroppedAbsenceObs("media-01", "wall-1", testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed — an absence is never evidence the surface reached \"running\"; body: %s", result.Command.Outcome, body)
 	}
 }

@@ -70,8 +70,15 @@ func TestRenderReportReachesObservationsAndNodeAPI(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("GET /api/v1/observations: status = %d, body: %s", status, obsBody)
 	}
-	if !containsAll(string(obsBody), `"kind":"surface"`, `"id":"garage"`, `"source":"node-render"`) {
-		t.Errorf("GET /api/v1/observations body missing expected surface/garage/node-render evidence: %s", obsBody)
+	// The source is node-scoped ("node-render:<nodeID>"), not the bare
+	// collector id — see noderender.SourceFor's doc comment: two different
+	// nodes reporting the same surface id must not collide on one row, so
+	// every observation this collector produces carries its own node's
+	// identity in Source. Asserted as the exact node-scoped value, not a
+	// "node-render" prefix match, so this test would fail again if the
+	// per-node scoping regressed back to the bare, colliding id.
+	if !containsAll(string(obsBody), `"kind":"surface"`, `"id":"garage"`, `"source":"node-render:render-01"`) {
+		t.Errorf("GET /api/v1/observations body missing expected surface/garage/node-render:render-01 evidence: %s", obsBody)
 	}
 
 	// --- GET /api/v1/nodes/render-01 carries the same evidence under render ---
