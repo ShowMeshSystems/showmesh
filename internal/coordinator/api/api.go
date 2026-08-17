@@ -1195,6 +1195,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/resolume.recovery", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeRecoveryConfig))
 	mux.HandleFunc("GET /api/v1/config/resolume.recovery/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfigRevisions))
 
+	// GET/PUT /api/v1/config/render.settings (Track B seam B2c, ADR-039):
+	// the idle-output/restart-policy singleton. Mirrors
+	// /config/resolume.recovery's config:write-only posture exactly
+	// (rendersettings.go) — no open read exists for this kind.
+	mux.HandleFunc("GET /api/v1/config/render.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/render.settings", h.writeGuard(&scopeConfigWrite, h.handlePutRenderSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/render.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfigRevisions))
+
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"
 	// is an explicit path segment, not a bare {id} under /resolume/, because

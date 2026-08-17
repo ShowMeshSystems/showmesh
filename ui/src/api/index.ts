@@ -37,6 +37,10 @@ export type {
   ResolumeRecoveryRestoreResponse,
   ConfigResolumeRecoveryPayload,
   ResolumeRecoveryConfigResponse,
+  // Track B seam B2c (ADR-039): render.settings.
+  ConfigRenderRestartPolicy,
+  ConfigRenderSettingsPayload,
+  RenderSettingsConfigResponse,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,
@@ -118,6 +122,9 @@ export {
   getResolumeRecoveryConfig,
   putResolumeRecoveryConfig,
   restoreResolumeRecovery,
+  getRenderSettingsConfig,
+  putRenderSettingsConfig,
+  getRenderSettingsConfigRevisions,
   listResolumeInstances,
   getResolumeInstance,
   listResolumeActions,

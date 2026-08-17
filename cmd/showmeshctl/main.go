@@ -68,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSurface(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
+	case "render":
+		return cmdRender(rest, stdout, stderr, clock)
 	case "assets":
 		return cmdAssets(rest, stdout, stderr, clock)
 	case "version":
@@ -171,6 +173,11 @@ Commands:
                            versus what it actually holds (Track E seam E5)
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
+  render settings get                  show the active render.settings configuration (Track B,
+                                        ADR-039; never 404s — reports the built-in default)
+  render settings set                  write a new render.settings revision (write, full
+                                        replacement, requires config:write)
+  render settings revisions            list render.settings revision history, newest first
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

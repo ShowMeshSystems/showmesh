@@ -23,6 +23,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
+  ConfigRenderSettingsPayload,
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
@@ -30,6 +31,7 @@ import type {
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   Model,
+  RenderSettingsConfigResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
   ResolumeRecoveryConfigResponse,
@@ -119,6 +121,22 @@ export function putResolumeRecoveryConfig(
 
 export function restoreResolumeRecovery(): Promise<ResolumeRecoveryRestoreResponse> {
   return store.restoreResolumeRecovery()
+}
+
+// Track B seam B2c (ADR-039): render.settings. Same thin pass-through
+// pattern.
+export function getRenderSettingsConfig(): Promise<RenderSettingsConfigResponse> {
+  return store.getRenderSettingsConfig()
+}
+
+export function putRenderSettingsConfig(
+  payload: ConfigRenderSettingsPayload,
+): Promise<RenderSettingsConfigResponse> {
+  return store.putRenderSettingsConfig(payload)
+}
+
+export function getRenderSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getRenderSettingsConfigRevisions()
 }
 
 // Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin

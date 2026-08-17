@@ -12,6 +12,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { RenderSettingsPanel } from '../components/RenderSettingsPanel'
 
 // Step 7 seam A (RES-008 D1): the configuration write surface's own view —
 // the active `fpp.endpoints` configuration, its revision history, and an
@@ -299,6 +300,13 @@ export function Configuration() {
 
             </>
           )}
+        </>
+      )}
+
+      {scopeGate.allowed && (
+        <>
+          <hr style={{ margin: '2rem 0' }} />
+          <RenderSettingsPanel />
         </>
       )}
     </div>
