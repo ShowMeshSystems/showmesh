@@ -65,6 +65,10 @@ function commandResult(overrides: Partial<RenderCommandResult> = {}): RenderComm
     outcomeReason: 'surface.pipeline.state = "stopped"',
     dispatchedAt: NOW,
     resolvedAt: NOW,
+    // Empty rather than omitted: this fixture's action is a clear, which
+    // carries no idleOutput, and the contract states that as "" rather than
+    // leaving the field out.
+    idleOutput: '',
     ...overrides,
   }
 }
