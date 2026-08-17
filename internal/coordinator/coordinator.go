@@ -205,9 +205,9 @@ func Run() int {
 	// unconditionally (a render node is optional; this cache costs nothing
 	// when nothing ever publishes to it), and handed to inv below so
 	// HandleMessage's "render" case has somewhere to push a decoded report
-	// — see inventory.WithRenderSink. renderCollector (registered on
-	// fppRunner further down, once fppRunner exists) reads back out of the
-	// SAME store, on its own poll cadence.
+	// — see inventory.WithRenderSink. noderender.Collector (registered on
+	// its own Runner further down) reads back out of the SAME store, on
+	// its own poll cadence.
 	renderStore := noderender.NewStore()
 
 	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore))
@@ -259,16 +259,20 @@ func Run() int {
 	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
 
 	// Track B seam B2b: renderStore (built above, already wired into inv)
-	// gets its own read side here — a Collector sharing this same
-	// fppRunner rather than a second Runner, matching how the Resolume
-	// collector joins it too (see newResolumeWiring's own doc comment for
-	// why one Runner is the standing pattern for "another observation
-	// source, no reason for its own goroutine-management copy"). Renders
-	// whatever renderStore currently holds into surface.* observations on
-	// its own cadence; see noderender's package doc comment for why this
-	// never touches the network and is unconditional (a coordinator with
-	// no render node ever attached simply Polls an empty store forever).
-	fppRunner.Add(noderender.New(renderStore), noderender.DefaultPollInterval)
+	// gets its own read side here — its OWN Runner, not fppRunner, because
+	// its completeness claim is genuinely different from fppRunner's other
+	// collectors' (see nodeRenderSink's doc comment in apiwiring.go):
+	// noderender.Collector never touches the network, so every Poll is the
+	// full current picture of every surface across every node, not just
+	// the resource(s) one delivery happens to mention — and pruning a
+	// surface that vanished entirely from a delivery needs that global
+	// claim, which fppSink's per-resource pruning cannot express. Renders
+	// whatever renderStore currently holds on its own cadence; see
+	// noderender's package doc comment for why this never touches the
+	// network and is unconditional (a coordinator with no render node ever
+	// attached simply Polls an empty store forever).
+	nodeRenderRunner := collector.NewRunner(&nodeRenderSink{st: st, logger: logger}, logger)
+	nodeRenderRunner.Add(noderender.New(renderStore), noderender.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -829,7 +833,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(5)
+	backgroundWG.Add(6)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -837,6 +841,10 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		fppRunner.Run(ctx)
+	}()
+	go func() {
+		defer backgroundWG.Done()
+		nodeRenderRunner.Run(ctx)
 	}()
 	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
 	// (assetsync/sync.go), joined via the identical backgroundWG so

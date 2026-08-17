@@ -16,6 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -573,6 +574,137 @@ func TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged(t *testing.T) {
 	}
 	if len(after) != 1 {
 		t.Fatalf("after the pruning delivery: %d observations remain, want 1 (fpp.port.16.current_ma must be pruned)", len(after))
+	}
+}
+
+// renderSurfacePayload builds a one-surface [mqttproto.RenderPayload], the
+// same shape noderender's own package tests use, for surfaceID.
+func renderSurfacePayload(surfaceID string) mqttproto.RenderPayload {
+	return mqttproto.RenderPayload{
+		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
+		GstLaunchAvailable: true,
+		Surfaces: []mqttproto.RenderSurfaceReport{{
+			SurfaceID:      surfaceID,
+			PipelineState:  mqttproto.RenderPipelineStateRunning,
+			Since:          time.Unix(1000, 0).UTC(),
+			FramesWritten:  10,
+			Transport:      "ndi",
+			ObservedAt:     time.Unix(2000, 0).UTC(),
+		}},
+	}
+}
+
+// TestFPPSinkLeavesADroppedSurfaceAsAGhostRow proves noderender.Collector.
+// Poll's OLD doc comment claim was false, and documents why: fppSink's
+// generic completeness contract (store.Store.ReplaceObservations) only
+// prunes stale SIGNALS within a resource that IS present in a delivery — a
+// resource entirely absent from the delivery ("this poll didn't mention
+// it") is, by that method's own doc comment, "left completely untouched".
+// noderender.Collector aggregates MULTIPLE surfaces into one batch, so a
+// dropped surface's key is simply missing from the next delivery, and
+// nothing scopes a DELETE to it. This is why noderender is wired to its
+// own [nodeRenderSink] in production (coordinator.go) rather than sharing
+// fppSink the way every other collector in this codebase does — see
+// TestNodeRenderSinkPrunesADroppedSurface immediately below for the fixed
+// path, driven against the exact same scenario.
+func TestFPPSinkLeavesADroppedSurfaceAsAGhostRow(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs, complete)
+
+	renderStore.Put("render-a", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+	obs2, complete2 := c.Poll(ctx)
+	sink.RecordObservations(ctx, obs2, complete2)
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(after) == 0 {
+		t.Fatalf("fppSink pruned the dropped surface's rows — this test's premise (that it CANNOT) no longer holds; if nodeRenderSink was reverted to reuse fppSink, update this test's doc comment rather than deleting it")
+	}
+}
+
+// TestNodeRenderSinkPrunesADroppedSurface is the coordinator review's named
+// reproduction, driven against the FIX: does dropping ONE node's surface,
+// while ANOTHER node still reports one, get pruned from the persisted
+// observations table when noderender is wired to [nodeRenderSink] — the
+// real production wiring in coordinator.go — instead of fppSink?
+//
+// It drives the real noderender.Collector against a real *store.Store via
+// nodeRenderSink — a fake would only prove this package's own assumptions
+// about the store back at itself (Step 5's "duplication found the bug in
+// the code that replaced it" lesson, in reverse: a hand-rolled fake would
+// just agree with itself).
+//
+// Mutation-checked: reverting nodeRenderSink's vanished-surface deletion
+// loop (or pointing noderender back at a plain fppSink, as in the test
+// above) makes this test fail identically to
+// TestFPPSinkLeavesADroppedSurfaceAsAGhostRow.
+func TestNodeRenderSinkPrunesADroppedSurface(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &nodeRenderSink{st: st, logger: testLogger()}
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs, complete)
+
+	before, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (before): %v", err)
+	}
+	if len(before) == 0 {
+		t.Fatalf("after the first poll: 0 observations stored for surface %q, want several", "garage")
+	}
+
+	// render-a's node clears its render assignment: its next report names
+	// no surfaces at all (a real agent-side "nothing to render now"
+	// payload, not a removal from the store). render-b is unaffected and
+	// still reports "patio" every cycle, which is what keeps this poll's
+	// overall batch non-empty — the case this fix's own notify() gate
+	// (len(observations) > 0) does NOT and should NOT suppress.
+	renderStore.Put("render-a", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+
+	obs2, complete2 := c.Poll(ctx)
+	if !complete2 {
+		t.Fatalf("second Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs2, complete2)
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (after): %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("after render-a cleared its surface: %d ghost observations remain for %q, want 0", len(after), "garage")
+	}
+
+	// Sanity: render-b's still-live surface must be unaffected either way.
+	stillThere, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "patio"})
+	if err != nil {
+		t.Fatalf("list observations (patio): %v", err)
+	}
+	if len(stillThere) == 0 {
+		t.Errorf("render-b's still-live surface %q was pruned too, want unaffected", "patio")
 	}
 }
 
