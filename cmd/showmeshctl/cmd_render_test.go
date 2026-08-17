@@ -165,6 +165,27 @@ func TestCmdRenderSettingsRevisionsListsNewestFirst(t *testing.T) {
 	}
 }
 
+// TestCmdRenderProbeIsRoutedNotUnknown proves "render probe" reaches
+// cmdRenderProbe rather than falling through to "unknown subcommand" —
+// this is the specific regression this seam existed to fix: the operation
+// shipped in the agent and coordinator with no CLI verb reaching it at
+// all. Wrong arg count is enough to prove routing without a real server:
+// cmdRenderProbe's own usage error is distinguishable from cmdRender's
+// generic "unknown subcommand" message.
+func TestCmdRenderProbeIsRoutedNotUnknown(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdRender([]string{"probe"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+	if strings.Contains(stderr.String(), "unknown subcommand") {
+		t.Fatalf(`stderr = %q, "probe" was routed to the generic unknown-subcommand path instead of cmdRenderProbe`, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "usage: showmeshctl render probe") {
+		t.Errorf("stderr = %q, want cmdRenderProbe's own usage message", stderr.String())
+	}
+}
+
 func TestCmdRenderUnknownSubcommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdRender([]string{"bogus"}, &stdout, &stderr, time.Now)

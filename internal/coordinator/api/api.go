@@ -1030,6 +1030,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/apply", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceApply))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/clear", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceClear))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/restart", h.writeGuard(&scopeRenderCommand, h.handleRenderPipelineRestart))
+	// Track B seam B4: dispatch render.transport.probe — a COMMAND (it
+	// starts a real gst-launch-1.0 subprocess on the node), never reachable
+	// by GET (ADR-024: no state change is reachable by GET), same
+	// render:command scope and same evidence-confirmation discipline as
+	// apply/clear/restart above. showmeshctl render transport (a read of
+	// last-known evidence) is a different, pre-existing surface — this is
+	// the "go find out now" counterpart.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe", h.writeGuard(&scopeRenderCommand, h.handleRenderTransportProbe))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))

@@ -166,6 +166,16 @@ func surfacePipelineStateObs(surfaceID, state string, observedAt, collectedAt ti
 	))
 }
 
+// surfaceTransportAvailableObs mirrors surfacePipelineStateObs for
+// surface.transport.available, this seam's own confirmation signal.
+func surfaceTransportAvailableObs(surfaceID string, available bool, observedAt, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		observation.SignalID(renderSignalTransportAvailable), available, observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource("node-render"),
+	))
+}
+
 // --- Auth ---
 
 func TestRenderDispatchRefusedUnauthenticated(t *testing.T) {
@@ -406,5 +416,123 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 	}
 	if !result.Command.Replay {
 		t.Fatalf("replay = false, want true on the second request")
+	}
+}
+
+// --- render.transport.probe ---
+
+// TestRenderTransportProbeDispatchesAndConfirmsOnUnavailableEvidence is
+// this operation's own named requirement: a probe that correctly reports
+// the NDI runtime ABSENT is just as confirmed as one reporting it present
+// — evaluateRenderTransportProbe confirms on evidence FRESHNESS, never on
+// evidence VALUE. If this regressed to matching a desired boolean, this
+// test would report unconfirmed instead.
+func TestRenderTransportProbeDispatchesAndConfirmsOnUnavailableEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{
+			surfaceTransportAvailableObs("wall-1", false, testNow.Add(time.Second), testNow.Add(time.Second)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe",
+		`{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	if action := setup.pub.payload[0].Payload.Action; action != "render.transport.probe" {
+		t.Fatalf("dispatched action = %q, want render.transport.probe", action)
+	}
+
+	var result struct {
+		Command struct {
+			Outcome       string `json:"outcome"`
+			OutcomeReason string `json:"outcomeReason"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed (a fresh false reading is a genuine answer, not a failure to answer); body: %s", result.Command.Outcome, body)
+	}
+	if !strings.Contains(result.Command.OutcomeReason, "false") {
+		t.Fatalf("outcomeReason = %q, want it to name the actual (false) reading", result.Command.OutcomeReason)
+	}
+}
+
+// TestRenderTransportProbeReportsUnconfirmedWithoutFreshEvidence proves
+// the other half: a pre-dispatch reading (or none at all) does not confirm
+// — evaluateRenderTransportProbe's freshness fence, mirroring
+// evaluateRenderSurfaceState's identical rule for pipeline state.
+func TestRenderTransportProbeReportsUnconfirmedWithoutFreshEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	// A STALE reading, dated well before dispatch: must not confirm.
+	setup.obs.setObs([]observation.Observation{
+		surfaceTransportAvailableObs("wall-1", true, testNow.Add(-time.Hour), testNow.Add(-time.Hour)),
+	})
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe",
+		`{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed (only a pre-dispatch reading exists); body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderTransportProbeNotReachableByGET proves ADR-024's rule directly:
+// no state change is reachable by GET. net/http.ServeMux's own
+// method-mismatch handling (the route is registered "POST ...") is what
+// enforces this; this test exists so a future accidental re-registration
+// as a bare pattern (dropping the "POST " prefix) fails loudly here rather
+// than silently reopening a command as a GET.
+func TestRenderTransportProbeNotReachableByGET(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodGet, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe", "", token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("GET transport-probe status = 200, want anything but 200: no state change may be reachable by GET (ADR-024); body: %s", body)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 — a GET must never dispatch a command", setup.pub.count())
 	}
 }
