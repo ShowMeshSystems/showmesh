@@ -46,7 +46,7 @@ func Build(channelCount, frameCount uint32, stepTimeMS byte) []byte {
 	binary.LittleEndian.PutUint32(hdr[14:18], frameCount)
 	hdr[18] = stepTimeMS
 	hdr[19] = 0
-	hdr[20] = byte((numBlocks>>4)&0xF0) | 0 // compression 0 = none
+	hdr[20] = byte((numBlocks >> 4) & 0xF0) // compression 0 = none
 	hdr[21] = byte(numBlocks & 0xFF)
 	hdr[22] = byte(numSparse)
 	hdr[23] = 0
