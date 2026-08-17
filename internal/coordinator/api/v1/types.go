@@ -151,6 +151,18 @@ type Node struct {
 	// — see [NodeDeclaration]'s own doc comment for what "declared: false"
 	// means and why this is never an omitted field.
 	Declaration NodeDeclaration `json:"declaration"`
+
+	// Render is Track B seam B2b's addition, additive per ADR-020 decision
+	// 8: whatever surface.* observations this coordinator currently holds
+	// for the render pipeline(s) this node has reported, one
+	// [ObservationEntry] per signal. Never null — an empty array means this
+	// node has never published a render report, not that the field was
+	// omitted. Each entry's resource names the SURFACE it concerns
+	// (ADR-026: a surface, not the node running it, is the thing being
+	// observed), so entries here may span more than one surface once a
+	// node runs N>1, and are not necessarily contiguous with any other
+	// node's entries in GET /api/v1/observations.
+	Render []ObservationEntry `json:"render"`
 }
 
 // NodeDeclaration is a node's declaration state: an operator's durable

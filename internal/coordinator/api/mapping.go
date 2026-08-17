@@ -372,7 +372,20 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // exists), the same value for every node rendered in one pass — see
 // discovery.go's fetchDeclarationContext, which every caller of mapNode
 // fetches exactly once per render/response rather than once per node.
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord) v1.Node {
+//
+// renderObs is Track B seam B2b's addition: whatever
+// [NodeRenderLister.NodeRenderObservations] currently holds for nv.NodeID
+// — every element's Resource names the surface it concerns (never
+// nv.NodeID itself; see that interface's doc comment), so this is a plain
+// pass-through render, not a per-node filter. nil (no render evidence at
+// all) renders as an empty array, never an omitted field, matching every
+// other "absent evidence is stated, never omitted" collection on [v1.Node].
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs []observation.Observation) v1.Node {
+	render := make([]v1.ObservationEntry, 0, len(renderObs))
+	for _, o := range renderObs {
+		render = append(render, mapObservationEntry(o, now))
+	}
+
 	n := v1.Node{
 		NodeID:       nv.NodeID,
 		FirstSeenAt:  formatTime(nv.FirstSeenAt),
@@ -385,6 +398,7 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 			Heartbeat: mapEvidence(heartbeatObservation(nv.NodeID, nv.Health, nv.UpdatedAt), now),
 		},
 		Declaration: mapNodeDeclaration(decl, latestRun),
+		Render:      render,
 	}
 
 	if nv.Hello != nil {

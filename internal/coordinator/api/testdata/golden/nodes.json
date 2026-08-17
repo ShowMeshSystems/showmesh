@@ -74,7 +74,8 @@
         "lastDiscoveredAt": null,
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
-      }
+      },
+      "render": []
     },
     {
       "nodeId": "shed-01",
@@ -141,7 +142,8 @@
         "lastDiscoveredAt": null,
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
-      }
+      },
+      "render": []
     }
   ]
 }
