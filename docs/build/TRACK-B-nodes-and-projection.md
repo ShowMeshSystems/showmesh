@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md) · [Spike procedure](../bench/TRACK-B-NDI-SPIKE.md) · [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md)
 
-Status: B1 complete (2026-08-14, merged to `main` at `fa5107e`). B0 (the transport spike) has not run and remains the owner's bench work; it gates B4 (NDI output), whose design its answer changes, not B2 (pipeline supervision) or B3 (the surface model and FSEQ extraction), which can and should be assembled against the real path now. Specified 2026-08-13.
+Status: **B0 passed on the owner's bench 2026-08-16** and B1 complete (2026-08-14, merged to `main` at `fa5107e`). The transport spike sustained 1920x1080 at 40.00 fps with zero dropped frames for 6 h 49 min into Resolume over wired NDI, so **B4's design question is settled as NDI and the HDMI-with-capture fallback is not being taken.** B2 (pipeline supervision) and B3 (the surface model and FSEQ extraction) were never gated by it and are the next work. Specified 2026-08-13.
 
 ## Goal
 
@@ -23,7 +23,17 @@ Two consequences worth stating before anyone re-derives them:
 
 ## Deliverables
 
-**B0. The transport spike**, per [`TRACK-B-NDI-SPIKE.md`](../bench/TRACK-B-NDI-SPIKE.md). Run before anything else. It answers whether the NDI assumption in ADR-026 survives contact with the reference hardware, and a failure here changes the track's design rather than delaying it.
+**B0. The transport spike**, per [`TRACK-B-NDI-SPIKE.md`](../bench/TRACK-B-NDI-SPIKE.md). **Done 2026-08-16, and it passed.** 982,100 frames at 1920x1080 UYVY, 0 dropped, 0 late, 0 errors, 40.00 fps sustained for 6 h 49 min from a Debian 13 OptiPlex Micro 7050 over wired Ethernet, with Resolume Arena and a second NDI receiver both attached and both clean. Evidence in [RES-006](../research/RES-006-linux-ndi-support.md); the partial-coverage caveats are in [RES-005](../research/RES-005-ndi-vs-hdmi-transport.md).
+
+Four things came out of it that the rest of this track has to carry.
+
+**The encode costs 86% of one core, and the ceiling is per-core rather than per-machine.** The spike's pipeline had no `queue`, so generation, SpeedHQ encode and send shared one streaming thread, and that thread ran at 86% while the box sat near idle. Two direct instructions follow for B2 and B3, developed in [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md): **put a `queue` between the renderer and the NDI sink**, because extending the spike's pipeline shape naively lands FSEQ extraction and canvas painting on a thread that already has 14% left while three cores sit idle; and **emit UYVY from the extraction if it can**, because the measurement was taken on the zero-conversion path and a `videoconvert` added later spends budget that was never measured as spare.
+
+**The NDI plugin is not packaged on Debian 13 and is compiled from `gst-plugins-rs` on the node**, accepted by the owner for day-0 with a scripted build; B4 must not assume an installable element.
+
+**Run 5, recovery, did not run**, so nothing yet says the sender and Resolume survive each other's restart. B2's supervision design should treat that as unknown rather than fine.
+
+**The spike proves the transport, not the renderer.** The frames came from `videotestsrc`, which costs almost nothing to produce, so the question B3 actually faces stays open and stays [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md)'s at L0.
 
 **B1. A real node agent.** **Done 2026-08-14.** The agent subscribes to its command topic, executes an allowlisted operation, and reports the outcome. ARCHITECTURE §10.4's "agents accept only allowlisted operations" is delivered, with one operation shipped (`agent.echo`); the allowlist grows as later seams add real operations.
 
@@ -31,7 +41,7 @@ Two consequences worth stating before anyone re-derives them:
 
 **B3. The surface model and FSEQ extraction.** A surface is a configuration object holding its canvas dimensions and its assigned virtual-matrix channel range. **This needs no schema migration**: the RES-008 re-survey established that `config_objects` and `config_revisions` are keyed `(kind, id)` with a JSON payload, so a surface is a new `kind`. Extraction reads the local FSEQ at the frame the timeline reports.
 
-**B4. NDI output.** The transport adapter, dynamically loading a user-installed runtime, honouring the documented location override, and **never bundling the runtime**. A missing runtime degrades the node and never stops it, per ADR-026 decision 6.
+**B4. NDI output.** The transport adapter, dynamically loading a user-installed runtime, honouring the documented location override, and **never bundling the runtime**. A missing runtime degrades the node and never stops it, per ADR-026 decision 6. **B0 settled the design question in NDI's favour**, so this proceeds as planned; note that on Debian 13 the GStreamer NDI element itself is a source build rather than a package, so "absent" is a state this adapter will genuinely meet in the field.
 
 **B5. Capability advertisement for all of it.** `render.surface` and the transport capabilities, versioned and attributed per [ADR-002](../decisions/ADR-002-capability-based-nodes.md), so the coordinator composes surfaces from advertisement rather than from a hardcoded node class. A node advertising both NDI and HDMI reports each independently, since support for one is never evidence for the other.
 
