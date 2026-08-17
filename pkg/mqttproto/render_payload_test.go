@@ -124,6 +124,53 @@ func TestRenderPayloadValidateAcceptsExplicitlyEmptySurfaces(t *testing.T) {
 	}
 }
 
+// TestRenderPayloadValidateRejectsIdleWithNoIdleMode proves finding 7's
+// wire-side rule: a surface reporting Drawing == RenderDrawingIdle with an
+// empty IdleMode must be refused, matching Reason's and TransportReason's
+// identical required-whenever-the-flag-says-so pattern one field up.
+func TestRenderPayloadValidateRejectsIdleWithNoIdleMode(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       RenderDrawingIdle,
+				IdleMode:      "", // invalid: required whenever drawing is "idle"
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for drawing=idle with an empty idleMode")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestRenderPayloadValidateRejectsUnrecognizedDrawing proves Drawing's
+// closed vocabulary is actually enforced, not merely documented.
+func TestRenderPayloadValidateRejectsUnrecognizedDrawing(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       "sideways", // not content, idle, or empty
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for an unrecognized drawing value")
+	}
+	if !errors.Is(err, ErrPayloadInvalidDrawing) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadInvalidDrawing", err)
+	}
+}
+
 // TestDecodeRenderPayloadRejectsAbsentSurfacesKey drives the defect at the
 // wire, not just through the Go struct: a hand-built JSON object with no
 // "surfaces" key at all (unreachable from this package's own constructors,

@@ -86,7 +86,7 @@ func newTestFrameWriterSupervisor(t *testing.T, surfaceID string) (*Supervisor, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, surfaceID, []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, surfaceID, []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("setup: pipeline never reached running")
 	}
 
@@ -156,6 +156,82 @@ func TestFrameWriterWritesContentWhilePlaying(t *testing.T) {
 		if b == 0 {
 			t.Fatalf("stdin contains a zero byte while Playing with a covered range; want content, not idle output")
 		}
+	}
+}
+
+// TestFrameWriterReportsDrawStateOnSupervisorSnapshot is finding 7's
+// regression test: the render report must carry what a surface is actually
+// drawing (content vs idle, which idle mode, and the timeline state/
+// position behind it), not just PipelineState=="running". Drives content,
+// then idle (Stopped), and asserts the supervisor's own Snapshot — the
+// exact source renderreport.go's toRenderSurfaceReport reads from —
+// reflects each transition. Remove FrameWriter's SetDrawState call (or
+// revert writeOneFrame/recordTick to not compute drawing/idleMode/position)
+// to see this fail.
+func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputDiagnostic, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	waitFor(t, func() bool {
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.Drawing == DrawingContent
+	})
+	snap, ok := sup.Snapshot(surfaceID)
+	if !ok {
+		t.Fatalf("no snapshot for %q", surfaceID)
+	}
+	if snap.Drawing != DrawingContent {
+		t.Fatalf("Drawing = %q while Playing with a covered range, want %q", snap.Drawing, DrawingContent)
+	}
+	if snap.TimelineState != string(multisync.StatePlaying) {
+		t.Fatalf("TimelineState = %q, want %q", snap.TimelineState, multisync.StatePlaying)
+	}
+	if snap.TimelinePositionMS == nil || *snap.TimelinePositionMS != 250 {
+		t.Fatalf("TimelinePositionMS = %v, want a pointer to 250", snap.TimelinePositionMS)
+	}
+	if snap.IdleMode != "" {
+		t.Fatalf("IdleMode = %q while drawing content, want empty", snap.IdleMode)
+	}
+
+	// Now go idle (Stopped) — this is the exact scenario the finding names:
+	// a MultiSync bind failure (or any cause) leaves the timeline at a
+	// non-content state, and the writer must report idle drawing, never a
+	// silent "still running" with no distinction from content.
+	tl.set(multisync.StateStopped, 999999)
+	waitFor(t, func() bool {
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.Drawing == DrawingIdle
+	})
+	snap, ok = sup.Snapshot(surfaceID)
+	if !ok {
+		t.Fatalf("no snapshot for %q", surfaceID)
+	}
+	if snap.Drawing != DrawingIdle {
+		t.Fatalf("Drawing = %q while Stopped, want %q", snap.Drawing, DrawingIdle)
+	}
+	if snap.TimelineState != string(multisync.StateStopped) {
+		t.Fatalf("TimelineState = %q, want %q", snap.TimelineState, multisync.StateStopped)
+	}
+	if snap.TimelinePositionMS != nil {
+		t.Fatalf("TimelinePositionMS = %v while idle, want nil (a position is not meaningful for idle output)", *snap.TimelinePositionMS)
+	}
+	if snap.IdleMode != IdleOutputDiagnostic {
+		t.Fatalf("IdleMode = %q while Stopped with idleOutput=diagnostic, want %q", snap.IdleMode, IdleOutputDiagnostic)
 	}
 }
 
@@ -403,6 +479,160 @@ func TestSampleRateNilUntilWindowCompletes(t *testing.T) {
 	want := float64(241-1) / (6 * time.Second).Seconds() // frames since the anchor / elapsed since the anchor
 	if got < want-0.01 || got > want+0.01 {
 		t.Fatalf("currentRate = %v, want ~%v (achieved, not the configured stepTime rate)", got, want)
+	}
+}
+
+// TestRecordTickSamplesRateOnEveryTickIncludingFailures is finding 8's
+// regression test at the unit level (no real 5s frameRateWindow wait
+// needed, matching TestSampleRateNilUntilWindowCompletes's own synthetic-
+// clock approach): sampleRate must be driven from EVERY tick, success or
+// failure, using the cumulative written counter — never gated to the
+// success path only, which is what let a stalled pipeline's rate freeze at
+// its last good value forever. Here: one successful write anchors the
+// window at written=1, then the window closes 6s later with zero further
+// writes (three delivered=false ticks) — the achieved rate must converge to
+// a real, measured 0.0, not stay nil (never sampled) or some stale
+// leftover.
+func TestRecordTickSamplesRateOnEveryTickIncludingFailures(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
+	fw := &FrameWriter{surfaceID: surfaceID, sup: sup, stepTime: 25 * time.Millisecond}
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+
+	fw.written.Store(1)
+	fw.recordTick(base, base, true) // anchors the window at written=1
+
+	// Three failed ticks — no successful write, fw.written stays at 1 —
+	// spread across the window, mirroring a stalled pipeline where every
+	// stdin write fails. The regression this reproduces: the OLD code only
+	// ever called sampleRate from the success path, so recordTick's calls
+	// below (delivered=false) would never have reached it, and currentRate
+	// would stay frozen at whatever it last was.
+	fw.recordTick(base.Add(2*time.Second), base.Add(2*time.Second), false)
+	fw.recordTick(base.Add(4*time.Second), base.Add(4*time.Second), false)
+	fw.recordTick(base.Add(6*time.Second), base.Add(6*time.Second), false) // window closes
+
+	if fw.currentRate == nil {
+		t.Fatalf("currentRate = nil after the window closed with only failed ticks, want a real 0.0 measurement")
+	}
+	if *fw.currentRate != 0 {
+		t.Fatalf("currentRate = %v, want 0.0 (no frames were successfully written in this window)", *fw.currentRate)
+	}
+}
+
+// TestFrameWriterRateDropsToZeroAfterPipelineStalls is finding 8's
+// end-to-end regression test against the real Run loop and a real
+// Supervisor/fakeProcess: once every stdin write starts failing, the
+// achieved rate must stop being reported as the last good value and
+// converge toward 0 rather than freezing — the exact defect ("surface.
+// frames.rate keeps reporting 40.0 indefinitely") named in the finding.
+// frameRateWindow is a package const (5s), so this drives real ticks for
+// slightly over 5 seconds; acceptable as this finding's own end-to-end
+// proof, distinct from TestRecordTickSamplesRateOnEveryTickIncludingFailures
+// above, which is the fast unit-level version.
+func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 5, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.set(multisync.StatePlaying, 0)
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	// Let it write successfully for a bit so a non-nil rate is established
+	// first, proving this test would actually catch a freeze rather than
+	// trivially passing on an always-nil rate.
+	waitFor(t, func() bool {
+		written, _, _ := fw.Counts()
+		return written >= 1
+	})
+
+	fp.setStdinFail(true)
+
+	// Read the rate through the Supervisor's own snapshot, never fw.
+	// currentRate directly: that field is documented single-goroutine
+	// (writeOneFrame's own goroutine only), and reading it from this test
+	// goroutine while Run's goroutine writes it is a real data race, not
+	// merely a style preference — sup.Snapshot is the properly synchronized
+	// path every real caller (renderreport.go) already uses.
+	deadline := time.Now().Add(7 * time.Second)
+	var lastRate *float64
+	for time.Now().Before(deadline) {
+		snap, ok := sup.Snapshot(surfaceID)
+		if ok {
+			lastRate = snap.FramesRate
+			if lastRate != nil && *lastRate == 0 {
+				return // rate correctly converged to 0
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := "nil"
+	if lastRate != nil {
+		got = fmt.Sprintf("%v", *lastRate)
+	}
+	t.Fatalf("currentRate never converged to 0 after the pipeline stalled for over 5s; last value = %s", got)
+}
+
+// TestCountTickerDropsCountsMissedTicks is finding 13's regression test for
+// the ticker-drop half: Go's time.Ticker silently drops ticks when the
+// receiver falls behind rather than queuing them, so nothing about a missed
+// tick shows up unless the gap between consecutive tickTime values is
+// checked directly. Revert countTickerDrops to a no-op (or to only updating
+// lastTickTime) to see this fail.
+func TestCountTickerDropsCountsMissedTicks(t *testing.T) {
+	fw := &FrameWriter{stepTime: 25 * time.Millisecond}
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+
+	fw.countTickerDrops(base) // first call only anchors; nothing to compare against yet
+	if got := fw.dropped.Load(); got != 0 {
+		t.Fatalf("dropped = %d after the first tick, want 0", got)
+	}
+
+	// A 100ms gap on a 25ms step is 4 step periods — 3 ticks the ticker
+	// never delivered at all, standing in for a writer that fell behind.
+	fw.countTickerDrops(base.Add(100 * time.Millisecond))
+	if got := fw.dropped.Load(); got != 3 {
+		t.Fatalf("dropped = %d after a 100ms gap on a 25ms step, want 3 missed ticks", got)
+	}
+
+	// A normal, on-schedule next tick must not count anything further.
+	fw.countTickerDrops(base.Add(125 * time.Millisecond))
+	if got := fw.dropped.Load(); got != 3 {
+		t.Fatalf("dropped = %d after a normal on-schedule tick, want unchanged at 3", got)
+	}
+}
+
+// TestRecordTickCountsLateFromScheduledTickTime is finding 13's regression
+// test for the lateness half: lateness must be measured against tickTime
+// (when this frame was SCHEDULED to happen), not against how long
+// writeOneFrame's own call took to run. A tickTime far in the past with an
+// instantaneous call (nothing between start and "now") is exactly the case
+// the old time.Since(start)-only check was blind to: no work happened, so
+// the old check would report 0 lateness even though this frame is
+// hopelessly behind schedule. Revert recordTick's lateness check to
+// time.Since(start) to see this fail.
+func TestRecordTickCountsLateFromScheduledTickTime(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
+	fw := &FrameWriter{surfaceID: surfaceID, sup: sup, stepTime: 25 * time.Millisecond}
+
+	staleTick := time.Now().Add(-500 * time.Millisecond)
+	fw.recordTick(time.Now(), staleTick, true)
+
+	_, late, _ := fw.Counts()
+	if late != 1 {
+		t.Fatalf("late = %d after a tick scheduled 500ms in the past on a 25ms step, want 1", late)
 	}
 }
 

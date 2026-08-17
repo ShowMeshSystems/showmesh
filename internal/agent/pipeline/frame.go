@@ -142,6 +142,23 @@ type FrameWriter struct {
 	loggedRangeErr bool
 	loggedWriteErr bool
 
+	// lastTickTime anchors finding 13's ticker-drop detection: Go's
+	// time.Ticker silently drops ticks when the receiver falls behind
+	// (never queues them), so a gap between consecutive tickTime values
+	// wider than one stepTime means one or more ticks never arrived at all.
+	// Touched only by writeOneFrame, which runs exclusively on Run's own
+	// goroutine — same single-goroutine rule as currentRate below.
+	lastTickTime time.Time
+
+	// timelineState, timelinePositionMS, drawing, and idleModeNow are this
+	// tick's draw evidence (finding 7 — see [Supervisor.SetDrawState]),
+	// touched only by writeOneFrame for the same single-goroutine reason as
+	// currentRate.
+	timelineState      string
+	timelinePositionMS *int64
+	drawing            string
+	idleModeNow        string
+
 	stop chan struct{}
 	done chan struct{}
 }
@@ -236,21 +253,28 @@ func (fw *FrameWriter) Counts() (written, late, dropped int64) {
 	return fw.written.Load(), fw.late.Load(), fw.dropped.Load()
 }
 
-// writeOneFrame is one tick's worth of work: sample the timeline, select
-// content or idle output, and write it to the pipeline's stdin. Lateness is
-// measured as this call itself taking longer than one frame period —
-// extraction plus write should be a small fraction of stepTime; a value at
-// or beyond it means this tick's frame missed its slot.
+// writeOneFrame is one tick's worth of work: detect any ticks the scheduler
+// itself dropped, sample the timeline, select content or idle output, write
+// it to the pipeline's stdin, and record what actually happened as evidence
+// (finding 7) — regardless of whether the write succeeded.
 func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	start := time.Now()
+
+	fw.countTickerDrops(tickTime)
 
 	snap := fw.timeline.Snapshot()
 
 	var outBuf []byte
+	var positionMS *int64
+	drawing := DrawingContent
+	idleMode := ""
 	if idleContentStates[snap.State] {
+		drawing = DrawingIdle
+		idleMode = fw.idleOutput
 		outBuf = fw.idleOutputFor(tickTime)
 	} else {
-		frameIdx := fw.frameIndexFor(snap.PositionMS)
+		pos := snap.PositionMS
+		frameIdx := fw.frameIndexFor(pos)
 		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {
 			fw.dropped.Add(1)
 			if !fw.loggedRangeErr {
@@ -259,16 +283,29 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 					"surface_id", fw.surfaceID, "frame", frameIdx, "error", err)
 			}
 			outBuf = fw.idleBuf
+			// A coverage-gap fallback is an extraction FAILURE, not a
+			// deliberate idle transition — always reported as black
+			// regardless of this surface's configured idleOutput, so a
+			// broken assignment never gets mislabelled as a normal
+			// operator-chosen idle cycle (e.g. "hold").
+			drawing = DrawingIdle
+			idleMode = IdleOutputBlack
 		} else {
 			fw.loggedRangeErr = false
 			outBuf = fw.buf
+			positionMS = &pos
 		}
 	}
+
+	fw.timelineState = string(snap.State)
+	fw.timelinePositionMS = positionMS
+	fw.drawing = drawing
+	fw.idleModeNow = idleMode
 
 	w, err := fw.sup.Stdin(fw.surfaceID)
 	if err != nil {
 		fw.dropped.Add(1)
-		fw.reportCounts()
+		fw.recordTick(start, tickTime, false)
 		return
 	}
 
@@ -287,17 +324,60 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 			fw.logger.Warn("frame writer: stdin write failed; pipeline process likely restarting",
 				"surface_id", fw.surfaceID, "error", werr, "bytes_written", n, "bytes_wanted", len(outBuf))
 		}
-		fw.reportCounts()
+		fw.recordTick(start, tickTime, false)
 		return
 	}
 	fw.loggedWriteErr = false
-	written := fw.written.Add(1)
+	fw.written.Add(1)
 
-	if elapsed := time.Since(start); elapsed > fw.stepTime {
-		fw.late.Add(1)
+	fw.recordTick(start, tickTime, true)
+}
+
+// countTickerDrops detects ticks Run's time.Ticker itself silently dropped
+// (finding 13): a Go ticker never queues a missed tick for a slow receiver,
+// it simply never sends it, so a writer running behind schedule produces NO
+// call to writeOneFrame for the ticks it missed — nothing to measure lateness
+// on. Comparing this tick's own scheduled instant (tickTime) against the
+// previous one recovers that: a gap of more than one stepTime means at
+// least one tick never arrived. Counted as dropped frames, the same counter
+// a failed write or a missing process uses — a ticker-dropped tick never got
+// a chance to render or write either, so it belongs in the same evidence.
+func (fw *FrameWriter) countTickerDrops(tickTime time.Time) {
+	if !fw.lastTickTime.IsZero() {
+		if gap := tickTime.Sub(fw.lastTickTime); gap > fw.stepTime {
+			if missed := int64(gap/fw.stepTime) - 1; missed > 0 {
+				fw.dropped.Add(missed)
+			}
+		}
 	}
+	fw.lastTickTime = tickTime
+}
 
-	fw.sampleRate(start, written)
+// recordTick finishes one tick: lateness (delivered ticks only), the
+// achieved-rate sample, and the draw-state/counter report — called on
+// every path through writeOneFrame, success or failure, so a stalled
+// pipeline's evidence keeps moving instead of freezing at its last good
+// value (finding 8).
+func (fw *FrameWriter) recordTick(start, tickTime time.Time, delivered bool) {
+	if delivered {
+		// Scheduling lateness (finding 13): how far behind THIS TICK'S OWN
+		// scheduled instant delivery actually finished — not merely how
+		// long this call itself took to run. time.Since(start) alone is
+		// blind to a writer running at half rate, because the ticks it
+		// never got a chance to process (see countTickerDrops) never
+		// generated a call to measure in the first place; tickTime is the
+		// real scheduling reference and is handed in for exactly this.
+		if lateness := time.Since(tickTime); lateness > fw.stepTime {
+			fw.late.Add(1)
+		}
+	}
+	// Always sampled from the CUMULATIVE written counter, on every tick,
+	// not only on a successful one: a stalled pipeline stops incrementing
+	// fw.written, so the window's frame delta naturally falls to zero and
+	// the achieved rate converges to a real, measured 0.0 within one
+	// frameRateWindow — never the stale last-good value this counter used
+	// to freeze at forever (finding 8).
+	fw.sampleRate(start, fw.written.Load())
 	fw.reportCounts()
 }
 
@@ -389,6 +469,7 @@ func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
 
 func (fw *FrameWriter) reportCounts() {
 	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate)
+	fw.sup.SetDrawState(fw.surfaceID, fw.timelineState, fw.timelinePositionMS, fw.drawing, fw.idleModeNow)
 }
 
 // Compile-time check that *fseq.File satisfies FrameSource.

@@ -657,7 +657,58 @@ type RenderSurfaceReport struct {
 	// the node's own clock — the evidence timestamp ADR-003 requires,
 	// distinct from Since (when the state itself began).
 	ObservedAt time.Time `json:"observedAt"`
+
+	// TimelineState is the multisync.Timeline state ("playing",
+	// "unsynchronized", "opened", "stopping", "stopped", "unknown") this
+	// surface's frame writer most recently sampled. "" means no frame
+	// writer is currently active for this surface (a Track B seam B2a
+	// test-pattern-only pipeline has no FSEQ and therefore no writer at
+	// all) — never inferred from PipelineState.
+	TimelineState string `json:"timelineState"`
+
+	// TimelinePositionMS is the timeline position this surface's most
+	// recent CONTENT frame (Drawing == [RenderDrawingContent]) was
+	// extracted from. nil whenever Drawing is [RenderDrawingIdle] or "":
+	// a position is only meaningful when content is actually being read
+	// from it (ADR-011: nil is genuinely inapplicable here, never a stale
+	// or zero position echoed back).
+	TimelinePositionMS *int64 `json:"timelinePositionMs"`
+
+	// Drawing is what this surface's frame writer actually wrote to the
+	// pipeline's stdin on its most recent tick: [RenderDrawingContent] or
+	// [RenderDrawingIdle]. "" means no frame writer is currently active
+	// for this surface. This is the evidence this build contract names
+	// explicitly: PipelineState=="running" alone cannot tell an operator
+	// "rendering content" from "emitting black at 40fps," and this field
+	// is what can (Track B finding 7).
+	Drawing string `json:"drawing"`
+
+	// IdleMode is the configured idle output ([RenderIdleOutputBlack],
+	// [RenderIdleOutputHold], or [RenderIdleOutputDiagnostic]) whenever
+	// Drawing is [RenderDrawingIdle]; "" otherwise, matching Reason's and
+	// TransportReason's identical required-whenever-the-flag-says-so rule.
+	IdleMode string `json:"idleMode"`
 }
+
+// RenderDrawingContent and RenderDrawingIdle are the two values
+// [RenderSurfaceReport.Drawing] can carry.
+const (
+	RenderDrawingContent = "content"
+	RenderDrawingIdle    = "idle"
+)
+
+// RenderIdleOutputBlack, RenderIdleOutputHold, and RenderIdleOutputDiagnostic
+// are this package's own copy of internal/agent/pipeline's identical
+// IdleOutputBlack/Hold/Diagnostic constants (build contract ruling 3) —
+// independently reproduced, not imported, per this codebase's standing
+// each-side-of-a-wire-boundary-decodes-independently convention
+// (internal/agent/renderops.go's surfaceIDPattern doc comment already
+// applies this once).
+const (
+	RenderIdleOutputBlack      = "black"
+	RenderIdleOutputHold       = "hold"
+	RenderIdleOutputDiagnostic = "diagnostic"
+)
 
 // RenderPayload is the payload of the showmesh.node.render/v1 schema,
 // published RETAINED to a node's observed/render topic ([ObservedTopic],
@@ -679,6 +730,30 @@ type RenderPayload struct {
 	// AssetInventoryPayload.Assets's identical rule — a node holding no
 	// surface assignment reports "surfaces": [], never omits the key.
 	Surfaces []RenderSurfaceReport `json:"surfaces"`
+
+	// MultiSyncListening is true once this node's UDP 32320 MultiSync
+	// listener has successfully bound and is running, false otherwise —
+	// Track B finding 7's second half. Before this field existed, a bind
+	// failure (port in use, permission, wrong interface) was ONLY a log
+	// line: the timeline stayed StateUnknown forever, every surface's
+	// frame writer drew idle output at full configured rate, and every
+	// other reported field (PipelineState=="running", FramesWritten
+	// climbing, FramesDropped==0) looked completely healthy. This field
+	// is what makes that a stated degradation instead of a silent one.
+	MultiSyncListening bool `json:"multiSyncListening"`
+
+	// MultiSyncReason is the bind error (or "not yet attempted" before the
+	// listener's first try) whenever MultiSyncListening is false. Not
+	// enforced as required by Validate: this field was added after
+	// SchemaNodeRenderV1 first shipped, and a hard requirement here would
+	// reject every payload built before this field existed — including
+	// this package's own existing fixtures in internal/coordinator, a
+	// concurrently-developed package this fix must not collide with.
+	// Publishers should always set it when MultiSyncListening is false
+	// (see internal/agent/multisyncstatus.go); an empty reason on a
+	// non-listening node is a real gap, just not one this wire boundary
+	// can refuse without breaking additive compatibility (ADR-020).
+	MultiSyncReason string `json:"multiSyncReason"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
@@ -719,9 +794,23 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
 				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
 		}
+		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle {
+			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle)
+		}
+		if s.Drawing == RenderDrawingIdle && s.IdleMode == "" {
+			return fmt.Errorf("%w: surfaces[%d].idleMode (required whenever drawing is %q)",
+				ErrPayloadMissingField, i, RenderDrawingIdle)
+		}
 	}
 	return nil
 }
+
+// ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
+// surface's Drawing is set but is not one of [RenderDrawingContent] or
+// [RenderDrawingIdle], matching [ErrPayloadInvalidOutcome]'s identical
+// closed-vocabulary role for [ResultPayload].
+var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
 
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent

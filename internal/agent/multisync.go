@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 
@@ -14,6 +15,16 @@ import (
 // (build contract seam B3, generalizing ADR-026 decision 6's "an absent
 // runtime degrades, never stops" rule to an absent/unbindable socket).
 //
+// status carries that degradation to the render report (finding 7): its own
+// doc comment claimed this was already "degradation with a stated reason,"
+// but before status existed the only place that reason ever went was a log
+// line — every reported field on a surface still under this node's
+// supervision (PipelineState=="running", FramesWritten climbing,
+// FramesDropped==0) looked completely healthy while the timeline sat frozen
+// at StateUnknown and every surface free-ran idle output all night. status
+// is set exactly once here, to the real outcome, before this function does
+// anything else that could return early.
+//
 // ADR-013 does NOT apply here: that rule protects a co-located fppd's own
 // unicast MultiSync stream from a second listener silently stealing it via
 // SO_REUSEPORT. A render node runs no fppd, so listenAddr and
@@ -24,7 +35,7 @@ import (
 // normally is still correct: a bind conflict must fail loudly (which it
 // does, here, as a degraded-with-reason node) rather than silently sharing
 // the port and risking exactly the desync ADR-013 documents.
-func runMultiSyncListener(ctx context.Context, listenAddr, interfaceName string, timeline *multisync.Timeline, logger *slog.Logger) {
+func runMultiSyncListener(ctx context.Context, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, logger *slog.Logger) {
 	l, err := multisync.NewListener(multisync.ListenerConfig{
 		ListenAddr:    listenAddr,
 		InterfaceName: interfaceName,
@@ -33,10 +44,13 @@ func runMultiSyncListener(ctx context.Context, listenAddr, interfaceName string,
 		// doc comment and ADR-013.
 	})
 	if err != nil {
+		reason := fmt.Sprintf("failed to bind multisync listener on %s (interface %q): %v", listenAddr, interfaceName, err)
 		logger.Warn("multisync: failed to bind listener; this node's surfaces will render idle output until this is fixed",
 			"listen_addr", listenAddr, "interface", interfaceName, "error", err)
+		status.set(false, reason)
 		return
 	}
+	status.set(true, "")
 
 	for _, jr := range l.JoinResults() {
 		if jr.Err != nil {
@@ -64,7 +78,12 @@ func runMultiSyncListener(ctx context.Context, listenAddr, interfaceName string,
 	}
 
 	if err := l.Run(ctx, handle); err != nil {
+		// Run returns nil on ordinary shutdown (ctx canceled); a non-nil
+		// error here is a genuine mid-session socket failure, the same
+		// degradation as never having bound at all — status must reflect
+		// it for the same reason the bind-failure branch above does.
 		logger.Warn("multisync: listener stopped", "error", err)
+		status.set(false, fmt.Sprintf("multisync listener stopped unexpectedly: %v", err))
 	}
 }
 

@@ -139,17 +139,22 @@ func Run() int {
 	// timeline is this node's single MultiSync-driven position estimate,
 	// shared by every surface's frame writer (ADR-026 N=1 is a renderer
 	// scope limit, not a reason to build N timelines; a future N>1 node
-	// still tracks one master's position). SetStepTime is called per
-	// surface, from that surface's own FSEQ file, on every apply/resume —
-	// see renderops.go's buildAssignedSpec and multisync.go's listener,
-	// which never calls SetStepTime itself (it has no file to read one
-	// from).
+	// still tracks one master's position). SetStepTime is called from a
+	// surface's own FSEQ file on every apply/resume — see renderops.go's
+	// applyTimelineStepTime, which renderOps.applySurface and
+	// ResumeAssignment both call; multisync.go's listener never calls
+	// SetStepTime itself (it has no file to read one from).
 	timeline := multisync.NewTimeline(time.Now, multisync.Config{})
+
+	// multiSyncStatus carries a bind failure (or a mid-session socket
+	// failure) into the render report as stated evidence rather than only a
+	// log line — finding 7's second half; see multisyncstatus.go.
+	multiSyncStatus := newMultiSyncStatus()
 
 	multiSyncDone := make(chan struct{})
 	go func() {
 		defer close(multiSyncDone)
-		runMultiSyncListener(sigCtx, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, logger)
+		runMultiSyncListener(sigCtx, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
 	}()
 
 	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, logger)
@@ -169,6 +174,15 @@ func Run() int {
 			}
 			if err := renderOps.ResumeAssignment(a.SurfaceID, params); err != nil {
 				logger.Warn("failed to re-apply a persisted render assignment at startup", "surface_id", a.SurfaceID, "error", err)
+				// Finding 9: the node KNOWS it holds an assignment it could
+				// not honour (FSEQ missing after a disk restore, a
+				// content-hash mismatch, unparseable persisted params); a
+				// log line alone leaves no runner for this surface, so the
+				// render report omits it entirely and the coordinator
+				// cannot distinguish "never assigned" from "assigned and
+				// broken." Report it as StateFailed instead of staying
+				// silent.
+				sup.MarkResumeFailed(a.SurfaceID, fmt.Sprintf("held a persisted assignment at boot but could not resume it: %v", err))
 				continue
 			}
 			logger.Info("resumed a persisted render assignment at startup", "surface_id", a.SurfaceID, "applied_at", a.AppliedAt)
@@ -211,7 +225,7 @@ func Run() int {
 		defer close(renderReportDone)
 		ticker := time.NewTicker(cfg.RenderReportInterval)
 		defer ticker.Stop()
-		runRenderReport(sigCtx, conn, cfg.NodeID, sup, time.Now, ticker.C, renderTrigger, logger)
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
 	<-sigCtx.Done()

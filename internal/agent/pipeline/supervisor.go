@@ -101,6 +101,54 @@ type Snapshot struct {
 	TransportAvailable *bool
 	TransportReason    string
 
+	// TransportObservedAt is when [runner.setTransportProbe] recorded THIS
+	// transport evidence — separate from the shared ObservedAt below.
+	// Carrying its own timestamp (rather than stamping the shared one, as
+	// an earlier version of this package did) is what makes "a fresh
+	// ObservedAt on the pipeline state means the state actually moved" true
+	// with no exceptions: the coordinator's own render-command confirmation
+	// fences on that exact invariant, and a probe refreshing the shared
+	// ObservedAt with no state transition was a way to defeat it from a
+	// second direction after [Supervisor.AwaitState]'s Generation check
+	// closed the first (finding 2).
+	TransportObservedAt time.Time
+
+	// TimelineState is the [multisync.State] (as its wire string, e.g.
+	// "playing", "unsynchronized", "opened") this surface's FrameWriter most
+	// recently sampled from the shared timeline — "" until any tick has run.
+	// Carried as a plain string (not multisync.State) so this package never
+	// imports pkg/multisync's State type into its own reported shape; see
+	// [FrameWriter.TimelineSource] for the interface boundary this crosses.
+	TimelineState string
+
+	// TimelinePositionMS is the timeline position this surface's FrameWriter
+	// extracted its most recent CONTENT frame from — nil whenever the writer
+	// is drawing idle output instead (finding 7's fix: a position is only
+	// meaningful when content is actually being read from it, and ADR-011
+	// says an inapplicable value is nil, never a stale or zero position).
+	TimelinePositionMS *int64
+
+	// Drawing is what the writer actually wrote to the pipeline's stdin on
+	// its most recent tick: [DrawingContent] or [DrawingIdle]. This is the
+	// evidence the build contract names explicitly: "the process is up" is
+	// not "frames are arriving somewhere," and a report that only carries
+	// PipelineState=running cannot tell an operator apart from a node
+	// silently emitting black at full rate all night.
+	Drawing string
+
+	// IdleMode is the configured idle output ([IdleOutputBlack],
+	// [IdleOutputHold], or [IdleOutputDiagnostic]) whenever Drawing is
+	// [DrawingIdle]; "" when Drawing is [DrawingContent].
+	IdleMode string
+
+	// Generation identifies which process attempt r.snap's State currently
+	// describes — see [runner.bumpProcGen]. Used internally by [Supervisor.
+	// AwaitState] to require that a confirmed state actually MOVED past a
+	// caller-supplied baseline, rather than trusting a stale snapshot whose
+	// ObservedAt happened to be refreshed by something unrelated (finding
+	// 2). Never sent over the wire; internal supervision bookkeeping only.
+	Generation int64
+
 	ObservedAt time.Time
 }
 
@@ -119,6 +167,10 @@ func (s Snapshot) clone() Snapshot {
 	if s.FramesRate != nil {
 		v := *s.FramesRate
 		out.FramesRate = &v
+	}
+	if s.TimelinePositionMS != nil {
+		v := *s.TimelinePositionMS
+		out.TimelinePositionMS = &v
 	}
 	return out
 }
@@ -255,13 +307,17 @@ func newRunner(surfaceID string, now func() time.Time, starter ProcessStarter, l
 
 // setState updates the reported state under lock, stamping Since and
 // ObservedAt from the same clock read so the two never disagree about when
-// "now" was.
+// "now" was, and Generation from r.procGen (same lock, so this is always the
+// generation the state transition actually happened under) — see
+// [Snapshot.Generation]'s doc comment on why AwaitState needs this and
+// finding 2 for the defect it closes.
 func (r *runner) setState(state State, reason string) {
 	r.mu.Lock()
 	r.snap.State = state
 	r.snap.Reason = reason
 	r.snap.Since = r.now()
 	r.snap.ObservedAt = r.snap.Since
+	r.snap.Generation = r.procGen
 	r.mu.Unlock()
 }
 
@@ -308,6 +364,29 @@ func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64) {
 	r.mu.Unlock()
 }
 
+// DrawingContent and DrawingIdle are the two values [Snapshot.Drawing] (and
+// [mqttproto.RenderSurfaceReport.Drawing]) can carry — see frame.go's
+// FrameWriter, the only writer of this evidence.
+const (
+	DrawingContent = "content"
+	DrawingIdle    = "idle"
+)
+
+// setDrawState records what a surface's FrameWriter actually wrote to the
+// pipeline's stdin on its most recent tick — finding 7's fix. Deliberately
+// does not touch State/Reason/Since/ObservedAt/Generation: this is a
+// separate evidence stream from pipeline lifecycle state, the same rule
+// [runner.setFrameCounts] already follows and for the same reason (must
+// never perturb AwaitState's post-dispatch confirmation check).
+func (r *runner) setDrawState(timelineState string, positionMS *int64, drawing, idleMode string) {
+	r.mu.Lock()
+	r.snap.TimelineState = timelineState
+	r.snap.TimelinePositionMS = positionMS
+	r.snap.Drawing = drawing
+	r.snap.IdleMode = idleMode
+	r.mu.Unlock()
+}
+
 // stdin returns the currently-running process's stdin writer, or an error
 // if nothing is currently running. Called on every frame tick (never
 // cached across ticks) so a mid-session pipeline restart is picked up on
@@ -338,16 +417,23 @@ func (r *runner) Snapshot() Snapshot {
 }
 
 // setTransportProbe stores a probe's outcome under lock, touching only
-// Transport/TransportAvailable/TransportReason/ObservedAt — see
-// [Supervisor.SetTransportProbe]'s doc comment for why updating the shared
-// ObservedAt here is safe.
+// Transport/TransportAvailable/TransportReason/TransportObservedAt — NEVER
+// the shared State/ObservedAt. An earlier version of this method stamped
+// the shared ObservedAt too, reasoning that AwaitState's freshness check
+// made it safe; it did not, because ObservedAt freshness with no state
+// transition is exactly what let a re-apply confirm off the pipeline it had
+// just killed (finding 2). The fix is this method never claiming evidence
+// about State at all — only [runner.setState] may move ObservedAt, so "a
+// fresh ObservedAt means the state actually moved" holds with no
+// exceptions, which the coordinator's own render-command confirmation now
+// depends on directly.
 func (r *runner) setTransportProbe(transport string, available bool, reason string, observedAt time.Time) {
 	r.mu.Lock()
 	r.snap.Transport = transport
 	v := available
 	r.snap.TransportAvailable = &v
 	r.snap.TransportReason = reason
-	r.snap.ObservedAt = observedAt
+	r.snap.TransportObservedAt = observedAt
 	r.mu.Unlock()
 }
 
@@ -739,6 +825,48 @@ func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int
 	r.setFrameCounts(written, late, dropped, rate)
 }
 
+// SetDrawState overwrites surfaceID's reported timeline/drawing evidence —
+// finding 7's agent-side fix, called by B3's FrameWriter every tick. A no-op
+// (never creates a runner) if surfaceID has never been applied, matching
+// [Supervisor.SetFrameCounts]'s identical rule.
+func (s *Supervisor) SetDrawState(surfaceID, timelineState string, positionMS *int64, drawing, idleMode string) {
+	s.mu.Lock()
+	r, ok := s.runners[surfaceID]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	r.setDrawState(timelineState, positionMS, drawing, idleMode)
+}
+
+// Generation reports surfaceID's current process-attempt generation, or 0 if
+// no runner exists yet for it — see [Snapshot.Generation]. Callers use this
+// to capture a pre-dispatch baseline before Apply/Restart, so AwaitState can
+// require the confirmed state to describe a strictly later attempt (finding
+// 2), never a stale one whose ObservedAt happened to be refreshed by
+// something unrelated (e.g. [Supervisor.SetTransportProbe]).
+func (s *Supervisor) Generation(surfaceID string) int64 {
+	snap, ok := s.Snapshot(surfaceID)
+	if !ok {
+		return 0
+	}
+	return snap.Generation
+}
+
+// MarkResumeFailed records that surfaceID holds a persisted assignment this
+// node could not resume at boot (FSEQ missing, content-hash mismatch,
+// unparseable persisted params, or any other buildAssignedSpec failure — see
+// internal/agent/agent.go's boot-resume loop). Creates the runner if none
+// exists yet, matching Apply/Clear/Restart/SetTransportProbe's own runnerFor
+// use, so the next render report includes this surface as StateFailed with
+// reason rather than silently omitting it (finding 9): the node knows it
+// holds an assignment it could not honour, and logging that is not the same
+// as reporting it.
+func (s *Supervisor) MarkResumeFailed(surfaceID, reason string) {
+	r := s.runnerFor(surfaceID)
+	r.setState(StateFailed, reason)
+}
+
 // SnapshotAll reports every surface this Supervisor currently supervises,
 // for the render report publisher — see internal/agent/renderreport.go. A
 // CLEARED surface (Clear called and no Apply since) is excluded entirely,
@@ -774,31 +902,48 @@ func (s *Supervisor) SnapshotAll() []Snapshot {
 // surface has ever been applied. Creates the runner if surfaceID has none
 // yet, matching Apply/Clear/Restart's own runnerFor use.
 //
-// observedAt updates the snapshot's shared ObservedAt field. That is safe
-// against [Supervisor.AwaitState]: AwaitState only treats a snapshot as
-// confirming evidence when its State is one of the caller's wanted states
-// AND ObservedAt is fresh enough, so a probe bumping ObservedAt without a
-// concurrent Apply's state having actually changed can never manufacture a
-// false "confirmed" for a state that has not moved — see AwaitState's own
-// doc comment for the defect this project already shipped once by
-// comparing against stale evidence.
+// observedAt is stamped onto the snapshot's OWN TransportObservedAt field,
+// never onto the shared State/ObservedAt — see [runner.setTransportProbe]'s
+// doc comment for why: this evidence is real and belongs on the snapshot,
+// but it is evidence about the TRANSPORT, not about whether pipeline state
+// moved, and conflating the two is precisely finding 2's defect.
 func (s *Supervisor) SetTransportProbe(surfaceID, transport string, available bool, reason string, observedAt time.Time) {
 	r := s.runnerFor(surfaceID)
 	r.setTransportProbe(transport, available, reason, observedAt)
 }
 
 // AwaitState polls surfaceID's snapshot until it reports one of want with
-// evidence (ObservedAt) at or after notBefore, or ctx is done — whichever
-// comes first. This is this seam's confirmation mechanism: starting a
-// pipeline is asynchronous, so "confirmed" must rest on a poll that
-// actually observed the desired state after the dispatch that requested it,
-// never on the dispatch call returning without error. See
-// internal/agent/command.go's OperationResult doc comment, which names this
-// exact case (a GStreamer pipeline reaching PLAYING) in advance.
+// evidence (ObservedAt) at or after notBefore AND a Generation strictly
+// after afterGeneration, or ctx is done — whichever comes first. This is
+// this seam's confirmation mechanism: starting a pipeline is asynchronous,
+// so "confirmed" must rest on a poll that actually observed the desired
+// state after the dispatch that requested it, never on the dispatch call
+// returning without error. See internal/agent/command.go's OperationResult
+// doc comment, which names this exact case (a GStreamer pipeline reaching
+// PLAYING) in advance.
+//
+// ObservedAt freshness alone rests on an invariant this package now holds
+// with no exceptions: ONLY [runner.setState] moves the shared State/
+// ObservedAt pair, so a fresh ObservedAt always means the state actually
+// transitioned (see [runner.setTransportProbe]'s own doc comment — an
+// earlier version of this package violated that invariant, which was
+// finding 2's real defect: a probe refreshing ObservedAt with no state
+// change let a re-apply confirm off a STALE "running" snapshot describing
+// the pipeline just killed). The Generation check below is defense in
+// depth on top of that invariant, not a substitute for it: it additionally
+// requires the confirmed snapshot to describe a strictly later process
+// attempt than whatever was live before this caller's own dispatch, which
+// protects against a FUTURE addition re-introducing an ObservedAt-without-
+// a-transition path the way setTransportProbe once did. Pass afterGeneration
+// = -1 to disable it for a caller with no analogous risk: clearSurface
+// always synchronously calls setState(Stopped, ...) as part of processing
+// the very command being awaited, so a generation floor there would only
+// make an already-cleared surface's repeat Clear fail to confirm for no
+// reason.
 //
 // found is false when ctx expired first; the caller should treat that as
 // "unconfirmed," never as an error and never as success.
-func (s *Supervisor) AwaitState(ctx context.Context, surfaceID string, want []State, notBefore time.Time, pollInterval time.Duration) (Snapshot, bool) {
+func (s *Supervisor) AwaitState(ctx context.Context, surfaceID string, want []State, notBefore time.Time, afterGeneration int64, pollInterval time.Duration) (Snapshot, bool) {
 	wantSet := make(map[State]bool, len(want))
 	for _, w := range want {
 		wantSet[w] = true
@@ -809,7 +954,7 @@ func (s *Supervisor) AwaitState(ctx context.Context, surfaceID string, want []St
 
 	for {
 		snap, ok := s.Snapshot(surfaceID)
-		if ok && wantSet[snap.State] && !snap.ObservedAt.Before(notBefore) {
+		if ok && wantSet[snap.State] && !snap.ObservedAt.Before(notBefore) && snap.Generation > afterGeneration {
 			return snap, true
 		}
 

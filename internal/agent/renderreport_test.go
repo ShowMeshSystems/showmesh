@@ -78,7 +78,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	}
 	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer awaitCancel()
-	if _, ok := sup.AwaitState(awaitCtx, "surface-1", []pipeline.State{pipeline.StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(awaitCtx, "surface-1", []pipeline.State{pipeline.StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("setup: pipeline never reached running")
 	}
 
@@ -90,7 +90,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -158,7 +158,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -203,7 +203,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	}
 	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer awaitCancel()
-	if _, ok := sup.AwaitState(awaitCtx, "surface-1", []pipeline.State{pipeline.StateStarting}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(awaitCtx, "surface-1", []pipeline.State{pipeline.StateStarting}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("setup: pipeline never reached starting")
 	}
 
@@ -215,7 +215,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {

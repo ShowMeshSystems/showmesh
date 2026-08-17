@@ -23,13 +23,31 @@ var ErrNoStdin = errors.New("pipeline: process has no stdin pipe")
 const maxStderrTailBytes = 4 * 1024
 
 // runningStateMarker is the exact substring gst-launch-1.0 writes to stdout
-// (with no "-v" flag needed — this is default output) when a pipeline
-// finishes its PAUSED->PLAYING transition. Watched for, never parsed
-// further: this is a measured fact about gst-launch-1.0's default output,
-// not a documented, versioned contract, so a future GStreamer release
-// changing this string degrades detection to "process alive, PLAYING never
-// observed" rather than crashing anything.
-const runningStateMarker = "Setting pipeline to PLAYING"
+// (with no "-v" flag needed — this is default output) once the
+// PAUSED->PLAYING transition has actually COMPLETED. Watched for, never
+// parsed further: this is a measured fact about gst-launch-1.0's default
+// output, not a documented, versioned contract, so a future GStreamer
+// release changing this string degrades detection to "process alive,
+// PLAYING never observed" rather than crashing anything.
+//
+// MEASURED, this machine, gst-launch-1.0 1.28.6 (finding 1): "Setting
+// pipeline to PLAYING ..." is printed BEFORE gst-launch calls
+// gst_element_set_state(PLAYING) and is present verbatim even when that
+// call goes on to FAIL — reproduced with
+// `fakesink state-error=paused-to-playing`:
+//
+//	Setting pipeline to PLAYING ...
+//	ERROR: from element .../GstFakeSink:fakesink0: GStreamer error: state
+//	change failed ...
+//	EXIT=255
+//
+// "New clock: GstSystemClock" only appears once PLAYING is actually
+// reached — present in that same run's successful case and in a pipeline
+// that reaches PLAYING and crashes later, ABSENT in the state-error run
+// above. Using the old string reset this package's own fast-failure
+// counter to 0 on every crash-looping attempt, because gst-launch prints it
+// unconditionally on the way TO the attempt, not on its success.
+const runningStateMarker = "New clock:"
 
 // ProcessHandle is the live handle to one started child process. The
 // production implementation wraps os/exec; tests substitute a fake to

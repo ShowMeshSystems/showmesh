@@ -85,7 +85,7 @@ func TestRealProcessKillMinusNineIsDetectedAndSupervisorRestarts(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	snap, ok := sup.AwaitState(ctx, "kill-test", []State{StateRunning}, dispatch, 20*time.Millisecond)
+	snap, ok := sup.AwaitState(ctx, "kill-test", []State{StateRunning}, dispatch, -1, 20*time.Millisecond)
 	if !ok {
 		t.Fatalf("real pipeline never reached StateRunning")
 	}
@@ -104,7 +104,7 @@ func TestRealProcessKillMinusNineIsDetectedAndSupervisorRestarts(t *testing.T) {
 	// distinct, non-running state — never silently stay "running".
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
-	crashed, ok := sup.AwaitState(ctx2, "kill-test", []State{StateRestarting, StateFailed}, killDispatch, 20*time.Millisecond)
+	crashed, ok := sup.AwaitState(ctx2, "kill-test", []State{StateRestarting, StateFailed}, killDispatch, -1, 20*time.Millisecond)
 	if !ok {
 		t.Fatalf("supervisor did not report a non-running state after kill -9; last known snapshot before kill: %+v", snap)
 	}
@@ -116,12 +116,66 @@ func TestRealProcessKillMinusNineIsDetectedAndSupervisorRestarts(t *testing.T) {
 	// dated after the kill.
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel3()
-	restarted, ok := sup.AwaitState(ctx3, "kill-test", []State{StateRunning}, killDispatch, 20*time.Millisecond)
+	restarted, ok := sup.AwaitState(ctx3, "kill-test", []State{StateRunning}, killDispatch, -1, 20*time.Millisecond)
 	if !ok {
 		t.Fatalf("supervisor did not restart the pipeline after kill -9")
 	}
 	if restarted.ObservedAt.Before(killDispatch) {
 		t.Fatalf("post-restart ObservedAt %s is before the kill at %s", restarted.ObservedAt, killDispatch)
+	}
+}
+
+// TestRealProcessRepeatedPlayingTransitionFailureReachesLockout is finding
+// 1's reproduction and regression test: a pipeline whose PAUSED->PLAYING
+// transition always FAILS still has gst-launch-1.0 print "Setting pipeline
+// to PLAYING ..." before every attempt (see process.go's runningStateMarker
+// doc comment for the measured transcript). Before the fix, that string was
+// treated as proof of reaching PLAYING, so [SawRunningMarker] was true on
+// every crash and the fast-failure counter reset to 0 every time —
+// StateFailed was never reached and this test would time out waiting for
+// it. Revert runningStateMarker to "Setting pipeline to PLAYING" to see it
+// fail.
+func TestRealProcessRepeatedPlayingTransitionFailureReachesLockout(t *testing.T) {
+	requireGstLaunch(t)
+
+	policy := defaultRestartPolicy
+	policy.maxConsecutiveFastFailures = 3
+	policy.initialBackoff = 10 * time.Millisecond
+	policy.maxBackoff = 20 * time.Millisecond
+
+	sup := newSupervisorWithPolicy(time.Now, nil, testLogger{}, policy)
+	shutdownSupervisor(t, sup)
+
+	// fakesink's state-error=paused-to-playing property forces the
+	// PAUSED->PLAYING transition to fail every single time, real GStreamer
+	// behaviour reproduced by hand for process.go's doc comment. NOT
+	// is-live: with a live source this same forced error is reported
+	// asynchronously and "New clock:" prints anyway (measured by hand: a
+	// live pipeline's failing sink still reaches the clock-selection point
+	// before its bus error arrives). Without is-live the source blocks in
+	// PREROLL, so the PAUSED->PLAYING failure is synchronous and "New
+	// clock:" never prints — the case this test needs to reproduce finding
+	// 1's actual defect.
+	spec := Spec{
+		SurfaceID: "lockout-test",
+		Stages: []Stage{
+			{Label: "source", Elements: []Element{{Factory: "videotestsrc"}}},
+			{Label: "sink", Elements: []Element{{Factory: "fakesink", Properties: []Property{{Key: "state-error", Value: "paused-to-playing"}}}}},
+		},
+	}
+	dispatch := time.Now()
+	if err := sup.Apply(spec); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	snap, ok := sup.AwaitState(ctx, "lockout-test", []State{StateFailed}, dispatch, -1, 20*time.Millisecond)
+	if !ok {
+		t.Fatalf("supervisor never reached StateFailed after repeated PAUSED->PLAYING failures (fast-failure lockout is dead if this times out)")
+	}
+	if snap.ConsecutiveFailures < policy.maxConsecutiveFastFailures {
+		t.Fatalf("ConsecutiveFailures = %d, want >= %d", snap.ConsecutiveFailures, policy.maxConsecutiveFastFailures)
 	}
 }
 

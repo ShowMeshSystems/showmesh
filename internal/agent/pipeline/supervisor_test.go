@@ -46,7 +46,7 @@ func TestSupervisorApplyReachesRunning(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	snap, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond)
+	snap, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond)
 	if !ok {
 		t.Fatalf("did not observe StateRunning; last snapshot: %+v", snap)
 	}
@@ -71,7 +71,7 @@ func TestSupervisorClearStopsAndDoesNotRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("never reached running before clearing")
 	}
 
@@ -81,7 +81,7 @@ func TestSupervisorClearStopsAndDoesNotRestart(t *testing.T) {
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	snap, ok := sup.AwaitState(ctx2, "s1", []State{StateStopped}, time.Time{}, 5*time.Millisecond)
+	snap, ok := sup.AwaitState(ctx2, "s1", []State{StateStopped}, time.Time{}, -1, 5*time.Millisecond)
 	if !ok {
 		t.Fatalf("did not observe StateStopped after Clear; last snapshot: %+v", snap)
 	}
@@ -128,7 +128,7 @@ func TestSupervisorClearedSurfaceExcludedFromSnapshotAll(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("never reached running before clearing")
 	}
 	if !snapshotAllHas(sup, "s1") {
@@ -145,7 +145,7 @@ func TestSupervisorClearedSurfaceExcludedFromSnapshotAll(t *testing.T) {
 	// control-loop goroutine that just transitioned to Stopped (both
 	// inside loop's cmdClear branch), so observing Stopped here already
 	// happens-after setCleared(true).
-	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateStopped}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateStopped}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("did not observe StateStopped after Clear")
 	}
 
@@ -159,7 +159,7 @@ func TestSupervisorClearedSurfaceExcludedFromSnapshotAll(t *testing.T) {
 	}
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel3()
-	if _, ok := sup.AwaitState(ctx3, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx3, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("never reached running after re-Apply")
 	}
 	if !snapshotAllHas(sup, "s1") {
@@ -185,7 +185,7 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("never reached running")
 	}
 
@@ -199,7 +199,7 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateRestarting}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateRestarting}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("crash did not transition to StateRestarting")
 	}
 
@@ -251,7 +251,7 @@ func TestSupervisorFastFailureLockout(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	snap, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, 10*time.Millisecond)
+	snap, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, -1, 10*time.Millisecond)
 	if !ok {
 		t.Fatalf("never reached StateFailed; last snapshot: %+v", snap)
 	}
@@ -300,7 +300,7 @@ func TestSupervisorSlowRepeatedFailureStillLocksOut(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	snap, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, 10*time.Millisecond)
+	snap, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, -1, 10*time.Millisecond)
 	if !ok {
 		t.Fatalf("never reached StateFailed despite repeated crashes that never saw PLAYING; last snapshot: %+v", snap)
 	}
@@ -315,7 +315,7 @@ func TestSupervisorSlowRepeatedFailureStillLocksOut(t *testing.T) {
 	}
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("explicit Restart after lockout did not reach StateRunning")
 	}
 }
@@ -350,7 +350,7 @@ func TestSupervisorStaleRunningMarkerCannotOverwriteFailed(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, 10*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, -1, 10*time.Millisecond); !ok {
 		t.Fatalf("never reached StateFailed")
 	}
 
@@ -390,7 +390,7 @@ func TestSupervisorUnsupportedWhenGstLaunchMissing(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, ok := sup.AwaitState(ctx, "s1", []State{StateUnsupported}, time.Time{}, 5*time.Millisecond); !ok {
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateUnsupported}, time.Time{}, -1, 5*time.Millisecond); !ok {
 		t.Fatalf("did not observe StateUnsupported when gst-launch is absent")
 	}
 	if fs.callCount() != 0 {
@@ -424,7 +424,7 @@ func TestSupervisorConfirmationEvidencePostDatesDispatch(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	staleSnap, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond)
+	staleSnap, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond)
 	if !ok {
 		t.Fatalf("setup: never reached initial running state")
 	}
@@ -443,7 +443,7 @@ func TestSupervisorConfirmationEvidencePostDatesDispatch(t *testing.T) {
 	// after its own dispatch off a pre-dispatch reading).
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer shortCancel()
-	if snap, found := sup.AwaitState(shortCtx, "s1", []State{StateRunning}, dispatchTime, 5*time.Millisecond); found {
+	if snap, found := sup.AwaitState(shortCtx, "s1", []State{StateRunning}, dispatchTime, -1, 5*time.Millisecond); found {
 		t.Fatalf("AwaitState reported found=true using stale evidence dated %s (before dispatch %s); snapshot: %+v",
 			staleSnap.ObservedAt, dispatchTime, snap)
 	}
@@ -459,11 +459,57 @@ func TestSupervisorConfirmationEvidencePostDatesDispatch(t *testing.T) {
 	freshCtx, freshCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer freshCancel()
 	freshDispatch := clock.Now()
-	snap, found := sup.AwaitState(freshCtx, "s1", []State{StateRunning}, freshDispatch, 5*time.Millisecond)
+	snap, found := sup.AwaitState(freshCtx, "s1", []State{StateRunning}, freshDispatch, -1, 5*time.Millisecond)
 	if !found {
 		t.Fatalf("did not observe fresh running evidence after the second restart")
 	}
 	if snap.ObservedAt.Before(freshDispatch) {
 		t.Fatalf("ObservedAt %s is before dispatch %s: evidence does not post-date dispatch", snap.ObservedAt, freshDispatch)
+	}
+}
+
+// TestSetTransportProbeNeverMovesStateObservedAt is the cross-seam
+// invariant the coordinator's own render-command confirmation now depends
+// on directly: "a fresh ObservedAt on the pipeline state means the state
+// actually moved," with no exceptions. SetTransportProbe is real,
+// legitimate evidence, but it is evidence about the TRANSPORT, not about
+// whether pipeline lifecycle state transitioned — it must land on its own
+// TransportObservedAt field and never touch the shared State/ObservedAt
+// pair (finding 2's actual defect: an earlier version of this method
+// stamped the shared ObservedAt too, which let a stale "running" snapshot
+// get reconfirmed by an unrelated probe).
+func TestSetTransportProbeNeverMovesStateObservedAt(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	sup := NewSupervisor(clock.Now, fs.Start, testLogger{})
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	before, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond)
+	if !ok {
+		t.Fatalf("did not observe StateRunning; last snapshot: %+v", before)
+	}
+
+	clock.Advance(time.Hour)
+	probeAt := clock.Now()
+	sup.SetTransportProbe("s1", "ndi", true, "", probeAt)
+
+	after, ok := sup.Snapshot("s1")
+	if !ok {
+		t.Fatalf("no snapshot for s1 after SetTransportProbe")
+	}
+	if !after.ObservedAt.Equal(before.ObservedAt) {
+		t.Fatalf("State ObservedAt moved from %s to %s after SetTransportProbe with no state transition — this defeats every caller (including the coordinator) that fences confirmation on ObservedAt freshness",
+			before.ObservedAt, after.ObservedAt)
+	}
+	if after.State != StateRunning {
+		t.Fatalf("State = %q after SetTransportProbe, want unchanged %q", after.State, StateRunning)
+	}
+	if !after.TransportObservedAt.Equal(probeAt) {
+		t.Fatalf("TransportObservedAt = %s, want %s (the probe's own evidence must still be recorded, just not on the shared ObservedAt)", after.TransportObservedAt, probeAt)
 	}
 }

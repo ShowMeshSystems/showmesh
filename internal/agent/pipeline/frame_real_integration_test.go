@@ -161,7 +161,7 @@ func TestFrameWriterAgainstRealFSEQRealMultiSyncRealGStreamer(t *testing.T) {
 	}
 	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer awaitCancel()
-	snap, ok := sup.AwaitState(awaitCtx, "surface-real-1", []State{StateRunning}, time.Time{}, 20*time.Millisecond)
+	snap, ok := sup.AwaitState(awaitCtx, "surface-real-1", []State{StateRunning}, time.Time{}, -1, 20*time.Millisecond)
 	if !ok {
 		t.Fatalf("real gst-launch-1.0 pipeline never reached Running; last snapshot: %+v", snap)
 	}
