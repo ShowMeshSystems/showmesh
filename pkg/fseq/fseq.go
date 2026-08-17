@@ -681,6 +681,15 @@ func (f *File) readCompressedFrame(frame int) ([]byte, error) {
 		return nil, &ErrFrameOutOfRange{Frame: frame, FrameCount: int(f.frameCount)}
 	}
 	if bi != f.cachedBlock {
+		// Invalidate the cache identity BEFORE attempting the decode:
+		// DecodeAll appends into cachedData's existing backing array when
+		// capacity allows (the common case for same-sized blocks), so a
+		// decode that fails partway through can leave cachedData's bytes
+		// overwritten while cachedBlock still names the OLD block. Without
+		// this, a later seek back to that old block would skip decodeBlock
+		// entirely and return the half-overwritten bytes as if they were
+		// still valid — wrong pixels, no error, nothing to notice.
+		f.cachedBlock = -1
 		if err := f.decodeBlock(bi); err != nil {
 			return nil, err
 		}
