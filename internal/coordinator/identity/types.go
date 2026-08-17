@@ -65,6 +65,15 @@ const (
 	ScopePrincipalWrite Scope = "principal:write"
 	ScopeAuditRead      Scope = "audit:read"
 
+	// ScopePrincipalRead is Track G seam G-5's own read counterpart to
+	// [ScopePrincipalWrite]: listing principals and tokens is exactly as
+	// sensitive as GET /api/v1/audit (identity, not telemetry), so it gets
+	// its own scope rather than reusing one of the four ADR-024 decision 4
+	// read scopes the way config.go's own doc comment explains
+	// config:write does for fpp.endpoints. Admin-only, alongside every
+	// other identity-administration scope.
+	ScopePrincipalRead Scope = "principal:read"
+
 	// ScopeResolumeAction is Track D seam D-3's own action-dispatch scope
 	// (TRACK-D-D3-SPEC.md section 5.1): every one of the seven Resolume
 	// actions (launchClip, clearLayer, blackout, launchColumn, selectDeck,
@@ -98,7 +107,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // names it, alongside principal:write, as the pair that stays fail-closed
 // even under the audit-write-failure exemption, and neither appears in
 // operatorActionScopes above.
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
@@ -165,6 +174,14 @@ type Principal struct {
 	CreatedAt  time.Time
 	Disabled   bool
 	Generation uint64 // bumped by password change, revoke-all, or restore
+
+	// HasPassword reports whether this principal has a password hash set —
+	// never the hash itself, which this type deliberately never carries.
+	// Track G seam G-5's lockout guard (api/principals.go) uses this,
+	// alongside an active-token count, to decide whether a principal has
+	// ANY remaining way to authenticate before refusing a write that would
+	// remove the coordinator's last reachable administrator.
+	HasPassword bool
 
 	// Reserved is true only for [ReservedResolumeRecoveryPrincipalID] —
 	// build contract §1.2: "visible wherever principals are listed". Never

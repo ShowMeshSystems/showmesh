@@ -379,6 +379,22 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 // declared node in the installation reading not_seen, because whichever
 // run's RecordNodeDiscoverySeen pass lands last wins "the most recent run"
 // regardless of which one an operator actually meant to be looking at.
+// principalLockoutProblem is Track G seam G-5's own 409 (requirement 3 /
+// ADR-039 decision 8): the request would leave no enabled principal able
+// to reach principal:write, either by disabling the last enabled admin, by
+// changing its role away from principal:write, or by revoking the last
+// credential able to reach that scope. Shares [ProblemTypeConflict] with
+// every other "valid request, unsafe right now" refusal in this file —
+// detail states which of the three triggered it and the remedy.
+func principalLockoutProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Refused: this would lock out every administrator",
+		Status: http.StatusConflict,
+		Detail: detail,
+	}
+}
+
 func discoveryRunConflictProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,

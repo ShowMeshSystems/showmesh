@@ -369,14 +369,15 @@ var dummyPasswordHash = sync.OnceValue(func() string {
 
 func principalFromRecord(rec store.PrincipalRecord) Principal {
 	return Principal{
-		ID:         rec.ID,
-		Name:       rec.Name,
-		Kind:       Kind(rec.Kind),
-		Role:       Role(rec.Role),
-		CreatedAt:  rec.CreatedAt,
-		Disabled:   rec.Disabled,
-		Generation: rec.Generation,
-		Reserved:   rec.ID == ReservedResolumeRecoveryPrincipalID,
+		ID:          rec.ID,
+		Name:        rec.Name,
+		Kind:        Kind(rec.Kind),
+		Role:        Role(rec.Role),
+		CreatedAt:   rec.CreatedAt,
+		Disabled:    rec.Disabled,
+		Generation:  rec.Generation,
+		HasPassword: rec.PasswordHash != "",
+		Reserved:    rec.ID == ReservedResolumeRecoveryPrincipalID,
 	}
 }
 
@@ -1005,8 +1006,9 @@ func (s *svc) IssueToken(ctx context.Context, principalID, label string, expires
 	if err != nil {
 		return Token{}, err
 	}
+	id := uuid.NewString()
 	if _, err := s.st.CreateToken(ctx, store.TokenRecord{
-		ID:          uuid.NewString(),
+		ID:          id,
 		PrincipalID: principalID,
 		Digest:      tok.Digest,
 		Hint:        tok.Hint,
@@ -1015,6 +1017,7 @@ func (s *svc) IssueToken(ctx context.Context, principalID, label string, expires
 	}); err != nil {
 		return Token{}, fmt.Errorf("identity: issue token: %w", err)
 	}
+	tok.ID = id
 	return tok, nil
 }
 
