@@ -49,9 +49,21 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	mustCtl(t, coord, token, []string{"show", "set", "--name", "Render E2E"}, showID)
 	mustCtl(t, coord, token, []string{"show", "activate"}, showID)
 	mustCtl(t, coord, token, []string{
+		// --transport hdmi, deliberately not ndi: this test proves the
+		// apply/confirm/clear/restart LIFECYCLE and asset resolution
+		// (build contract ruling 4), not NDI transport reachability —
+		// that is TestRenderTransportProbeReachesObservationsAndCLI's own
+		// job, below. Seam B4 wires a REAL ndisink into this exact spec
+		// path, and this development environment genuinely lacks the NDI
+		// runtime (see this seam's own report): an ndi surface here would
+		// correctly never reach "running", which is the right behavior
+		// per ADR-026 decision 6, not a bug to route around. hdmi has no
+		// real sink built yet (B4's scope is NDI only), so applyOutputSink
+		// falls back to the same fakesink+queue pipeline B2a proved
+		// reliable, which is what this test actually needs.
 		"surface", "set", "--show", showID, "--name", "Wall", "--node", nodeID,
 		"--start-channel", "1", "--channel-count", "12", "--width", "2", "--height", "2",
-		"--pixel-format", "rgb", "--frame-rate", "40", "--transport", "ndi", "--ndi-source-name", "test-source",
+		"--pixel-format", "rgb", "--frame-rate", "40", "--transport", "hdmi", "--hdmi-display", "HDMI-1",
 	}, surfaceID)
 
 	// 24 channels so the surface's 12-channel range at start channel 1 is a
