@@ -109,6 +109,26 @@ subcommand.
 // refusing client-side before a request is sent matches this program's
 // existing posture elsewhere, e.g. parseConfigSetPayload).
 func resolvePassword(stdin io.Reader, stderr io.Writer, password string, useStdin bool, promptLabel string, required bool) (string, error) {
+	isTTY := false
+	fd := -1
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		isTTY = true
+		fd = int(f.Fd())
+	}
+	return resolvePasswordFrom(stdin, stderr, password, useStdin, promptLabel, required, isTTY, func() (string, error) {
+		b, err := term.ReadPassword(fd)
+		return string(b), err
+	})
+}
+
+// resolvePasswordFrom is resolvePassword's decision logic with the
+// terminal detection and echo-suppressed read injected, so the flag and
+// TTY paths are unit-testable without a real terminal. Order: an explicit
+// flag always wins; a TTY prompts, and when required is false an empty
+// answer means "no password"; a non-TTY with no flag is a usage error
+// when required (never a hang on a read from a pipe with nothing behind
+// it) and "no password" otherwise.
+func resolvePasswordFrom(stdin io.Reader, stderr io.Writer, password string, useStdin bool, promptLabel string, required bool, isTTY bool, readSecret func() (string, error)) (string, error) {
 	if useStdin {
 		reader := bufio.NewReader(stdin)
 		line, err := reader.ReadString('\n')
@@ -120,25 +140,21 @@ func resolvePassword(stdin io.Reader, stderr io.Writer, password string, useStdi
 	if password != "" {
 		return password, nil
 	}
-	if !required {
-		return "", nil
-	}
-	// Interactive prompt only when stdin is a real terminal -- a script
-	// that gave neither --password nor --password-stdin gets a clear
-	// usage error instead of hanging on a read from a pipe with nothing
-	// behind it.
-	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+	if isTTY {
 		if _, err := fmt.Fprint(stderr, promptLabel); err != nil {
 			return "", fmt.Errorf("writing password prompt: %w", err)
 		}
-		b, err := term.ReadPassword(int(f.Fd()))
+		s, err := readSecret()
 		if _, werr := fmt.Fprintln(stderr); werr != nil {
 			return "", fmt.Errorf("writing password prompt newline: %w", werr)
 		}
 		if err != nil {
 			return "", fmt.Errorf("reading password: %w", err)
 		}
-		return string(b), nil
+		return s, nil
+	}
+	if !required {
+		return "", nil
 	}
 	return "", newCLIError(exitUsage, "a password is required: pass --password, --password-stdin, or run interactively")
 }
@@ -256,7 +272,7 @@ func cmdPrincipalSetDisabled(args []string, stdout, stderr io.Writer, clock func
 	}
 	fs, g := newFlagSet("showmeshctl principal "+verb, stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl principal %s <id> [flags]\n", verb)
+		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl principal %s [flags] <id>\n", verb)
 		_, _ = fmt.Fprintf(stderr, "\n%s a principal (requires principal:write).\n", action)
 		if disabled {
 			_, _ = fmt.Fprintln(stderr, "Refused with 409 if this is the coordinator's last enabled administrator")
@@ -308,7 +324,7 @@ func cmdPrincipalResetPassword(args []string, stdout, stderr io.Writer, clock fu
 		"password, in plaintext on the command line -- visible in shell history and `ps`; prefer --password-stdin")
 	fs.BoolVar(&passwordStdin, "password-stdin", false, "read the password as one line from stdin")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal reset-password <id> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal reset-password [flags] <id>")
 		_, _ = fmt.Fprintln(stderr, "\nReset a principal's password (requires principal:write). Bumps that")
 		_, _ = fmt.Fprintln(stderr, "principal's generation counter, invalidating every session and token it")
 		_, _ = fmt.Fprintln(stderr, "currently holds.")
@@ -361,7 +377,7 @@ func cmdPrincipalResetPassword(args []string, stdout, stderr io.Writer, clock fu
 func cmdPrincipalSetRole(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl principal set-role", stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal set-role <id> <role> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal set-role [flags] <id> <role>")
 		_, _ = fmt.Fprintln(stderr, "\nChange a principal's role (requires principal:write). Refused with 409")
 		_, _ = fmt.Fprintln(stderr, "if this would leave no enabled principal able to reach principal:write")
 		_, _ = fmt.Fprintln(stderr, "(ADR-039 decision 8).")

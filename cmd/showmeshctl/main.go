@@ -200,12 +200,12 @@ Commands:
   principal disable <id>              disable a principal (write; refused 409 if this
                                        is the last enabled administrator, ADR-039)
   principal enable <id>               enable a principal (write)
-  principal reset-password <id> [--password|--password-stdin]
+  principal reset-password [--password|--password-stdin] <id>
                            reset a principal's password (write)
   principal set-role <id> <role>      change a principal's role (write; refused 409 if
                                        this would leave no reachable administrator)
   token list <principalId>            list a principal's API tokens (requires principal:read)
-  token issue <principalId> [--label] [--expires]
+  token issue [--label] [--expires] <principalId>
                            issue an API token (write; value shown exactly once)
   token revoke <principalId> <tokenId>
                            revoke an API token (write; refused 409 if this is the last

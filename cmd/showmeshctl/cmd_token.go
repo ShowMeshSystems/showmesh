@@ -54,7 +54,7 @@ another enabled administrator, or another active token) is refused with
 
 Subcommands:
   list <principalId>                            list a principal's tokens
-  issue <principalId> [--label] [--expires]      issue a new token (write)
+  issue [--label] [--expires] <principalId>      issue a new token (write)
   revoke <principalId> <tokenId>                 revoke a token (write)
 
 Run "showmeshctl token <subcommand> --help" for flags specific to one
@@ -65,7 +65,7 @@ subcommand.
 func cmdTokenList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl token list", stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token list <principalId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token list [flags] <principalId>")
 		_, _ = fmt.Fprintln(stderr, "\nList a principal's API tokens. Requires principal:read. Never shows a")
 		_, _ = fmt.Fprintln(stderr, "digest or a raw value.")
 		fs.PrintDefaults()
@@ -113,7 +113,7 @@ func cmdTokenIssue(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	fs.StringVar(&expires, "expires", "",
 		"optional expiry: an RFC3339 timestamp (e.g. 2027-01-15T00:00:00Z); default: never (ADR-024 decision 1)")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token issue <principalId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token issue [flags] <principalId>")
 		_, _ = fmt.Fprintln(stderr, "\nIssue a new API token for a principal (requires principal:write). The")
 		_, _ = fmt.Fprintln(stderr, "printed value is this token's only appearance, ever -- store it now.")
 		fs.PrintDefaults()
@@ -177,7 +177,7 @@ func cmdTokenIssue(args []string, stdout, stderr io.Writer, clock func() time.Ti
 func cmdTokenRevoke(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl token revoke", stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token revoke <principalId> <tokenId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl token revoke [flags] <principalId> <tokenId>")
 		_, _ = fmt.Fprintln(stderr, "\nRevoke an API token (requires principal:write). Refused with 409 if this")
 		_, _ = fmt.Fprintln(stderr, "is the last credential able to reach principal:write (ADR-039 decision 8).")
 		fs.PrintDefaults()

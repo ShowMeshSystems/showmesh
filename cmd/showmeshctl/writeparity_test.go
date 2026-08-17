@@ -62,36 +62,40 @@ func openAPISegments(p string) []pathSegment {
 	return segs
 }
 
-// segmentsCompatible reports whether a CLI-derived path shape could
-// address the same resource as an openapi path: same segment count, and
-// every segment matches literally UNLESS either side is a variable (an
-// unresolved CLI expression, or an openapi {param}) — in which case that
-// position matches regardless of what it would resolve to at runtime.
-//
-// This is deliberately coarser than full semantic verification: a CLI
-// call built from two unresolved expressions in a row (e.g. "principal
-// enable"/"principal disable" sharing one id+verb-built path) is treated
-// as compatible with EVERY openapi path of the same shape, not just the
-// ones that call site actually reaches. That is the tradeoff this kind of
-// structural test makes everywhere in this project (ParameterID.
-// MarshalJSON returning an error rather than a comment asking nicely):
-// it catches an endpoint with NO matching CLI call at all, which is what
-// decision 9 asks for, not a perfect model of every call site's runtime
-// values. See this task's own report for the specific gaps this
-// coarseness could theoretically hide, checked by hand instead.
+// segmentsCompatible reports whether a CLI-derived path shape addresses
+// an openapi path: same segment count, an openapi {param} accepts any CLI
+// segment, and an openapi LITERAL segment must be matched by a CLI
+// literal with the same text. An unresolved CLI segment (a runtime
+// expression) never matches an openapi literal: a CLI call that builds a
+// literal position dynamically (cmd_principal.go's enable/disable verb)
+// must instead be declared in dynamicWritePathCoverage, so it cannot
+// silently "cover" every same-shaped endpoint the API grows later.
 func segmentsCompatible(cli, api []pathSegment) bool {
 	if len(cli) != len(api) {
 		return false
 	}
 	for i := range cli {
-		if cli[i].variable || api[i].variable {
+		if api[i].variable {
 			continue
 		}
-		if cli[i].text != api[i].text {
+		if cli[i].variable || cli[i].text != api[i].text {
 			return false
 		}
 	}
 	return true
+}
+
+// dynamicWritePathCoverage declares, per concrete operation
+// ("METHOD /openapi/path" exactly as api/openapi.yaml writes the path),
+// which openapi operations the package's dynamically built CLI paths
+// cover. Every entry names its call site. An entry whose operation no
+// longer exists in api/openapi.yaml fails the test, so this map cannot
+// go stale in either direction.
+var dynamicWritePathCoverage = map[string]string{
+	"POST /principals/{id}/enable": "cmd_principal.go cmdPrincipalSetDisabled builds " +
+		"/api/v1/principals/<id>/<verb> with verb=enable (showmeshctl principal enable)",
+	"POST /principals/{id}/disable": "cmd_principal.go cmdPrincipalSetDisabled builds " +
+		"/api/v1/principals/<id>/<verb> with verb=disable (showmeshctl principal disable)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a
@@ -303,12 +307,13 @@ func collectCLIWritePathShapes(t *testing.T) [][]pathSegment {
 	return shapes
 }
 
-// nonGETOpenAPIPaths reads api/openapi.yaml (relative to the repository
-// root — this test's working directory is cmd/showmeshctl, so it walks up
-// two levels, mirroring internal/coordinator/api/openapi_test.go's
-// loadOpenAPIDocument for the identical file) and returns every path that
-// declares at least one non-GET operation.
-func nonGETOpenAPIPaths(t *testing.T) []string {
+// nonGETOpenAPIOperations reads api/openapi.yaml (relative to the
+// repository root — this test's working directory is cmd/showmeshctl, so
+// it walks up two levels, mirroring internal/coordinator/api/
+// openapi_test.go's loadOpenAPIDocument for the identical file) and
+// returns, per path declaring at least one non-GET operation, the set of
+// its non-GET methods (upper-cased).
+func nonGETOpenAPIOperations(t *testing.T) map[string]map[string]bool {
 	t.Helper()
 
 	path := filepath.Join("..", "..", "api", "openapi.yaml")
@@ -326,15 +331,17 @@ func nonGETOpenAPIPaths(t *testing.T) []string {
 
 	methodNames := map[string]bool{"get": true, "put": true, "post": true, "delete": true, "patch": true}
 
-	var out []string
+	out := map[string]map[string]bool{}
 	for p, methods := range doc.Paths {
 		for method := range methods {
 			lower := strings.ToLower(method)
 			if !methodNames[lower] || lower == "get" {
 				continue
 			}
-			out = append(out, p)
-			break
+			if out[p] == nil {
+				out[p] = map[string]bool{}
+			}
+			out[p][strings.ToUpper(lower)] = true
 		}
 	}
 	return out
@@ -351,10 +358,9 @@ func nonGETOpenAPIPaths(t *testing.T) []string {
 // update a checklist.
 //
 // This test cannot see the API's own Go handler types (cmd/showmeshctl
-// must never import a coordinator package — see importgraph_test.go) and
-// does not need to: api/openapi.yaml is read as plain data, and this
-// program's own source is parsed as plain Go syntax, exactly as
-// CLAUDE.md's "reading api/openapi.yaml as data is fine" note allows.
+// must never import a coordinator package — importgraph_test.go forbids
+// the IMPORT, and reading api/openapi.yaml as plain data plus parsing
+// this program's own source as plain Go syntax imports nothing).
 func TestEveryWritePathHasACLIVerb(t *testing.T) {
 	cliShapes := collectCLIWritePathShapes(t)
 	if len(cliShapes) == 0 {
@@ -362,11 +368,42 @@ func TestEveryWritePathHasACLIVerb(t *testing.T) {
 			"not that this program issues no writes")
 	}
 
-	for _, p := range nonGETOpenAPIPaths(t) {
+	ops := nonGETOpenAPIOperations(t)
+	// Floor: a YAML-shape drift that stops the parser seeing paths must
+	// fail loudly, not pass over an empty (or nearly empty) set.
+	if len(ops) < 20 {
+		t.Fatalf("found only %d non-GET paths in api/openapi.yaml (expected at least 20) — "+
+			"the YAML scan is almost certainly broken", len(ops))
+	}
+
+	// Every dynamicWritePathCoverage entry must name an operation that
+	// still exists, with a stated call site.
+	dynamicallyCoveredPaths := map[string]bool{}
+	for op, callSite := range dynamicWritePathCoverage {
+		if callSite == "" {
+			t.Errorf("dynamicWritePathCoverage[%q] has no stated call site", op)
+		}
+		method, p, ok := strings.Cut(op, " ")
+		if !ok {
+			t.Errorf("dynamicWritePathCoverage key %q is not \"METHOD /path\"", op)
+			continue
+		}
+		if !ops[p][method] {
+			t.Errorf("dynamicWritePathCoverage names %q but api/openapi.yaml declares no such "+
+				"operation — remove the stale entry", op)
+			continue
+		}
+		dynamicallyCoveredPaths[p] = true
+	}
+
+	for p := range ops {
 		if reason, exempt := exemptWritePaths[p]; exempt {
 			if reason == "" {
 				t.Errorf("%s is on exemptWritePaths with no stated reason", p)
 			}
+			continue
+		}
+		if dynamicallyCoveredPaths[p] {
 			continue
 		}
 
@@ -379,9 +416,9 @@ func TestEveryWritePathHasACLIVerb(t *testing.T) {
 			}
 		}
 		if !covered {
-			t.Errorf("non-GET path %q has no matching showmeshctl write call and no entry in "+
-				"exemptWritePaths — add a CLI verb for it (ADR-030, CLAUDE.md's CLI-parity constraint), "+
-				"or add a reasoned exemption", p)
+			t.Errorf("non-GET path %q has no matching showmeshctl write call, no entry in "+
+				"dynamicWritePathCoverage, and no entry in exemptWritePaths — add a CLI verb for it "+
+				"(ADR-030, CLAUDE.md's CLI-parity constraint), or add a reasoned exemption", p)
 		}
 	}
 }
