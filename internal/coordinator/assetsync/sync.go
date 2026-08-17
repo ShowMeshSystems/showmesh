@@ -59,11 +59,43 @@ type dispatchRecord struct {
 	expiresAt    time.Time
 }
 
+// Settings is this service's live, no-restart-able configuration — Track G
+// seam G-4's assets.settings configuration kind (ADR-039), mirrored here so
+// package assetsync does not need to import internal/coordinator/config for
+// one struct shape (declared at the consumer, per this codebase's standing
+// convention). SHOWMESH_ASSET_DIR has no field here — it stays
+// environment-only (ADR-039 decision 2) and this package never reads it.
+type Settings struct {
+	// ContentBaseURL is SHOWMESH_ASSET_CONTENT_BASE_URL / assets.settings'
+	// contentBaseUrl. Empty means this service dispatches nothing — see
+	// [Service.Enabled].
+	ContentBaseURL string
+	// MaxUploadBytes bounds a single asset upload. This service does not
+	// use it directly (the upload handler does); it is carried here only
+	// because assets.settings is one configuration object and this Service
+	// is that object's one live holder.
+	MaxUploadBytes int64
+	// SyncInterval is how often [Service.Run] recomputes every declared
+	// node's gap, in addition to running on every [Service.Nudge].
+	SyncInterval time.Duration
+	// InventoryInterval is this coordinator's own copy of the agent's
+	// inventory-report cadence — see [BuildNodeManifest]'s staleness
+	// window.
+	InventoryInterval time.Duration
+}
+
 // Service is ADR-028 decision 7's sync service: on upload (via [Service.
 // Nudge]) and on its own tick interval — never in response to a show
 // starting — it computes every declared node's gap against the active
 // show ([BuildNodeManifest]) and dispatches one asset.fetch command per
 // missing asset. It never deletes anything, on any node, for any reason.
+//
+// Track G seam G-4 (ADR-039 decision 6) made every field of [Settings]
+// live: a coordinator operator can change contentBaseUrl, the upload
+// limit, or either interval through the assets.settings configuration
+// kind while this process runs, and [Service.Run] picks each one up
+// without a restart — including the "zero to one and back to zero"
+// transition ([Service.Enabled] flipping while Run is already looping).
 //
 // The zero value is not usable; construct with [NewService].
 type Service struct {
@@ -72,10 +104,8 @@ type Service struct {
 	logger *slog.Logger
 	now    func() time.Time
 
-	// contentBaseURL is SHOWMESH_ASSET_CONTENT_BASE_URL. Empty means this
-	// service does not run — see [Service.Enabled] and [Service.Run].
-	contentBaseURL    string
-	inventoryInterval time.Duration
+	settingsMu sync.RWMutex
+	settings   Settings
 
 	// nudge is buffered 1: a pending, not-yet-consumed nudge coalesces
 	// with a second one rather than queuing, matching
@@ -88,19 +118,72 @@ type Service struct {
 	inFlight map[dispatchKey]dispatchRecord
 }
 
-// NewService constructs a Service. contentBaseURL and inventoryInterval
-// are config.Config's AssetContentBaseURL and AssetInventoryInterval
-// respectively; an empty contentBaseURL means [Service.Enabled] is false
-// and [Service.Run] returns immediately after logging why.
-func NewService(st *store.Store, pub Publisher, logger *slog.Logger, contentBaseURL string, inventoryInterval time.Duration) *Service {
+// NewService constructs a Service holding initial. See [Settings]' own
+// field doc comments; an empty initial.ContentBaseURL means [Service.
+// Enabled] starts false, which is a normal, deliberate state, not an error.
+func NewService(st *store.Store, pub Publisher, logger *slog.Logger, initial Settings) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Service{
 		st: st, pub: pub, logger: logger, now: time.Now,
-		contentBaseURL: contentBaseURL, inventoryInterval: inventoryInterval,
-		nudge: make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
+		settings: initial,
+		nudge:    make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
 	}
+}
+
+// SetSettings replaces this service's live settings, taking effect on
+// [Service.Run]'s very next loop iteration — see that method's doc
+// comment. Nudges Run to re-check promptly, rather than waiting out
+// whatever of the OLD sync interval remains, whenever the new settings
+// actually differ from the current ones.
+func (s *Service) SetSettings(v Settings) {
+	s.settingsMu.Lock()
+	changed := s.settings != v
+	s.settings = v
+	s.settingsMu.Unlock()
+	if changed {
+		s.Nudge()
+	}
+}
+
+// Settings returns this service's current live settings.
+func (s *Service) Settings() Settings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings
+}
+
+// ContentBaseURL returns the current live content base URL — satisfies
+// api.AssetSettingsSource with no adapter, the same "narrow interface
+// declared at the consumer" property [Service.Nudge] already gives
+// api.AssetSyncNudger.
+func (s *Service) ContentBaseURL() string {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings.ContentBaseURL
+}
+
+// MaxUploadBytes returns the current live upload limit.
+func (s *Service) MaxUploadBytes() int64 {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings.MaxUploadBytes
+}
+
+// InventoryInterval returns the current live inventory-report cadence.
+func (s *Service) InventoryInterval() time.Duration {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings.InventoryInterval
+}
+
+// syncInterval returns the current live sync-pass cadence, used only by
+// [Service.Run]'s own loop.
+func (s *Service) syncInterval() time.Duration {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings.SyncInterval
 }
 
 // WithClock overrides Service's clock. Production never calls this;
@@ -110,13 +193,12 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 	return s
 }
 
-// Enabled reports whether this service was configured with a non-empty
-// content base URL. When false, [Service.Run] performs no work at all —
-// see that method's doc comment, and config.Config.AssetContentBaseURL's
-// own doc comment for why an unset base URL must say so rather than
-// silently doing nothing.
+// Enabled reports whether this service currently holds a non-empty
+// content base URL. Read live on every [Service.Run] loop iteration, so
+// this can flip in either direction while Run is already looping — see
+// that method's doc comment.
 func (s *Service) Enabled() bool {
-	return s.contentBaseURL != ""
+	return s.ContentBaseURL() != ""
 }
 
 // Nudge requests an out-of-band sync pass as soon as [Service.Run]'s
@@ -132,26 +214,40 @@ func (s *Service) Nudge() {
 	}
 }
 
-// Run ticks immediately, then waits interval (or a [Service.Nudge], or
-// ctx.Done) before ticking again, until ctx is cancelled. If !s.Enabled(),
-// Run logs once, stating that no asset ever reaches a node over the
-// network with this service off, and returns without starting a loop —
-// per §5.1: "the service does NOT run [and] says so once at startup",
-// never a silent no-op.
-func (s *Service) Run(ctx context.Context, interval time.Duration) {
-	if !s.Enabled() {
-		s.logger.Warn("asset sync service is disabled: SHOWMESH_ASSET_CONTENT_BASE_URL is not set; " +
-			"nodes will never receive an asset over the network, and the asset manifest states this as the reason a node cannot be confirmed ready")
-		return
-	}
+// Run ticks immediately, then waits [Service.syncInterval] (read fresh on
+// every iteration, or a [Service.Nudge], or ctx.Done) before ticking
+// again, until ctx is cancelled. Track G seam G-4 (ADR-039 decision 6):
+// unlike before, Run never returns early because [Service.Enabled] is
+// false — it keeps looping and simply skips dispatch work on any
+// iteration where Enabled reports false, because contentBaseUrl can be
+// set (or cleared) through the assets.settings configuration kind at any
+// point while this process runs, and a Run that already returned could
+// never notice. Every enabled<->disabled transition is logged once, not
+// on every iteration, matching the original "says so once" contract for
+// each state rather than repeating it every tick.
+func (s *Service) Run(ctx context.Context) {
+	var loggedEnabled *bool
 
 	for {
-		s.tick(ctx)
+		enabled := s.Enabled()
+		if loggedEnabled == nil || *loggedEnabled != enabled {
+			if enabled {
+				s.logger.Info("asset sync service is enabled: nodes can receive assets over the network")
+			} else {
+				s.logger.Warn("asset sync service is disabled: no contentBaseUrl is configured (assets.settings); " +
+					"nodes will never receive an asset over the network, and the asset manifest states this as the reason a node cannot be confirmed ready")
+			}
+			loggedEnabled = &enabled
+		}
+
+		if enabled {
+			s.tick(ctx)
+		}
 		if ctx.Err() != nil {
 			return
 		}
 
-		timer := time.NewTimer(interval)
+		timer := time.NewTimer(s.syncInterval())
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -241,7 +337,7 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 	// job); buildNodeManifestForActiveShow is the same function BuildNodeManifest
 	// calls, so this dispatches against the identical verdict the manifest
 	// API renders, never a second opinion.
-	m, err := buildNodeManifestForActiveShow(ctx, s.st, s.now(), s.inventoryInterval, nodeID, ActiveShow{Configured: true, ShowID: showID})
+	m, err := buildNodeManifestForActiveShow(ctx, s.st, s.now(), s.InventoryInterval(), nodeID, ActiveShow{Configured: true, ShowID: showID})
 	if err != nil {
 		s.logger.Error("asset sync: failed to build node manifest", "node_id", nodeID, "error", err)
 		return
@@ -400,8 +496,9 @@ func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset Expect
 }
 
 // fetchURL builds the URL an agent's asset.fetch operation downloads from:
-// s.contentBaseURL joined with the content route the (separately built)
-// asset store's HTTP handler serves, GET /api/v1/assets/{id}/content.
+// the CURRENT live content base URL joined with the content route the
+// (separately built) asset store's HTTP handler serves, GET
+// /api/v1/assets/{id}/content.
 func (s *Service) fetchURL(assetID string) string {
-	return strings.TrimRight(s.contentBaseURL, "/") + "/api/v1/assets/" + assetID + "/content"
+	return strings.TrimRight(s.ContentBaseURL(), "/") + "/api/v1/assets/" + assetID + "/content"
 }

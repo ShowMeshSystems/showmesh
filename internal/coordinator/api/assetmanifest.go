@@ -18,6 +18,14 @@ import (
 // notes for *store.Store.
 var _ AssetSyncNudger = (*assetsync.Service)(nil)
 
+// assetSyncServiceSatisfiesAssetSettingsSource is Track G seam G-4's own
+// compile-time assertion, alongside the one above: *assetsync.Service's
+// ContentBaseURL/MaxUploadBytes/InventoryInterval methods already satisfy
+// [AssetSettingsSource] with no adapter needed, which is what lets
+// coordinator.go wire the SAME Service value into both
+// [Dependencies.AssetSettings] and [Dependencies.AssetSyncNudger].
+var _ AssetSettingsSource = (*assetsync.Service)(nil)
+
 // This file is Track E seam E5's own HTTP surface: GET /assets/manifest
 // (every declared node) and GET /nodes/{nodeId}/assets (one node).
 // internal/coordinator/assetsync.ComputeNodeManifest — reached here only
@@ -50,14 +58,15 @@ func (h *handlers) handleAssetManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	manifests, err := assetsync.BuildManifest(r.Context(), h.deps.AssetManifests, now, h.deps.AssetInventoryInterval)
+	manifests, err := assetsync.BuildManifest(r.Context(), h.deps.AssetManifests, now, h.deps.AssetSettings.InventoryInterval())
 	if err != nil {
 		h.writeInternalError(w, now, "build asset manifest", err)
 		return
 	}
+	syncEnabled := h.deps.AssetSettings.ContentBaseURL() != ""
 	out := make([]v1.NodeAssetManifest, 0, len(manifests))
 	for _, m := range manifests {
-		out = append(out, mapNodeAssetManifest(m, h.deps.AssetSyncEnabled))
+		out = append(out, mapNodeAssetManifest(m, syncEnabled))
 	}
 	jsonWrite(w, v1.AssetManifestResponse{ServerTime: formatTime(now), Nodes: out})
 }
@@ -111,12 +120,12 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	m, err := assetsync.BuildNodeManifest(r.Context(), h.deps.AssetManifests, now, h.deps.AssetInventoryInterval, nodeID)
+	m, err := assetsync.BuildNodeManifest(r.Context(), h.deps.AssetManifests, now, h.deps.AssetSettings.InventoryInterval(), nodeID)
 	if err != nil {
 		h.writeInternalError(w, now, "build node asset manifest", err)
 		return
 	}
-	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSyncEnabled)})
+	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSettings.ContentBaseURL() != "")})
 }
 
 // --- mapping: assetsync.NodeManifest -> v1 wire types ---
@@ -189,11 +198,14 @@ func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool) v1.NodeAss
 }
 
 // assetSyncDisabledNote is notReadyReason's appended sentence when
-// SHOWMESH_ASSET_CONTENT_BASE_URL is unset — see [mapNodeAssetManifest]'s
+// assets.settings' contentBaseUrl is unset — see [mapNodeAssetManifest]'s
 // syncEnabled doc. It states the missing assets will never arrive over the
 // network, not merely that they are currently absent, matching
-// assetsync/sync.go's own Run-disabled log line in substance.
-const assetSyncDisabledNote = "asset sync is disabled (SHOWMESH_ASSET_CONTENT_BASE_URL is not set): this coordinator will never deliver these assets to the node over the network"
+// assetsync/sync.go's own Run-disabled log line in substance. Track G seam
+// G-4 moved contentBaseUrl from SHOWMESH_ASSET_CONTENT_BASE_URL into this
+// store-backed configuration kind (ADR-039); this note names the kind
+// rather than the now-retired environment variable.
+const assetSyncDisabledNote = "asset sync is disabled (assets.settings' contentBaseUrl is not set): this coordinator will never deliver these assets to the node over the network"
 
 // notReadyReason summarizes ALREADY-COMPUTED missing/gap counts, plus
 // [assetSyncDisabledNote] when syncEnabled is false, into one operator-facing

@@ -7,6 +7,10 @@ import {
   getResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
   putResolumeInstancesConfig,
+  getAssetsSettingsConfig,
+  getAssetsSettingsConfigRevisions,
+  putAssetsSettingsConfig,
+  type AssetsSettingsConfigResponse,
   type ConfigFPPEndpoint,
   type ConfigRevisionMeta,
   type FPPEndpointsConfigResponse,
@@ -75,6 +79,14 @@ type ResolumeLoadState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: ResolumeInstancesConfigResponse; revisions: ConfigRevisionMeta[] }
 
+// AssetSettingsLoadState mirrors FPPLoadState/ResolumeLoadState's identical
+// shape, for the assets.settings section — Track G seam G-4 (ADR-039).
+type AssetSettingsLoadState =
+  | { kind: 'loading' }
+  | { kind: 'not_configured'; reason: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; config: AssetsSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
+
 export function Configuration() {
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
@@ -97,6 +109,7 @@ export function Configuration() {
         <>
           <FPPEndpointsSection />
           <ResolumeInstancesSection />
+          <AssetsSettingsSection />
         </>
       )}
     </div>
@@ -457,6 +470,192 @@ function ResolumeInstancesSection() {
               busyReason="Saving this configuration revision…"
             >
               {saving ? 'Saving…' : 'Save Resolume instance'}
+            </ScopedButton>
+          </div>
+
+          {state.kind === 'loaded' && state.revisions.length > 0 && (
+            <>
+              <h4 className="panel__title">Revision history</h4>
+              <RevisionsTable revisions={state.revisions} />
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+// AssetsSettingsSection is Track G seam G-4's own addition (ADR-039): the
+// assets.settings editor, alongside FPPEndpointsSection/
+// ResolumeInstancesSection above. SHOWMESH_ASSET_DIR has no control here —
+// it stays environment-only (ADR-039 decision 2). Unlike the API's own PUT
+// (which accepts a partial update, per-field optional — ADR-039 decision
+// 5), this form always sends all four fields together: it always holds
+// the currently loaded value for every field, so a full write is exactly
+// as correct as a partial one and needs no extra "which fields changed"
+// bookkeeping here (ADR-030: "the UI holds no authoring logic; validation
+// is server-side").
+function AssetsSettingsSection() {
+  const [state, setState] = useState<AssetSettingsLoadState>({ kind: 'loading' })
+  const [contentBaseURL, setContentBaseURL] = useState('')
+  const [maxUploadBytes, setMaxUploadBytes] = useState('')
+  const [syncIntervalSeconds, setSyncIntervalSeconds] = useState('')
+  const [inventoryIntervalSeconds, setInventoryIntervalSeconds] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const savingRef = useRef(false)
+  const [reloadGeneration, setReloadGeneration] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+
+    async function load(): Promise<void> {
+      try {
+        const [config, revisionsResp] = await Promise.all([
+          getAssetsSettingsConfig(),
+          getAssetsSettingsConfigRevisions(),
+        ])
+        if (cancelled) return
+        setState({ kind: 'loaded', config, revisions: revisionsResp.revisions })
+        setContentBaseURL(config.payload.contentBaseUrl)
+        setMaxUploadBytes(String(config.payload.maxUploadBytes))
+        setSyncIntervalSeconds(String(config.payload.syncIntervalSeconds))
+        setInventoryIntervalSeconds(String(config.payload.inventoryIntervalSeconds))
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setState({ kind: 'not_configured', reason: err.message })
+          setContentBaseURL('')
+          setMaxUploadBytes('')
+          setSyncIntervalSeconds('')
+          setInventoryIntervalSeconds('')
+          return
+        }
+        setState({ kind: 'error', message: describeApiError(err) })
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [reloadGeneration])
+
+  async function handleSave(): Promise<void> {
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await putAssetsSettingsConfig({
+        contentBaseUrl: contentBaseURL.trim(),
+        maxUploadBytes: Number(maxUploadBytes),
+        syncIntervalSeconds: Number(syncIntervalSeconds),
+        inventoryIntervalSeconds: Number(inventoryIntervalSeconds),
+      })
+      setReloadGeneration((g) => g + 1)
+    } catch (err) {
+      setSaveError(describeApiError(err))
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section style={{ marginTop: '2rem' }}>
+      <h3 className="panel__title">Asset store settings</h3>
+      <p className="text-muted">
+        The asset store&rsquo;s operator-facing settings, moved out of{' '}
+        <code>SHOWMESH_ASSET_CONTENT_BASE_URL</code>/<code>SHOWMESH_ASSET_MAX_UPLOAD_BYTES</code>/
+        <code>SHOWMESH_ASSET_SYNC_INTERVAL</code>/<code>SHOWMESH_ASSET_INVENTORY_INTERVAL</code> into
+        this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected — it stays
+        environment-only.
+      </p>
+
+      {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
+      {state.kind === 'error' && (
+        <p className="panel panel--error" role="alert">
+          {state.message}
+        </p>
+      )}
+
+      {(state.kind === 'loaded' || state.kind === 'not_configured') && (
+        <>
+          {state.kind === 'not_configured' && (
+            <p className="text-muted" role="status">
+              {state.reason}
+            </p>
+          )}
+          {state.kind === 'loaded' && (
+            <p className="panel" role="status">
+              Active revision {state.config.revision} (source {state.config.source}
+              {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).{' '}
+              <strong>{state.config.restartRequiredReason}</strong>
+            </p>
+          )}
+
+          <table className="config-table">
+            <thead>
+              <tr>
+                <th>Content base URL</th>
+                <th>Max upload bytes</th>
+                <th>Sync interval (s)</th>
+                <th>Inventory interval (s)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <input
+                    type="text"
+                    aria-label="Asset content base URL"
+                    placeholder="http://coordinator:8080 (empty disables sync)"
+                    value={contentBaseURL}
+                    onChange={(e) => setContentBaseURL(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    aria-label="Asset max upload bytes"
+                    value={maxUploadBytes}
+                    onChange={(e) => setMaxUploadBytes(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    aria-label="Asset sync interval seconds"
+                    value={syncIntervalSeconds}
+                    onChange={(e) => setSyncIntervalSeconds(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    aria-label="Asset inventory interval seconds"
+                    value={inventoryIntervalSeconds}
+                    onChange={(e) => setInventoryIntervalSeconds(e.target.value)}
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ marginTop: '1rem' }}>
+            {saveError !== null && (
+              <p role="alert" className="session-form__error">
+                {saveError}
+              </p>
+            )}
+            <ScopedButton
+              requiredScope={CONFIG_WRITE_SCOPE}
+              onClick={() => void handleSave()}
+              busy={saving}
+              busyReason="Saving this configuration revision…"
+            >
+              {saving ? 'Saving…' : 'Save asset settings'}
             </ScopedButton>
           </div>
 

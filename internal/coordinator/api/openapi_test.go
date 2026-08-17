@@ -366,6 +366,43 @@ func TestOpenAPIConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
+// TestOpenAPIAssetsSettingsConfigResponsesMatchRealResponses is Track G
+// seam G-4's own conformance coverage, mirroring
+// TestOpenAPIConfigResponsesMatchRealResponses exactly for the
+// assets.settings kind — including a SECOND, partial PUT, since this
+// kind's own PUT payload schema (ConfigAssetsSettingsPutPayload) is
+// deliberately different from every field being present.
+func TestOpenAPIAssetsSettingsConfigResponsesMatchRealResponses(t *testing.T) {
+	c := newOpenAPICompiler(t)
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", validAssetsSettingsBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "AssetsSettingsConfigResponse", putBody)
+
+	partialReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", `{"syncIntervalSeconds":600}`,
+		map[string]string{"Authorization": "Bearer " + token})
+	partialResp, partialBody := doRawRequest(t, api.Handler, partialReq)
+	if partialResp.StatusCode != http.StatusOK {
+		t.Fatalf("partial PUT: status = %d, want 200; body: %s", partialResp.StatusCode, partialBody)
+	}
+	assertMatchesSchema(t, c, "AssetsSettingsConfigResponse", partialBody)
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "AssetsSettingsConfigResponse", getBody)
+
+	_, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings/revisions", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
+}
+
 // TestOpenAPIDiscoveryResponsesMatchRealResponses is finding 15's own
 // regression test: seam B's three routes (POST /discovery/runs, POST
 // /nodes/{nodeId}/declaration, DELETE /nodes/{nodeId}/declaration) had NO

@@ -247,12 +247,6 @@ type Dependencies struct {
 	// GET /assets/{id}/content reports the blob not found.
 	AssetBackend assetstore.Backend
 
-	// AssetMaxUploadBytes bounds a single asset upload (SHOWMESH_ASSET_MAX_UPLOAD_BYTES).
-	// A value <= 0 is replaced by [assetstore.DefaultMaxUploadBytes] —
-	// the same "nothing told this API otherwise" posture as every other
-	// unwired/unset numeric dependency in this struct.
-	AssetMaxUploadBytes int64
-
 	// AssetManifests is Track E seam E5's asset manifest surface
 	// (GET /assets/manifest, GET /nodes/{nodeId}/assets — assetmanifest.go).
 	// It is a concrete *store.Store, not an interface, unlike every other
@@ -272,14 +266,19 @@ type Dependencies struct {
 	// panicking on a nil dereference.
 	AssetManifests *store.Store
 
-	// AssetInventoryInterval is SHOWMESH_ASSET_INVENTORY_INTERVAL
-	// ([config.Config.AssetInventoryInterval]), threaded through for the
-	// identical "this package does not read the environment or config
-	// package state on its own" reason [FPPEndpointsEnvVarSet] documents.
-	// assetsync.StalenessWindow(AssetInventoryInterval) is the ONE staleness
-	// computation every manifest response rests on. A value <= 0 is
-	// replaced by [defaultAssetManifestInventoryInterval].
-	AssetInventoryInterval time.Duration
+	// AssetSettings is Track G seam G-4's live, no-restart view of the
+	// assets.settings configuration kind (ADR-039): the upload byte limit,
+	// the manifest staleness interval, and (via ContentBaseURL) whether the
+	// sync service is enabled at all — read fresh on every request, rather
+	// than the startup-snapshot fields (AssetMaxUploadBytes,
+	// AssetInventoryInterval, AssetSyncEnabled) this replaced, which could
+	// not change without a restart. In practice the real value is
+	// *assetsync.Service, wired by coordinator.go — the SAME value wired as
+	// [Dependencies.AssetSyncNudger], because that one Service is this
+	// coordinator's single live holder of this configuration kind. A nil
+	// field is replaced by [noAssetSettingsSource], which reproduces the
+	// exact defaults the old startup-snapshot fields used to fall back to.
+	AssetSettings AssetSettingsSource
 
 	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see
 	// [AssetSyncNudger]'s own doc comment. In practice the real value is
@@ -290,21 +289,27 @@ type Dependencies struct {
 	// API failing" posture.
 	AssetSyncNudger AssetSyncNudger
 
-	// AssetSyncEnabled mirrors *assetsync.Service.Enabled()
-	// (cfg.AssetContentBaseURL != ""), threaded through for the identical
-	// "this package does not read the environment or config package state
-	// on its own" reason [FPPEndpointsEnvVarSet] documents. Consumed by
-	// assetmanifest.go's not_ready reason: config.Config.
-	// AssetContentBaseURL's own doc comment and assetsync/sync.go's startup
-	// log line both promise that an unset base URL is stated as the reason
-	// no node can be confirmed ready, and this field is what makes that
-	// true rather than an unkept promise. The zero value (false) is the
-	// same "nothing told this API otherwise" posture as every other unwired
-	// dependency here — a test or embedder that has not wired this in gets
-	// the disabled-sync note appended to every not_ready reason, which is
-	// the conservative reading when this coordinator has not said
-	// otherwise.
-	AssetSyncEnabled bool
+	// AssetSettingsEnvVarsSet is [FPPEndpointsEnvVarSet]'s mirror for Track
+	// G seam G-4 (ADR-039 decision 4): whether ANY of the four
+	// SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/
+	// SHOWMESH_ASSET_SYNC_INTERVAL/SHOWMESH_ASSET_INVENTORY_INTERVAL
+	// variables is currently set in the coordinator PROCESS's environment.
+	// Consumed by handlePutAssetsSettingsConfig: a write is refused with
+	// 409 while this is true, for the identical reason
+	// FPPEndpointsEnvVarSet's own doc comment gives. The zero value (false)
+	// is the same "nothing told this API otherwise" posture as every other
+	// unwired dependency in this struct.
+	AssetSettingsEnvVarsSet bool
+
+	// AssetSettingsMigrationDeferred is [FPPEndpointsMigrationDeferred]'s
+	// mirror: this coordinator started with one or more of the four
+	// SHOWMESH_ASSET_* settings variables set, tried to migrate them into
+	// the store, and could not persist that write — see
+	// internal/coordinator's assetsettingssync.go. The zero value (false)
+	// is the same "nothing told this API otherwise" posture as every other
+	// unwired dependency here.
+	AssetSettingsMigrationDeferred bool
+
 	// Resolume is this API's observability dependency: whatever
 	// Resolume instances this coordinator has configured, with their
 	// currently-held observations. A nil field is replaced by
@@ -409,11 +414,8 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetBackend == nil {
 		d.AssetBackend = noAssetBackend{}
 	}
-	if d.AssetMaxUploadBytes <= 0 {
-		d.AssetMaxUploadBytes = assetstore.DefaultMaxUploadBytes
-	}
-	if d.AssetInventoryInterval <= 0 {
-		d.AssetInventoryInterval = defaultAssetManifestInventoryInterval
+	if d.AssetSettings == nil {
+		d.AssetSettings = noAssetSettingsSource{}
 	}
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
@@ -443,10 +445,25 @@ func (noAssetSyncNudger) Nudge() {}
 // minutes). Duplicated, not imported: that constant is unexported, and
 // this package must not import internal/coordinator/config for a value —
 // the same posture [Dependencies.FPPEndpointsEnvVarSet]'s doc comment
-// states for reading the environment. Only reached when
-// [Dependencies.AssetInventoryInterval] is left unset, which production
-// wiring never does (config.Load always computes a positive value).
+// states for reading the environment. Only reached through
+// [noAssetSettingsSource], which production wiring never uses (coordinator.go
+// always wires a real *assetsync.Service).
 const defaultAssetManifestInventoryInterval = 2 * time.Minute
+
+// noAssetSettingsSource is [Dependencies.AssetSettings]'s nil-safe default:
+// it reproduces exactly the defaults the old startup-snapshot fields
+// (AssetMaxUploadBytes, AssetInventoryInterval, AssetSyncEnabled) used to
+// fall back to — an unset upload limit became [assetstore.DefaultMaxUploadBytes],
+// an unset inventory interval became [defaultAssetManifestInventoryInterval],
+// and an empty ContentBaseURL (this type's own zero value) is exactly what
+// AssetSyncEnabled's own false default meant.
+type noAssetSettingsSource struct{}
+
+func (noAssetSettingsSource) ContentBaseURL() string { return "" }
+func (noAssetSettingsSource) MaxUploadBytes() int64  { return assetstore.DefaultMaxUploadBytes }
+func (noAssetSettingsSource) InventoryInterval() time.Duration {
+	return defaultAssetManifestInventoryInterval
+}
 
 // noResolumeReferenceResolver is [Dependencies.ResolumeReferences]'s
 // nil-safe default: every method reports
@@ -1058,6 +1075,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/resolume.instances", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfig))
 	mux.HandleFunc("PUT /api/v1/config/resolume.instances", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeInstancesConfig))
 	mux.HandleFunc("GET /api/v1/config/resolume.instances/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfigRevisions))
+
+	// Track G seam G-4 (ADR-039): assets.settings, mirroring
+	// resolume.instances in every respect including the always-config:write,
+	// never-CloseReads read posture and the still-set-env-var 409 — see
+	// config.go's own top comment and assetssettingsconfig.go's own file
+	// comment. Unlike resolume.instances, PUT supports a partial update
+	// (each field independently optional).
+	mux.HandleFunc("GET /api/v1/config/assets.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/assets.settings", h.writeGuard(&scopeConfigWrite, h.handlePutAssetsSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/assets.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAssetsSettingsConfigRevisions))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

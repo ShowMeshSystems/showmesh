@@ -377,6 +377,30 @@ type AssetSyncNudger interface {
 	Nudge()
 }
 
+// AssetSettingsSource is Track G seam G-4's live, no-restart view of the
+// assets.settings configuration kind (ADR-039 decision 6): the three
+// settings this package itself needs to read on every request rather than
+// once at startup. Declared here, at the consumer, for the identical
+// reason [AssetSyncNudger] is: the real implementation is
+// *assetsync.Service itself (assetsync.Settings' three matching fields),
+// which already satisfies this interface with no adapter needed.
+//
+// SyncInterval and MaxUploadBytes... only MaxUploadBytes appears below:
+// SyncInterval governs assetsync.Service's OWN loop cadence, which this
+// package never reads (it has no reason to know how often the service
+// ticks, only what it would do once it does).
+type AssetSettingsSource interface {
+	// ContentBaseURL is the live assets.settings contentBaseUrl. Empty
+	// means the asset sync service is disabled — see assetmanifest.go's
+	// syncEnabled derivation.
+	ContentBaseURL() string
+	// MaxUploadBytes bounds a single asset upload.
+	MaxUploadBytes() int64
+	// InventoryInterval is the ONE staleness computation every manifest
+	// response rests on (assetsync.StalenessWindow).
+	InventoryInterval() time.Duration
+}
+
 // DeclarationStore is what this package needs from seam 0's
 // node_declarations and discovery_runs tables (RES-008 D2/D6, BUILD-PLAN
 // Step 7 seam B) — satisfied directly by *store.Store, matching

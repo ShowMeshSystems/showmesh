@@ -405,6 +405,44 @@ func resolumeInstancesMigrationDeferredProblem() v1.Problem {
 	}
 }
 
+// assetsSettingsEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s mirror
+// for Track G seam G-4 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/assets.settings with 409 while any of the four
+// SHOWMESH_ASSET_* settings variables is still set, for the identical
+// reason — a write accepted now cannot survive this coordinator's own next
+// restart.
+func assetsSettingsEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: one or more SHOWMESH_ASSET_* settings variables are still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because one or more of SHOWMESH_ASSET_CONTENT_BASE_URL, " +
+			"SHOWMESH_ASSET_MAX_UPLOAD_BYTES, SHOWMESH_ASSET_SYNC_INTERVAL, or SHOWMESH_ASSET_INVENTORY_INTERVAL is " +
+			"still set in this coordinator's environment — accepting it now would conflict with those variables on " +
+			"the next restart. Remove all four from your environment (SHOWMESH_ASSET_DIR is unaffected — it stays " +
+			"environment-only) and restart this coordinator once, then retry.",
+	}
+}
+
+// assetsSettingsMigrationDeferredProblem is
+// [resolumeInstancesMigrationDeferredProblem]'s mirror: the standard remedy
+// above is not safe while the startup migration is deferred, because no
+// store configuration exists yet — removing the variables and restarting
+// would resolve this coordinator to config.DefaultAssetSettings rather than
+// to what it is actually using right now.
+func assetsSettingsMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of the SHOWMESH_ASSET_* settings variables was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_ASSET_* settings migration could not be saved on this " +
+			"boot, so the store holds no assets.settings configuration yet. Do NOT remove those variables — they are " +
+			"currently the only copy of this coordinator's asset store settings. Check the coordinator's data volume " +
+			"(often full, read-only, or damaged) and restart; the migration retries on every boot. Once it succeeds, " +
+			"remove the variables and retry.",
+	}
+}
+
 // discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
 // [handlers.handleStartDiscoveryRun] refuses a second discovery run while
 // one is already in flight on this coordinator, rather than queuing it —

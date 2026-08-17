@@ -23,14 +23,16 @@ import { ApiError } from '../api/errors'
 // ResolumeCompositionUpload.test.tsx and ResolumeView.test.tsx.
 // Track G seam G-2 (ADR-039) added a second, independent section to this
 // page (ResolumeInstancesSection) alongside the FPP one this file already
-// tested. Its own three API functions are mocked here too, purely so every
-// EXISTING test below — none of which is about Resolume — is not derailed
-// by that section making a real, unmocked network call: default to the
-// "nothing configured yet" 404 every fresh coordinator answers with, which
-// (matching the FPP section's own 404 handling) renders quiet text, never
-// an alert, so `findByRole('alert')`/`queryByRole('alert')` assertions
-// below still see only the FPP section's own alert. Resolume-specific
-// behavior has its own coverage in Configuration.resolume.test.tsx.
+// tested, and Track G seam G-4 added a third (AssetsSettingsSection).
+// Every added section's own API functions are mocked here too, purely so
+// every EXISTING test below — none of which is about Resolume or asset
+// settings — is not derailed by that section making a real, unmocked
+// network call: default to the "nothing configured yet" 404 every fresh
+// coordinator answers with, which (matching the FPP section's own 404
+// handling) renders quiet text, never an alert, so
+// `findByRole('alert')`/`queryByRole('alert')` assertions below still see
+// only the FPP section's own alert. Resolume-specific behavior has its own
+// coverage in Configuration.resolume.test.tsx.
 const {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
@@ -38,6 +40,9 @@ const {
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
+  getAssetsSettingsConfig,
+  putAssetsSettingsConfig,
+  getAssetsSettingsConfigRevisions,
 } = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   putFPPEndpointsConfig: vi.fn(),
@@ -45,6 +50,9 @@ const {
   getResolumeInstancesConfig: vi.fn(),
   putResolumeInstancesConfig: vi.fn(),
   getResolumeInstancesConfigRevisions: vi.fn(),
+  getAssetsSettingsConfig: vi.fn(),
+  putAssetsSettingsConfig: vi.fn(),
+  getAssetsSettingsConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -56,6 +64,9 @@ vi.mock('../api', async (importOriginal) => {
     getResolumeInstancesConfig,
     putResolumeInstancesConfig,
     getResolumeInstancesConfigRevisions,
+    getAssetsSettingsConfig,
+    putAssetsSettingsConfig,
+    getAssetsSettingsConfigRevisions,
   }
 })
 
@@ -72,6 +83,18 @@ beforeEach(() => {
     kind: 'resolume.instances',
     revisions: [],
   })
+  getAssetsSettingsConfig.mockRejectedValue(
+    new ApiError(
+      'no assets.settings configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getAssetsSettingsConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'assets.settings',
+    revisions: [],
+  })
 })
 
 afterEach(() => {
@@ -82,6 +105,9 @@ afterEach(() => {
   getResolumeInstancesConfig.mockReset()
   putResolumeInstancesConfig.mockReset()
   getResolumeInstancesConfigRevisions.mockReset()
+  getAssetsSettingsConfig.mockReset()
+  putAssetsSettingsConfig.mockReset()
+  getAssetsSettingsConfigRevisions.mockReset()
 })
 
 function renderConfiguration(model: Model) {

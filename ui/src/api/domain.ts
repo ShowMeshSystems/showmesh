@@ -74,6 +74,16 @@ export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResp
 export type ResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
 export type ConfigResolumeInstance = components['schemas']['ConfigResolumeInstance']
 export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-4 (ADR-039): the assets.settings configuration write
+// surface, aliased for the identical reason as resolume.instances' own
+// shapes above. ConfigAssetsSettingsPutPayload is a SEPARATE type from
+// ConfigAssetsSettingsPayload (unlike every other config kind's PUT/GET
+// pair, which share one payload shape): every field of a PUT request is
+// independently optional, while a GET/PUT response always carries all
+// four.
+export type AssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
+export type ConfigAssetsSettingsPayload = components['schemas']['ConfigAssetsSettingsPayload']
+export type ConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']

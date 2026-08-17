@@ -933,6 +933,50 @@ type ResolumeInstancesConfigResponse struct {
 	RestartRequiredReason  string                         `json:"restartRequiredReason"`
 }
 
+// ConfigAssetsSettingsPayload is the "assets.settings" configuration kind's
+// decoded payload (Track G seam G-4, ADR-039): the body PUT
+// /config/assets.settings accepts, and the "payload" member of GET
+// /config/assets.settings' response. Every field is optional on a PUT
+// request body (absent means "leave the stored value alone" — ADR-039
+// decision 5); on a response every field is always present. Durations are
+// seconds, matching this contract's existing "...Seconds" convention (e.g.
+// ObservationEvidence.ValidForSeconds) rather than a Go duration string —
+// FLOAT64, not an integer, mirroring ResolumeRecoveryResponse.
+// SettleDelaySeconds' identical choice one seam over: an integer-second
+// encoding silently truncates a legitimate sub-second interval to zero.
+type ConfigAssetsSettingsPayload struct {
+	ContentBaseURL           string  `json:"contentBaseUrl"`
+	MaxUploadBytes           int64   `json:"maxUploadBytes"`
+	SyncIntervalSeconds      float64 `json:"syncIntervalSeconds"`
+	InventoryIntervalSeconds float64 `json:"inventoryIntervalSeconds"`
+}
+
+// AssetsSettingsConfigResponse is the body of GET and PUT
+// /config/assets.settings, mirroring [ResolumeInstancesConfigResponse]'s
+// shape exactly (env->store migration, singleton object, no-restart apply).
+//
+// RestartRequired is always false: every field of this kind applies to the
+// already-running asset sync service with no restart (ADR-039 decision 6,
+// Track G seam G-4). The field stays on the wire for the identical
+// additive-only reason [FPPEndpointsConfigResponse.RestartRequired] does.
+//
+// CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
+// the startup env->store migration creates (Source "env_migration"): a
+// startup migration has no principal — see
+// internal/coordinator's assetsettingssync.go.
+type AssetsSettingsConfigResponse struct {
+	ServerTime             string                      `json:"serverTime"`
+	Kind                   string                      `json:"kind"`
+	Revision               int64                       `json:"revision"`
+	Payload                ConfigAssetsSettingsPayload `json:"payload"`
+	UpdatedAt              string                      `json:"updatedAt"`
+	CreatedByPrincipalID   *string                     `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                     `json:"createdByPrincipalName"`
+	Source                 string                      `json:"source"`
+	RestartRequired        bool                        `json:"restartRequired"`
+	RestartRequiredReason  string                      `json:"restartRequiredReason"`
+}
+
 // ConfigRevisionMeta is one element of [ConfigRevisionsResponse.Revisions]:
 // a config_revisions row's metadata, WITHOUT its payload — the revisions
 // list is for browsing history (which revision, when, by whom, from what

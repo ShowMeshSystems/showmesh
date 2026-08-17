@@ -97,6 +97,9 @@ type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsRespo
 // Track G seam G-2 (ADR-039).
 type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
 type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-4 (ADR-039).
+type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
+type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -572,6 +575,60 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/resolume.instances/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-4 (ADR-039): the assets.settings configuration write
+  // surface. Same thin pass-through shape as resolume.instances just
+  // above — the one difference is putAssetsSettingsConfig's payload type,
+  // which is INTENTIONALLY the separate PutPayload schema (every field
+  // optional), not the response payload schema.
+
+  /** `GET /api/v1/config/assets.settings` (Track G seam G-4). Throws (404) when nothing has been configured yet. */
+  async getAssetsSettingsConfig(): Promise<SchemaAssetsSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAssetsSettingsConfigResponse>(
+        '/config/assets.settings',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/assets.settings` (Track G seam G-4). payload
+   * carries ONLY the fields the caller wants to change — an absent field
+   * leaves the stored value alone (ADR-039 decision 5). Validated
+   * before-activation server-side (ADR-009) — a rejected payload throws
+   * and appends no revision.
+   */
+  async putAssetsSettingsConfig(
+    payload: SchemaConfigAssetsSettingsPutPayload,
+  ): Promise<SchemaAssetsSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaAssetsSettingsConfigResponse>(
+        '/config/assets.settings',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/assets.settings/revisions` (Track G seam G-4): revision history, newest first, metadata only. */
+  async getAssetsSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/assets.settings/revisions',
         controller.signal,
       )
     } finally {

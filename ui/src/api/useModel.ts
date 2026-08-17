@@ -22,6 +22,8 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  AssetsSettingsConfigResponse,
+  ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
@@ -118,6 +120,24 @@ export function putResolumeInstancesConfig(
 
 export function getResolumeInstancesConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getResolumeInstancesConfigRevisions()
+}
+
+// Track G seam G-4 (ADR-039): the same thin pass-through pattern, for the
+// assets.settings configuration write surface. putAssetsSettingsConfig's
+// payload is the SEPARATE PutPayload type — every field optional, unlike
+// AssetsSettingsConfigResponse's own always-fully-populated payload.
+export function getAssetsSettingsConfig(): Promise<AssetsSettingsConfigResponse> {
+  return store.getAssetsSettingsConfig()
+}
+
+export function putAssetsSettingsConfig(
+  payload: ConfigAssetsSettingsPutPayload,
+): Promise<AssetsSettingsConfigResponse> {
+  return store.putAssetsSettingsConfig(payload)
+}
+
+export function getAssetsSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getAssetsSettingsConfigRevisions()
 }
 
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
