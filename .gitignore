@@ -64,3 +64,7 @@ ui/.vite/
 
 # Preserved local env snapshots (live-fleet credentials; never commit)
 deploy/.env.*
+
+
+# Artifacts written by the integration suite's real agent subprocess.
+test/integration/assets/
