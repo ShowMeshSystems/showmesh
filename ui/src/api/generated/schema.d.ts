@@ -1494,6 +1494,8 @@ export interface components {
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
             /** @description A short, human-readable explanation. Always non-empty. */
             outcomeReason: string;
+            /** @description True only when this command's outcome evidence is itself the pipeline's own reported "failed" state, distinct from absent, stale, or a merely-not-yet-reached state. outcomeState above only ever carries the six-value evidence-state vocabulary (never "failed") — a caller that wants to react to the pipeline specifically being down must use this field, never outcomeState or a parse of outcomeReason's free text. Always false for a confirmed outcome and for render.transport.probe. */
+            pipelineFailed: boolean;
             /** Format: date-time */
             dispatchedAt: string;
             /** Format: date-time */

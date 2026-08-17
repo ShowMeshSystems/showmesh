@@ -48,6 +48,7 @@ type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationRespo
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -218,8 +219,16 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // configuration objects and the macro run surface. Same thin
 // pass-through pattern as every method above.
 
-export function listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
+export function listConfigObjects(
+  kind: 'show.action' | 'show.macro' | 'show.surface',
+): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind)
+}
+
+// Finding 16: lets the UI resolve which node a candidate show.surface
+// object is assigned to (the list summary above does not carry `node`).
+export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+  return store.getShowSurface(id)
 }
 
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {

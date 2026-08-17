@@ -36,6 +36,23 @@ func TestRenderTransportProbeReachesObservationsAndCLI(t *testing.T) {
 
 	awaitAgentReceivingCommands(t, cli, w, nodeID)
 
+	// Finding 18: render.transport.probe now refuses a surface this node
+	// has never applied (Supervisor.SetTransportProbe no longer creates a
+	// runner on demand — a typo'd or stale surface id used to manufacture
+	// a permanent phantom `surface` resource with no discoverable removal
+	// path). "garage" must exist first, exactly the way render_test.go's
+	// own TestRenderReportReachesObservationsAndNodeAPI applies it, before
+	// this test's probe against it can mean anything.
+	applyCmd := echoCmd(nodeID, "cmd-transport-apply-1", "idem-transport-apply-1", "")
+	applyCmd.Action = "render.surface.apply"
+	applyCmd.Params = map[string]any{"surfaceId": "garage"}
+	dispatchCmd(t, cli, nodeID, applyCmd)
+	applyResult := waitForResult(t, w, applyCmd.CommandID, 15*time.Second)
+	if applyResult.Outcome != "confirmed" {
+		t.Fatalf("setup render.surface.apply outcome = %q, want confirmed; reason=%q (agent logs:\n%s)",
+			applyResult.Outcome, applyResult.Reason, agent.logs.String())
+	}
+
 	probeCmd := echoCmd(nodeID, "cmd-transport-probe-1", "idem-transport-probe-1", "")
 	probeCmd.Action = "render.transport.probe"
 	probeCmd.Params = map[string]any{"surfaceId": "garage"}

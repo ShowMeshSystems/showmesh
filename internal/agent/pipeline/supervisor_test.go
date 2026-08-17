@@ -513,3 +513,45 @@ func TestSetTransportProbeNeverMovesStateObservedAt(t *testing.T) {
 		t.Fatalf("TransportObservedAt = %s, want %s (the probe's own evidence must still be recorded, just not on the shared ObservedAt)", after.TransportObservedAt, probeAt)
 	}
 }
+
+// TestRestartOnNeverAppliedSurfaceErrorsAndCreatesNoPhantom is Finding 18:
+// a typo'd or stale surface id passed to Restart must be refused, and must
+// never manufacture a runner that SnapshotAll then reports forever with no
+// discoverable removal path. Revert Restart's runnerForExisting guard back
+// to runnerFor and this test's error assertion fails (Restart returns nil)
+// while the SnapshotAll assertion also fails (the phantom appears).
+func TestRestartOnNeverAppliedSurfaceErrorsAndCreatesNoPhantom(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	sup := NewSupervisor(clock.Now, fs.Start, testLogger{})
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Restart("never-applied"); err == nil {
+		t.Fatalf("Restart on a never-applied surface: err = nil, want a refusal naming there is nothing to restart")
+	}
+	if snaps := sup.SnapshotAll(); len(snaps) != 0 {
+		t.Fatalf("SnapshotAll() after a refused Restart = %+v, want empty — Restart must never manufacture a runner", snaps)
+	}
+	if _, ok := sup.Snapshot("never-applied"); ok {
+		t.Fatalf("Snapshot(%q) reports ok=true after a refused Restart, want no runner to exist at all", "never-applied")
+	}
+}
+
+// TestSetTransportProbeOnNeverAppliedSurfaceReturnsFalseAndCreatesNoPhantom
+// is Finding 18's other half: SetTransportProbe against a surface id this
+// node has never applied must report false (recorded nothing) and must
+// never manufacture a runner — renderops.go's probeTransport is what turns
+// that false into an honest refusal instead of a silently-discarded probe.
+func TestSetTransportProbeOnNeverAppliedSurfaceReturnsFalseAndCreatesNoPhantom(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	sup := NewSupervisor(clock.Now, fs.Start, testLogger{})
+	shutdownSupervisor(t, sup)
+
+	if recorded := sup.SetTransportProbe("never-applied", "ndi", true, "", clock.Now()); recorded {
+		t.Fatalf("SetTransportProbe on a never-applied surface: recorded = true, want false")
+	}
+	if snaps := sup.SnapshotAll(); len(snaps) != 0 {
+		t.Fatalf("SnapshotAll() after a refused SetTransportProbe = %+v, want empty — it must never manufacture a runner", snaps)
+	}
+}

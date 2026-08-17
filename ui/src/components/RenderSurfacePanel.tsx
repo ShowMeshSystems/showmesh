@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { applyRenderSurface, clearRenderSurface, restartRenderPipeline } from '../api'
+import { useEffect, useState } from 'react'
+import { applyRenderSurface, clearRenderSurface, getShowSurface, listConfigObjects, restartRenderPipeline } from '../api'
 import type { ObservationEntry, RenderCommandResult } from '../api'
 import { useModelContext } from '../app/ModelContext'
-import { describeApiError } from '../app/session'
+import { describeApiError, evaluateAnyScope } from '../app/session'
 import { EvidenceValue } from './EvidenceValue'
 import { ScopedButton } from './ScopedButton'
 
@@ -19,24 +19,65 @@ export interface RenderSurfacePanelProps {
   entries: ObservationEntry[]
 }
 
+// Finding 16 (Track B surface fixes): matches api.go's showConfigReadScopes
+// gate on GET /config/show.surface — the same scope pair views/Macros.tsx
+// gates its own show.macro read on, for the identical reason: an operator
+// role holds show:macro:run and NOT config:write, and this list must
+// render for that role too.
+const CONFIGURED_SURFACE_READ_SCOPES = ['show:macro:run', 'config:write']
+
+type ConfiguredSurfacesState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'loaded'; surfaceIds: string[] }
+  | { kind: 'error'; message: string }
+
+// useConfiguredSurfaceIds resolves which show.surface objects are
+// assigned to nodeId (payload.node) — the set `showmeshctl render apply`
+// already reaches without any prior render report, and the render report
+// alone cannot see (a supervisor entry, and so a report row, exists only
+// AFTER an apply). listConfigObjects's summary shape carries `show`, not
+// `node` (STEP-9-SPEC.md section 5.5 predates show.surface), so each
+// candidate is fetched in full to filter by node — bounded by ADR-026's
+// v1 one-surface-per-node scope, not an unbounded fan-out.
+function useConfiguredSurfaceIds(nodeId: string, allowed: boolean): ConfiguredSurfacesState {
+  const [state, setState] = useState<ConfiguredSurfacesState>({ kind: 'idle' })
+
+  useEffect(() => {
+    if (!allowed) {
+      setState({ kind: 'idle' })
+      return
+    }
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('show.surface')
+      .then(async (resp) => {
+        const resolved = await Promise.all(
+          resp.objects.map(async (obj) => {
+            const full = await getShowSurface(obj.id)
+            return full.payload.node === nodeId ? obj.id : null
+          }),
+        )
+        if (cancelled) return
+        setState({ kind: 'loaded', surfaceIds: resolved.filter((id): id is string => id !== null) })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setState({ kind: 'error', message: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nodeId, allowed])
+
+  return state
+}
+
 export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps) {
   const model = useModelContext()
   const connected = model.connection.kind === 'live'
-
-  if (entries.length === 0) {
-    // "No data yet" (this node has never published a render report) must
-    // look visibly different from "still loading" (the snapshot itself
-    // has not arrived) — model.connection distinguishes those two states
-    // one level up (DataFreshnessNotice already renders the loading
-    // case), so once we reach here with a real node and an empty render
-    // array, it specifically means "reported nothing, ever."
-    return (
-      <p className="text-muted" role="status">
-        This node has never published a render report — no surface is configured on it, or
-        its agent has not reported in yet.
-      </p>
-    )
-  }
+  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, CONFIGURED_SURFACE_READ_SCOPES)
+  const configured = useConfiguredSurfaceIds(nodeId, readGate.allowed)
 
   const bySurface = new Map<string, ObservationEntry[]>()
   const order: string[] = []
@@ -49,24 +90,74 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
     bySurface.get(id)!.push(e)
   }
 
+  // Finding 16: a surface configured on this node but never applied
+  // reports zero evidence — union in every configured show.surface id,
+  // even with an empty entry list, so its apply/clear/restart controls
+  // render below regardless of whether the render report has ever
+  // mentioned it.
+  if (configured.kind === 'loaded') {
+    for (const id of configured.surfaceIds) {
+      if (!bySurface.has(id)) {
+        bySurface.set(id, [])
+        order.push(id)
+      }
+    }
+  }
+
+  if (order.length === 0) {
+    if (configured.kind === 'loading') {
+      return (
+        <p className="text-muted" role="status">
+          Loading configured surfaces for this node…
+        </p>
+      )
+    }
+    // "No data yet" (this node has never published a render report AND
+    // has no configured surface reachable from here) must look visibly
+    // different from "still loading" (the snapshot itself has not
+    // arrived) — model.connection distinguishes those two states one
+    // level up (DataFreshnessNotice already renders the loading case).
+    return (
+      <p className="text-muted" role="status">
+        This node has never published a render report — no surface is configured on it, or
+        its agent has not reported in yet.
+      </p>
+    )
+  }
+
   return (
     <>
-      {order.map((surfaceId) => (
-        <div key={surfaceId} className="render-surface">
-          <h4 className="panel__subtitle">Surface: {surfaceId}</h4>
-          {bySurface.get(surfaceId)!.map((entry) => (
-            <EvidenceValue
-              key={entry.signal}
-              label={entry.signal}
-              evidence={entry}
-              serverTime={model.serverTime}
-              serverTimeReceivedAt={model.serverTimeReceivedAt}
-              connected={connected}
-            />
-          ))}
-          <RenderSurfaceControls nodeId={nodeId} surfaceId={surfaceId} />
-        </div>
-      ))}
+      {configured.kind === 'error' && (
+        <p role="alert" className="render-surface__error">
+          Could not check for configured surfaces with no render report yet: {configured.message}.
+          Surfaces already reporting evidence still show below.
+        </p>
+      )}
+      {order.map((surfaceId) => {
+        const surfaceEntries = bySurface.get(surfaceId)!
+        return (
+          <div key={surfaceId} className="render-surface">
+            <h4 className="panel__subtitle">Surface: {surfaceId}</h4>
+            {surfaceEntries.length === 0 ? (
+              <p className="text-muted" role="status">
+                Configured for this node — never applied, so there is no render report yet.
+              </p>
+            ) : (
+              surfaceEntries.map((entry) => (
+                <EvidenceValue
+                  key={entry.signal}
+                  label={entry.signal}
+                  evidence={entry}
+                  serverTime={model.serverTime}
+                  serverTimeReceivedAt={model.serverTimeReceivedAt}
+                  connected={connected}
+                />
+              ))
+            )}
+            <RenderSurfaceControls nodeId={nodeId} surfaceId={surfaceId} />
+          </div>
+        )
+      })}
     </>
   )
 }

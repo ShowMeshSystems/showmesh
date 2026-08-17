@@ -731,6 +731,22 @@ func (s *Supervisor) runnerFor(surfaceID string) *runner {
 	return r
 }
 
+// runnerForExisting looks up surfaceID's runner WITHOUT creating one.
+// Finding 18: Apply is this package's one deliberate bootstrap operation —
+// every other entry point that used to go through [Supervisor.runnerFor]
+// (Restart, SetTransportProbe) could manufacture a permanent phantom
+// `surface` for a caller's typo'd or stale id, immediately visible in
+// [Supervisor.SnapshotAll] with no discoverable removal path (its only
+// clear path, Clear, has no reason to occur to an operator for a surface
+// that never existed). Mirrors [Supervisor.Snapshot]'s own
+// lookup-without-create shape.
+func (s *Supervisor) runnerForExisting(surfaceID string) (*runner, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runners[surfaceID]
+	return r, ok
+}
+
 // Apply starts (or restarts, if one is already running) spec's surface.
 // Asynchronous: it hands the spec to the runner's control loop and returns
 // immediately, before the process has started — see [Supervisor.AwaitState]
@@ -757,12 +773,19 @@ func (s *Supervisor) Clear(surfaceID string) error {
 
 // Restart clears the failed-lockout counters and (re)starts surfaceID's
 // pipeline from its currently-applied spec. Returns an error if no spec has
-// ever been applied for surfaceID — there is nothing to restart.
+// ever been applied for surfaceID — there is nothing to restart. Finding
+// 18: this doc comment used to be aspirational — runnerFor's create-on-
+// demand meant a Restart against an unknown id silently manufactured a
+// runner instead of erroring, so this is now backed by
+// [Supervisor.runnerForExisting].
 func (s *Supervisor) Restart(surfaceID string) error {
 	if surfaceID == "" {
 		return fmt.Errorf("pipeline: surfaceID must not be empty")
 	}
-	r := s.runnerFor(surfaceID)
+	r, ok := s.runnerForExisting(surfaceID)
+	if !ok {
+		return fmt.Errorf("pipeline: no spec has ever been applied for surface %q; nothing to restart", surfaceID)
+	}
 	r.cmds <- command{kind: cmdRestart}
 	return nil
 }
@@ -898,18 +921,34 @@ func (s *Supervisor) SnapshotAll() []Snapshot {
 // directly on its snapshot, independent of the runner's own apply/clear/
 // restart control loop — a probe (internal/agent/renderops.go's
 // "render.transport.probe") is diagnostic evidence about a transport, not a
-// pipeline lifecycle transition, and may legitimately run before any
-// surface has ever been applied. Creates the runner if surfaceID has none
-// yet, matching Apply/Clear/Restart's own runnerFor use.
+// pipeline lifecycle transition.
+//
+// Finding 18: this used to create the runner on demand if surfaceID had
+// none yet, on the reasoning that a probe may legitimately run before any
+// surface has ever been applied — but the caller that reasoning was
+// written for is applySurface's own internal recordDegradedTransportEvidence
+// call (renderops.go), which only ever runs after [Supervisor.Apply] has
+// already created the runner for that exact surface. The externally
+// reachable "render.transport.probe" command has no such guarantee, and a
+// caller's typo'd or stale surface id used to manufacture a permanent
+// phantom `surface` resource with no discoverable removal path. Returns
+// false (recording nothing) when surfaceID has never been applied on this
+// node — renderops.go's probeTransport checks this before running the
+// probe at all, so a refusal is reported honestly rather than a probe
+// running for evidence nobody asked to keep.
 //
 // observedAt is stamped onto the snapshot's OWN TransportObservedAt field,
 // never onto the shared State/ObservedAt — see [runner.setTransportProbe]'s
 // doc comment for why: this evidence is real and belongs on the snapshot,
 // but it is evidence about the TRANSPORT, not about whether pipeline state
 // moved, and conflating the two is precisely finding 2's defect.
-func (s *Supervisor) SetTransportProbe(surfaceID, transport string, available bool, reason string, observedAt time.Time) {
-	r := s.runnerFor(surfaceID)
+func (s *Supervisor) SetTransportProbe(surfaceID, transport string, available bool, reason string, observedAt time.Time) bool {
+	r, ok := s.runnerForExisting(surfaceID)
+	if !ok {
+		return false
+	}
 	r.setTransportProbe(transport, available, reason, observedAt)
+	return true
 }
 
 // AwaitState polls surfaceID's snapshot until it reports one of want with

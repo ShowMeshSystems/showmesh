@@ -734,11 +734,28 @@ func (o *renderOperations) probeTransport(ctx context.Context, params map[string
 		return OperationResult{}, err
 	}
 
+	// Finding 18: refuse cleanly BEFORE running the probe process at all
+	// when this node has never applied surfaceID — otherwise the probe
+	// still ran, and [pipeline.Supervisor.SetTransportProbe] would have
+	// silently discarded its own result (it no longer creates a runner on
+	// demand), reporting Confirmed off evidence nothing kept. A typo'd or
+	// stale surface id gets an honest, named refusal instead of a phantom
+	// `surface` resource that persists on the dashboard forever with no
+	// discoverable removal path.
+	if _, ok := o.sup.Snapshot(surfaceID); !ok {
+		return OperationResult{}, fmt.Errorf("%s: surface %q has never been applied on this node; nothing to probe", action, surfaceID)
+	}
+
 	executedAt := now()
 	result := pipeline.ProbeNDISend(ctx, o.probeStarter)
 	observedAt := now()
 
-	o.sup.SetTransportProbe(surfaceID, transport, result.Available, result.Reason, observedAt)
+	if !o.sup.SetTransportProbe(surfaceID, transport, result.Available, result.Reason, observedAt) {
+		// The surface existed moments ago (checked above) but is gone now
+		// — vanishingly unlikely (nothing in this package deletes a
+		// runner), but never silently drop a completed probe's result.
+		return OperationResult{}, fmt.Errorf("%s: surface %q no longer has a runner to record this probe against", action, surfaceID)
+	}
 
 	return OperationResult{
 		Confirmed: result.Available,

@@ -476,6 +476,10 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 
 	var confirmed bool
 	var outcomeState, outcomeReason string
+	// pipelineFailed is Finding 15: only confirmRenderCommand's own
+	// evaluateRenderSurfaceState path can ever set it — a transport probe
+	// has no desired pipeline STATE to match and never reports one failed.
+	var pipelineFailed bool
 	if in.Action == "render.transport.probe" {
 		// No desired STATE to match (unlike apply/clear/restart): a probe
 		// that correctly reports the runtime absent is just as confirmed
@@ -497,14 +501,14 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		// operator-issued one, so requiring it to move would make every
 		// render.pipeline.restart command time out. Confirmed against a
 		// real agent (test/integration/render_dispatch_test.go).
-		confirmed, outcomeState, outcomeReason = h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
+		confirmed, outcomeState, outcomeReason, pipelineFailed = h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
 	}
 	resolvedAt := h.now()
 	outcome := "unconfirmed"
 	if confirmed {
 		outcome = "confirmed"
 	}
-	resultJSON, _ := json.Marshal(commandResultPayload{Outcome: outcome})
+	resultJSON, _ := json.Marshal(commandResultPayload{Outcome: outcome, PipelineFailed: pipelineFailed})
 	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
 		ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: &outcomeState, OutcomeReason: &outcomeReason,
@@ -535,7 +539,8 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		NodeID: in.NodeID, SurfaceID: in.SurfaceID, Replay: false,
 		Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
-		DispatchedAt: dispatchedFmt, ResolvedAt: &resolvedFmt,
+		PipelineFailed: pipelineFailed,
+		DispatchedAt:   dispatchedFmt, ResolvedAt: &resolvedFmt,
 		IdleOutput: idleOutputFromParams(in.Params),
 	}, nil, nil
 }
@@ -581,25 +586,25 @@ func (h *handlers) writeRenderAudit(ctx context.Context, now time.Time, kind ide
 // ResourceSurface rather than observation.ResourceFPP. nodeID is the node
 // THIS dispatch was sent to — see evaluateRenderSurfaceState for why that
 // matters.
-func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, wantState string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, wantState string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string, pipelineFailed bool) {
 	if h.deps.Observations == nil {
-		return false, string(observation.StateNotCollected), "no observation source is configured"
+		return false, string(observation.StateNotCollected), "no observation source is configured", false
 	}
 	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
 	ticker := time.NewTicker(renderCommandPollInterval)
 	defer ticker.Stop()
 
 	for {
-		confirmed, outcomeState, outcomeReason = h.evaluateRenderSurfaceState(ctx, nodeID, surfaceID, wantState, dispatchedAt)
+		confirmed, outcomeState, outcomeReason, pipelineFailed = h.evaluateRenderSurfaceState(ctx, nodeID, surfaceID, wantState, dispatchedAt)
 		if confirmed {
-			return true, outcomeState, outcomeReason
+			return true, outcomeState, outcomeReason, false
 		}
 		if !time.Now().Before(absDeadline) {
-			return false, outcomeState, outcomeReason
+			return false, outcomeState, outcomeReason, pipelineFailed
 		}
 		select {
 		case <-ctx.Done():
-			return false, string(observation.StateUnknownAge), "confirmation aborted before the deadline: " + ctx.Err().Error()
+			return false, string(observation.StateUnknownAge), "confirmation aborted before the deadline: " + ctx.Err().Error(), false
 		case <-ticker.C:
 		}
 	}
@@ -631,13 +636,13 @@ func renderNodeSourceFor(nodeID string) string {
 // same schemaV4 (resource, signal, source) row noderender.Collector wrote,
 // so the source's own identity already disambiguates it, with no
 // resolution needed for a caller that knows exactly which node it dispatched to.
-func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfaceID, wantState string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfaceID, wantState string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string, pipelineFailed bool) {
 	kind := observation.ResourceSurface
 	sig := observation.SignalID(renderSignalPipelineState)
 	wantSource := renderNodeSourceFor(nodeID)
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
 	if err != nil {
-		return false, string(observation.StateCollectionFailed), "reading surface.pipeline.state for confirmation: " + err.Error()
+		return false, string(observation.StateCollectionFailed), "reading surface.pipeline.state for confirmation: " + err.Error(), false
 	}
 	var o observation.Observation
 	var found bool
@@ -650,7 +655,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	}
 	if !found {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.pipeline.state observation is recorded for this surface from node %s yet", nodeID)
+			"no surface.pipeline.state observation is recorded for this surface from node %s yet", nodeID), false
 	}
 	src := o.Source
 	if src == "" {
@@ -673,7 +678,7 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 		if o.CollectedAt.Before(notBefore) {
 			return false, string(observation.StateNotCollected), fmt.Sprintf(
 				"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
-				notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
+				notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src), false
 		}
 		if wantState == mqttproto.RenderPipelineStateStopped {
 			reason := o.Reason
@@ -684,9 +689,9 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 			// the value-observation branch below uses, so a caller reading
 			// the outcome reason sees the desired state was reached either
 			// way — only the parenthetical names how it was confirmed.
-			return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src)
+			return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src), false
 		}
-		return false, string(o.Absence), fmt.Sprintf("surface.pipeline.state is absent (%s), wanted %q (via %s)", o.Reason, wantState, src)
+		return false, string(o.Absence), fmt.Sprintf("surface.pipeline.state is absent (%s), wanted %q (via %s)", o.Reason, wantState, src), false
 	}
 
 	// Value-bearing evidence is fenced on ObservedAt — the node's own
@@ -699,12 +704,12 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	// dispatch at all.
 	if o.ObservedAt == nil {
 		return false, string(observation.StateUnknownAge), fmt.Sprintf(
-			"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+			"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID), false
 	}
 	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
 			"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
-			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
+			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src), false
 	}
 
 	state := o.StateAt(h.now())
@@ -713,12 +718,20 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 		if reason == "" {
 			reason = fmt.Sprintf("surface.pipeline.state evidence state is %s", state)
 		}
-		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
+		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src), false
 	}
-	if v, ok := o.Value.(string); ok && v == wantState {
-		return true, string(state), fmt.Sprintf("surface.pipeline.state = %q (via %s)", v, src)
+	v, _ := o.Value.(string)
+	if v == wantState {
+		return true, string(state), fmt.Sprintf("surface.pipeline.state = %q (via %s)", v, src), false
 	}
-	return false, string(state), fmt.Sprintf("surface.pipeline.state = %v, wanted %q (via %s)", o.Value, wantState, src)
+	// Finding 15: the pipeline's own reported value is distinct,
+	// structured evidence — not merely "some other state" — exactly when
+	// it equals mqttproto.RenderPipelineStateFailed. This is the ONLY
+	// place PipelineFailed is ever set true; everywhere else in this
+	// function it is false because the branch that fired is either
+	// confirmation itself or a state that genuinely isn't "failed".
+	pipelineFailed = v == mqttproto.RenderPipelineStateFailed
+	return false, string(state), fmt.Sprintf("surface.pipeline.state = %v, wanted %q (via %s)", o.Value, wantState, src), pipelineFailed
 }
 
 // renderSignalTransportAvailable is the signal
@@ -842,7 +855,8 @@ func renderCommandResultFromRecord(rec store.CommandRecord, replay bool) v1.Rend
 		CommandID: rec.ID, IdempotencyKey: rec.IdempotencyKey, Action: rec.Action,
 		NodeID: nodeID, SurfaceID: surfaceID, Replay: replay,
 		Outcome: res.Outcome, OutcomeState: rec.OutcomeState, OutcomeReason: rec.OutcomeReason,
-		DispatchedAt: dispatchedAt, ResolvedAt: resolvedAt,
+		PipelineFailed: res.PipelineFailed,
+		DispatchedAt:   dispatchedAt, ResolvedAt: resolvedAt,
 		IdleOutput: decodeIdleOutputFromParamsJSON(rec.ParamsJSON),
 	}
 }

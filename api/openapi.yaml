@@ -4322,8 +4322,8 @@ components:
         `surface.pipeline.state` evidence dated at or after dispatch.
       required:
         [commandId, idempotencyKey, action, nodeId, surfaceId, replay,
-         outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt,
-         idleOutput]
+         outcome, outcomeState, outcomeReason, pipelineFailed, dispatchedAt,
+         resolvedAt, idleOutput]
       additionalProperties: false
       properties:
         commandId:
@@ -4363,6 +4363,17 @@ components:
         outcomeReason:
           type: string
           description: A short, human-readable explanation. Always non-empty.
+        pipelineFailed:
+          type: boolean
+          description: >-
+            True only when this command's outcome evidence is itself the
+            pipeline's own reported "failed" state, distinct from absent,
+            stale, or a merely-not-yet-reached state. outcomeState above
+            only ever carries the six-value evidence-state vocabulary
+            (never "failed") — a caller that wants to react to the
+            pipeline specifically being down must use this field, never
+            outcomeState or a parse of outcomeReason's free text. Always
+            false for a confirmed outcome and for render.transport.probe.
         dispatchedAt:
           type: string
           format: date-time

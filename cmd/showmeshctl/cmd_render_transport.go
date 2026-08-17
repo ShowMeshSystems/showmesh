@@ -123,11 +123,16 @@ type renderTransportResult struct {
 
 // interpretTransportObservations finds surface.transport.available (and,
 // alongside it, surface.transport.reason) in obs and turns them into one
-// verdict. Absent, not_collected, or collection_failed all collapse to
-// Probed: false — every one of those is "cannot tell you the transport is
-// usable right now," which is what an operator running this command
-// actually needs to know; --output json's State field preserves the
-// distinction for a caller that needs it.
+// verdict. Probed is true ONLY for state "current" — every other state
+// (absent, not_collected, collection_failed, stale, unknown_age,
+// unsupported) collapses to Probed: false, per ADR-011: "stale = unknown,
+// never healthy." Finding 17: this used to collapse only not_collected and
+// collection_failed, so a `surface.transport.available = true` row aged
+// into stale or unknown_age still reported Probed: true carrying that aged
+// boolean, and renderTransportExitCode exited 0 on it — the human-readable
+// line said "(stale)" but the exit code, which scripts actually read,
+// lied. --output json's State field preserves the discarded distinction
+// for a caller that wants it.
 func interpretTransportObservations(obs []evidence) renderTransportResult {
 	var available *evidence
 	var reason *evidence
@@ -145,9 +150,8 @@ func interpretTransportObservations(obs []evidence) renderTransportResult {
 			Reason: "no transport probe evidence for this surface: this coordinator has never observed a render report naming it"}
 	}
 
-	switch available.State {
-	case stateNotCollected, stateCollectionFailed:
-		r := "transport has never been probed for this surface"
+	if available.State != stateCurrent {
+		r := untrustworthyTransportReason(available.State)
 		if available.Reason != nil && *available.Reason != "" {
 			r = *available.Reason
 		}
@@ -162,6 +166,22 @@ func interpretTransportObservations(obs []evidence) renderTransportResult {
 		}
 	}
 	return renderTransportResult{Probed: true, Available: v, Reason: r, State: available.State}
+}
+
+// untrustworthyTransportReason is the default Probed: false reason for
+// every non-current state, used when the observation itself carries no
+// more specific Reason.
+func untrustworthyTransportReason(state string) string {
+	switch state {
+	case stateStale:
+		return "the last transport probe result is stale and no longer trustworthy"
+	case stateUnknownAge:
+		return "the last transport probe result's age cannot be confirmed"
+	case stateUnsupported:
+		return "this surface does not report transport-availability evidence"
+	default: // stateNotCollected, stateCollectionFailed
+		return "transport has never been probed for this surface"
+	}
 }
 
 func renderTransportExitCode(r renderTransportResult) int {

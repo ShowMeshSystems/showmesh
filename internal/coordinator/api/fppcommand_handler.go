@@ -114,6 +114,19 @@ type commandResultPayload struct {
 	Outcome    string `json:"outcome,omitempty"`
 	StatusCode int    `json:"statusCode,omitempty"`
 	Body       string `json:"body,omitempty"`
+
+	// PipelineFailed is Finding 15's own field, set only by
+	// renderdispatch.go's evaluateRenderSurfaceState: true when the
+	// surface.pipeline.state evidence confirming/refusing a render command
+	// is itself the pipeline's own reported "failed" value, distinct from
+	// merely absent, stale, or wrong-but-otherwise-healthy evidence.
+	// OutcomeState (both here and on the wire) only ever carries
+	// pkg/observation's six-value State vocabulary, never a pipeline
+	// state — this field is what lets a caller (showmeshctl's
+	// exitRenderPipelineDown) distinguish the two without parsing
+	// OutcomeReason's free text. Irrelevant, and always false/omitted, for
+	// every non-render command this payload also serves.
+	PipelineFailed bool `json:"pipelineFailed,omitempty"`
 }
 
 // fppCommandRecordFor builds the commands-table row for env, with

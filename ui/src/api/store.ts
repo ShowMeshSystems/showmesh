@@ -119,6 +119,8 @@ type SchemaConfigShowAction = components['schemas']['ConfigShowAction']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+// Finding 16: show.surface's own read response, same aliasing pattern.
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -896,11 +898,32 @@ export class ApiStore {
   // it silently renders empty/403 for the operator role these config
   // kinds exist to serve. See views/Macros.tsx and views/ShowActions.tsx.
 
-  /** `GET /api/v1/config/show.action` or `GET /api/v1/config/show.macro` — object ids, labels, and current revision only, never the full payloads (STEP-9-SPEC.md section 5.5). */
-  async listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
+  /** `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`, or `GET /api/v1/config/show.surface` — object ids, labels, and current revision only, never the full payloads (STEP-9-SPEC.md section 5.5; show.surface uses the identical `showConfigReadScopes` gate — api.go route table). */
+  async listConfigObjects(kind: 'show.action' | 'show.macro' | 'show.surface'): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaConfigObjectsListResponse>(`/config/${kind}`, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.surface/{id}`. Finding 16: this is how the
+   * Operator UI learns a surface's assigned `node` — [listConfigObjects]'s
+   * summary carries `show`, not `node` (STEP-9-SPEC.md section 5.5's
+   * summary shape predates show.surface and was never widened), so the
+   * caller fetches each candidate object's full payload to filter by
+   * node. ADR-026 v1 scope is one surface per node, so this is a small,
+   * bounded fan-out, not an n+1 growth risk.
+   */
+  async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowSurfaceConfigResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }

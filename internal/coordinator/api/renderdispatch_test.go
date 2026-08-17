@@ -953,6 +953,70 @@ func TestRenderRestartConfirmsOnFreshPostDispatchEvidence(t *testing.T) {
 	}
 }
 
+// TestRenderRestartUnconfirmedWithFailedPipelineSetsPipelineFailed is
+// Finding 15's own coordinator-side proof, against the real HTTP handler
+// and the real evaluateRenderSurfaceState/confirmRenderCommand path (only
+// the observation store is a fake, exactly like every other test in this
+// file): when the freshest post-dispatch surface.pipeline.state evidence
+// is itself the pipeline's own reported "failed" value, the response's
+// PipelineFailed field is true, never inferred by showmeshctl (or any
+// other caller) from OutcomeState, which never equals "failed" — see
+// evaluateRenderSurfaceState's own doc comment on the branch that sets
+// this. Revert that branch (or the pipelineFailed plumbing through
+// confirmRenderCommand/executeRenderDispatch) and this test's assertion on
+// pipelineFailed fails while Outcome/OutcomeState stay unaffected — this
+// is the coordinator-side half of the claim
+// TestRenderRestartUnconfirmedWithFailedPipelineExits23
+// (test/integration/render_pipeline_failed_test.go) proves end to end
+// through the real showmeshctl binary.
+func TestRenderRestartUnconfirmedWithFailedPipelineSetsPipelineFailed(t *testing.T) {
+	renderCommandConfirmDeadline = 200 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	// Fresh, post-dispatch evidence reporting the pipeline's own "failed"
+	// state — never confirms "running", and never times out on absence
+	// either, so this exercises the "current but wrong value" branch,
+	// never the not_collected/stale ones Finding 17's own fix covers.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("media-01", "wall-1", "failed", testNow.Add(time.Second), testNow.Add(time.Second)),
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/restart", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct {
+			Outcome        string `json:"outcome"`
+			OutcomeState   string `json:"outcomeState"`
+			PipelineFailed bool   `json:"pipelineFailed"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want unconfirmed; body: %s", result.Command.Outcome, body)
+	}
+	if result.Command.OutcomeState != "current" {
+		t.Fatalf("outcomeState = %q, want %q — the evidence itself is fresh, only its VALUE is wrong; "+
+			"OutcomeState must never be used to carry a pipeline state; body: %s", result.Command.OutcomeState, "current", body)
+	}
+	if !result.Command.PipelineFailed {
+		t.Fatalf("pipelineFailed = false, want true; body: %s", body)
+	}
+}
+
 // --- render.transport.probe ---
 
 // TestRenderTransportProbeDispatchesAndConfirmsOnUnavailableEvidence is

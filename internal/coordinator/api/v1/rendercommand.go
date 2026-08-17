@@ -38,6 +38,19 @@ type RenderCommandResult struct {
 	OutcomeState  string `json:"outcomeState"`
 	OutcomeReason string `json:"outcomeReason"`
 
+	// PipelineFailed is Finding 15: true only when this command's outcome
+	// evidence is itself the pipeline's own reported "failed" state
+	// (mqttproto.RenderPipelineStateFailed), distinct from absent, stale,
+	// or a merely-not-yet-reached state. OutcomeState above only ever
+	// carries pkg/observation's six-value State vocabulary (current,
+	// stale, unknown_age, not_collected, collection_failed, unsupported)
+	// — it can never equal "failed" — so a caller that wants to react to
+	// the pipeline specifically being down must use this field, never
+	// OutcomeState or a parse of OutcomeReason's free text. Always false
+	// for a confirmed outcome and for render.transport.probe, which has
+	// no pipeline state to fail.
+	PipelineFailed bool `json:"pipelineFailed"`
+
 	DispatchedAt string  `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
 

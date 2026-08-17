@@ -445,6 +445,43 @@ func fakeProbeStarter(result pipeline.ExitResult) pipeline.ProcessStarter {
 	}
 }
 
+// TestProbeTransportOnNeverAppliedSurfaceRefusesAndCreatesNoPhantom is
+// Finding 18: showmeshctl render probe <node> <typo'd-surface-id> used to
+// silently manufacture a permanent phantom `surface` resource (Supervisor.
+// SetTransportProbe's own runnerFor create-on-demand). probeTransport must
+// now refuse outright, naming the surface, WITHOUT even running the probe
+// process (the fake starter here would panic-free either way, but a real
+// gst-launch-1.0 subprocess should never spin up for a surface nobody
+// configured) and without leaving anything for sup.SnapshotAll to report.
+func TestProbeTransportOnNeverAppliedSurfaceRefusesAndCreatesNoPhantom(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true")
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+	probeRan := false
+	renderOps.probeStarter = func(ctx context.Context, path string, argv []string, onRunning func()) (pipeline.ProcessHandle, error) {
+		probeRan = true
+		return fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})(ctx, path, argv, onRunning)
+	}
+
+	_, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "wal-01"}, clock.now)
+	if err == nil {
+		t.Fatalf("probeTransport on a never-applied surface: err = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "wal-01") || !strings.Contains(err.Error(), "never been applied") {
+		t.Fatalf("probeTransport error = %q, want it to name the surface and say it was never applied", err.Error())
+	}
+	if probeRan {
+		t.Errorf("the probe process ran for a surface this node never applied; it must refuse before probing")
+	}
+	if snaps := sup.SnapshotAll(); len(snaps) != 0 {
+		t.Fatalf("SnapshotAll() after a refused probe = %+v, want empty — no phantom surface", snaps)
+	}
+}
+
 // TestProbeTransportAvailableRecordsOnSupervisorSnapshot proves
 // probeTransport's wiring end to end: a real state-transition-confirmed
 // probe (the fake starter stands in for the real gst-launch-1.0 subprocess;
@@ -461,6 +498,14 @@ func TestProbeTransportAvailableRecordsOnSupervisorSnapshot(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	// Finding 18: probeTransport now refuses a surface this node has never
+	// applied, so this surface must exist first — matching every real
+	// caller (an operator can only ever probe a surface that has at least
+	// been assigned once).
+	if err := sup.Apply(pipeline.DefaultTestPatternSpec("surface-1")); err != nil {
+		t.Fatalf("setup Apply: %v", err)
+	}
 
 	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
 	if err != nil {
@@ -505,6 +550,13 @@ func TestProbeTransportUnavailableRecordsReason(t *testing.T) {
 		StderrTail:       "ERROR: from element ...: Failed loading NDI SDK\n",
 	})
 
+	// Finding 18: probeTransport now refuses a surface this node has never
+	// applied — see the identical setup step in
+	// TestProbeTransportAvailableRecordsOnSupervisorSnapshot.
+	if err := sup.Apply(pipeline.DefaultTestPatternSpec("surface-1")); err != nil {
+		t.Fatalf("setup Apply: %v", err)
+	}
+
 	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
 	if err != nil {
 		t.Fatalf("probeTransport: %v", err)
@@ -546,6 +598,13 @@ func TestHandleMessageRenderTransportProbeFiresRenderTrigger(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	// Finding 18: probeTransport now refuses a surface this node has never
+	// applied — see the identical setup step in
+	// TestProbeTransportAvailableRecordsOnSupervisorSnapshot.
+	if err := sup.Apply(pipeline.DefaultTestPatternSpec("surface-1")); err != nil {
+		t.Fatalf("setup Apply: %v", err)
+	}
 
 	renderTrigger := make(chan struct{}, 1)
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, renderTrigger, clock.now, discardLogger())

@@ -115,3 +115,53 @@ func TestCmdRenderTransportNotCollectedExits22(t *testing.T) {
 		t.Errorf("stdout = %q, want the observation's own stated reason", stdout.String())
 	}
 }
+
+// TestCmdRenderTransportStaleExits22 is Finding 17: a
+// surface.transport.available=true row that has aged into "stale" must
+// NOT exit 0. Before the fix, interpretTransportObservations's collapse
+// covered only not_collected/collection_failed, so this aged "true"
+// reading fell through to Probed: true and renderTransportExitCode
+// returned exitOK — a script trusting the exit code would have believed
+// NDI was usable off evidence ADR-011 calls unknown, never healthy.
+// Revert the `available.State != stateCurrent` gate in
+// interpretTransportObservations and this test fails with exit 0.
+func TestCmdRenderTransportStaleExits22(t *testing.T) {
+	body := `{"serverTime":"2026-08-17T00:00:00Z","observations":[
+		{"signal":"surface.transport.available","value":true,"unit":null,"state":"stale","reason":null,
+		 "observedAt":"2026-08-17T00:00:00Z","collectedAt":"2026-08-17T00:00:00Z","source":"node-render","quality":"measured","validForSeconds":45}
+	]}`
+	ts := httptest.NewServer(renderTransportObservationsHandler(t, body))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdRender([]string{"transport", "--server", ts.URL, "--token", "t", "garage-window"}, &stdout, &stderr, time.Now)
+	if code != exitRenderUnavailable {
+		t.Fatalf("exit code = %d, want exitRenderUnavailable (%d) — a stale reading must never exit 0; stdout=%s stderr=%s",
+			code, exitRenderUnavailable, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "stale") {
+		t.Errorf("stdout = %q, want it to name the stale state", stdout.String())
+	}
+}
+
+// TestCmdRenderTransportUnknownAgeExits22 is Finding 17's second named
+// case: "unknown_age" must collapse the same way "stale" does, for the
+// same ADR-011 reason.
+func TestCmdRenderTransportUnknownAgeExits22(t *testing.T) {
+	body := `{"serverTime":"2026-08-17T00:00:00Z","observations":[
+		{"signal":"surface.transport.available","value":true,"unit":null,"state":"unknown_age","reason":null,
+		 "observedAt":null,"collectedAt":"2026-08-17T00:00:00Z","source":"node-render","quality":"measured","validForSeconds":45}
+	]}`
+	ts := httptest.NewServer(renderTransportObservationsHandler(t, body))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdRender([]string{"transport", "--server", ts.URL, "--token", "t", "garage-window"}, &stdout, &stderr, time.Now)
+	if code != exitRenderUnavailable {
+		t.Fatalf("exit code = %d, want exitRenderUnavailable (%d) — unknown_age must never exit 0; stdout=%s stderr=%s",
+			code, exitRenderUnavailable, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "unknown_age") {
+		t.Errorf("stdout = %q, want it to name the unknown_age state", stdout.String())
+	}
+}

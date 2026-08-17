@@ -100,6 +100,12 @@ export type ConfigShowMacroStep = components['schemas']['ConfigShowMacroStep']
 export type ConfigShowMacro = components['schemas']['ConfigShowMacro']
 export type ShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 export type ConfigRevisionsResponseKind = ConfigRevisionsResponse['kind']
+// Finding 16 (Track B surface fixes): show.surface reads, so the UI can
+// discover a configured-but-not-yet-applied surface the same way
+// showmeshctl already can. Aliased for the identical reason as every
+// type above.
+export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
+export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 
 export type MacroRunSummary = components['schemas']['MacroRunSummary']
 export type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']

@@ -11,14 +11,22 @@ import type { Model, ObservationEntry, RenderCommandResult, SessionResponse } fr
 // wiring to "render:command", grouping by surface, and rendering
 // confirmed/unconfirmed honestly per ADR-003) from store.ts's own network
 // behavior.
-const { applyRenderSurface, clearRenderSurface, restartRenderPipeline } = vi.hoisted(() => ({
-  applyRenderSurface: vi.fn(),
-  clearRenderSurface: vi.fn(),
-  restartRenderPipeline: vi.fn(),
-}))
+// Finding 16: listConfigObjects/getShowSurface are the two calls
+// [useConfiguredSurfaceIds] makes to discover a configured-but-unapplied
+// surface — mocked here for the identical reason as the three command
+// verbs below, and defaulted to "nothing configured" so tests that never
+// set them keep the pre-fix behavior.
+const { applyRenderSurface, clearRenderSurface, restartRenderPipeline, listConfigObjects, getShowSurface } =
+  vi.hoisted(() => ({
+    applyRenderSurface: vi.fn(),
+    clearRenderSurface: vi.fn(),
+    restartRenderPipeline: vi.fn(),
+    listConfigObjects: vi.fn(),
+    getShowSurface: vi.fn(),
+  }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, applyRenderSurface, clearRenderSurface, restartRenderPipeline }
+  return { ...actual, applyRenderSurface, clearRenderSurface, restartRenderPipeline, listConfigObjects, getShowSurface }
 })
 
 afterEach(() => {
@@ -26,6 +34,8 @@ afterEach(() => {
   applyRenderSurface.mockReset()
   clearRenderSurface.mockReset()
   restartRenderPipeline.mockReset()
+  listConfigObjects.mockReset()
+  getShowSurface.mockReset()
 })
 
 const NOW = '2026-08-17T00:00:00.000Z'
@@ -63,6 +73,7 @@ function commandResult(overrides: Partial<RenderCommandResult> = {}): RenderComm
     outcome: 'confirmed',
     outcomeState: 'current',
     outcomeReason: 'surface.pipeline.state = "stopped"',
+    pipelineFailed: false,
     dispatchedAt: NOW,
     resolvedAt: NOW,
     // Empty rather than omitted: this fixture's action is a clear, which
@@ -139,5 +150,85 @@ describe('RenderSurfacePanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Apply' }))
 
     await waitFor(() => expect(applyRenderSurface).toHaveBeenCalledWith('media-01', 'wall-1', 'opener'))
+  })
+
+  // Finding 16: a node with a configured show.surface but no assignment
+  // yet reports zero render evidence (a supervisor entry, and so a
+  // report row, exists only AFTER an apply). Before this fix,
+  // entries.length === 0 always took the "never published" early return
+  // and no control of any kind rendered, so the first apply for such a
+  // surface was reachable from showmeshctl and NOT from the Operator UI.
+  // Revert useConfiguredSurfaceIds (or the union into bySurface/order in
+  // RenderSurfacePanel) and this test fails: it stays on "This node has
+  // never published a render report" and finds no "Apply" button.
+  it('renders apply/clear/restart for a configured surface that has never reported (Finding 16)', async () => {
+    listConfigObjects.mockResolvedValue({
+      serverTime: NOW,
+      kind: 'show.surface',
+      objects: [{ id: 'wall-1', label: 'Wall', show: 'halloween', currentRevision: 1, updatedAt: NOW }],
+    })
+    getShowSurface.mockResolvedValue({
+      serverTime: NOW,
+      kind: 'show.surface',
+      id: 'wall-1',
+      revision: 1,
+      payload: {
+        show: 'halloween',
+        name: 'Wall',
+        node: 'media-01',
+        channelRange: { startChannel: 1, channelCount: 12 },
+        geometry: { width: 2, height: 2, pixelFormat: 'rgb' },
+        frameRate: 40,
+        output: { transport: 'ndi', ndi: { sourceName: 'wall-1' } },
+      },
+      updatedAt: NOW,
+      createdByPrincipalId: null,
+      createdByPrincipalName: null,
+    })
+    const model = makeModel({ session: signedIn({ scopes: ['render:command', 'show:macro:run'] }) })
+    renderPanel(model, [])
+
+    expect(await screen.findByText('Surface: wall-1')).toBeInTheDocument()
+    expect(screen.getByText(/never applied, so there is no render report yet/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
+    expect(screen.queryByText(/has never published a render report/)).not.toBeInTheDocument()
+  })
+
+  it('does not union in a show.surface object assigned to a different node', async () => {
+    listConfigObjects.mockResolvedValue({
+      serverTime: NOW,
+      kind: 'show.surface',
+      objects: [{ id: 'other-wall', label: 'Other', show: 'halloween', currentRevision: 1, updatedAt: NOW }],
+    })
+    getShowSurface.mockResolvedValue({
+      serverTime: NOW,
+      kind: 'show.surface',
+      id: 'other-wall',
+      revision: 1,
+      payload: {
+        show: 'halloween',
+        name: 'Other',
+        node: 'media-02',
+        channelRange: { startChannel: 1, channelCount: 12 },
+        geometry: { width: 2, height: 2, pixelFormat: 'rgb' },
+        frameRate: 40,
+        output: { transport: 'ndi', ndi: { sourceName: 'other-wall' } },
+      },
+      updatedAt: NOW,
+      createdByPrincipalId: null,
+      createdByPrincipalName: null,
+    })
+    const model = makeModel({ session: signedIn({ scopes: ['render:command', 'show:macro:run'] }) })
+    renderPanel(model, [])
+
+    expect(await screen.findByText(/has never published a render report/)).toBeInTheDocument()
+    expect(screen.queryByText('Surface: other-wall')).not.toBeInTheDocument()
+  })
+
+  it('never fetches configured surfaces when the operator lacks a show.surface read scope', () => {
+    const model = makeModel({ session: signedIn({ scopes: ['render:command'] }) })
+    renderPanel(model, [])
+    expect(screen.getByText(/has never published a render report/)).toBeInTheDocument()
+    expect(listConfigObjects).not.toHaveBeenCalled()
   })
 })

@@ -75,6 +75,17 @@ type renderCommandResult struct {
 	OutcomeState  string `json:"outcomeState"`
 	OutcomeReason string `json:"outcomeReason"`
 
+	// PipelineFailed mirrors v1.RenderCommandResult.PipelineFailed
+	// (Finding 15): true only when this outcome's own evidence is the
+	// pipeline's own reported "failed" state. OutcomeState above can
+	// never equal "failed" — it only ever carries
+	// pkg/observation's six-value evidence-state vocabulary
+	// (current/stale/unknown_age/not_collected/collection_failed/
+	// unsupported) — so this field, not a comparison against OutcomeState
+	// or a parse of OutcomeReason's free text, is what makes
+	// [exitRenderPipelineDown] below reachable.
+	PipelineFailed bool `json:"pipelineFailed"`
+
 	DispatchedAt string  `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
 
@@ -85,12 +96,6 @@ type renderCommandResponse struct {
 	ServerTime time.Time           `json:"serverTime"`
 	Command    renderCommandResult `json:"command"`
 }
-
-// renderPipelineFailedState is [collector/noderender]'s
-// surface.pipeline.state "failed" value, independently reproduced here
-// (this program imports no coordinator package) exactly like
-// fppStatusValueIdle's own reasoning in the fpp CLI files.
-const renderPipelineFailedState = "failed"
 
 // dispatchRenderCommand is the request/response core shared by "render
 // apply", "render clear", and "render restart": build a client on this
@@ -139,11 +144,15 @@ func dispatchRenderCommand(stdout, stderr io.Writer, clock func() time.Time, g *
 // reportRenderCommandResult prints result's outcome honestly to stdout and
 // returns the exit code it maps to, mirroring reportFPPCommandResult's own
 // honesty rule: exitOK only for "confirmed", never inferred from a bare
-// 200. "unconfirmed" splits further than the FPP case: OutcomeState
-// "failed" — direct evidence the pipeline is down, not merely absent —
-// gets its own [exitRenderPipelineDown] rather than sharing
-// [exitCommandUnconfirmed] with every other unconfirmed cause (a deadline
-// that simply elapsed, or stale/unknown evidence).
+// 200. "unconfirmed" splits further than the FPP case: PipelineFailed —
+// direct evidence the pipeline is down, not merely absent — gets its own
+// [exitRenderPipelineDown] rather than sharing [exitCommandUnconfirmed]
+// with every other unconfirmed cause (a deadline that simply elapsed, or
+// stale/unknown evidence). Finding 15: this used to compare OutcomeState
+// against a "failed" literal, which OutcomeState can never actually hold
+// (it is pkg/observation's six-value evidence-state vocabulary, never a
+// pipeline state), making exitRenderPipelineDown unreachable from any real
+// coordinator response.
 func reportRenderCommandResult(stdout io.Writer, cmdLabel string, result renderCommandResult) int {
 	if result.Replay {
 		_, _ = fmt.Fprintf(stdout, "showmeshctl %s: this idempotency key was already used; "+
@@ -160,7 +169,7 @@ func reportRenderCommandResult(stdout io.Writer, cmdLabel string, result renderC
 	case "unconfirmed":
 		_, _ = fmt.Fprintf(stdout, "unconfirmed: %s on %s/%s: %s (command %s)\n",
 			result.Action, result.NodeID, result.SurfaceID, result.OutcomeReason, result.CommandID)
-		if result.OutcomeState == renderPipelineFailedState {
+		if result.PipelineFailed {
 			return exitRenderPipelineDown
 		}
 		return exitCommandUnconfirmed
@@ -179,7 +188,7 @@ func exitCodeForRenderCommandResult(result renderCommandResult) int {
 	case "confirmed":
 		return exitOK
 	case "unconfirmed":
-		if result.OutcomeState == renderPipelineFailedState {
+		if result.PipelineFailed {
 			return exitRenderPipelineDown
 		}
 		return exitCommandUnconfirmed

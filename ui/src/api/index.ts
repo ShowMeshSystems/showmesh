@@ -68,6 +68,10 @@ export type {
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
   ConfigObjectsListResponse,
+  // Finding 16: show.surface reads, so the UI can discover a
+  // configured-but-not-yet-applied surface the way showmeshctl already can.
+  ConfigShowSurface,
+  ShowSurfaceConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -113,6 +117,7 @@ export {
   declareNode,
   deleteNodeDeclaration,
   listConfigObjects,
+  getShowSurface,
   getShowAction,
   putShowAction,
   getShowActionRevisions,
