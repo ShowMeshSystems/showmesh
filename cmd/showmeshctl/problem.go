@@ -190,12 +190,18 @@ const (
 	// reason in the first place).
 	exitAssetsUnknown = 21
 
-	// exitRenderUnavailable: a "render status" subcommand found no render
-	// evidence at all for the requested node — it has never published a
-	// render report, distinct from a node that HAS reported and is
-	// simply stale/unknown/failed (those print normally and exit 0:
-	// "reported, here is what it said" is not an error). "cannot tell
-	// anything about this node's render pipeline."
+	// exitRenderUnavailable: either "render status" found no render
+	// evidence at all for the requested node (never published a render
+	// report — distinct from a node that HAS reported and is simply
+	// stale/unknown/failed, which prints normally and exits 0), or
+	// "render transport" found the surface's transport unavailable —
+	// either a real probe confirmed it (Track B seam B4,
+	// [pipeline.ProbeNDISend]) or no probe evidence exists yet. All three
+	// are "cannot tell the operator this works right now," which is what
+	// an operator running either command actually wants to know; a script
+	// that needs to distinguish the exact cause should pass --output json
+	// and read the observation state directly rather than branching on
+	// this exit code alone.
 	exitRenderUnavailable = 22
 
 	// exitRenderPipelineDown: a "render apply"/"render clear"/

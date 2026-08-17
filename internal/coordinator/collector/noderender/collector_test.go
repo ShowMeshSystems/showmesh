@@ -117,6 +117,11 @@ func TestPollTransportUnprobedIsNotCollected(t *testing.T) {
 	if transport.Reason == "" {
 		t.Errorf("unprobed transport: Reason is empty, want a stated reason (absent evidence must be stated, never omitted)")
 	}
+
+	reason := findObs(t, obs, SignalSurfaceTransportReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("unprobed transport reason: Absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	}
 }
 
 // TestPollProbedTransportRendersBool proves the other half of the same
@@ -126,6 +131,7 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
 	payload.Surfaces[0].TransportAvailable = boolPtr(false)
+	payload.Surfaces[0].TransportReason = "NDI runtime not found"
 	st.Put("render-01", payload, false, time.Now())
 
 	c := New(st)
@@ -137,6 +143,62 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 	if v, ok := transport.Value.(bool); !ok || v != false {
 		t.Errorf("probed transport: Value = %v, want false", transport.Value)
+	}
+
+	reason := findObs(t, obs, SignalSurfaceTransportReason)
+	if reason.Absence != "" {
+		t.Errorf("transport reason: Absence = %q, want empty", reason.Absence)
+	}
+	if v, ok := reason.Value.(string); !ok || v != "NDI runtime not found" {
+		t.Errorf("transport reason: Value = %v, want %q", reason.Value, "NDI runtime not found")
+	}
+}
+
+// TestPollFramesRateUnmeasuredIsNotCollected proves ADR-040's obligation:
+// before the agent's frame writer has completed a sampling window,
+// FramesRate is nil on the wire, and this must render as not_collected —
+// never a fabricated zero, and never the surface's configured frameRate
+// echoed back (samplePayload sets no frameRate at all, so any non-nil
+// Value here could only be a fabrication).
+func TestPollFramesRateUnmeasuredIsNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning) // FramesRate left nil
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	rate := findObs(t, obs, SignalSurfaceFramesRate)
+	if rate.Absence != observation.StateNotCollected {
+		t.Errorf("unmeasured frame rate: Absence = %q, want %q", rate.Absence, observation.StateNotCollected)
+	}
+	if rate.Value != nil {
+		t.Errorf("unmeasured frame rate: Value = %v, want nil", rate.Value)
+	}
+	if rate.Reason == "" {
+		t.Errorf("unmeasured frame rate: Reason is empty, want a stated reason (absent evidence must be stated, never omitted)")
+	}
+}
+
+// TestPollFramesRateMeasuredRendersFloat proves the other half: once the
+// agent has a real measurement, it renders as a value, not stuck
+// permanently at not_collected.
+func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	measured := 39.87
+	payload.Surfaces[0].FramesRate = &measured
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	rate := findObs(t, obs, SignalSurfaceFramesRate)
+	if rate.Absence != "" {
+		t.Errorf("measured frame rate: Absence = %q, want empty", rate.Absence)
+	}
+	if v, ok := rate.Value.(float64); !ok || v != measured {
+		t.Errorf("measured frame rate: Value = %v, want %v", rate.Value, measured)
 	}
 }
 
@@ -326,14 +388,32 @@ func TestPollDoesNotEmitAbsenceOnFirstSightingOfANode(t *testing.T) {
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
+	// Scoped to SignalSurfacePipelineState, the only signal a dropped
+	// surface's absence is emitted on. Other signals are legitimately
+	// not_collected on a first poll (surface.frames.rate has no completed
+	// measurement window yet; surface.transport.available has not been
+	// probed), and counting those would fail this test for the wrong reason.
 	var absences int
 	for _, o := range obs {
-		if o.Absence == observation.StateNotCollected {
+		if o.Signal == SignalSurfacePipelineState && o.Absence == observation.StateNotCollected {
 			absences++
 		}
 	}
 	if absences != 0 {
-		t.Errorf("first-ever poll produced %d absence observations, want 0", absences)
+		t.Errorf("first-ever poll produced %d surface.pipeline.state absence observations, want 0", absences)
+	}
+
+	// Guard the guard: if this poll ever stopped emitting pipeline-state
+	// evidence at all, the count above would be trivially zero and this test
+	// would pass while proving nothing.
+	var sawPipelineStateValue bool
+	for _, o := range obs {
+		if o.Signal == SignalSurfacePipelineState && o.Absence == "" {
+			sawPipelineStateValue = true
+		}
+	}
+	if !sawPipelineStateValue {
+		t.Fatal("first-ever poll emitted no surface.pipeline.state value at all; the absence count above proves nothing")
 	}
 }
 

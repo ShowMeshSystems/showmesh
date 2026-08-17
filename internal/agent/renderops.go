@@ -61,6 +61,13 @@ var renderApplyKnownKeys = map[string]bool{
 // render.pipeline.restart, which take only a surface identifier.
 var renderSurfaceKnownKeys = map[string]bool{"surfaceId": true}
 
+// renderTransportProbeKnownKeys is the key allowlist for
+// render.transport.probe, which (like clear/restart) takes only a surface
+// identifier: the probe result is recorded against that surface's snapshot
+// (see [pipeline.Supervisor.SetTransportProbe]) so it flows through the
+// existing render report rather than needing its own wire shape.
+var renderTransportProbeKnownKeys = map[string]bool{"surfaceId": true}
+
 // parseSurfaceID extracts and validates params.surfaceId, common to all
 // three render.* operations.
 func parseSurfaceID(action string, params map[string]any) (string, error) {
@@ -90,13 +97,13 @@ func rejectUnknownKeys(action string, params map[string]any, known map[string]bo
 	return nil
 }
 
-// isRenderAction reports whether action is one of this seam's three
+// isRenderAction reports whether action is one of this seam's four
 // allowlisted render.* operations — used by command.go's HandleMessage to
 // decide whether to signal renderTrigger after a genuinely-executed
 // command.
 func isRenderAction(action string) bool {
 	switch action {
-	case "render.surface.apply", "render.surface.clear", "render.pipeline.restart":
+	case "render.surface.apply", "render.surface.clear", "render.pipeline.restart", "render.transport.probe":
 		return true
 	default:
 		return false
@@ -113,7 +120,7 @@ type frameWriterHandle struct {
 	cancel context.CancelFunc
 }
 
-// renderOperations holds the three render.* allowlisted operations' shared
+// renderOperations holds the four render.* allowlisted operations' shared
 // dependencies: the pipeline supervisor, the on-disk assignment store
 // (build contract ruling 4 — a re-read at boot resumes rendering with no
 // coordinator reachable), the node's asset directory (where a
@@ -128,6 +135,15 @@ type renderOperations struct {
 
 	mu      sync.Mutex
 	writers map[string]*frameWriterHandle
+
+	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
+	// to [pipeline.ProbeNDISend]. nil (the production default, set by
+	// [newRenderOperations]) selects the real process starter; tests in
+	// this package set it directly (same-package access, no exported
+	// setter needed) to exercise probeTransport's wiring without shelling
+	// out to a real gst-launch-1.0 — pipeline/probe_test.go already covers
+	// the probe mechanism itself exhaustively against fakes and reality.
+	probeStarter pipeline.ProcessStarter
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, logger pipeline.Logger) *renderOperations {
@@ -331,38 +347,52 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 // requires a node never resolve an asset by filename alone trusting the
 // coordinator's say-so blindly, so a content-hash mismatch refuses the
 // assignment rather than rendering unverified bytes.
-func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any) (pipeline.Spec, *fseq.File, fseqAssignment, error) {
+func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
 	a, ok, err := buildFSEQAssignment(action, params)
 	if err != nil {
-		return pipeline.Spec{}, nil, fseqAssignment{}, err
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, err
 	}
 	if !ok {
-		return pipeline.DefaultTestPatternSpec(surfaceID), nil, fseqAssignment{}, nil
+		spec, sinkOutcome, serr := applyOutputSink(pipeline.DefaultTestPatternSpec(surfaceID), surfaceID, params)
+		if serr != nil {
+			return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, serr)
+		}
+		return spec, nil, fseqAssignment{}, sinkOutcome, nil
 	}
 
 	path := filepath.Join(assetDir, a.fseqFilename)
 	gotHash, err := hashFile(path)
 	if err != nil {
-		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
 	}
 	if gotHash != a.fseqContentHash {
-		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf(
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf(
 			"%s: fseq asset %q content hash %q does not match assignment's %q (ADR-028: identity is content, not filename)",
 			action, a.fseqFilename, gotHash, a.fseqContentHash)
 	}
 
 	f, err := fseq.Open(path)
 	if err != nil {
-		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: opening fseq asset %q: %w", action, a.fseqFilename, err)
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: opening fseq asset %q: %w", action, a.fseqFilename, err)
 	}
 
 	spec, err := pipeline.FSEQSourceSpec(surfaceID, a.width, a.height, a.pixelFormat, a.frameRate)
 	if err != nil {
 		_ = f.Close()
-		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: %w", action, err)
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, err)
+	}
+	// buildFSEQAssignment does not itself parse params.output — the sink is
+	// attached here, uniformly with the test-pattern-fallback branch above,
+	// so a real assignment's NDI/HDMI choice and a diagnostic assignment's
+	// choice go through exactly one code path (renderspec.go's
+	// applyOutputSink), never two that could disagree.
+	spec, sinkOutcome, err := applyOutputSink(spec, surfaceID, params)
+	if err != nil {
+		_ = f.Close()
+		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, err)
 	}
 
-	return spec, f, a, nil
+	return spec, f, a, sinkOutcome, nil
 }
 
 // ResumeAssignment re-applies a persisted assignment at agent startup
@@ -374,7 +404,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
 	const action = "render.surface.apply (resumed at boot)"
 
-	spec, f, a, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
 	if err != nil {
 		return err
 	}
@@ -384,6 +414,7 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 		}
 		return fmt.Errorf("%s: %w", action, err)
 	}
+	o.recordDegradedTransportEvidence(surfaceID, sinkOutcome, time.Now().UTC())
 	if f != nil {
 		if err := o.startFrameWriter(surfaceID, f, a); err != nil {
 			_ = f.Close()
@@ -391,6 +422,25 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 		}
 	}
 	return nil
+}
+
+// recordDegradedTransportEvidence proactively records surface.transport.
+// available=false with an actionable reason the moment a spec falls back
+// to the diagnostic fakesink — no probe needed, because this package
+// already knows with certainty (it built the spec) that a fakesink cannot
+// send NDI. Distinct from render.transport.probe's own real state-
+// transition evidence: this is static, build-time evidence about the
+// pipeline's own construction, not a runtime probe result, but it fills
+// the exact same wire fields, so a caller reading surface.transport.
+// available never needs to know which of the two produced it.
+//
+// A no-op when sinkOutcome.Configured is false (no output was requested at
+// all — nothing to report) or RealSink is true (nothing degraded).
+func (o *renderOperations) recordDegradedTransportEvidence(surfaceID string, sinkOutcome outputSinkOutcome, observedAt time.Time) {
+	if !sinkOutcome.Configured || sinkOutcome.RealSink {
+		return
+	}
+	o.sup.SetTransportProbe(surfaceID, sinkOutcome.Transport, false, sinkOutcome.Reason, observedAt)
 }
 
 // applySurface is the OperationFunc for "render.surface.apply": validate
@@ -424,7 +474,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: persisting assignment: %w", action, err)
 	}
 
-	spec, f, a, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -435,6 +485,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		}
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
 	}
+	o.recordDegradedTransportEvidence(surfaceID, sinkOutcome, now())
 
 	// A re-apply of a surface that already had a frame writer running
 	// replaces it: stop the old one (and close its FSEQ file) before
@@ -519,6 +570,47 @@ func (o *renderOperations) restartPipeline(ctx context.Context, params map[strin
 	}
 
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateRunning}, executedAt)
+}
+
+// probeTransport is the OperationFunc for "render.transport.probe": run a
+// real NDI state-transition probe ([pipeline.ProbeNDISend]) and record the
+// outcome on surfaceID's snapshot so it reaches the next render report
+// (command.go's renderTrigger fires after this, same as the other three
+// render.* operations). Unlike applySurface/clearSurface/restartPipeline,
+// this operation's own effect (the probe) is synchronous and complete by
+// the time it returns — there is no separate asynchronous state to poll
+// for, so Confirmed reports the probe's own result (available or not),
+// not a read-back of something else.
+func (o *renderOperations) probeTransport(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	const action = "render.transport.probe"
+	const transport = "ndi" // the only transport this build has a real probe for; see ProbeNDISend.
+
+	surfaceID, err := parseSurfaceID(action, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := rejectUnknownKeys(action, params, renderTransportProbeKnownKeys); err != nil {
+		return OperationResult{}, err
+	}
+
+	executedAt := now()
+	result := pipeline.ProbeNDISend(ctx, o.probeStarter)
+	observedAt := now()
+
+	o.sup.SetTransportProbe(surfaceID, transport, result.Available, result.Reason, observedAt)
+
+	return OperationResult{
+		Confirmed: result.Available,
+		Signal:    "node.render.transport_probe",
+		Value: map[string]any{
+			"surfaceId": surfaceID,
+			"transport": transport,
+			"available": result.Available,
+			"reason":    result.Reason,
+		},
+		ExecutedAt: executedAt,
+		ObservedAt: observedAt,
+	}, nil
 }
 
 // awaitAndReport polls the supervisor for evidence, dated at or after

@@ -23,6 +23,43 @@ func decodeRenderReport(t *testing.T, payload []byte) mqttproto.RenderPayload {
 	return p
 }
 
+// TestToRenderSurfaceReportCarriesRealFrameCounters is a direct regression
+// test for a defect this seam's review found: toRenderSurfaceReport
+// hardcoded FramesWritten/FramesLate/FramesDropped to 0 behind a stale
+// "B2a has no frame writer; B3 populates this" comment, so every frame
+// counter this system ever published was a zero regardless of what the
+// frame writer actually counted. FramesRate (ADR-040) must round-trip
+// too, including staying nil when unmeasured — never a fabricated zero.
+func TestToRenderSurfaceReportCarriesRealFrameCounters(t *testing.T) {
+	rate := 39.4
+	snap := pipeline.Snapshot{
+		SurfaceID:     "wall-1",
+		State:         pipeline.StateRunning,
+		FramesWritten: 1234,
+		FramesLate:    12,
+		FramesDropped: 3,
+		FramesRate:    &rate,
+	}
+	got := toRenderSurfaceReport(snap)
+	if got.FramesWritten != 1234 {
+		t.Errorf("FramesWritten = %d, want 1234 (got the real supervisor snapshot value, not a hardcoded 0)", got.FramesWritten)
+	}
+	if got.FramesLate != 12 {
+		t.Errorf("FramesLate = %d, want 12", got.FramesLate)
+	}
+	if got.FramesDropped != 3 {
+		t.Errorf("FramesDropped = %d, want 3", got.FramesDropped)
+	}
+	if got.FramesRate == nil || *got.FramesRate != rate {
+		t.Errorf("FramesRate = %v, want %v", got.FramesRate, rate)
+	}
+
+	unmeasured := toRenderSurfaceReport(pipeline.Snapshot{SurfaceID: "wall-1", State: pipeline.StateRunning})
+	if unmeasured.FramesRate != nil {
+		t.Errorf("FramesRate = %v for an unmeasured snapshot, want nil (never a fabricated zero)", unmeasured.FramesRate)
+	}
+}
+
 // TestRunRenderReportPublishesOnTick proves a tick produces a retained
 // publish on the node's observed/render topic reflecting the supervisor's
 // real state, following runAssetInventory's identical test shape.

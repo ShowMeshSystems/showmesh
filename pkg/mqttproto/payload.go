@@ -630,15 +630,28 @@ type RenderSurfaceReport struct {
 	FramesLate    int64 `json:"framesLate"`
 	FramesDropped int64 `json:"framesDropped"`
 
+	// FramesRate is the frame writer's own measured achieved output rate in
+	// frames/second (ADR-040's obligation), nil until it has completed at
+	// least one full sampling window — never a plausible-looking zero and
+	// never the surface's configured frameRate echoed back.
+	FramesRate *float64 `json:"framesRate"`
+
 	// Transport names the output transport this surface's pipeline is
 	// configured for (e.g. "ndi"); empty when not yet meaningful (seam B2a
 	// runs a test-pattern pipeline with no real output stage).
 	Transport string `json:"transport"`
 
-	// TransportAvailable is nil when the transport has not been probed
-	// (seam B2a never probes; B4 fills this in), true/false when it has —
-	// see ADR-011: nil is genuinely unknown, never defaulted to a boolean.
+	// TransportAvailable is nil when the transport has not been probed,
+	// true/false when it has (internal/agent/pipeline.ProbeNDISend) — see
+	// ADR-011: nil is genuinely unknown, never defaulted to a boolean.
 	TransportAvailable *bool `json:"transportAvailable"`
+
+	// TransportReason is required whenever TransportAvailable is non-nil
+	// and false — an actionable pointer (e.g. missing NDI runtime install
+	// instructions), never a bare "unavailable." Left empty when
+	// TransportAvailable is true or nil, matching Reason's identical rule
+	// for PipelineState one field up.
+	TransportReason string `json:"transportReason"`
 
 	// ObservedAt is when the supervisor actually sampled this report, on
 	// the node's own clock — the evidence timestamp ADR-003 requires,
@@ -669,8 +682,9 @@ type RenderPayload struct {
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
-// non-empty, Reason required whenever PipelineState is not "running", and
-// LastStderr bounded to [maxRenderStderrBytes] — all four exist so this
+// non-empty, Reason required whenever PipelineState is not "running",
+// TransportReason required whenever TransportAvailable is false, and
+// LastStderr bounded to [maxRenderStderrBytes] — all five exist so this
 // payload can never exceed [maxEnvelopeSize] regardless of what a caller
 // tries to put in it.
 func (p RenderPayload) Validate() error {
@@ -696,6 +710,10 @@ func (p RenderPayload) Validate() error {
 		if s.PipelineState != RenderPipelineStateRunning && s.Reason == "" {
 			return fmt.Errorf("%w: surfaces[%d].reason (required whenever pipelineState is not %q)",
 				ErrPayloadMissingField, i, RenderPipelineStateRunning)
+		}
+		if s.TransportAvailable != nil && !*s.TransportAvailable && s.TransportReason == "" {
+			return fmt.Errorf("%w: surfaces[%d].transportReason (required whenever transportAvailable is false)",
+				ErrPayloadMissingField, i)
 		}
 		if len(s.LastStderr) > maxRenderStderrBytes {
 			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",

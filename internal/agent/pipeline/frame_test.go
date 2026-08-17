@@ -274,6 +274,37 @@ func TestFrameIndexForClampsToFrameCount(t *testing.T) {
 	}
 }
 
+// TestSampleRateNilUntilWindowCompletes proves ADR-040's obligation at the
+// unit level: the first call only anchors the window (no measurement yet —
+// a nil rate must never render as a plausible-looking zero), and a rate
+// appears only once frameRateWindow of wall-clock time has actually
+// elapsed since the anchor, computed from real elapsed time and frames
+// written in it, never from stepTime or any other configured value.
+func TestSampleRateNilUntilWindowCompletes(t *testing.T) {
+	fw := &FrameWriter{stepTime: 25 * time.Millisecond}
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+
+	fw.sampleRate(base, 1) // anchors the window; written=1 at the anchor
+	if fw.currentRate != nil {
+		t.Fatalf("currentRate after the anchoring call = %v, want nil", fw.currentRate)
+	}
+
+	fw.sampleRate(base.Add(2*time.Second), 81) // 2s elapsed, short of the window
+	if fw.currentRate != nil {
+		t.Fatalf("currentRate before the window completes = %v, want nil", fw.currentRate)
+	}
+
+	fw.sampleRate(base.Add(6*time.Second), 241) // 6s elapsed since the anchor: window closes
+	if fw.currentRate == nil {
+		t.Fatalf("currentRate after the window completes = nil, want a measurement")
+	}
+	got := *fw.currentRate
+	want := float64(241-1) / (6 * time.Second).Seconds() // frames since the anchor / elapsed since the anchor
+	if got < want-0.01 || got > want+0.01 {
+		t.Fatalf("currentRate = %v, want ~%v (achieved, not the configured stepTime rate)", got, want)
+	}
+}
+
 // waitFor polls cond every 2ms for up to 2s, failing the test if it never
 // becomes true — the frame writer runs on its own goroutine and ticks at
 // real wall-clock intervals, so tests observe it by polling rather than by

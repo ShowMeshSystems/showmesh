@@ -70,6 +70,19 @@ type Spec struct {
 	// Stages is the ordered, "!"-chained pipeline. See the Stage and
 	// [DefaultTestPatternSpec] doc comments.
 	Stages []Stage
+
+	// OutputDegradedReason is "" when Stages' sink is a real, transport-
+	// backed output; non-empty when the caller (internal/agent/renderspec.go's
+	// applyOutputSink) fell back to a diagnostic fakesink because the
+	// requested output.transport has no real sink in this build, or was
+	// misconfigured (e.g. an ndi output with no sourceName). The runner
+	// carries this into every "running" state report for as long as this
+	// spec stays applied, INCLUDING across a restart — see
+	// setRunningIfCurrent. ADR-029: an action whose effect cannot be
+	// observed reports as unconfirmable with a reason, never as plain
+	// success, so a pipeline that genuinely reaches PLAYING with nothing
+	// downstream able to see its output must still say so.
+	OutputDegradedReason string
 }
 
 // CapsFilterStage builds a single-element "queue"-shaped Stage wrapping a

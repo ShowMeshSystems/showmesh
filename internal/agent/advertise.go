@@ -42,12 +42,27 @@ func platformString() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
-// publishHello publishes cfg's identity and (per Config.Capabilities' doc
-// comment, ordinarily empty) capability set to the retained hello topic.
-func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time) error {
+// publishHello publishes cfg's identity and this node's capability set to
+// the retained hello topic, and returns how many capabilities were
+// actually published (for publishAdvertisement's own log line — cfg.
+// Capabilities alone would undercount whatever [capabilityDetector] found,
+// since detection happens inside this function, not before it). The
+// capability set is cfg.Capabilities verbatim when SHOWMESH_NODE_CAPABILITIES
+// set it (an explicit operator override always wins outright), otherwise a
+// fresh call to [detectCapabilities] — real detection, run again on every
+// connect (including every reconnect), not cached from boot, so a
+// capability that becomes available later (e.g. the NDI runtime gets
+// installed) is advertised on this node's next reconnect with no restart
+// required.
+func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time) (int, error) {
 	topic, err := mqttproto.HelloTopic(cfg.NodeID)
 	if err != nil {
-		return fmt.Errorf("building hello topic: %w", err)
+		return 0, fmt.Errorf("building hello topic: %w", err)
+	}
+
+	caps := cfg.Capabilities
+	if len(caps) == 0 {
+		caps = capabilityDetector(ctx)
 	}
 
 	env, err := mqttproto.NewHelloEnvelope(time.Now, cfg.NodeID, mqttproto.HelloPayload{
@@ -56,18 +71,21 @@ func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID 
 		AgentVersion: version.Version,
 		BootID:       bootID,
 		StartedAt:    startedAt,
-		Capabilities: cfg.Capabilities,
+		Capabilities: caps,
 	})
 	if err != nil {
-		return fmt.Errorf("building hello envelope: %w", err)
+		return 0, fmt.Errorf("building hello envelope: %w", err)
 	}
 
 	payload, err := json.Marshal(env)
 	if err != nil {
-		return fmt.Errorf("marshaling hello envelope: %w", err)
+		return 0, fmt.Errorf("marshaling hello envelope: %w", err)
 	}
 
-	return pub.Publish(ctx, topic, mqttproto.HelloDeliveryPolicy.QoS, mqttproto.HelloDeliveryPolicy.Retain, payload)
+	if err := pub.Publish(ctx, topic, mqttproto.HelloDeliveryPolicy.QoS, mqttproto.HelloDeliveryPolicy.Retain, payload); err != nil {
+		return 0, err
+	}
+	return len(caps), nil
 }
 
 // publishLWT publishes an online/reason LWT payload to nodeID's LWT topic,
@@ -119,10 +137,10 @@ func publishAdvertisement(ctx context.Context, pub Publisher, cfg config.Config,
 	pubCtx, cancel := context.WithTimeout(ctx, advertiseTimeout)
 	defer cancel()
 
-	if err := publishHello(pubCtx, pub, cfg, bootID, startedAt); err != nil {
+	if n, err := publishHello(pubCtx, pub, cfg, bootID, startedAt); err != nil {
 		logPublishFailure(logger, "hello", cfg.NodeID, err)
 	} else {
-		logger.Info("published hello", "node_id", cfg.NodeID, "capability_count", len(cfg.Capabilities))
+		logger.Info("published hello", "node_id", cfg.NodeID, "capability_count", n)
 	}
 
 	if err := publishOnline(pubCtx, pub, cfg.NodeID); err != nil {

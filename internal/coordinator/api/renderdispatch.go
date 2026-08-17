@@ -226,6 +226,16 @@ func (h *handlers) handleRenderPipelineRestart(w http.ResponseWriter, r *http.Re
 	h.dispatchRenderCommand(w, r, "render.pipeline.restart", "running")
 }
 
+// handleRenderTransportProbe dispatches render.transport.probe — a COMMAND
+// (it starts a real gst-launch-1.0 subprocess on the node to attempt a
+// state transition; ADR-026 decision 6's "element presence is not runtime
+// presence" rule is what this whole operation exists to answer for real),
+// never reachable by GET. desiredState is passed as "" because this
+// operation has no desired STATE to match — see confirmRenderTransportProbe.
+func (h *handlers) handleRenderTransportProbe(w http.ResponseWriter, r *http.Request) {
+	h.dispatchRenderCommand(w, r, "render.transport.probe", "")
+}
+
 // resolveRenderApplyParams builds render.surface.apply's complete,
 // self-contained params object (build contract ruling 4) or refuses
 // outright, naming exactly what could not be resolved. It never returns a
@@ -418,7 +428,16 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	})
 	h.writeRenderAudit(ctx, now, identity.AuditDispatch, in, inserted, "")
 
-	confirmed, outcomeState, outcomeReason := h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
+	var confirmed bool
+	var outcomeState, outcomeReason string
+	if in.Action == "render.transport.probe" {
+		// No desired STATE to match (unlike apply/clear/restart): a probe
+		// that correctly reports the runtime absent is just as confirmed
+		// as one that reports it present — see confirmRenderTransportProbe.
+		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(ctx, in.NodeID, in.SurfaceID, dispatchedAt)
+	} else {
+		confirmed, outcomeState, outcomeReason = h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
+	}
 	resolvedAt := h.now()
 	outcome := "unconfirmed"
 	if confirmed {
@@ -609,6 +628,96 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 		return true, string(state), fmt.Sprintf("surface.pipeline.state = %q (via %s)", v, src)
 	}
 	return false, string(state), fmt.Sprintf("surface.pipeline.state = %v, wanted %q (via %s)", o.Value, wantState, src)
+}
+
+// renderSignalTransportAvailable is the signal
+// internal/coordinator/collector/noderender renders from
+// [mqttproto.RenderSurfaceReport.TransportAvailable].
+const renderSignalTransportAvailable = "surface.transport.available"
+
+// confirmRenderTransportProbe polls surface.transport.available for
+// evidence dated at or after dispatchedAt, the same poll shape
+// confirmRenderCommand uses for surface.pipeline.state. nodeID is the node
+// THIS probe was dispatched to — see evaluateRenderTransportProbe for why
+// that matters, the same reason evaluateRenderSurfaceState takes it.
+func (h *handlers) confirmRenderTransportProbe(ctx context.Context, nodeID, surfaceID string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+	if h.deps.Observations == nil {
+		return false, string(observation.StateNotCollected), "no observation source is configured"
+	}
+	absDeadline := time.Now().Add(renderCommandConfirmDeadline)
+	ticker := time.NewTicker(renderCommandPollInterval)
+	defer ticker.Stop()
+
+	for {
+		confirmed, outcomeState, outcomeReason = h.evaluateRenderTransportProbe(ctx, nodeID, surfaceID, dispatchedAt)
+		if confirmed {
+			return true, outcomeState, outcomeReason
+		}
+		if !time.Now().Before(absDeadline) {
+			return false, outcomeState, outcomeReason
+		}
+		select {
+		case <-ctx.Done():
+			return false, string(observation.StateUnknownAge), "confirmation aborted before the deadline: " + ctx.Err().Error()
+		case <-ticker.C:
+		}
+	}
+}
+
+// evaluateRenderTransportProbe reports confirmed=true once a fresh
+// surface.transport.available reading (dated at or after notBefore) exists
+// for surfaceID, from the node this probe was dispatched to — deliberately
+// regardless of its VALUE. Unlike evaluateRenderSurfaceState, which confirms
+// only a specific desired pipeline state, a probe has no desired transport
+// value: an operator asking "can this node send NDI now?" is equally well
+// answered by true and by false. Refusing to confirm a correctly-reported
+// false would make "the runtime genuinely is not installed" indistinguishable
+// from "the probe never ran," which is exactly the false-claim direction
+// ADR-026 decision 6 forbids. Filtered to renderNodeSourceFor(nodeID) rather
+// than resolved across every node that has ever reported surfaceID, for the
+// identical reason evaluateRenderSurfaceState is: a stale reading from a
+// DIFFERENT node must never confirm or unconfirm a probe this dispatch never
+// touched.
+func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, surfaceID string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+	kind := observation.ResourceSurface
+	sig := observation.SignalID(renderSignalTransportAvailable)
+	wantSource := renderNodeSourceFor(nodeID)
+	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return false, string(observation.StateCollectionFailed), "reading surface.transport.available for confirmation: " + err.Error()
+	}
+	var o observation.Observation
+	var found bool
+	for _, cand := range obs {
+		if cand.Resource.Kind == kind && cand.Resource.ID == surfaceID && cand.Signal == sig && cand.Source == wantSource {
+			o = cand
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.transport.available observation is recorded for this surface from node %s yet", nodeID)
+	}
+	src := o.Source
+	if src == "" {
+		src = "unknown source"
+	}
+	if o.CollectedAt.Before(notBefore) {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.transport.available reading has arrived since this probe was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
+			notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
+	}
+	state := o.StateAt(h.now())
+	if state != observation.StateCurrent {
+		reason := o.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("surface.transport.available evidence state is %s", state)
+		}
+		return false, string(state), fmt.Sprintf("%s (via %s)", reason, src)
+	}
+	v, _ := o.Value.(bool)
+	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
 }
 
 // renderCommandResultFromRecord renders a replayed command's already-

@@ -37,17 +37,34 @@ func decodeLWT(t *testing.T, payload []byte) (mqttproto.Envelope, mqttproto.LWTP
 	return env, lwt
 }
 
+// withStubCapabilityDetector replaces capabilityDetector for the duration
+// of one test, restoring the real (gst-launch-shelling) detector via
+// t.Cleanup. Every test in this file that leaves Config.Capabilities empty
+// uses this, so the suite stays hermetic and does not depend on what is or
+// is not installed on the machine running it — real detection is proven
+// separately, and for real, by capabilities_test.go.
+func withStubCapabilityDetector(t *testing.T, set capability.Set) {
+	t.Helper()
+	prev := capabilityDetector
+	capabilityDetector = func(context.Context) capability.Set { return set }
+	t.Cleanup(func() { capabilityDetector = prev })
+}
+
 func TestPublishHelloTopicRetainQoSAndPayload(t *testing.T) {
+	withStubCapabilityDetector(t, capability.Set{})
+
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{
 		NodeID:    "media-03",
 		NodeLabel: "Media Node 03",
 		// Capabilities intentionally left empty: this is the production
-		// default (see Config.Capabilities' doc comment).
+		// default (see Config.Capabilities' doc comment). With the
+		// detector stubbed to find nothing, publishHello must advertise
+		// nothing either.
 	}
 	startedAt := time.Date(2026, 8, 10, 11, 0, 0, 0, time.UTC)
 
-	if err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
@@ -87,19 +104,46 @@ func TestPublishHelloTopicRetainQoSAndPayload(t *testing.T) {
 }
 
 func TestPublishHelloAdvertisesConfiguredCapabilities(t *testing.T) {
+	// No stub needed: a non-empty Config.Capabilities (the
+	// SHOWMESH_NODE_CAPABILITIES override) must win outright and skip
+	// detection entirely — if this test ever shelled out to a real
+	// gst-launch-1.0, that would itself be evidence of the override not
+	// actually short-circuiting detection.
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{
 		NodeID:       "media-03",
 		Capabilities: capability.Set{{ID: "matrix.render", Version: 1}},
 	}
 
-	if err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
 	_, hello := decodeHello(t, pub.snapshot()[0].payload)
 	if len(hello.Capabilities) != 1 || hello.Capabilities[0].ID != "matrix.render" {
 		t.Errorf("Capabilities = %v, want the one configured capability to be advertised (this env var exists precisely to allow that override)", hello.Capabilities)
+	}
+}
+
+// TestPublishHelloDetectsCapabilitiesWhenNoOverrideConfigured proves the
+// other half of publishHello's precedence: an empty Config.Capabilities
+// falls through to capabilityDetector, and whatever it finds is what gets
+// advertised — the detector is stubbed here so this test is about
+// publishHello's wiring, not about what this machine actually has
+// installed.
+func TestPublishHelloDetectsCapabilitiesWhenNoOverrideConfigured(t *testing.T) {
+	withStubCapabilityDetector(t, capability.Set{{ID: "transport.ndi.send", Version: 1}})
+
+	pub := newFakePublisher()
+	cfg := agentconfig.Config{NodeID: "media-03"}
+
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
+		t.Fatalf("publishHello() error = %v", err)
+	}
+
+	_, hello := decodeHello(t, pub.snapshot()[0].payload)
+	if len(hello.Capabilities) != 1 || hello.Capabilities[0].ID != "transport.ndi.send" {
+		t.Errorf("Capabilities = %v, want the one detected capability", hello.Capabilities)
 	}
 }
 
@@ -165,6 +209,8 @@ func TestPublishOfflineTopicRetainQoSAndPayload(t *testing.T) {
 }
 
 func TestPublishAdvertisementPublishesHelloThenOnline(t *testing.T) {
+	withStubCapabilityDetector(t, capability.Set{})
+
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
@@ -194,6 +240,8 @@ func TestPublishAdvertisementPublishesHelloThenOnline(t *testing.T) {
 // publishAdvertisement's existing "both publishes are individually
 // best-effort" contract — must not stop the online publish that follows it.
 func TestPublishAdvertisementACLRejectionLogsDistinctlyAndStillAttemptsOnline(t *testing.T) {
+	withStubCapabilityDetector(t, capability.Set{})
+
 	pub := newFakePublisher()
 	pub.rejectOn = map[int]bool{0: true} // the hello publish (call 0) is ACL-rejected
 	logger, logs := capturingLogger()

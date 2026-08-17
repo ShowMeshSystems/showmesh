@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -315,5 +317,248 @@ func TestRenderOperationsRoundTripJSONParams(t *testing.T) {
 	}
 	if reparsed["frameRate"] != float64(40) {
 		t.Fatalf("persisted frameRate = %v, want 40", reparsed["frameRate"])
+	}
+}
+
+// TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning is this
+// seam's own regression test for the defect review found: a surface
+// configured for a transport this build cannot actually attach a real sink
+// for (hdmi — B4 implements ndi only) falls back to a diagnostic fakesink,
+// which genuinely reaches PLAYING, but that must NEVER read as a plain,
+// silent success (ADR-029). Both channels the review named must carry the
+// gap: pipeline.state's own Reason (non-empty even though state is
+// "running"), and surface.transport.available (false, with a stated
+// reason) — proactively, from the apply itself, with no explicit
+// render.transport.probe required.
+func TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	params := map[string]any{
+		"surfaceId": "surface-1",
+		"output": map[string]any{
+			"transport": "hdmi",
+			"hdmi":      map[string]any{"display": "HDMI-1"},
+		},
+	}
+	result, err := renderOps.applySurface(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("applySurface: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("Confirmed = false, want true (the diagnostic pipeline genuinely reaches running); result = %+v", result)
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Value = %#v, want a map", result.Value)
+	}
+	if val["state"] != "running" {
+		t.Fatalf(`Value["state"] = %v, want "running" (the process really is in PLAYING)`, val["state"])
+	}
+	reason, _ := val["reason"].(string)
+	if reason == "" {
+		t.Fatalf(`Value["reason"] is empty for a "running" state whose sink is a diagnostic fallback — a silent success is exactly what ADR-029 forbids`)
+	}
+	if !strings.Contains(reason, "hdmi") {
+		t.Errorf("Value[\"reason\"] = %q, want it to name hdmi specifically", reason)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Reason == "" {
+		t.Errorf("snap.Reason is empty for a degraded-output surface reporting running, want a real reason")
+	}
+	if snap.Transport != "hdmi" {
+		t.Errorf("snap.Transport = %q, want hdmi", snap.Transport)
+	}
+	if snap.TransportAvailable == nil || *snap.TransportAvailable {
+		t.Fatalf("snap.TransportAvailable = %v, want a non-nil false — this is known false from the pipeline's own construction, no probe needed", snap.TransportAvailable)
+	}
+	if snap.TransportReason == "" {
+		t.Errorf("snap.TransportReason is empty, want a real reason")
+	}
+}
+
+// TestApplySurfaceWithRealNDISinkNeverTouchesTransportAvailable proves the
+// OTHER half: a surface whose spec genuinely got a real ndi sink must NOT
+// have this apply-time mechanism claim transport.available is true (or
+// touch it at all) — only a real [pipeline.ProbeNDISend] result (or the
+// pipeline's own future evidence) is entitled to say NDI actually works;
+// building a real sink is necessary but not sufficient evidence (ADR-026
+// decision 6 — element/spec presence is not runtime presence).
+func TestApplySurfaceWithRealNDISinkNeverTouchesTransportAvailable(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	params := map[string]any{
+		"surfaceId": "surface-1",
+		"output": map[string]any{
+			"transport": "ndi",
+			"ndi":       map[string]any{"sourceName": "garage-window"},
+		},
+	}
+	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {
+		t.Fatalf("applySurface: %v", err)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Reason != "" {
+		t.Errorf("snap.Reason = %q for a real ndi sink, want empty", snap.Reason)
+	}
+	if snap.TransportAvailable != nil {
+		t.Errorf("snap.TransportAvailable = %v for a real ndi sink with no probe run, want nil (unprobed, never assumed true)", snap.TransportAvailable)
+	}
+}
+
+// fakeProbeProcess is a [pipeline.ProcessHandle] that returns exactly one
+// pre-loaded [pipeline.ExitResult] from Wait, for probeTransport's own
+// tests — a different, simpler shape than fakeRenderStarter (above),
+// which fires onRunningMarker for a long-lived supervised pipeline;
+// [pipeline.ProbeNDISend] reads SawRunningMarker off ExitResult directly
+// and never registers an onRunningMarker callback at all (see
+// probe.go's runProbe), so this fake needs no callback handling.
+type fakeProbeProcess struct{ exitCh chan pipeline.ExitResult }
+
+func (p *fakeProbeProcess) Wait() pipeline.ExitResult { return <-p.exitCh }
+func (p *fakeProbeProcess) Kill() error               { return nil }
+func (p *fakeProbeProcess) Pid() int                  { return 1 }
+func (p *fakeProbeProcess) Stdin() (io.Writer, error) { return nil, pipeline.ErrNoStdin }
+
+// fakeProbeStarter returns a [pipeline.ProcessStarter] whose every process
+// immediately reports result from Wait.
+func fakeProbeStarter(result pipeline.ExitResult) pipeline.ProcessStarter {
+	return func(_ context.Context, _ string, _ []string, _ func()) (pipeline.ProcessHandle, error) {
+		p := &fakeProbeProcess{exitCh: make(chan pipeline.ExitResult, 1)}
+		p.exitCh <- result
+		return p, nil
+	}
+}
+
+// TestProbeTransportAvailableRecordsOnSupervisorSnapshot proves
+// probeTransport's wiring end to end: a real state-transition-confirmed
+// probe (the fake starter stands in for the real gst-launch-1.0 subprocess;
+// pipeline/probe_test.go covers the probe mechanism itself) records
+// Transport/TransportAvailable on the named surface's snapshot, which is
+// exactly what renderreport.go reads to build the next render report — and
+// reports Confirmed: true with the matching Value.
+func TestProbeTransportAvailableRecordsOnSupervisorSnapshot(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true") // ResolveGstLaunch must succeed; the fake starter stands in for the rest.
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
+	if err != nil {
+		t.Fatalf("probeTransport: %v", err)
+	}
+	if !result.Confirmed {
+		t.Errorf("Confirmed = false, want true")
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok || val["available"] != true {
+		t.Errorf("Value = %#v, want available=true", result.Value)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Transport != "ndi" {
+		t.Errorf("snap.Transport = %q, want ndi", snap.Transport)
+	}
+	if snap.TransportAvailable == nil || !*snap.TransportAvailable {
+		t.Errorf("snap.TransportAvailable = %v, want true", snap.TransportAvailable)
+	}
+}
+
+// TestProbeTransportUnavailableRecordsReason proves the false path carries
+// a real, non-empty reason both in the OperationResult and on the
+// supervisor's snapshot (mqttproto.RenderPayload.Validate requires
+// TransportReason whenever TransportAvailable is false — this is what
+// prevents renderreport.go from ever publishing a payload that fails its
+// own wire-boundary validation).
+func TestProbeTransportUnavailableRecordsReason(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true")
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{
+		SawRunningMarker: false,
+		StderrTail:       "ERROR: from element ...: Failed loading NDI SDK\n",
+	})
+
+	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
+	if err != nil {
+		t.Fatalf("probeTransport: %v", err)
+	}
+	if result.Confirmed {
+		t.Errorf("Confirmed = true, want false")
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok || val["available"] != false {
+		t.Errorf("Value = %#v, want available=false", result.Value)
+	}
+	if reason, _ := val["reason"].(string); reason == "" {
+		t.Errorf("Value[\"reason\"] is empty, want a real reason")
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.TransportAvailable == nil || *snap.TransportAvailable {
+		t.Errorf("snap.TransportAvailable = %v, want false", snap.TransportAvailable)
+	}
+	if snap.TransportReason == "" {
+		t.Errorf("snap.TransportReason is empty, want a real reason")
+	}
+}
+
+// TestHandleMessageRenderTransportProbeFiresRenderTrigger proves
+// render.transport.probe joins the other three render.* operations in
+// isRenderAction, so a probe dispatched through the real command path
+// republishes the render report immediately rather than waiting out the
+// next tick.
+func TestHandleMessageRenderTransportProbeFiresRenderTrigger(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true")
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	renderTrigger := make(chan struct{}, 1)
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, renderTrigger, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := renderCmd("render.transport.probe", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	select {
+	case <-renderTrigger:
+	default:
+		t.Fatalf("renderTrigger did not fire for render.transport.probe")
 	}
 }

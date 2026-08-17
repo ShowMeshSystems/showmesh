@@ -224,6 +224,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch render.transport.probe to a node (Track B seam B4)
+         * @description Behind `render:command`. A COMMAND, not a read: it starts a real gst-launch-1.0 subprocess on the node that attempts a genuine NULL->PLAYING state transition against the configured output transport (ADR-026 decision 6: element presence is not runtime presence, so this is the only thing that may answer "is NDI usable right now"). Confirms once a `surface.transport.available` reading dated at or after dispatch exists — regardless of its value: a probe correctly reporting the transport unavailable is confirmed exactly like one reporting it available, because there is no desired transport value here the way `apply`/`restart` have a desired pipeline state. `showmeshctl render transport` remains the separate read of last-known evidence; this is the "go find out now" counterpart, never reachable by `GET` (ADR-024).
+         */
+        post: operations["dispatchRenderTransportProbe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -1457,7 +1477,7 @@ export interface components {
             commandId: string;
             idempotencyKey: string;
             /** @enum {string} */
-            action: "render.surface.apply" | "render.surface.clear" | "render.pipeline.restart";
+            action: "render.surface.apply" | "render.surface.clear" | "render.pipeline.restart" | "render.transport.probe";
             nodeId: string;
             surfaceId: string;
             /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result. */
@@ -3099,6 +3119,40 @@ export interface operations {
         };
     };
     dispatchRenderPipelineRestart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                surfaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RenderSurfaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchRenderTransportProbe: {
         parameters: {
             query?: never;
             header?: never;

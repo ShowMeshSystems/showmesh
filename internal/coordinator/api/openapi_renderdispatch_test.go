@@ -102,6 +102,41 @@ func TestOpenAPIRenderClearUnconfirmedResponseMatchesRealResponse(t *testing.T) 
 	}
 }
 
+// TestOpenAPIRenderTransportProbeResponseMatchesRealResponse proves
+// dispatchRenderTransportProbe's response (Track B seam B4) matches the
+// same RenderCommandResponse schema its sibling endpoints use — it
+// reuses that schema rather than defining a new one, so this is the
+// conformance coverage for a real, confirmed transport-probe outcome.
+func TestOpenAPIRenderTransportProbeResponseMatchesRealResponse(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	c := newOpenAPICompiler(t)
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{
+			surfaceTransportAvailableObs("media-01", "wall-1", false, testNow.Add(time.Second), testNow.Add(time.Second)),
+		})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/transport-probe",
+		`{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, c, "RenderCommandResponse", body)
+}
+
 // TestOpenAPIRenderApplyRefusalMatchesProblemSchema proves the asset-
 // unresolved refusal is a real Problem response, not just a raw string.
 func TestOpenAPIRenderApplyRefusalMatchesProblemSchema(t *testing.T) {

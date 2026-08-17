@@ -87,6 +87,18 @@ type FrameWriter struct {
 	// writeOneFrame is incrementing them on the frame loop's.
 	written, late, dropped atomic.Int64
 
+	// rateWindowStart and rateWindowWritten anchor the achieved-rate
+	// measurement (see writeOneFrame's rate-sampling block): the wall-clock
+	// time and written-count at the start of the current sampling window.
+	// currentRate is the most recently completed window's frames/second,
+	// nil until one full window has elapsed. All three are touched only
+	// from writeOneFrame, which runs exclusively on Run's own goroutine —
+	// reportCounts, called at the end of the same tick, reads currentRate
+	// on that same goroutine, so nothing here needs a lock or an atomic.
+	rateWindowStart   time.Time
+	rateWindowWritten int64
+	currentRate       *float64
+
 	// loggedRangeErrOnce and loggedWriteErrOnce keep this loop from log-
 	// spamming at up to 40Hz when a condition (e.g. the process is down, or
 	// the assigned range is not covered by this frame) is persistent —
@@ -223,13 +235,48 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 		return
 	}
 	fw.loggedWriteErr = false
-	fw.written.Add(1)
+	written := fw.written.Add(1)
 
 	if elapsed := time.Since(start); elapsed > fw.stepTime {
 		fw.late.Add(1)
 	}
 
+	fw.sampleRate(start, written)
 	fw.reportCounts()
+}
+
+// frameRateWindow bounds how long writeOneFrame accumulates successful
+// writes before turning them into an achieved-frames/second measurement.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for the right
+// window length. Long enough that one slow frame does not dominate the
+// average (at the reference ~40fps this is dozens of samples), short
+// enough that a genuine sustained slowdown shows up on the dashboard within
+// a few seconds rather than minutes.
+const frameRateWindow = 5 * time.Second
+
+// sampleRate updates the achieved-rate measurement from a successful
+// write's own timestamp and cumulative written count. The first call after
+// construction (or after a window closes) only anchors the window; a rate
+// is reported starting from the window after that, computed strictly from
+// wall-clock elapsed time and frames actually written in it — never from
+// fw.stepTime or any other configured/target value, which is what keeps
+// this an achieved measurement rather than the target echoed back.
+func (fw *FrameWriter) sampleRate(now time.Time, written int64) {
+	if fw.rateWindowStart.IsZero() {
+		fw.rateWindowStart = now
+		fw.rateWindowWritten = written
+		return
+	}
+	elapsed := now.Sub(fw.rateWindowStart)
+	if elapsed < frameRateWindow {
+		return
+	}
+	frames := written - fw.rateWindowWritten
+	rate := float64(frames) / elapsed.Seconds()
+	fw.currentRate = &rate
+	fw.rateWindowStart = now
+	fw.rateWindowWritten = written
 }
 
 // frameIndexFor converts a timeline position (ms) to a frame index via
@@ -261,7 +308,7 @@ func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
 }
 
 func (fw *FrameWriter) reportCounts() {
-	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load())
+	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate)
 }
 
 // Compile-time check that *fseq.File satisfies FrameSource.

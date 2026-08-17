@@ -160,18 +160,39 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, rep),
 	}
 
-	// TransportAvailable is nil whenever B4's probe has not run yet (seam
-	// B2a never probes) — an unprobed transport is [observation.
-	// StateNotCollected], never rendered as available or unavailable. See
-	// [observation.MeasuredUnknownAge]'s ADR-011 rule applied one layer up:
-	// nil here means "no attempt", not "unknown value of a known attempt",
-	// so this is NotCollected regardless of rep.retained, unlike every
-	// other field above.
-	if sf.TransportAvailable == nil {
-		obs = append(obs, notCollected(res, SignalSurfaceTransportAvailable, SourceFor(nodeID),
-			"transport availability has not been probed for this surface (Track B seam B4 is not built yet)", rep.receivedAt))
+	// FramesRate is nil whenever the frame writer has not yet completed a
+	// full sampling window (see pipeline.FrameWriter.sampleRate's doc
+	// comment) — ADR-040's obligation is real achieved-rate evidence, so an
+	// unmeasured rate is NotCollected, never a fabricated zero and never
+	// the surface's configured frameRate echoed back.
+	if sf.FramesRate == nil {
+		obs = append(obs, notCollected(res, SignalSurfaceFramesRate, SourceFor(nodeID),
+			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep))
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, rep))
+	}
+
+	// TransportAvailable is nil whenever this surface's transport has never
+	// been probed — an ndi surface only gets a value once render.surface.
+	// apply's own pipeline start or a render.transport.probe command has
+	// actually run [pipeline.ProbeNDISend] against it (internal/agent/
+	// renderops.go), and an hdmi surface has no probe at all yet. An
+	// unprobed transport is [observation.StateNotCollected], never rendered
+	// as available or unavailable. See [observation.MeasuredUnknownAge]'s
+	// ADR-011 rule applied one layer up: nil here means "no attempt", not
+	// "unknown value of a known attempt", so this is NotCollected
+	// regardless of rep.retained, unlike every other field above.
+	if sf.TransportAvailable == nil {
+		reason := "transport availability has not been probed for this surface"
+		obs = append(obs,
+			notCollected(res, SignalSurfaceTransportAvailable, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceTransportReason, SourceFor(nodeID), reason, rep.receivedAt),
+		)
+	} else {
+		obs = append(obs,
+			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, rep),
+		)
 	}
 
 	return obs

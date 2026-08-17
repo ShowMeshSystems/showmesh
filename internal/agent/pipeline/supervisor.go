@@ -80,18 +80,26 @@ type Snapshot struct {
 	// counters, cumulative for the life of the current surface assignment
 	// (reset to 0 by a fresh Apply, never by a pipeline crash/restart — the
 	// frame writer goroutine outlives any one gst-launch-1.0 attempt and
-	// keeps counting through a restart). Zero in every seam before B3.
+	// keeps counting through a restart).
 	FramesWritten int64
 	FramesLate    int64
 	FramesDropped int64
 
-	// Transport and TransportAvailable are always "" / nil in this seam —
-	// B2a's pipeline has no real output stage, so there is nothing to
-	// report and nothing has been probed. See [mqttproto.
-	// RenderSurfaceReport.TransportAvailable]'s doc comment on why nil
-	// means genuinely unprobed, not "false."
+	// FramesRate is the frame writer's own measured achieved output rate in
+	// frames/second, over its most recently completed sampling window — see
+	// FrameWriter.sampleRate's doc comment for how the window is chosen. nil
+	// until at least one full window has elapsed (ADR-040's obligation:
+	// this is evidence, never a plausible-looking zero and never the
+	// configured target rate echoed back).
+	FramesRate *float64
+
+	// Transport, TransportAvailable and TransportReason are "" / nil / ""
+	// until [runner.setTransportProbe] records a real probe result — see
+	// [mqttproto.RenderSurfaceReport.TransportAvailable]'s doc comment on
+	// why nil means genuinely unprobed, not "false."
 	Transport          string
 	TransportAvailable *bool
+	TransportReason    string
 
 	ObservedAt time.Time
 }
@@ -107,6 +115,10 @@ func (s Snapshot) clone() Snapshot {
 	if s.TransportAvailable != nil {
 		v := *s.TransportAvailable
 		out.TransportAvailable = &v
+	}
+	if s.FramesRate != nil {
+		v := *s.FramesRate
+		out.FramesRate = &v
 	}
 	return out
 }
@@ -154,6 +166,14 @@ type runner struct {
 	// still need to observe the Stopped transition immediately after
 	// clearing to confirm the clear itself.
 	cleared bool
+
+	// degradedReason mirrors the currently-applied Spec's own
+	// OutputDegradedReason, set at cmdApply and read by
+	// setRunningIfCurrent — see that field's doc comment. Kept as its own
+	// field (not read off a stored Spec) so a restart, which re-attempts
+	// the SAME already-applied spec, does not need to keep the whole Spec
+	// value around just for this one field.
+	degradedReason string
 }
 
 // bumpProcGen advances the generation identifying which process attempt is
@@ -176,15 +196,30 @@ func (r *runner) bumpProcGen() int64 {
 // setRunningIfCurrent applies StateRunning only if gen still names the
 // live process's current generation, so a marker from an already-dead or
 // already-superseded attempt can never stamp state onto whatever is
-// current now.
+// current now. Reason carries r.degradedReason rather than always "": a
+// pipeline whose sink is a diagnostic fakesink because its requested
+// output.transport has no real sink in this build (or was misconfigured)
+// genuinely reaches PLAYING, but that must never read as a plain, silent
+// "running" — see Spec.OutputDegradedReason's doc comment.
 func (r *runner) setRunningIfCurrent(gen int64) {
 	r.mu.Lock()
 	current := r.procGen
+	reason := r.degradedReason
 	r.mu.Unlock()
 	if gen != current {
 		return
 	}
-	r.setState(StateRunning, "")
+	r.setState(StateRunning, reason)
+}
+
+// setDegradedReason records why the currently-applied spec's output is not
+// a real transport-backed sink, or "" when it is. Called at cmdApply from
+// the newly-applied Spec's own OutputDegradedReason, and cleared at
+// cmdClear — see [runner.setRunningIfCurrent].
+func (r *runner) setDegradedReason(reason string) {
+	r.mu.Lock()
+	r.degradedReason = reason
+	r.mu.Unlock()
 }
 
 // Logger is the minimal logging surface this package needs, so it does not
@@ -257,16 +292,19 @@ func (r *runner) setCounters(restartCount, consecutiveFailures int64, lastExitCo
 	r.mu.Unlock()
 }
 
-// setFrameCounts overwrites the reported frame counters, called by B3's
-// FrameWriter as it runs. Deliberately does not touch State/Reason/Since/
-// ObservedAt: frame counts are a separate evidence stream from pipeline
-// lifecycle state and must not perturb AwaitState's post-dispatch
-// confirmation check (see [Supervisor.AwaitState]).
-func (r *runner) setFrameCounts(written, late, dropped int64) {
+// setFrameCounts overwrites the reported frame counters and, once
+// measured, the achieved frame rate, called by B3's FrameWriter as it runs.
+// rate is nil until FrameWriter.sampleRate has completed its first window —
+// never defaulted or synthesized here. Deliberately does not touch
+// State/Reason/Since/ObservedAt: frame counts are a separate evidence
+// stream from pipeline lifecycle state and must not perturb AwaitState's
+// post-dispatch confirmation check (see [Supervisor.AwaitState]).
+func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64) {
 	r.mu.Lock()
 	r.snap.FramesWritten = written
 	r.snap.FramesLate = late
 	r.snap.FramesDropped = dropped
+	r.snap.FramesRate = rate
 	r.mu.Unlock()
 }
 
@@ -297,6 +335,20 @@ func (r *runner) Snapshot() Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.snap.clone()
+}
+
+// setTransportProbe stores a probe's outcome under lock, touching only
+// Transport/TransportAvailable/TransportReason/ObservedAt — see
+// [Supervisor.SetTransportProbe]'s doc comment for why updating the shared
+// ObservedAt here is safe.
+func (r *runner) setTransportProbe(transport string, available bool, reason string, observedAt time.Time) {
+	r.mu.Lock()
+	r.snap.Transport = transport
+	v := available
+	r.snap.TransportAvailable = &v
+	r.snap.TransportReason = reason
+	r.snap.ObservedAt = observedAt
+	r.mu.Unlock()
 }
 
 // Pid reports the OS pid of the currently-running process, or 0 when
@@ -425,13 +477,15 @@ func (r *runner) loop() {
 				// A fresh Apply is a new rendering session: frame counts
 				// from whatever surface (or spec) was previously applied to
 				// this ID describe a session that has ended, not this one.
-				r.setFrameCounts(0, 0, 0)
+				r.setFrameCounts(0, 0, 0, nil)
 				r.setCleared(false)
+				r.setDegradedReason(spec.OutputDegradedReason)
 				attemptStart()
 			case cmdClear:
 				stopCurrent()
 				haveSpec = false
-				r.setFrameCounts(0, 0, 0)
+				r.setFrameCounts(0, 0, 0, nil)
+				r.setDegradedReason("")
 				r.setState(StateStopped, "cleared by operator")
 				r.setCleared(true)
 			case cmdRestart:
@@ -670,18 +724,19 @@ func (s *Supervisor) Stdin(surfaceID string) (io.Writer, error) {
 	return r.stdin()
 }
 
-// SetFrameCounts overwrites surfaceID's reported frame counters. A no-op
+// SetFrameCounts overwrites surfaceID's reported frame counters and
+// achieved rate (nil rate until measured — see FrameWriter.sampleRate). A no-op
 // (never creates a runner) if surfaceID has never been applied — the frame
 // writer that would call this only exists after Apply has already created
 // one.
-func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int64) {
+func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int64, rate *float64) {
 	s.mu.Lock()
 	r, ok := s.runners[surfaceID]
 	s.mu.Unlock()
 	if !ok {
 		return
 	}
-	r.setFrameCounts(written, late, dropped)
+	r.setFrameCounts(written, late, dropped, rate)
 }
 
 // SnapshotAll reports every surface this Supervisor currently supervises,
@@ -709,6 +764,27 @@ func (s *Supervisor) SnapshotAll() []Snapshot {
 		out = append(out, r.Snapshot())
 	}
 	return out
+}
+
+// SetTransportProbe records surfaceID's most recent transport probe result
+// directly on its snapshot, independent of the runner's own apply/clear/
+// restart control loop — a probe (internal/agent/renderops.go's
+// "render.transport.probe") is diagnostic evidence about a transport, not a
+// pipeline lifecycle transition, and may legitimately run before any
+// surface has ever been applied. Creates the runner if surfaceID has none
+// yet, matching Apply/Clear/Restart's own runnerFor use.
+//
+// observedAt updates the snapshot's shared ObservedAt field. That is safe
+// against [Supervisor.AwaitState]: AwaitState only treats a snapshot as
+// confirming evidence when its State is one of the caller's wanted states
+// AND ObservedAt is fresh enough, so a probe bumping ObservedAt without a
+// concurrent Apply's state having actually changed can never manufacture a
+// false "confirmed" for a state that has not moved — see AwaitState's own
+// doc comment for the defect this project already shipped once by
+// comparing against stale evidence.
+func (s *Supervisor) SetTransportProbe(surfaceID, transport string, available bool, reason string, observedAt time.Time) {
+	r := s.runnerFor(surfaceID)
+	r.setTransportProbe(transport, available, reason, observedAt)
 }
 
 // AwaitState polls surfaceID's snapshot until it reports one of want with

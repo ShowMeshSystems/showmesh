@@ -66,6 +66,10 @@ func cmdRender(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdRenderClear(rest, stdout, stderr, clock)
 	case "restart":
 		return cmdRenderRestart(rest, stdout, stderr, clock)
+	case "probe":
+		return cmdRenderProbe(rest, stdout, stderr, clock)
+	case "transport":
+		return cmdRenderTransport(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl render: unknown subcommand %q\n\n", sub)
 		printRenderUsage(stderr)
@@ -81,11 +85,17 @@ the render.settings configuration kind (ADR-039): what a surface draws
 while the MultiSync timeline is stopped, opened, or unknown (idleOutput),
 and the pipeline supervisor's bounded restart backoff (restartPolicy).
 "status", "apply", "clear", and "restart" (seam B2b-front) drive the
-render pipeline itself over the node's three allowlisted operations
+render pipeline itself over the node's allowlisted render.* operations
 (internal/agent/renderops.go): render.surface.apply, render.surface.clear,
 render.pipeline.restart. Every dispatch requires the render:command scope
 and confirms by evidence (ADR-003) — a 200 is never conflated with the
-pipeline having actually reached the state asked for.
+pipeline having actually reached the state asked for. "probe" and
+"transport" are the command/read pair for output-transport evidence (seam
+B4): "probe" dispatches render.transport.probe — a real gst-launch-1.0
+state transition run right now, not an element-existence check — and
+"transport" reads the most recently probed evidence already on file
+without asking again. Both exit 22 when the transport is unavailable (or,
+for "transport", was never probed).
 
 Subcommands:
   settings get|set|revisions   render.settings configuration (see
@@ -104,6 +114,14 @@ Subcommands:
                                 sending a partial one
   clear <node-id> <surface-id>   dispatch render.surface.clear
   restart <node-id> <surface-id> dispatch render.pipeline.restart
+  probe <node-id> <surface-id> dispatch render.transport.probe: run a
+                                real state-transition attempt on the node
+                                right now and confirm on fresh evidence,
+                                regardless of the answer it finds
+  transport <surface-id>       show a surface's most recently probed
+                                transport availability and reason (open
+                                read; exits 22 when unavailable or never
+                                probed)
 
 Run "showmeshctl render <subcommand> --help" for flags specific to one
 subcommand.
@@ -264,6 +282,39 @@ func cmdRenderRestart(args []string, stdout, stderr io.Writer, clock func() time
 		return exitUsage
 	}
 	return dispatchRenderCommand(stdout, stderr, clock, g, "render restart", rest[0], rest[1], "restart", "")
+}
+
+// cmdRenderProbe dispatches render.transport.probe — the COMMAND that
+// actually runs a real gst-launch-1.0 state transition on the node, as
+// distinct from "render transport" (cmd_render_transport.go), which only
+// reads the last evidence this coordinator already holds. An operator who
+// just installed the NDI runtime on a node needs this: without it, the
+// only way to get a fresh answer is restarting the agent or re-applying a
+// surface.
+func cmdRenderProbe(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl render probe", stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl render probe [flags] <node-id> <surface-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDispatch render.transport.probe (requires render:command): run a real")
+		_, _ = fmt.Fprintln(stderr, "gst-launch-1.0 state-transition attempt on the node right now and confirm")
+		_, _ = fmt.Fprintln(stderr, "once fresh surface.transport.available evidence exists — a fresh")
+		_, _ = fmt.Fprintln(stderr, "'unavailable' answer confirms exactly like a fresh 'available' one; there is")
+		_, _ = fmt.Fprintln(stderr, "no desired value here, only a desired ANSWER. See 'render transport' to")
+		_, _ = fmt.Fprintln(stderr, "read the last answer already on file instead of asking again now.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "render probe", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return exitUsage
+	}
+	return dispatchRenderCommand(stdout, stderr, clock, g, "render probe", rest[0], rest[1], "transport-probe", "")
 }
 
 func cmdRenderSettings(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
