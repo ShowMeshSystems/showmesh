@@ -342,6 +342,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/principals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every principal (Track G seam G-5)
+         * @description Requires `principal:read`. Includes the built-in Resolume recovery principal (`reserved: true`) — visible wherever principals are listed, but not something anything can authenticate as.
+         */
+        get: operations["listPrincipals"];
+        put?: never;
+        /**
+         * Create a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Never guarded by the last-administrator lockout rule (requirement 3): creating a principal can only ever add a way to authenticate, never remove one. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["createPrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One principal (Track G seam G-5)
+         * @description Requires `principal:read`.
+         */
+        get: operations["getPrincipal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a principal's role (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["setPrincipalRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Never guarded by the last-administrator lockout rule: re-enabling only ever adds back a way to authenticate. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["enablePrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when this would disable the coordinator's last enabled administrator (requirement 3 / ADR-039 decision 8). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["disablePrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a principal's password (Track G seam G-5)
+         * @description Requires `principal:write`. Bumps the target principal's generation counter (identical to the `showmesh-coordinator reset-password` subcommand), invalidating every session and token this principal currently holds. Never guarded by the last-administrator lockout rule: the new password is itself a credential, not a removal of one. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["resetPrincipalPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List one principal's API tokens (Track G seam G-5)
+         * @description Requires `principal:read`. Never renders a digest or a raw token value (ADR-024 decision 1) — only IssueTokenResponse.value ever does, exactly once, at creation.
+         */
+        get: operations["listPrincipalTokens"];
+        put?: never;
+        /**
+         * Issue an API token for a principal (Track G seam G-5)
+         * @description Requires `principal:write`. The response's `value` field is this token's only appearance anywhere on the wire, ever again (ADR-024 decision 1). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["issuePrincipalToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an API token (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when this is the last credential able to reach `principal:write` (requirement 3 / ADR-039 decision 8: a password on another enabled administrator, or another active token, must remain). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/fpp.endpoints": {
         parameters: {
             query?: never;
@@ -1476,6 +1644,82 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             entries: components["schemas"]["AuditEntry"][];
+        };
+        /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret — reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
+        PrincipalObject: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "human" | "machine";
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            disabled: boolean;
+            hasPassword: boolean;
+            reserved: boolean;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The body of GET /principals. */
+        PrincipalsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            principals: components["schemas"]["PrincipalObject"][];
+        };
+        /** @description The body of GET /principals/{id}, POST /principals, PUT /principals/{id}/role, POST /principals/{id}/enable, POST /principals/{id}/disable, and POST /principals/{id}/password. */
+        PrincipalResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            principal: components["schemas"]["PrincipalObject"];
+        };
+        /** @description The body of POST /principals. password may be absent, null, or an empty string — all three mean "no password, token-only" (a machine principal that will only ever use an issued token), matching this coordinator's own create-principal subcommand. */
+        CreatePrincipalRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: "human" | "machine";
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            password?: string;
+        };
+        /** @description The body of PUT /principals/{id}/role. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (Track G seam G-5 requirement 3). */
+        SetPrincipalRoleRequest: {
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+        };
+        /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty — a reset that silently clears a password would leave a human principal with no way to sign in at all. */
+        SetPrincipalPasswordRequest: {
+            password: string;
+        };
+        /** @description One API token's non-secret metadata — never a digest or the raw token value, which is rendered exactly once, by IssueTokenResponse.value, and never again by this or any other schema (ADR-024 decision 1). */
+        TokenObject: {
+            id: string;
+            principalId: string;
+            hint: string;
+            label: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string | null;
+            /** Format: date-time */
+            lastUsedAt: string | null;
+        };
+        /** @description The body of GET /principals/{id}/tokens. */
+        TokensResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            tokens: components["schemas"]["TokenObject"][];
+        };
+        /** @description The body of POST /principals/{id}/tokens. expiresAt absent or null both mean "never expires" (ADR-024 decision 1's default) — the same meaning either way, so there is no absent-vs-null ambiguity for this field to resolve, unlike ConfigFPPEndpointsPayload.endpoints. */
+        IssueTokenRequest: {
+            label?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        /** @description The body of POST /principals/{id}/tokens. value carries the token's plaintext exactly once (ADR-024 decision 1) — no other response in this contract ever renders it again, including a later GET /principals/{id}/tokens. */
+        IssueTokenResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            token: components["schemas"]["TokenObject"];
+            value: string;
         };
         /** @description One FPP instance's (id, url) pair (RES-008 D1) — the same shape `SHOWMESH_FPP_ENDPOINTS` carries. */
         ConfigFPPEndpoint: {
@@ -3160,6 +3404,392 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPrincipals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createPrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePrincipalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly created principal. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setPrincipalRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPrincipalRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The principal with its new role. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: this would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enablePrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disablePrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: disabling this principal would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resetPrincipalPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPrincipalPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPrincipalTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokensResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    issuePrincipalToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IssueTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The token's metadata, plus its plaintext value. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueTokenResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                tokenId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token was revoked. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: revoking this token would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

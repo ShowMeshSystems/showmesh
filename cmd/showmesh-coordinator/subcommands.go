@@ -52,6 +52,22 @@ func dataDirFromEnv() string {
 	return config.DefaultDataDir
 }
 
+// setBreakGlassUsage overrides fs's default -h/--help output with note
+// prepended to the usual "Usage of <name>:" plus flag defaults. Track G
+// seam G-5 gave six of these seven subcommands a normal-path counterpart
+// (`showmeshctl principal`/`token`, the Operator UI's Access page) — see
+// that seam's own doc comment in internal/coordinator/api/principals.go.
+// This file's subcommands stay as ADR-024 decision 9's break-glass path:
+// filesystem access to the data volume, reachable with no network
+// credential, for a coordinator with no reachable administrator at all.
+func setBreakGlassUsage(fs *flag.FlagSet, note string) {
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(fs.Output(), note)
+		_, _ = fmt.Fprintf(fs.Output(), "\nUsage of %s:\n", fs.Name())
+		fs.PrintDefaults()
+	}
+}
+
 // cliLogger is deliberately quiet (warnings and above only) and writes to
 // stderr, not stdout: every subcommand's own stdout output is meant to be
 // read (and potentially scripted against) directly, and every one of
@@ -331,6 +347,7 @@ func runIssueTokenSubcommand(args []string) int {
 
 func runIssueTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("issue-token", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: issues a token with no network credential, for a coordinator with no reachable\nadministrator. For ordinary use, run \"showmeshctl token issue\" instead.")
 	principalRef := fs.String("principal", "", "principal id or exact display name to mint a token for (required)")
 	label := fs.String("label", "", "label to help tell this token apart from others in list-tokens")
 	expires := fs.String("expires", "", "optional expiry: an RFC3339 timestamp or a Go duration from now (e.g. 4380h); default: never (ADR-024 decision 1)")
@@ -403,6 +420,7 @@ func runListTokensSubcommand(args []string) int {
 
 func runListTokensSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("list-tokens", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: lists tokens with no network credential, for a coordinator with no reachable\nadministrator. For ordinary use, run \"showmeshctl token list\" instead.")
 	principalRef := fs.String("principal", "", "principal id or exact display name (required)")
 	_ = fs.Parse(args)
 
@@ -470,6 +488,7 @@ func runRevokeTokenSubcommand(args []string) int {
 
 func runRevokeTokenSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("revoke-token", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: revokes a token with no network credential, for a coordinator with no reachable\nadministrator. For ordinary use, run \"showmeshctl token revoke\" instead.")
 	principalRef := fs.String("principal", "", "principal id or exact display name the token belongs to (required)")
 	tokenID := fs.String("id", "", "token id to revoke, from list-tokens (required)")
 	_ = fs.Parse(args)
@@ -685,6 +704,7 @@ func runCreatePrincipalSubcommand(args []string) int {
 
 func runCreatePrincipalSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("create-principal", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: creates a principal with no network credential, for a coordinator with no\nreachable administrator. For ordinary use, run \"showmeshctl principal create\" instead.")
 	name := fs.String("name", "", "display name for the new principal (required)")
 	roleFlag := fs.String("role", "", "role: viewer, operator, admin, or scheduler (required)")
 	kindFlag := fs.String("kind", "", "kind: human or machine (required)")
@@ -777,6 +797,7 @@ func runInvalidateAllSessionsSubcommand(args []string) int {
 
 func runInvalidateAllSessionsSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("invalidate-all-sessions", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path, and the ONLY path (ADR-024 decision 5): run this once, host-side, immediately\nafter restoring a backup and before trusting the restored coordinator with any traffic. Not\nreachable over the API or showmeshctl at any scope, by design.")
 	confirm := fs.Bool("yes", false, "required: confirms this operator intends to sign out every principal on this coordinator")
 	_ = fs.Parse(args)
 
@@ -836,6 +857,7 @@ func runResetPasswordSubcommand(args []string) int {
 
 func runResetPasswordSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: resets a password with no network credential, for a coordinator with no\nreachable administrator. For ordinary use, run \"showmeshctl principal reset-password\" instead.")
 	name := fs.String("name", "", "principal name to reset (mutually exclusive with -id)")
 	id := fs.String("id", "", "principal id to reset (mutually exclusive with -name)")
 	_ = fs.Parse(args)
@@ -898,6 +920,7 @@ func runListPrincipalsSubcommand(args []string) int {
 
 func runListPrincipalsSubcommandWithDeps(deps *cliDeps, args []string) int {
 	fs := flag.NewFlagSet("list-principals", flag.ExitOnError)
+	setBreakGlassUsage(fs, "Break-glass path: lists principals with no network credential, for a coordinator with no\nreachable administrator. For ordinary use, run \"showmeshctl principal list\" instead.")
 	_ = fs.Parse(args)
 
 	ctx := context.Background()

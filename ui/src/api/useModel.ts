@@ -27,14 +27,22 @@ import type {
   ConfigRevisionsResponse,
   ConfigShowAction,
   ConfigShowMacro,
+  CreatePrincipalRequest,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
+  IssueTokenRequest,
+  IssueTokenResponse,
   Model,
+  PrincipalResponse,
+  PrincipalsResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
   ResolumeRecoveryConfigResponse,
   ResolumeRecoveryResponse,
   ResolumeRecoveryRestoreResponse,
+  SetPrincipalPasswordRequest,
+  SetPrincipalRoleRequest,
+  TokensResponse,
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
@@ -286,4 +294,42 @@ export function setResolumeLayerBypass(layer: string, bypassed: boolean): Promis
 
 export function setResolumeLayerMaster(layer: string, master: number): Promise<ResolumeActionResult> {
   return store.setResolumeLayerMaster(layer, master)
+}
+
+// -- Track G seam G-5: identity administration over the API -------------
+
+export function listPrincipals(): Promise<PrincipalsResponse> {
+  return store.listPrincipals()
+}
+
+export function createPrincipal(payload: CreatePrincipalRequest): Promise<PrincipalResponse> {
+  return store.createPrincipal(payload)
+}
+
+export function setPrincipalRole(id: string, payload: SetPrincipalRoleRequest): Promise<PrincipalResponse> {
+  return store.setPrincipalRole(id, payload)
+}
+
+export function disablePrincipal(id: string): Promise<PrincipalResponse> {
+  return store.disablePrincipal(id)
+}
+
+export function enablePrincipal(id: string): Promise<PrincipalResponse> {
+  return store.enablePrincipal(id)
+}
+
+export function resetPrincipalPassword(id: string, payload: SetPrincipalPasswordRequest): Promise<PrincipalResponse> {
+  return store.resetPrincipalPassword(id, payload)
+}
+
+export function listPrincipalTokens(id: string): Promise<TokensResponse> {
+  return store.listPrincipalTokens(id)
+}
+
+export function issuePrincipalToken(id: string, payload: IssueTokenRequest): Promise<IssueTokenResponse> {
+  return store.issuePrincipalToken(id, payload)
+}
+
+export function revokePrincipalToken(id: string, tokenId: string): Promise<void> {
+  return store.revokePrincipalToken(id, tokenId)
 }

@@ -56,6 +56,8 @@ const NAV_GROUPS: Array<{
     items: [
       { to: '/config', label: 'FPP & Resolume', end: false },
       { to: '/actions', label: 'Show actions', end: false },
+      // Track G seam G-5: identity administration's own nav entry.
+      { to: '/access', label: 'Access', end: false },
     ],
   },
 ]
