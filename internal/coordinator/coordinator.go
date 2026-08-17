@@ -23,6 +23,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -199,7 +200,17 @@ func Run() int {
 		}
 	}
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub))
+	// Track B seam B2b: the push cache behind
+	// internal/coordinator/collector/noderender. Constructed here,
+	// unconditionally (a render node is optional; this cache costs nothing
+	// when nothing ever publishes to it), and handed to inv below so
+	// HandleMessage's "render" case has somewhere to push a decoded report
+	// — see inventory.WithRenderSink. renderCollector (registered on
+	// fppRunner further down, once fppRunner exists) reads back out of the
+	// SAME store, on its own poll cadence.
+	renderStore := noderender.NewStore()
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore))
 
 	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
 	if err != nil {
@@ -246,6 +257,18 @@ func Run() int {
 		},
 	}
 	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
+
+	// Track B seam B2b: renderStore (built above, already wired into inv)
+	// gets its own read side here — a Collector sharing this same
+	// fppRunner rather than a second Runner, matching how the Resolume
+	// collector joins it too (see newResolumeWiring's own doc comment for
+	// why one Runner is the standing pattern for "another observation
+	// source, no reason for its own goroutine-management copy"). Renders
+	// whatever renderStore currently holds into surface.* observations on
+	// its own cadence; see noderender's package doc comment for why this
+	// never touches the network and is unconditional (a coordinator with
+	// no render node ever attached simply Polls an empty store forever).
+	fppRunner.Add(noderender.New(renderStore), noderender.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -405,6 +428,11 @@ func Run() int {
 		FPP:          fppInstanceLister{st: st, endpoints: fppEndpoints},
 		Observations: storeObservationLister{st: st},
 		Events:       storeEventReader{st: st},
+		// Track B seam B2b: renderStore already satisfies
+		// api.NodeRenderLister's NodeRenderObservations method directly, no
+		// adapter needed, the same "the real dependency already has this
+		// method set" pattern api.ConfigStore's own wiring below uses.
+		Render: renderStore,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.

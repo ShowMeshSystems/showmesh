@@ -72,6 +72,14 @@ const (
 	// controlled device (ADR-016), not a ShowMesh node: no agent, no
 	// advertisement, no LWT. See internal/coordinator/collector/resolume.
 	ResourceResolume ResourceKind = "resolume"
+
+	// ResourceSurface identifies one show.surface config object (ADR-026):
+	// a render node's supervised pipeline for one logical output surface.
+	// The resource id is the show.surface object id, never the node id
+	// that happens to be running it — a node reports which surfaces it
+	// currently drives, but the surface is the thing being observed. See
+	// internal/coordinator/collector/noderender.
+	ResourceSurface ResourceKind = "surface"
 )
 
 // ResourceRef identifies the subject of an observation.

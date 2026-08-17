@@ -73,7 +73,8 @@
       "lastDiscoveredAt": null,
       "notSeenAsOfRunId": null,
       "notSeenAsOfRunFinishedAt": null
-    }
+    },
+    "render": []
   }
 }
 

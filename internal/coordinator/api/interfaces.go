@@ -76,6 +76,25 @@ type ResolumeLister interface {
 	ListInstances(ctx context.Context) ([]ResolumeInstanceView, error)
 }
 
+// NodeRenderLister looks up the render-pipeline observations this
+// coordinator currently holds for one node's surfaces (Track B seam B2b),
+// for embedding into GET /api/v1/nodes' per-node view — the node read
+// path's analogue of [nodeEvidenceObservations] in mapping.go, except
+// backed by internal/coordinator/collector/noderender's own push cache
+// rather than synthesized from store rows: a render report's surfaceId
+// (not nodeId) is the observations table's resource key, so this package
+// cannot simply filter ListObservations by node the way FPPInstanceView
+// does.
+type NodeRenderLister interface {
+	// NodeRenderObservations returns every surface.* observation this
+	// coordinator currently holds for nodeID's most recently reported
+	// render assignment, or nil if none has ever been received. Never
+	// blocks on I/O — this renders an in-memory cache, matching
+	// [FPPPollNudger.NudgePoll]'s identical "must not block" contract one
+	// dependency over.
+	NodeRenderObservations(nodeID string) []observation.Observation
+}
+
 // ObservationFilter narrows GET /api/v1/observations per contract section
 // 6.1 ("filters resourceKind, resourceId, signal"). A nil field means no
 // filter on that dimension.

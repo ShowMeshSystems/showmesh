@@ -37,6 +37,13 @@ type Dependencies struct {
 	Events       EventReader
 	Collectors   CollectorStatusLister
 
+	// Render is Track B seam B2b's dependency — see [NodeRenderLister]. A
+	// nil field is replaced by [noNodeRenderLister], under which every
+	// node renders with no render evidence at all: correct for a
+	// coordinator with no render node ever attached, and for every test
+	// in this package that predates this field.
+	Render NodeRenderLister
+
 	// Identity is ADR-024's principal, session, token, bootstrap, and
 	// audit surface — internal/coordinator/identity.Service, already
 	// built (Step 6's own dependency, not this package's to define). A
@@ -364,6 +371,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Collectors == nil {
 		d.Collectors = noCollectorStatusLister{}
 	}
+	if d.Render == nil {
+		d.Render = noNodeRenderLister{}
+	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
 	}
@@ -480,6 +490,14 @@ type noNodeLister struct{}
 func (noNodeLister) Snapshot(context.Context, time.Time) ([]inventory.NodeView, error) {
 	return nil, nil
 }
+
+// noNodeRenderLister is [Dependencies.Render]'s nil-safe default: every node
+// renders with no render evidence, matching every other no-op lister in
+// this package (noNodeLister, noFPPLister) — an unwired render dependency
+// is a real, honest "nothing reported", never an error.
+type noNodeRenderLister struct{}
+
+func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observation { return nil }
 
 type noFPPLister struct{}
 

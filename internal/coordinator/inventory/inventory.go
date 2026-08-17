@@ -88,6 +88,28 @@ type Manager struct {
 	// (GET /api/v1/nodes) is unaffected and always current.
 	livenessMu   sync.Mutex
 	lastLiveness map[string]Liveness
+
+	// renderSink receives every decoded render report — see
+	// [WithRenderSink]. nil (the default) means no render ingestion at all:
+	// a "render" observed subpath is then dropped exactly like any other
+	// subpath this step does not understand (the default case below),
+	// never a startup failure.
+	renderSink RenderSink
+}
+
+// RenderSink receives a node's decoded render report as it arrives, so
+// internal/coordinator/collector/noderender's push cache can be fed without
+// this package importing that collector package directly — the same
+// "declare the interface at the consumer" convention
+// internal/coordinator/collector.Sink documents, applied here because
+// noderender.Store is the producer and this package is what has the
+// decoded payload plus the retained/live verdict to give it.
+// *noderender.Store already satisfies this with no adapter needed.
+type RenderSink interface {
+	// Put records payload as nodeID's latest render report. retained and
+	// receivedAt are exactly [Manager.classify]'s own retained flag and
+	// receipt time — see [Manager.handleRender].
+	Put(nodeID string, payload mqttproto.RenderPayload, retained bool, receivedAt time.Time)
 }
 
 // Option configures optional Manager behavior at [New]. The zero value
@@ -103,6 +125,14 @@ type Option func(*Manager)
 // non-blocking by construction.
 func WithOnChange(fn func()) Option {
 	return func(m *Manager) { m.onChange = fn }
+}
+
+// WithRenderSink registers sink to receive every decoded render report —
+// see [Manager.renderSink] and [Manager.handleRender]. Optional: the
+// default (no sink registered) drops "render" observed messages exactly
+// like any other subpath this step does not model.
+func WithRenderSink(sink RenderSink) Option {
+	return func(m *Manager) { m.renderSink = sink }
 }
 
 // New builds a Manager backed by st. logger may be nil, in which case
@@ -318,6 +348,8 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 			m.handleHealth(ctx, topic.NodeID, msg)
 		case "assets":
 			m.handleAssetInventory(ctx, topic.NodeID, msg)
+		case "render":
+			m.handleRender(ctx, topic.NodeID, msg)
 		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
@@ -524,6 +556,49 @@ func (m *Manager) handleAssetInventory(ctx context.Context, nodeID string, msg b
 		m.logger.Error("failed to store asset inventory", "node_id", nodeID, "error", err)
 		return
 	}
+	m.notify()
+}
+
+// handleRender ingests a node's render pipeline health report (Track B seam
+// B2b; ADR-011, ADR-026) into m.renderSink, if one was registered — see
+// [WithRenderSink]. A nil renderSink is not an error: it means nothing has
+// wired render ingestion in yet, and the message is silently dropped
+// exactly like any subpath this step does not understand.
+//
+// Unlike handleAssetInventory, a RETAINED delivery IS stored here, not
+// skipped: [RenderSink.Put] (backed by noderender.Store) already carries
+// its own retained/unknown-age distinction all the way through to the
+// observation layer (see that package's buildValue), so there is no
+// "store.NodeAssetReportRecord.ReportedAt has no unknown-age representation"
+// gap here to work around — this payload's own model supports it directly.
+func (m *Manager) handleRender(_ context.Context, nodeID string, msg broker.Message) {
+	if m.renderSink == nil {
+		m.logger.Debug("ignoring render report: no render sink registered", "node_id", nodeID)
+		return
+	}
+
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("render", nodeID, err)
+		return
+	}
+	render, err := mqttproto.DecodeRenderPayload(env)
+	if err != nil {
+		m.logMalformed("render", nodeID, err)
+		return
+	}
+
+	// receivedAt is this coordinator's own receipt time in BOTH branches —
+	// bookkeeping (when the message was processed), never evidence of the
+	// subject's own state. [RenderSink.Put] (backed by noderender.Store)
+	// is the one place msg.Retained decides whether that also doubles as
+	// ObservedAt (live) or is kept strictly separate from it (retained) —
+	// see that package's buildValue, ADR-011's rule applied one layer
+	// down. This deliberately does NOT go through [Manager.classify]:
+	// classify's *time.Time return is store's ObservedAt convention, and
+	// calling it here would tempt a future edit into passing that pointer
+	// through as if it were this bookkeeping timestamp.
+	m.renderSink.Put(nodeID, render, msg.Retained, m.now())
 	m.notify()
 }
 

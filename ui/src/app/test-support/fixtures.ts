@@ -103,6 +103,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
       heartbeat: makeEvidence({ signal: 'node.heartbeat' }),
     },
     declaration: makeNodeDeclaration(),
+    render: [],
     ...overrides,
   }
 }
