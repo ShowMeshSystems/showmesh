@@ -202,6 +202,24 @@ type Dependencies struct {
 	// tests and for any embedder that has not wired it in.
 	ResolumeID string
 
+	// ResolumeInstancesEnvVarSet is [FPPEndpointsEnvVarSet]'s mirror for
+	// Track G seam G-2 (ADR-039 decision 4): whether SHOWMESH_RESOLUME_URL
+	// is currently set in the coordinator PROCESS's environment. Consumed
+	// by handlePutResolumeInstancesConfig (resolumeinstancesconfig.go): a
+	// write is refused with 409 while this is true, for the identical
+	// reason FPPEndpointsEnvVarSet's own doc comment gives. The zero value
+	// (false) is the same "nothing told this API otherwise" posture as
+	// every other unwired dependency in this struct.
+	ResolumeInstancesEnvVarSet bool
+
+	// ResolumeInstancesMigrationDeferred is [FPPEndpointsMigrationDeferred]'s
+	// mirror: this coordinator started with SHOWMESH_RESOLUME_URL set, tried
+	// to migrate it into the store, and could not persist that write — see
+	// internal/coordinator's resolumeinstancessync.go. The zero value
+	// (false) is the same "nothing told this API otherwise" posture as
+	// every other unwired dependency here.
+	ResolumeInstancesMigrationDeferred bool
+
 	// ResolumeActions is Track D seam D-3/A's action engine
 	// (internal/coordinator/collector/resolume), reached only through
 	// [ResolumeActionDispatcher] — see that interface's own doc comment
@@ -1032,6 +1050,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/fpp.endpoints", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfig))
 	mux.HandleFunc("PUT /api/v1/config/fpp.endpoints", h.writeGuard(&scopeConfigWrite, h.handlePutFPPEndpointsConfig))
 	mux.HandleFunc("GET /api/v1/config/fpp.endpoints/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPEndpointsConfigRevisions))
+
+	// Track G seam G-2 (ADR-039): resolume.instances, mirroring
+	// fpp.endpoints in every respect including the always-config:write,
+	// never-CloseReads read posture — see config.go's own top comment and
+	// resolumeinstancesconfig.go's own file comment.
+	mux.HandleFunc("GET /api/v1/config/resolume.instances", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfig))
+	mux.HandleFunc("PUT /api/v1/config/resolume.instances", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeInstancesConfig))
+	mux.HandleFunc("GET /api/v1/config/resolume.instances/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfigRevisions))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

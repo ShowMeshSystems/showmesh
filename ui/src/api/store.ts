@@ -94,6 +94,9 @@ type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+// Track G seam G-2 (ADR-039).
+type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
+type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -518,6 +521,59 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.postJson<SchemaDiscoveryRunResponse>('/discovery/runs', undefined, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-2 (ADR-039): the resolume.instances configuration
+  // write surface. Same thin pass-through shape as the fpp.endpoints trio
+  // just above, including the same "the config view calls this directly
+  // and renders (or fails to reach, and renders THAT) itself" posture.
+
+  /** `GET /api/v1/config/resolume.instances` (Track G seam G-2). Throws (404) when nothing has been configured yet. */
+  async getResolumeInstancesConfig(): Promise<SchemaResolumeInstancesConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeInstancesConfigResponse>(
+        '/config/resolume.instances',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/resolume.instances` (Track G seam G-2). Validated
+   * before-activation server-side (ADR-009) — a rejected payload throws
+   * and appends no revision; the caller (the config view's save handler)
+   * renders the thrown error via `describeApiError`, matching
+   * `putFPPEndpointsConfig`'s identical contract.
+   */
+  async putResolumeInstancesConfig(
+    payload: SchemaConfigResolumeInstancesPayload,
+  ): Promise<SchemaResolumeInstancesConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaResolumeInstancesConfigResponse>(
+        '/config/resolume.instances',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/resolume.instances/revisions` (Track G seam G-2): revision history, newest first, metadata only. */
+  async getResolumeInstancesConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/resolume.instances/revisions',
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }

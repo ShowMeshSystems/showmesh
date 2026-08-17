@@ -67,6 +67,13 @@ export type ConfigFPPEndpoint = components['schemas']['ConfigFPPEndpoint']
 export type ConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 export type ConfigRevisionMeta = components['schemas']['ConfigRevisionMeta']
 export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+// Track G seam G-2 (ADR-039): the resolume.instances configuration write
+// surface, aliased for the identical reason as fpp.endpoints' own shapes
+// above — mirrors that kind exactly, including reusing ConfigRevisionMeta/
+// ConfigRevisionsResponse for its own revision history.
+export type ResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
+export type ConfigResolumeInstance = components['schemas']['ConfigResolumeInstance']
+export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']

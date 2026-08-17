@@ -550,19 +550,26 @@ func (h *Hub) render(ctx context.Context) {
 	// one fixed singleton resource, keyed "resolumerecovery:default" —
 	// never evicted, full-frame only, no delta kind, mirroring
 	// resolume.changed's own posture immediately above. Skipped entirely
-	// when ResolumeRecovery is unwired ([noResolumeRecoveryProvider]): a
-	// singleton has no natural empty state the way ListInstances gives
-	// resolume:<id> above for free. Once wired, a toggle-read error skips
-	// this pass rather than publishing a default-looking state —
-	// Record/LastReport never error.
-	if _, unwired := h.deps.ResolumeRecovery.(noResolumeRecoveryProvider); !unwired {
+	// when no Resolume instance is configured RIGHT NOW
+	// ([ResolumeRecoveryProvider.Configured]): a singleton has no natural
+	// empty state the way ListInstances gives resolume:<id> above for free.
+	// Once configured, a toggle-read error skips this pass rather than
+	// publishing a default-looking state — Record/LastReport never error.
+	//
+	// Track G seam G-2 replaced a type assertion against
+	// [noResolumeRecoveryProvider] here: once resolume.instances applies
+	// without a restart, ResolumeRecovery can be wired to a live manager
+	// that currently holds zero instances (the exact cold-start state this
+	// seam's own acceptance run starts from), so "wired" and "configured
+	// right now" are no longer the same fact.
+	if h.deps.ResolumeRecovery.Configured() {
 		if enabled, configured, err := ResolveResolumeRecoveryToggle(ctx, h.deps.Config); err != nil {
 			h.logger.Warn("stream hub: resolve resolume.recovery toggle failed", "error", err)
 		} else {
 			const key = "resolumerecovery:default"
 			// resolumeConfigured is always true here — this whole branch is
-			// gated on ResolumeRecovery being wired (the !unwired check
-			// above), which is exactly what that field reports.
+			// gated on ResolumeRecovery.Configured() above, which is exactly
+			// what that method reports.
 			proj := resolumeRecoveryChangedEventProjection(true, enabled, configured, h.deps.ResolumeRecoverySettleSeconds,
 				h.deps.ResolumeRecovery.Record(), h.deps.ResolumeRecovery.LastReport())
 			if h.updateRendered(key, proj) {

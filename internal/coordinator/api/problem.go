@@ -371,6 +371,40 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 	}
 }
 
+// resolumeInstancesEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s
+// mirror for Track G seam G-2 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/resolume.instances with 409 while SHOWMESH_RESOLUME_URL is
+// still set, for the identical reason — a write accepted now cannot
+// survive this coordinator's own next restart.
+func resolumeInstancesEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: SHOWMESH_RESOLUME_URL is still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because SHOWMESH_RESOLUME_URL is still set in this coordinator's environment " +
+			"— accepting it now would conflict with that variable on the next restart. Remove SHOWMESH_RESOLUME_URL " +
+			"and SHOWMESH_RESOLUME_ID and restart this coordinator once, then retry.",
+	}
+}
+
+// resolumeInstancesMigrationDeferredProblem is
+// [fppEndpointsMigrationDeferredProblem]'s mirror: the standard remedy
+// above is not safe while the startup migration is deferred, because no
+// store configuration exists yet — removing the variable and restarting
+// would resolve this coordinator to zero Resolume instances.
+func resolumeInstancesMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of SHOWMESH_RESOLUME_URL was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID migration could not be " +
+			"saved on this boot, so the store holds no resolume.instances configuration yet. Do NOT remove " +
+			"SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID — they are currently the only copy of this coordinator's " +
+			"Resolume instance. Check the coordinator's data volume (often full, read-only, or damaged) and restart; " +
+			"the migration retries on every boot. Once it succeeds, remove the variables and retry.",
+	}
+}
+
 // discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
 // [handlers.handleStartDiscoveryRun] refuses a second discovery run while
 // one is already in flight on this coordinator, rather than queuing it —

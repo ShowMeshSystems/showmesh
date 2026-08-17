@@ -881,6 +881,58 @@ type FPPEndpointsConfigResponse struct {
 	RestartRequiredReason  string                    `json:"restartRequiredReason"`
 }
 
+// ConfigResolumeInstance is one element of
+// [ConfigResolumeInstancesPayload.Instances]: one Resolume Arena instance's
+// (id, url) pair, mirroring [ConfigFPPEndpoint]'s identical shape. The
+// payload stays a list — [ResolumeInstancesConfigResponse]'s own doc
+// comment says why — even though Track G seam G-2 enforces at most one
+// element at write time.
+type ConfigResolumeInstance struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// ConfigResolumeInstancesPayload is the "resolume.instances" configuration
+// kind's decoded payload (Track G seam G-2, ADR-039): the body PUT
+// /config/resolume.instances accepts, and the "payload" member of GET
+// /config/resolume.instances' response. Instances is never null on the
+// wire — zero configured Resolume instances is a real, valid state, not an
+// absence.
+type ConfigResolumeInstancesPayload struct {
+	Instances []ConfigResolumeInstance `json:"instances"`
+}
+
+// ResolumeInstancesConfigResponse is the body of GET and PUT
+// /config/resolume.instances, mirroring [FPPEndpointsConfigResponse]'s
+// shape exactly, including the list-shaped payload: this list holds at
+// most one element today and stays a list (api/interfaces.go's
+// ResolumeLister doc comment already commits GET /resolume/instances to
+// the identical convention) — the limit lives in validation, never in the
+// schema, matching ADR-026's "N surfaces implemented at N=1".
+//
+// RestartRequired is always false: the coordinator's collector set follows
+// this configuration within about ten seconds with no restart (Track G
+// seam G-2 applies ADR-036 to this kind exactly as fpp.endpoints already
+// has it). The field stays on the wire for the identical additive-only
+// reason [FPPEndpointsConfigResponse.RestartRequired] does.
+//
+// CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
+// the startup env->store migration creates (Source "env_migration"): a
+// startup migration has no principal — see
+// internal/coordinator's resolumeinstancessync.go.
+type ResolumeInstancesConfigResponse struct {
+	ServerTime             string                         `json:"serverTime"`
+	Kind                   string                         `json:"kind"`
+	Revision               int64                          `json:"revision"`
+	Payload                ConfigResolumeInstancesPayload `json:"payload"`
+	UpdatedAt              string                         `json:"updatedAt"`
+	CreatedByPrincipalID   *string                        `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                        `json:"createdByPrincipalName"`
+	Source                 string                         `json:"source"`
+	RestartRequired        bool                           `json:"restartRequired"`
+	RestartRequiredReason  string                         `json:"restartRequiredReason"`
+}
+
 // ConfigRevisionMeta is one element of [ConfigRevisionsResponse.Revisions]:
 // a config_revisions row's metadata, WITHOUT its payload — the revisions
 // list is for browsing history (which revision, when, by whom, from what

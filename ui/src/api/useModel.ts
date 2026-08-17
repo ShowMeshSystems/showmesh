@@ -23,6 +23,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
+  ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
@@ -32,6 +33,7 @@ import type {
   Model,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
+  ResolumeInstancesConfigResponse,
   ResolumeRecoveryConfigResponse,
   ResolumeRecoveryResponse,
   ResolumeRecoveryRestoreResponse,
@@ -100,6 +102,22 @@ export function putFPPEndpointsConfig(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// Track G seam G-2 (ADR-039): the same thin pass-through pattern, for the
+// resolume.instances configuration write surface.
+export function getResolumeInstancesConfig(): Promise<ResolumeInstancesConfigResponse> {
+  return store.getResolumeInstancesConfig()
+}
+
+export function putResolumeInstancesConfig(
+  payload: ConfigResolumeInstancesPayload,
+): Promise<ResolumeInstancesConfigResponse> {
+  return store.putResolumeInstancesConfig(payload)
+}
+
+export function getResolumeInstancesConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getResolumeInstancesConfigRevisions()
 }
 
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
