@@ -56,9 +56,28 @@ func syncFPPMQTTConfig(ctx context.Context, st *store.Store, identitySvc identit
 	if err != nil {
 		return config.FPPMQTTConfig{}, "", false, fmt.Errorf("coordinator: decode active fpp.mqtt config payload: %w", err)
 	}
-	storedPassword, _, err := config.ReadFPPMQTTPassword(dataDir)
-	if err != nil {
-		return config.FPPMQTTConfig{}, "", false, fmt.Errorf("coordinator: read stored fpp.mqtt password: %w", err)
+	storedPassword, _, perr := config.ReadFPPMQTTPassword(dataDir)
+	if perr != nil {
+		// An unreadable secret file must not refuse boot: a startup path
+		// has no principal to hold accountable, and exiting here is a
+		// restart loop with no API and no dashboard (ADR-039 decision 3's
+		// posture). The failure is scoped to the FPP MQTT collector's
+		// credential: continue with the env password where the environment
+		// still carries a matching configuration, otherwise with none,
+		// until the volume is fixed or the password is rotated via
+		// PUT /api/v1/config/fpp.mqtt.
+		logger.Error("failed to read the stored fpp.mqtt password; starting anyway with the FPP MQTT collector's "+
+			"credential degraded rather than refusing to boot. Fix the data volume and restart, or rotate the "+
+			"password via PUT /api/v1/config/fpp.mqtt.",
+			"error", perr)
+		if envCfg.Configured() && config.FPPMQTTConfigEqual(storedCfg, envCfg) {
+			return storedCfg, envPassword, false, nil
+		}
+		if !envCfg.Configured() {
+			return storedCfg, "", false, nil
+		}
+		// Non-secret fields disagree regardless of the unreadable file:
+		// fall through to the owner's disagreement rule below.
 	}
 
 	if !envCfg.Configured() {

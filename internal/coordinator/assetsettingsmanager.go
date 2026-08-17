@@ -13,6 +13,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -43,28 +44,34 @@ type assetSettingsSource struct {
 	mu       sync.Mutex
 	revision int64
 	cached   config.AssetSettings
-	loaded   bool
 }
 
-func newAssetSettingsSource(st *store.Store, logger *slog.Logger) *assetSettingsSource {
-	return &assetSettingsSource{st: st, logger: logger}
+// newAssetSettingsSource seeds the source with the boot-resolved
+// AUTHORITATIVE settings — see newResolumeInstanceSource for why: while a
+// deferred boot migration leaves the environment authoritative the store
+// holds no assets.settings object, and an unseeded source would answer
+// [config.DefaultAssetSettings] and silently revert the env-configured
+// values on the first reconcile tick.
+func newAssetSettingsSource(st *store.Store, logger *slog.Logger, initial config.AssetSettings) *assetSettingsSource {
+	return &assetSettingsSource{st: st, logger: logger, cached: initial}
 }
 
-// Current returns the active assets.settings, or [config.DefaultAssetSettings]
-// before anything has ever been configured or loaded.
+// Current returns the active assets.settings. A missing config object is a
+// steady state and answers the seed; any other store error keeps the last
+// known settings, and logs.
 func (s *assetSettingsSource) Current(ctx context.Context) config.AssetSettings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	obj, err := s.st.GetConfigObject(ctx, config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return s.cached
+	}
 	if err != nil {
-		if !s.loaded {
-			return config.DefaultAssetSettings()
-		}
 		s.logWarn("failed to read the active assets.settings configuration; continuing with the last known settings", err)
 		return s.cached
 	}
-	if s.loaded && obj.CurrentRevision == s.revision {
+	if obj.CurrentRevision == s.revision {
 		return s.cached
 	}
 
@@ -81,7 +88,6 @@ func (s *assetSettingsSource) Current(ctx context.Context) config.AssetSettings 
 
 	s.revision = obj.CurrentRevision
 	s.cached = settings
-	s.loaded = true
 	return settings
 }
 

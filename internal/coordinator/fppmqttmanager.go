@@ -8,6 +8,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -37,30 +38,36 @@ type fppMQTTConfigSource struct {
 	revision int64
 	cached   config.FPPMQTTConfig
 	password string
-	loaded   bool
 }
 
-func newFPPMQTTConfigSource(st *store.Store, dataDir string, logger *slog.Logger) *fppMQTTConfigSource {
-	return &fppMQTTConfigSource{st: st, dataDir: dataDir, logger: logger}
+// newFPPMQTTConfigSource seeds the source with the boot-resolved
+// AUTHORITATIVE configuration and password — see newResolumeInstanceSource
+// for why: while a deferred boot migration leaves the environment
+// authoritative the store holds no fpp.mqtt object, and an unseeded source
+// would manufacture an empty configuration and tear down the env-built
+// collector on the first reconcile tick.
+func newFPPMQTTConfigSource(st *store.Store, dataDir string, logger *slog.Logger, initialCfg config.FPPMQTTConfig, initialPassword string) *fppMQTTConfigSource {
+	return &fppMQTTConfigSource{st: st, dataDir: dataDir, logger: logger, cached: initialCfg, password: initialPassword}
 }
 
-// Current returns the active fpp.mqtt configuration and password. On any
-// store or file error it returns the last value it successfully read, and
-// logs — mirroring [resolumeInstanceSource.Current]'s "stale-but-real
-// beats manufactured empty" reasoning.
+// Current returns the active fpp.mqtt configuration and password. A
+// missing config object is a steady state and answers the seed; any other
+// store or file error keeps the last known value, and logs — mirroring
+// [resolumeInstanceSource.Current]'s "stale-but-real beats manufactured
+// empty" reasoning.
 func (s *fppMQTTConfigSource) Current(ctx context.Context) (config.FPPMQTTConfig, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	obj, err := s.st.GetConfigObject(ctx, config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return s.cached, s.password
+	}
 	if err != nil {
-		if !s.loaded {
-			return config.FPPMQTTConfig{}, ""
-		}
 		s.logWarn("failed to read the active fpp.mqtt configuration; continuing with the last known value", err)
 		return s.cached, s.password
 	}
-	if s.loaded && obj.CurrentRevision == s.revision {
+	if obj.CurrentRevision == s.revision {
 		return s.cached, s.password
 	}
 
@@ -87,7 +94,6 @@ func (s *fppMQTTConfigSource) Current(ctx context.Context) (config.FPPMQTTConfig
 	s.revision = obj.CurrentRevision
 	s.cached = cfg
 	s.password = password
-	s.loaded = true
 	return cfg, password
 }
 
@@ -112,6 +118,7 @@ type fppMQTTBundle struct {
 // [api.FPPMQTTHostLister] by delegating to whichever bundle is current.
 type fppMQTTManager struct {
 	runner *collector.Runner
+	source *fppMQTTConfigSource
 	logger *slog.Logger
 
 	mu     sync.Mutex
@@ -124,13 +131,14 @@ var (
 	_ api.FPPMQTTHostLister     = (*fppMQTTManager)(nil)
 )
 
-// newFPPMQTTManager constructs a manager with no bundle. Call
+// newFPPMQTTManager constructs a manager with no bundle over source, which
+// both Run's reconcile loop and CurrentHosts read. Call
 // [fppMQTTManager.reconcile] once, synchronously, with the startup-resolved
 // configuration before starting any goroutine that serves requests — the
 // same "no request may observe a partially-wired dependency" property
 // resolumeManager already holds.
-func newFPPMQTTManager(runner *collector.Runner, logger *slog.Logger) *fppMQTTManager {
-	return &fppMQTTManager{runner: runner, logger: logger}
+func newFPPMQTTManager(runner *collector.Runner, source *fppMQTTConfigSource, logger *slog.Logger) *fppMQTTManager {
+	return &fppMQTTManager{runner: runner, source: source, logger: logger}
 }
 
 // buildBundle constructs a *fppmqtt.Collector for cfg/password, registers
@@ -219,7 +227,7 @@ func (m *fppMQTTManager) reconcile(ctx context.Context, cfg config.FPPMQTTConfig
 // reconciles once, synchronously, with the startup-resolved configuration
 // before this goroutine (and the HTTP server) ever starts — mirroring
 // resolumeManager.Run's identical contract.
-func (m *fppMQTTManager) Run(ctx context.Context, source *fppMQTTConfigSource) {
+func (m *fppMQTTManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(fppMQTTReconcileInterval)
 	defer ticker.Stop()
 
@@ -234,7 +242,7 @@ func (m *fppMQTTManager) Run(ctx context.Context, source *fppMQTTConfigSource) {
 			m.wg.Wait()
 			return
 		case <-ticker.C:
-			cfg, password := source.Current(ctx)
+			cfg, password := m.source.Current(ctx)
 			m.reconcile(ctx, cfg, password)
 		}
 	}
@@ -263,11 +271,13 @@ func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorStat
 // to cross-check a proposed fpp.endpoints list against fpp.mqtt as it
 // stands RIGHT NOW, not a startup snapshot (mirroring the identical live
 // re-check Track G seam G-2 added for the Resolume instance id).
-func (m *fppMQTTManager) CurrentHosts(context.Context) (map[string]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.bundle == nil {
-		return nil, nil
-	}
-	return m.bundle.cfg.Hosts, nil
+//
+// Resolved from the store-backed source, never from the running bundle: a
+// stored fpp.mqtt with hosts but no brokerURL is valid and starts no
+// bundle, yet its hosts must still refuse an fpp.endpoints write that
+// would strand them — otherwise the next boot's own cross-check refuses
+// to start with no API left to repair it.
+func (m *fppMQTTManager) CurrentHosts(ctx context.Context) (map[string]string, error) {
+	cfg, _ := m.source.Current(ctx)
+	return cfg.Hosts, nil
 }

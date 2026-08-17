@@ -426,3 +426,21 @@ func TestGetAssetsSettingsConfigRevisionsListsNewestFirst(t *testing.T) {
 		t.Errorf("newest revision = %v, want revision 2, active", first)
 	}
 }
+
+// TestPutAssetsSettingsConfigRejectsNullBody: a literal null body decodes
+// into a nil map with no error, which would read as "every field absent"
+// and mint a no-op revision — refused with the same 400 the per-field
+// null rules use.
+func TestPutAssetsSettingsConfigRejectsNullBody(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", `null`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (a null body is not an object); body: %s", resp.StatusCode, body)
+	}
+}

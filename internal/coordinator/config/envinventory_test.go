@@ -4,7 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -83,6 +84,10 @@ var knownGapEnvVars = map[string]string{
 		"add a broker without a restart — but it lives in integrationbrokers.go, outside Track G's audited " +
 		"config.go scope, and was never converted to a store-backed kind. Recorded as a gap, not endorsed as " +
 		"start-time; see docs/private/DECISION-QUEUE.md.",
+	"SHOWMESH_INTEGRATION_BROKER_": "not a variable itself but the literal prefix integrationbrokers.go " +
+		"concatenates into SHOWMESH_INTEGRATION_BROKER_<ID>_USERNAME/_PASSWORD, the per-broker credentials of " +
+		"the SHOWMESH_INTEGRATION_BROKERS family recorded above — the same gap, one entry per literal the " +
+		"sweep can see",
 }
 
 // retiredEnvVars is ADR-039 decision 3's group: a variable a store-backed
@@ -119,32 +124,39 @@ var retiredRefusesToStartEnvVars = map[string]string{
 		"when this is still set, rather than accepting and honoring or silently ignoring it",
 }
 
-// envConstRegexp matches this package's SHOWMESH_* string-literal
-// constants, e.g. `"SHOWMESH_HTTP_ADDR"`.
+// envConstRegexp matches a whole string literal naming a SHOWMESH_*
+// variable, e.g. `"SHOWMESH_HTTP_ADDR"` or an inline
+// os.Getenv("SHOWMESH_HTTP_ADDR") argument.
 var envConstRegexp = regexp.MustCompile(`^SHOWMESH_[A-Z0-9_]+$`)
 
+// envSweepRoots are the directories this test sweeps, relative to this
+// package's directory (internal/coordinator/config): every coordinator
+// package plus the coordinator binary, not just this package — a
+// SHOWMESH_ read anywhere in the coordinator is subject to ADR-039, not
+// only one routed through this package's constants.
+var envSweepRoots = []string{
+	filepath.Join(".."), // internal/coordinator/...
+	filepath.Join("..", "..", "..", "cmd", "showmesh-coordinator"), // the coordinator binary
+}
+
 // TestEveryEnvVarIsOnTheStartTimeAllowList is ADR-039 decision 9's first
-// enforced test: every SHOWMESH_* setting this package's non-test source
-// declares as a string constant must appear on exactly one of the
-// allow-lists above, each carrying a stated reason. It parses source
-// rather than hardcoding a second list of names, so a new
-// `envSomething = "SHOWMESH_SOMETHING"` constant added anywhere in this
-// package fails this test by construction — the point CLAUDE.md makes
+// enforced test: every SHOWMESH_* name appearing as a string literal in
+// coordinator non-test source (a constant, an inline os.Getenv argument,
+// anything) must appear on exactly one of the allow-lists above, each
+// carrying a stated reason. It parses source rather than hardcoding a
+// second list of names, so a new SHOWMESH_ read added anywhere in the
+// swept tree fails this test by construction — the point CLAUDE.md makes
 // about ParameterID.MarshalJSON returning an error rather than a comment
 // asking nicely.
 //
-// Scope is this whole package's directory, not only config.go: Track G's
-// own audit was scoped to config.go by filename and missed
-// SHOWMESH_INTEGRATION_BROKERS (integrationbrokers.go) as a result — see
-// knownGapEnvVars. Two SHOWMESH_TEST_* variables exist outside this
-// package entirely (internal/coordinator/inventory/liveness.go,
-// internal/coordinator/api/api.go), explicitly documented as
-// TEST-SUPPORT-ONLY harness knobs following this project's established
-// SHOWMESH_TEST_* convention (see Makefile's test-integration target);
-// they are not operator configuration and are deliberately out of this
-// test's scope.
+// SHOWMESH_TEST_*-prefixed names are the one allowed convention: they
+// are documented TEST-SUPPORT-ONLY harness knobs (see
+// internal/coordinator/api/api.go's envStreamSubscriberBufferOverride
+// and internal/coordinator/inventory/liveness.go's
+// envStalenessWindowOverride), never operator configuration, and the
+// sweep skips them by prefix rather than listing each one.
 func TestEveryEnvVarIsOnTheStartTimeAllowList(t *testing.T) {
-	found := collectPackageEnvConstants(t)
+	found := collectCoordinatorEnvLiterals(t)
 
 	allowed := map[string]bool{}
 	for name := range startTimeEnvVars {
@@ -168,7 +180,7 @@ func TestEveryEnvVarIsOnTheStartTimeAllowList(t *testing.T) {
 
 	for name := range found {
 		if !allowed[name] {
-			t.Errorf("%s is read by internal/coordinator/config but appears on no allow-list — "+
+			t.Errorf("%s appears in coordinator source but is on no allow-list — "+
 				"a new operator-facing environment variable must be added to exactly one of "+
 				"startTimeEnvVars/deploymentPostureEnvVars/tuningKnobEnvVars/knownGapEnvVars/"+
 				"retiredEnvVars/retiredRefusesToStartEnvVars in envinventory_test.go, with a stated "+
@@ -182,61 +194,64 @@ func TestEveryEnvVarIsOnTheStartTimeAllowList(t *testing.T) {
 	// list stays honest in both directions.
 	for name := range allowed {
 		if !found[name] {
-			t.Errorf("%s is on an allow-list in envinventory_test.go but no constant in "+
-				"internal/coordinator/config declares that value any more — remove the stale entry", name)
+			t.Errorf("%s is on an allow-list in envinventory_test.go but no string literal in "+
+				"the swept coordinator source names it any more — remove the stale entry", name)
 		}
 	}
 }
 
-// collectPackageEnvConstants parses every non-test .go file in this
-// package's directory and returns the set of SHOWMESH_* string values
-// assigned to a const declaration anywhere in it. Values built at
-// runtime by string concatenation (e.g. integrationBrokerUsernameEnv's
-// per-identifier derivation in integrationbrokers.go) are not constants
-// and are intentionally not enumerable this way; their constant PREFIX
+// collectCoordinatorEnvLiterals parses every non-test .go file under
+// envSweepRoots and returns the set of SHOWMESH_* names appearing as a
+// whole string literal ANYWHERE in the AST — a constant, an inline
+// os.Getenv argument, a map key — not only in const declarations, so an
+// inline read cannot slip past the allow-list. SHOWMESH_TEST_*-prefixed
+// harness knobs are skipped by convention. Names built at runtime by
+// string concatenation (e.g. integrationBrokerUsernameEnv's
+// per-identifier derivation in integrationbrokers.go) are not literals
+// and are intentionally not enumerable this way; their literal PREFIX
 // (SHOWMESH_INTEGRATION_BROKERS, via envIntegrationBrokers) still is, and
 // that is what carries the family onto the allow-list.
-func collectPackageEnvConstants(t *testing.T) map[string]bool {
+func collectCoordinatorEnvLiterals(t *testing.T) map[string]bool {
 	t.Helper()
-
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("reading package directory: %v", err)
-	}
 
 	found := map[string]bool{}
 	fset := token.NewFileSet()
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", name, err)
-		}
-
-		ast.Inspect(f, func(n ast.Node) bool {
-			spec, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
+	for _, root := range envSweepRoots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			for _, v := range spec.Values {
-				lit, ok := v.(*ast.BasicLit)
+			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parsing %s: %v", path, err)
+			}
+
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
-					continue
+					return true
 				}
 				value, err := strconv.Unquote(lit.Value)
 				if err != nil {
-					continue
+					return true
+				}
+				if strings.HasPrefix(value, "SHOWMESH_TEST_") {
+					return true
 				}
 				if envConstRegexp.MatchString(value) {
 					found[value] = true
 				}
-			}
-			return true
+				return true
+			})
+			return nil
 		})
+		if err != nil {
+			t.Fatalf("walking %s: %v", root, err)
+		}
 	}
 
 	return found

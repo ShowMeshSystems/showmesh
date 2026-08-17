@@ -271,7 +271,10 @@ func Run() int {
 	// comment) — there is no separate "if configured" gate here, matching
 	// that method's own contract rather than duplicating its condition.
 	assetSync := assetsync.NewService(st, bm, logger, toAssetSyncSettings(assetSettings))
-	assetSettingsSrc := newAssetSettingsSource(st, logger)
+	// Seeded with the boot-resolved settings so a deferred migration (or a
+	// store read failing before the source's first successful read) keeps
+	// the reconciler answering these values rather than the defaults.
+	assetSettingsSrc := newAssetSettingsSource(st, logger, assetSettings)
 
 	// The volume backend owns the asset bytes; SQLite holds only their
 	// metadata (ADR-028). A backend that cannot be opened is fatal, because
@@ -370,7 +373,10 @@ func Run() int {
 	// must already see live state, never a manager that has not yet run
 	// its first pass.
 	resolumeMgr.reconcile(ctx, resolumeInstances)
-	resolumeInstanceSrc := newResolumeInstanceSource(st, logger)
+	// Seeded with the boot-resolved instance list so a deferred migration
+	// (or a store read failing before the source's first successful read)
+	// never manufactures an empty list and tears the bundle above down.
+	resolumeInstanceSrc := newResolumeInstanceSource(st, logger, resolumeInstances)
 
 	// Track G seam G-3 (ADR-039): fppMQTTManager owns the live
 	// *fppmqtt.Collector for whatever fpp.mqtt currently configures,
@@ -378,12 +384,16 @@ func Run() int {
 	// file comment. It replaces the old one-shot construction below cfg's
 	// FPPEndpoints loop used to perform exactly once, for the process's
 	// whole life.
-	fppMQTTMgr := newFPPMQTTManager(fppRunner, logger)
+	// Seeded with the boot-resolved configuration for the same reason the
+	// Resolume source above is; the manager also answers CurrentHosts from
+	// this source, so the fpp.endpoints collision check sees the stored
+	// hosts even when no collector bundle is running.
+	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger, fppMQTTCfg, fppMQTTPassword)
+	fppMQTTMgr := newFPPMQTTManager(fppRunner, fppMQTTConfigSrc, logger)
 	// The FIRST reconcile runs synchronously, here, for the identical
 	// "no request may observe a partially-wired dependency" reason
 	// resolumeMgr.reconcile above does.
 	fppMQTTMgr.reconcile(ctx, fppMQTTCfg, fppMQTTPassword)
-	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger)
 
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
@@ -838,7 +848,7 @@ func Run() int {
 	// backgroundWG.Add(7) above.
 	go func() {
 		defer backgroundWG.Done()
-		fppMQTTMgr.Run(ctx, fppMQTTConfigSrc)
+		fppMQTTMgr.Run(ctx)
 	}()
 
 	// resolumeMgr.Run owns Track G seam G-2's own reconcile loop: it keeps

@@ -10,6 +10,8 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +246,69 @@ func TestMigrateFPPMQTTFromEnvSecretFileFailureDefersWithoutTouchingStore(t *tes
 	}
 	if !strings.Contains(buf.String(), "secret file could not be written") {
 		t.Errorf("log output = %q, want an ERROR naming the secret file failure", buf.String())
+	}
+}
+
+// TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot
+// proves an unreadable secret file is scoped to the FPP MQTT collector's
+// credential, never a boot refusal: with the env unset the stored config
+// proceeds with no password, and with the env still set and matching on
+// the non-secret fields the env password fills in.
+func TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Make the secret file unreadable by replacing it with a directory —
+	// present (so this is a read error, not the benign not-exist case) and
+	// guaranteed to fail os.ReadFile.
+	secretPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatalf("remove secret file: %v", err)
+	}
+	if err := os.Mkdir(secretPath, 0o755); err != nil {
+		t.Fatalf("mkdir at secret path: %v", err)
+	}
+
+	// Env unset: the stored configuration proceeds with no password.
+	logger, buf := capturingLogger()
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, config.FPPMQTTConfig{}, "", time.Now, logger)
+	if err != nil {
+		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil — an unreadable secret file must not refuse boot", err)
+	}
+	if deferred {
+		t.Error("migrationDeferred = true, want false")
+	}
+	if !config.FPPMQTTConfigEqual(cfg, testFPPMQTTConfig) {
+		t.Errorf("cfg = %+v, want the stored configuration %+v", cfg, testFPPMQTTConfig)
+	}
+	if password != "" {
+		t.Errorf("password = %q, want empty with the env unset and the file unreadable", password)
+	}
+	if !strings.Contains(buf.String(), "failed to read the stored fpp.mqtt password") {
+		t.Errorf("log output = %q, want an ERROR naming the unreadable secret file", buf.String())
+	}
+
+	// Env still set and matching on the non-secret fields: the env
+	// password fills in rather than the collector connecting with none.
+	cfg, password, deferred, err = syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger())
+	if err != nil {
+		t.Fatalf("syncFPPMQTTConfig() with env set: error = %v, want nil", err)
+	}
+	if deferred {
+		t.Error("migrationDeferred = true, want false")
+	}
+	if !config.FPPMQTTConfigEqual(cfg, testFPPMQTTConfig) || password != testFPPMQTTPassword {
+		t.Errorf("cfg/password = %+v/%q, want the stored config with the env password %q", cfg, password, testFPPMQTTPassword)
+	}
+
+	// A genuine non-secret disagreement still refuses, unreadable file or
+	// not: the owner's disagreement rule is unrelated to the file failure.
+	other := testFPPMQTTConfig
+	other.BrokerURL = "tcp://10.0.9.9:1883"
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, other, testFPPMQTTPassword, time.Now, discardLogger()); !errors.Is(err, errFPPMQTTDisagree) {
+		t.Errorf("syncFPPMQTTConfig() with disagreeing env: error = %v, want errFPPMQTTDisagree", err)
 	}
 }

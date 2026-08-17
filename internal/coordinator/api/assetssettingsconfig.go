@@ -155,6 +155,12 @@ func decodeAssetsSettingsConfigPutBody(body io.Reader) (assetsSettingsPutFields,
 		return assetsSettingsPutFields{}, fmt.Errorf(
 			`request body must be a JSON object with any of "contentBaseUrl","maxUploadBytes","syncIntervalSeconds","inventoryIntervalSeconds": %w`, err)
 	}
+	// A literal null decodes into a nil map with no error, which would
+	// read as "every field absent" and mint a no-op revision.
+	if top == nil {
+		return assetsSettingsPutFields{}, errors.New(
+			`request body must be a JSON object, not null; send {} to change nothing`)
+	}
 
 	allowed := map[string]bool{
 		"contentBaseUrl": true, "maxUploadBytes": true,

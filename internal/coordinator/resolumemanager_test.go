@@ -32,7 +32,7 @@ func newTestResolumeManager(t *testing.T) (*resolumeManager, *resolumeInstanceSo
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 	mgr := newResolumeManager(config.Config{}, runner, &resolume.CompositionStore{}, st, identitySvc, testLogger(), func() {})
-	src := newResolumeInstanceSource(st, testLogger())
+	src := newResolumeInstanceSource(st, testLogger(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -149,6 +149,56 @@ func TestResolumeManagerReconcileZeroToOneToZero(t *testing.T) {
 		t.Fatalf("Configured() = false after reconfiguring the same instance, want true")
 	}
 	waitForObservation(t, mgr.st, "arena-1", "resolume.reachable", 5*time.Second)
+}
+
+// TestResolumeManagerDeferredMigrationSurvivesReconcileTick reproduces the
+// deferred-migration teardown: the boot migration could not write the
+// store, so the environment stays authoritative, the source is seeded with
+// it, and the store holds NO resolume.instances object. A reconcile tick
+// reading the source must keep the env-built bundle, never manufacture an
+// empty instance list from the not-found read and tear it down.
+func TestResolumeManagerDeferredMigrationSurvivesReconcileTick(t *testing.T) {
+	srv := httptest.NewServer(resolumeProductHandler())
+	defer srv.Close()
+
+	mgr, _ := newTestResolumeManager(t)
+	ctx := context.Background()
+
+	env := []config.ResolumeInstance{{ID: "arena-1", URL: srv.URL}}
+	src := newResolumeInstanceSource(mgr.st, testLogger(), env)
+
+	// Boot's synchronous first reconcile, from the env-authoritative list.
+	mgr.reconcile(ctx, env)
+	if !mgr.Configured() {
+		t.Fatal("Configured() = false after the boot reconcile, want true")
+	}
+	mgr.mu.Lock()
+	first := mgr.bundle
+	mgr.mu.Unlock()
+
+	// The periodic tick: the store has no resolume.instances object (the
+	// deferred state), and the tick must not tear the bundle down.
+	mgr.reconcile(ctx, src.Current(ctx))
+	mgr.mu.Lock()
+	after := mgr.bundle
+	mgr.mu.Unlock()
+	if after != first {
+		t.Fatal("reconcile tick during a deferred migration replaced or tore down the env-built bundle, want it untouched")
+	}
+
+	// A transient store read error must keep the current state too, not
+	// manufacture empty: a closed store fails every read with a
+	// non-not-found error.
+	if err := mgr.st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	mgr.reconcile(ctx, src.Current(ctx))
+	mgr.mu.Lock()
+	after = mgr.bundle
+	mgr.mu.Unlock()
+	if after != first {
+		t.Fatal("reconcile tick during a transient store read error tore down the env-built bundle, want it untouched")
+	}
 }
 
 // TestResolumeManagerReconcileURLChangeRestartsTheCollector proves the

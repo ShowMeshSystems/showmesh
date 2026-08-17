@@ -202,6 +202,11 @@ func decodeFPPMQTTConfigPutBody(body io.Reader) (fppMQTTPutFields, error) {
 			`{"brokerURL":string,"username":string,"topicPrefix":string,"hosts":{"id":"HostName",...},"password":string}, `+
 			`every field optional: %w`, err)
 	}
+	// A literal null decodes into a nil map with no error, which would
+	// read as "every field absent" and mint a no-op revision.
+	if top == nil {
+		return fppMQTTPutFields{}, errors.New(`request body must be a JSON object, not null; send {} to change nothing`)
+	}
 
 	for key := range top {
 		if !fppMQTTPutFieldNames[key] {

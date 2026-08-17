@@ -107,15 +107,11 @@ func resolveAuthoritativeAssetSettings(ctx context.Context, st *store.Store, ide
 // mirror. See that function's own doc comment for the full reasoning —
 // unchanged here: a failed write is logged and NEVER refuses to start
 // (ADR-039 decision 3), because a startup migration has no principal to
-// hold accountable for refusing to boot. Runs (and writes revision 1) even
-// when envVarsSet is false, so that a coordinator with nothing configured
-// still gets a resolvable revision-0 state via [config.DefaultAssetSettings]
-// rather than a special case downstream — mirrored from
-// migrateResolumeInstancesFromEnv's own "nothing configured" short-circuit,
-// narrowed: unlike Resolume, zero configured asset settings is not "no
-// migration needed", because config.DefaultAssetSettings() must be the value
-// used in BOTH cases and no PUT is required for env vars that were never
-// set in the first place.
+// hold accountable for refusing to boot. When envVarsSet is false there is
+// nothing to migrate: no revision is written and
+// [config.DefaultAssetSettings] is returned, leaving the store empty until
+// an operator's own first PUT — the same "nothing configured"
+// short-circuit migrateResolumeInstancesFromEnv performs.
 func migrateAssetSettingsFromEnv(ctx context.Context, identitySvc identity.Service, envVarsSet bool, envSettings config.AssetSettings, now func() time.Time, logger *slog.Logger) (settings config.AssetSettings, migrationDeferred bool, err error) {
 	if !envVarsSet {
 		return config.DefaultAssetSettings(), false, nil

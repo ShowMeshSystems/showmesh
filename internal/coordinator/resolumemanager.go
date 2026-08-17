@@ -66,16 +66,23 @@ type resolumeInstanceSource struct {
 	mu       sync.Mutex
 	revision int64
 	cached   []config.ResolumeInstance
-	loaded   bool
 }
 
-func newResolumeInstanceSource(st *store.Store, logger *slog.Logger) *resolumeInstanceSource {
-	return &resolumeInstanceSource{st: st, logger: logger}
+// newResolumeInstanceSource seeds the source with the boot-resolved
+// AUTHORITATIVE instance list. The seed is what Current answers until the
+// store yields an active revision — which it never does while a deferred
+// boot migration leaves the environment authoritative, so without the seed
+// the first reconcile tick would manufacture an empty list and tear down
+// the env-built bundle the boot just constructed.
+func newResolumeInstanceSource(st *store.Store, logger *slog.Logger, initial []config.ResolumeInstance) *resolumeInstanceSource {
+	return &resolumeInstanceSource{st: st, logger: logger, cached: initial}
 }
 
 // Current returns the active Resolume instance list (0 or 1 entries in
-// practice, enforced by validation at write time). On any store error it
-// returns the last list it successfully read, and logs — mirroring
+// practice, enforced by validation at write time). A missing config object
+// is a steady state (nothing ever configured, or a deferred boot migration
+// keeping the environment authoritative) and answers the seed; any other
+// store error keeps the last known list, and logs — mirroring
 // [fppEndpointSource.Current]'s identical "stale-but-real beats
 // manufactured empty" reasoning.
 func (s *resolumeInstanceSource) Current(ctx context.Context) []config.ResolumeInstance {
@@ -83,14 +90,14 @@ func (s *resolumeInstanceSource) Current(ctx context.Context) []config.ResolumeI
 	defer s.mu.Unlock()
 
 	obj, err := s.st.GetConfigObject(ctx, config.ResolumeInstancesConfigKind, config.ResolumeInstancesConfigObjectID)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return s.cached
+	}
 	if err != nil {
-		if !s.loaded {
-			return nil
-		}
 		s.logWarn("failed to read the active resolume.instances configuration; continuing with the last known list", err)
 		return s.cached
 	}
-	if s.loaded && obj.CurrentRevision == s.revision {
+	if obj.CurrentRevision == s.revision {
 		return s.cached
 	}
 
@@ -107,7 +114,6 @@ func (s *resolumeInstanceSource) Current(ctx context.Context) []config.ResolumeI
 
 	s.revision = obj.CurrentRevision
 	s.cached = instances
-	s.loaded = true
 	return instances
 }
 
