@@ -151,13 +151,13 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: sf.SurfaceID}
 
 	obs := []observation.Observation{
-		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, rep),
-		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, rep),
-		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, rep),
-		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, rep),
+		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, sf.ObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, sf.ObservedAt, rep),
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -169,7 +169,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		obs = append(obs, notCollected(res, SignalSurfaceFramesRate, SourceFor(nodeID),
 			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, rep))
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, sf.ObservedAt, rep))
 	}
 
 	// TransportAvailable is nil whenever this surface's transport has never
@@ -190,36 +190,36 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		)
 	} else {
 		obs = append(obs,
-			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep),
-			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, sf.ObservedAt, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, sf.ObservedAt, rep),
 		)
 	}
 
 	return obs
 }
 
-// buildValue is where this package's own version of ADR-011's retained/live
-// rule is enforced, for every value-bearing signal it produces — the
-// identical shape fppmqtt.Collector.buildObservation uses one package over:
+// buildValue stamps ObservedAt from the node's own reported observedAt
+// (sf.ObservedAt, unlike fppmqtt one package over: FPP sends no sample
+// time, this agent does, so this package must use it rather than
+// substituting the coordinator's receipt time — ADR-003, ADR-011).
+// observedAt.IsZero() means the node reported none: [observation.
+// MeasuredUnknownAge], ObservedAt left nil rather than defaulted. Otherwise
+// [observation.Measured] with observedAt, regardless of rep.retained — a
+// retained MQTT delivery's age is only unknown when the payload itself
+// carries no evidence timestamp.
 //
-//   - rep.retained: [observation.MeasuredUnknownAge]. ObservedAt is nil,
-//     never rep.receivedAt.
-//   - live: [observation.Measured] with rep.receivedAt as ObservedAt — the
-//     moment this collector actually recorded the delivery.
-//
-// CollectedAt is rep.receivedAt in both branches: that is when this
-// package's cache actually recorded the evidence (Store.Put), not the later
-// moment Poll happens to run — Poll only ever renders a cache, it does not
-// itself collect anything. Source is [SourceFor](nodeID), not [SourceName]
-// directly — see that function's doc comment for why.
-func buildValue(nodeID string, res observation.ResourceRef, sig observation.SignalID, value any, rep report) observation.Observation {
+// CollectedAt is always rep.receivedAt: when this package's cache actually
+// recorded the evidence (Store.Put), not the later moment Poll happens to
+// run. Source is [SourceFor](nodeID), not [SourceName] directly — see that
+// function's doc comment for why.
+func buildValue(nodeID string, res observation.ResourceRef, sig observation.SignalID, value any, observedAt time.Time, rep report) observation.Observation {
 	source := SourceFor(nodeID)
 	opts := []observation.Option{
 		observation.WithSource(source),
 		observation.WithCollectedAt(rep.receivedAt),
 	}
 
-	if rep.retained {
+	if observedAt.IsZero() {
 		o, err := observation.MeasuredUnknownAge(res, sig, value, opts...)
 		if err != nil {
 			return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)
@@ -228,7 +228,7 @@ func buildValue(nodeID string, res observation.ResourceRef, sig observation.Sign
 	}
 
 	opts = append(opts, observation.WithValidFor(DefaultValidFor))
-	o, err := observation.Measured(res, sig, value, rep.receivedAt, opts...)
+	o, err := observation.Measured(res, sig, value, observedAt, opts...)
 	if err != nil {
 		return failed(res, sig, source, internalErrorReason(nodeID, err), rep.receivedAt)
 	}

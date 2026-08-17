@@ -165,9 +165,24 @@ func (h *handlers) dispatchRenderCommand(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		var problem *v1.Problem
-		params, problem = h.resolveRenderApplyParams(ctx, nodeID, surfaceID, body.SequenceID)
+		var resolveErr error
+		params, problem, resolveErr = h.resolveRenderApplyParams(ctx, nodeID, surfaceID, body.SequenceID)
+		if resolveErr != nil {
+			h.writeInternalError(w, now, "resolve render.surface.apply params", resolveErr)
+			return
+		}
 		if problem != nil {
 			writeProblem(w, h.logger, now, *problem)
+			return
+		}
+		if params == nil {
+			// Defensive: resolveRenderApplyParams's contract is "never a
+			// nil params map without a problem or an error" — see that
+			// function's doc comment (Finding 5). A future call site that
+			// slips past both checks above must still never dispatch a
+			// command with "params": null on the wire.
+			h.writeInternalError(w, now, "resolve render.surface.apply params",
+				errors.New("resolveRenderApplyParams returned nil params with no problem and no error"))
 			return
 		}
 	} else {
@@ -240,50 +255,62 @@ func (h *handlers) handleRenderTransportProbe(w http.ResponseWriter, r *http.Req
 // self-contained params object (build contract ruling 4) or refuses
 // outright, naming exactly what could not be resolved. It never returns a
 // partial params map alongside a non-nil problem.
-func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surfaceID, sequenceID string) (map[string]any, *v1.Problem) {
+//
+// Its result is one of exactly three shapes (Finding 5): (params, nil, nil)
+// on success; (nil, problem, nil) when the CALLER's request is what cannot
+// be resolved (bad sequence id, no active show, and the like) — a v1.Problem
+// the caller reports to the operator; or (nil, nil, err) when THIS
+// coordinator failed to read its own store (a transient SQLite error and
+// the like) — an error the caller must report as its own 500, never as a
+// node-side rejection. A coordinator-side failure disguised as "no params,
+// no problem" used to reach dispatch as a real MQTT publish carrying
+// "params": null, which a node then correctly refused — reported to the
+// operator as the NODE having rejected the command, when the coordinator
+// never actually resolved one.
+func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surfaceID, sequenceID string) (map[string]any, *v1.Problem, error) {
 	if h.deps.AssetManifests == nil || h.deps.Config == nil {
 		p := invalidParameterProblem("this coordinator has no asset store or config store wired in; render.surface.apply cannot resolve an assignment")
-		return nil, &p
+		return nil, &p, nil
 	}
 
 	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowSurfaceConfigKind, surfaceID)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigObjectNotFound) {
 			p := resourceNotFoundProblem(fmt.Sprintf("surface %q is not a configured show.surface object", surfaceID))
-			return nil, &p
+			return nil, &p, nil
 		}
-		return nil, nil
+		return nil, nil, fmt.Errorf("read show.surface config object %q: %w", surfaceID, err)
 	}
 	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, surfaceID, obj.CurrentRevision)
 	if err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("read show.surface config revision for %q: %w", surfaceID, err)
 	}
 	payload, verr := config.DecodeShowSurfacePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 	if verr != nil {
 		p := invalidParameterProblem(fmt.Sprintf("surface %q has a stored payload that no longer decodes: %s", surfaceID, verr.Detail))
-		return nil, &p
+		return nil, &p, nil
 	}
 	if payload.Node != nodeID {
 		p := invalidParameterProblem(fmt.Sprintf("surface %q is assigned to node %q, not %q", surfaceID, payload.Node, nodeID))
-		return nil, &p
+		return nil, &p, nil
 	}
 
 	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
 	if err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("resolve active show: %w", err)
 	}
 	if !active.Configured {
 		p := invalidParameterProblem("no active show is configured; render.surface.apply has no show to resolve an asset against")
-		return nil, &p
+		return nil, &p, nil
 	}
 	if payload.Show != active.ShowID {
 		p := invalidParameterProblem(fmt.Sprintf("surface %q belongs to show %q, which is not the active show %q", surfaceID, payload.Show, active.ShowID))
-		return nil, &p
+		return nil, &p, nil
 	}
 
 	expected, err := assetsync.ExpectedAssetsForNode(ctx, h.deps.AssetManifests, active.ShowID, nodeID)
 	if err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("resolve expected assets for node %q in show %q: %w", nodeID, active.ShowID, err)
 	}
 	var matches []assetsync.ExpectedAsset
 	for _, a := range expected.Assets {
@@ -294,11 +321,11 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 	switch len(matches) {
 	case 0:
 		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, active.ShowID))
-		return nil, &p
+		return nil, &p, nil
 	default:
 		if len(matches) > 1 {
 			p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(matches), sequenceID, nodeID, active.ShowID))
-			return nil, &p
+			return nil, &p, nil
 		}
 	}
 	asset := matches[0]
@@ -309,13 +336,13 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 		FSEQFilename: asset.Filename, FSEQContentHash: asset.ContentHash,
 	})
 	if err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("encode render.surface.apply params: %w", err)
 	}
 	var params map[string]any
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, nil
+		return nil, nil, fmt.Errorf("decode render.surface.apply params back into a map: %w", err)
 	}
-	return params, nil
+	return params, nil, nil
 }
 
 // renderApplyParamsPayload's JSON key set matches
@@ -436,6 +463,21 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		// as one that reports it present — see confirmRenderTransportProbe.
 		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(ctx, in.NodeID, in.SurfaceID, dispatchedAt)
 	} else {
+		// render.pipeline.restart's wantState "running" is what the surface
+		// already was before this command (that is the whole point of a
+		// restart), so a naive receipt-time fence could trivially confirm
+		// off a pre-existing reading — Finding 4. evaluateRenderSurfaceState's
+		// ObservedAt fence already closes this: internal/agent/pipeline.
+		// runner.setState only stamps a fresh ObservedAt on a REAL state
+		// transition, and both cmdApply and cmdRestart unconditionally run
+		// stopCurrent+attemptStart (Starting, then Running), so a stale
+		// pre-dispatch "running" reading can never satisfy the fence — a
+		// restart-count movement check was tried here and reverted: the
+		// real agent's RestartCount increments only on a crash-driven
+		// restart (the exit branch in pipeline.runner.loop), never on an
+		// operator-issued one, so requiring it to move would make every
+		// render.pipeline.restart command time out. Confirmed against a
+		// real agent (test/integration/render_dispatch_test.go).
 		confirmed, outcomeState, outcomeReason = h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
 	}
 	resolvedAt := h.now()
@@ -586,34 +628,55 @@ func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfa
 	if src == "" {
 		src = "unknown source"
 	}
-	if o.CollectedAt.Before(notBefore) {
-		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
-			notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
-	}
 
 	// A surface this node explicitly stops reporting, with a reason
 	// (noderender.Collector.Poll's dropped-surface absence — see that
 	// package), IS evidence the pipeline is gone: ADR-003's "evidence that
 	// observed state moved", exactly as much as an explicit "stopped"
-	// value would be. The CollectedAt-vs-notBefore fence immediately above
-	// already applies to this row too, so this branch can only fire on
-	// absence evidence that post-dates dispatch — the fence this project
-	// has paid for once already (a command confirmed 179 microseconds
-	// after its own dispatch off a pre-dispatch reading) is not
-	// bypassed here. Only wantState=="stopped" (render.surface.clear)
-	// accepts this: render.surface.apply/render.pipeline.restart want
-	// "running", which an absence can never satisfy.
-	if wantState == mqttproto.RenderPipelineStateStopped && o.Absence == observation.StateNotCollected {
-		reason := o.Reason
-		if reason == "" {
-			reason = "surface.pipeline.state was explicitly reported absent"
+	// value would be. This absence carries no node-clock ObservedAt (there
+	// is no sample to date), so it is fenced on CollectedAt — the moment
+	// THIS coordinator's own poll actually noticed the drop, which is real
+	// evidence of a transition for an absence row, unlike CollectedAt on a
+	// value-bearing row (see below). Only wantState=="stopped"
+	// (render.surface.clear) accepts this: render.surface.apply/
+	// render.pipeline.restart want "running", which an absence can never
+	// satisfy.
+	if o.Absence == observation.StateNotCollected {
+		if o.CollectedAt.Before(notBefore) {
+			return false, string(observation.StateNotCollected), fmt.Sprintf(
+				"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
+				notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
 		}
-		// Formatted with the same `surface.pipeline.state = %q` prefix the
-		// value-observation branch below uses, so a caller reading the
-		// outcome reason sees the desired state was reached either way —
-		// only the parenthetical names how it was confirmed.
-		return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src)
+		if wantState == mqttproto.RenderPipelineStateStopped {
+			reason := o.Reason
+			if reason == "" {
+				reason = "surface.pipeline.state was explicitly reported absent"
+			}
+			// Formatted with the same `surface.pipeline.state = %q` prefix
+			// the value-observation branch below uses, so a caller reading
+			// the outcome reason sees the desired state was reached either
+			// way — only the parenthetical names how it was confirmed.
+			return true, string(observation.StateCurrent), fmt.Sprintf("surface.pipeline.state = %q (absent: %s, via %s)", wantState, reason, src)
+		}
+		return false, string(o.Absence), fmt.Sprintf("surface.pipeline.state is absent (%s), wanted %q (via %s)", o.Reason, wantState, src)
+	}
+
+	// Value-bearing evidence is fenced on ObservedAt — the node's own
+	// clock reading of when the condition was true (Finding 4) — never on
+	// CollectedAt, the coordinator's receipt time. A report snapshotted
+	// before dispatch and merely RECEIVED after it must not confirm; that
+	// is the 179-microsecond defect this project has already paid for
+	// once. ObservedAt==nil (genuinely unknown age) can never satisfy this
+	// fence either, since there is then no evidence the reading post-dates
+	// dispatch at all.
+	if o.ObservedAt == nil {
+		return false, string(observation.StateUnknownAge), fmt.Sprintf(
+			"surface.pipeline.state evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+	}
+	if o.ObservedAt.Before(notBefore) {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.pipeline.state reading has arrived since this command was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
+			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
 	}
 
 	state := o.StateAt(h.now())
@@ -703,10 +766,18 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	if src == "" {
 		src = "unknown source"
 	}
-	if o.CollectedAt.Before(notBefore) {
+	// Fenced on ObservedAt, not CollectedAt — the identical fix
+	// evaluateRenderSurfaceState applies for Finding 4: the node's own
+	// clock reading of when the probe result was true, never the
+	// coordinator's receipt time.
+	if o.ObservedAt == nil {
+		return false, string(observation.StateUnknownAge), fmt.Sprintf(
+			"surface.transport.available evidence from node %s carries no observation timestamp (unknown age); cannot confirm it post-dates dispatch", nodeID)
+	}
+	if o.ObservedAt.Before(notBefore) {
 		return false, string(observation.StateNotCollected), fmt.Sprintf(
-			"no surface.transport.available reading has arrived since this probe was dispatched at %s; the most recent evidence is from %s, via %s, and predates dispatch",
-			notBefore.Format(time.RFC3339), o.CollectedAt.Format(time.RFC3339), src)
+			"no surface.transport.available reading has arrived since this probe was dispatched at %s; the most recent evidence was observed at %s, via %s, and predates dispatch",
+			notBefore.Format(time.RFC3339), o.ObservedAt.Format(time.RFC3339), src)
 	}
 	state := o.StateAt(h.now())
 	if state != observation.StateCurrent {
