@@ -584,12 +584,12 @@ func renderSurfacePayload(surfaceID string) mqttproto.RenderPayload {
 		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
 		GstLaunchAvailable: true,
 		Surfaces: []mqttproto.RenderSurfaceReport{{
-			SurfaceID:      surfaceID,
-			PipelineState:  mqttproto.RenderPipelineStateRunning,
-			Since:          time.Unix(1000, 0).UTC(),
-			FramesWritten:  10,
-			Transport:      "ndi",
-			ObservedAt:     time.Unix(2000, 0).UTC(),
+			SurfaceID:     surfaceID,
+			PipelineState: mqttproto.RenderPipelineStateRunning,
+			Since:         time.Unix(1000, 0).UTC(),
+			FramesWritten: 10,
+			Transport:     "ndi",
+			ObservedAt:    time.Unix(2000, 0).UTC(),
 		}},
 	}
 }
