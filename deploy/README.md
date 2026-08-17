@@ -125,6 +125,8 @@ If you already run Mosquitto (or another MQTT broker) elsewhere on the show netw
 
 The coordinator's SQLite database (ADR-009) and other runtime state live in the named volume `showmesh-data`, mounted at `/var/lib/showmesh` inside the container. The bundled broker's persistence and logs live in `mosquitto-data` and `mosquitto-log`. Named volumes are used instead of bind mounts so ownership and filesystem semantics stay consistent across host platforms.
 
+This volume is credential-bearing and must be treated as sensitive: alongside principal password hashes and token digests, it now also holds the `fpp.mqtt` configuration kind's broker password in the clear, in its own file (`fpp-mqtt-broker-password.txt`) rather than in the SQLite database — ADR-039 decision 7 keeps a rotatable secret out of SQLite's immutable configuration-revision history, but the value still has to live somewhere the coordinator can read it back to authenticate to the broker, and that somewhere is this volume. Back it up and restore it with the same care as any other credential store.
+
 ## Backup
 
 Compose prefixes every volume name with the project name (the directory name by default, `deploy` if you brought the stack up as shown above, or whatever you pass via `-p`/`COMPOSE_PROJECT_NAME`). The named volume is therefore not literally `showmesh-data` on disk; running a backup command against that literal name silently creates a brand-new, empty volume and writes an empty tarball with exit code 0, so always discover the real name first:

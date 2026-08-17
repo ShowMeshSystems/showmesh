@@ -74,6 +74,16 @@ export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResp
 export type ResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
 export type ConfigResolumeInstance = components['schemas']['ConfigResolumeInstance']
 export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-3 (ADR-039): the fpp.mqtt configuration write surface.
+// Unlike fpp.endpoints/resolume.instances, the PUT request shape
+// (ConfigFPPMQTTPutRequest) is NOT the same as the response payload shape
+// (ConfigFPPMQTTPayload, reached via FPPMQTTConfigResponse['payload']):
+// every PUT field is independently optional (ADR-039 decision 5) and the
+// response never carries the password itself (decision 7), only
+// `passwordSet`.
+export type FPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
+export type ConfigFPPMQTTPayload = components['schemas']['ConfigFPPMQTTPayload']
+export type ConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']

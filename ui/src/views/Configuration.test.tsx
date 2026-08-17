@@ -31,6 +31,8 @@ import { ApiError } from '../api/errors'
 // an alert, so `findByRole('alert')`/`queryByRole('alert')` assertions
 // below still see only the FPP section's own alert. Resolume-specific
 // behavior has its own coverage in Configuration.resolume.test.tsx.
+// Track G seam G-3 (ADR-039) added a third section (FPPMQTTSection) the
+// identical way, with the identical default-404 treatment.
 const {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
@@ -38,6 +40,9 @@ const {
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
+  getFPPMQTTConfig,
+  putFPPMQTTConfig,
+  getFPPMQTTConfigRevisions,
 } = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   putFPPEndpointsConfig: vi.fn(),
@@ -45,6 +50,9 @@ const {
   getResolumeInstancesConfig: vi.fn(),
   putResolumeInstancesConfig: vi.fn(),
   getResolumeInstancesConfigRevisions: vi.fn(),
+  getFPPMQTTConfig: vi.fn(),
+  putFPPMQTTConfig: vi.fn(),
+  getFPPMQTTConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -56,6 +64,9 @@ vi.mock('../api', async (importOriginal) => {
     getResolumeInstancesConfig,
     putResolumeInstancesConfig,
     getResolumeInstancesConfigRevisions,
+    getFPPMQTTConfig,
+    putFPPMQTTConfig,
+    getFPPMQTTConfigRevisions,
   }
 })
 
@@ -72,6 +83,18 @@ beforeEach(() => {
     kind: 'resolume.instances',
     revisions: [],
   })
+  getFPPMQTTConfig.mockRejectedValue(
+    new ApiError(
+      'no fpp.mqtt configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getFPPMQTTConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'fpp.mqtt',
+    revisions: [],
+  })
 })
 
 afterEach(() => {
@@ -82,6 +105,9 @@ afterEach(() => {
   getResolumeInstancesConfig.mockReset()
   putResolumeInstancesConfig.mockReset()
   getResolumeInstancesConfigRevisions.mockReset()
+  getFPPMQTTConfig.mockReset()
+  putFPPMQTTConfig.mockReset()
+  getFPPMQTTConfigRevisions.mockReset()
 })
 
 function renderConfiguration(model: Model) {

@@ -21,7 +21,6 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -184,6 +183,31 @@ func Run() int {
 		resolumeConfiguredID = resolumeInstances[0].ID
 	}
 
+	// Track G seam G-3 (ADR-039): the SHOWMESH_FPP_MQTT_* -> store
+	// migration and disagreement rule, mirroring resolume.instances above
+	// — see fppmqttsync.go. From this point on, envFPPMQTT/envFPPMQTTPassword
+	// are never read again: fppMQTTCfg/fppMQTTPassword are AUTHORITATIVE.
+	envFPPMQTT := config.FPPMQTTConfig{
+		BrokerURL: cfg.FPPMQTTBrokerURL, Username: cfg.FPPMQTTUsername,
+		TopicPrefix: cfg.FPPMQTTTopicPrefix, Hosts: cfg.FPPMQTTHosts,
+	}
+	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, cfg.DataDir, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative fpp.mqtt configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+	// The identical re-check config.ValidateFPPMQTTHostIDs already performed
+	// against the env-parsed list at config-load time, re-run against the
+	// AUTHORITATIVE fpp.endpoints and fpp.mqtt lists — see the fpp.mqtt
+	// hosts cross-check above this block for why env-parsed alone is not
+	// enough once either side may be store-authoritative instead.
+	if err := config.ValidateFPPMQTTHostIDs(fppMQTTCfg.Hosts, cfg.FPPEndpoints); err != nil {
+		logger.Error("fpp.mqtt no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
 	// hub is assigned below, once api.New has built it, but inv (which can
 	// start delivering MQTT messages the instant broker.NewBrokerManager
 	// begins connecting) needs a notify callback wired in before that
@@ -321,6 +345,19 @@ func Run() int {
 	resolumeMgr.reconcile(ctx, resolumeInstances)
 	resolumeInstanceSrc := newResolumeInstanceSource(st, logger)
 
+	// Track G seam G-3 (ADR-039): fppMQTTManager owns the live
+	// *fppmqtt.Collector for whatever fpp.mqtt currently configures,
+	// mirroring resolumeMgr immediately above — see fppmqttmanager.go's own
+	// file comment. It replaces the old one-shot construction below cfg's
+	// FPPEndpoints loop used to perform exactly once, for the process's
+	// whole life.
+	fppMQTTMgr := newFPPMQTTManager(fppRunner, logger)
+	// The FIRST reconcile runs synchronously, here, for the identical
+	// "no request may observe a partially-wired dependency" reason
+	// resolumeMgr.reconcile above does.
+	fppMQTTMgr.reconcile(ctx, fppMQTTCfg, fppMQTTPassword)
+	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger)
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -345,13 +382,15 @@ func Run() int {
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
 		// multiCollectorStatusLister (apiwiring.go) concatenates the two;
-		// the MQTT half's "configured" bit is exactly the same condition
-		// that decides whether *fppmqtt.Collector is constructed and
-		// registered below, so this line and that one can never disagree
-		// about whether FPP MQTT collection is enabled.
+		// fppMQTTMgr (Track G seam G-3) reports its own bundle live, so this
+		// line can never disagree with whether FPP MQTT collection is
+		// actually running.
 		Collectors: multiCollectorStatusLister{
 			fppCollectorStatusLister{endpoints: fppEndpoints},
-			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
+			// Track G seam G-3: fppMQTTMgr reports its OWN current state
+			// live, replacing the old fppMQTTCollectorStatusLister startup
+			// snapshot — mirroring resolumeMgr immediately below.
+			fppMQTTMgr,
 			// Track G seam G-2: resolumeMgr reports its OWN current state
 			// live (api.CollectorStatuses is called per request), so this
 			// entry and the manager's own actual bundle can never disagree —
@@ -473,6 +512,19 @@ func Run() int {
 		// doc comments, which apply unchanged here.
 		ResolumeInstancesEnvVarSet:         cfg.ResolumeURL != "",
 		ResolumeInstancesMigrationDeferred: resolumeInstancesMigrationDeferred,
+		// FPPMQTT is Track G seam G-3's live host map, read from fppMQTTMgr
+		// (the SAME manager wired into Collectors above) rather than a
+		// startup snapshot — see api.FPPMQTTHostLister's own doc comment.
+		FPPMQTT: fppMQTTMgr,
+		// FPPMQTTSecret is Track G seam G-3's write-only credential surface
+		// (ADR-039 decision 7), backed by the secret file under cfg.DataDir
+		// — see fppMQTTSecretAdapter (apiwiring.go).
+		FPPMQTTSecret: fppMQTTSecretAdapter{dataDir: cfg.DataDir},
+		// FPPMQTTEnvVarSet/FPPMQTTMigrationDeferred are
+		// FPPEndpointsEnvVarSet/FPPEndpointsMigrationDeferred's mirror for
+		// Track G seam G-3 — see those two fields' own doc comments.
+		FPPMQTTEnvVarSet:         cfg.FPPMQTTBrokerURL != "",
+		FPPMQTTMigrationDeferred: fppMQTTMigrationDeferred,
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -651,38 +703,11 @@ func Run() int {
 	}
 	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, fppCollectorReconcileInterval, logger)
 
-	// Seam B's FPP MQTT collector (internal/coordinator/collector/fppmqtt),
-	// contract section 5.4: constructed and registered only when its broker
-	// URL is configured — unset SHOWMESH_FPP_MQTT_BROKER_URL means this
-	// collector does not exist at all for this process, no warning storm,
-	// no failed-connection signals for a feature the operator did not
-	// enable (contract section 4.4). cfg.Validate has already checked
-	// FPPMQTTHosts' ids against cfg.FPPEndpoints and FPPMQTTBrokerURL's
-	// shape (internal/coordinator/config's validateFPPMQTTConfig); fppmqtt.New
-	// re-checks the same shape on its own for the identical "safe to
-	// construct directly, without relying on config validation having
-	// already run" reason fpp.New already documents for the REST collector
-	// above, so a failure here would mean those two checks have drifted
-	// apart — a startup-worthy inconsistency in this binary, not a
-	// condition to skip past silently.
-	var mqttFPPCollector *fppmqtt.Collector
-	if cfg.FPPMQTTBrokerURL != "" {
-		mqttFPPCollector, err = fppmqtt.New(fppmqtt.Options{
-			BrokerURL:   cfg.FPPMQTTBrokerURL,
-			Username:    cfg.FPPMQTTUsername,
-			Password:    cfg.FPPMQTTPassword,
-			TopicPrefix: cfg.FPPMQTTTopicPrefix,
-			Hosts:       cfg.FPPMQTTHosts,
-			Logger:      logger,
-		})
-		if err != nil {
-			logger.Error("failed to construct fpp mqtt collector", "error", err)
-			_ = bm.Disconnect(ctx)
-			_ = st.Close()
-			return 1
-		}
-		fppRunner.Add(mqttFPPCollector, mqttFPPCollector.PollInterval())
-	}
+	// Track G seam G-3 (ADR-039): fppMQTTMgr already constructed and
+	// registered its collector, if configured, in its first synchronous
+	// reconcile call above (mirroring resolumeMgr) — replacing the old
+	// one-shot construction this block used to perform here. See
+	// fppmqttmanager.go's own file comment.
 
 	// The store and the broker each contribute independently to /readyz;
 	// readiness.Aggregate is not-ready as soon as either is, per ADR-011 —
@@ -712,7 +737,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(6)
+	backgroundWG.Add(7)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -758,28 +783,20 @@ func Run() int {
 		watchUnclaimedBootstrap(ctx, identitySvc, logger)
 	}()
 
-	// mqttFPPCollector.Run owns the FPP MQTT broker connection's own
-	// lifecycle (connect, resubscribe across reconnects, graceful
-	// disconnect on ctx cancellation — see that method's doc comment),
-	// entirely separate from fppRunner's poll-loop goroutine above: Poll
-	// only ever renders whatever mqttFPPCollector's message store already
-	// holds (contract section 4.1 — Poll never touches the network), so the
-	// connection itself needs its own goroutine the same way hub.Run and
-	// fppRunner.Run already get theirs, joined via the identical
-	// backgroundWG so shutdown still waits for every one of them cleanly.
-	// Started (and only started) exactly when mqttFPPCollector was
-	// constructed above, matching that same cfg.FPPMQTTBrokerURL != ""
-	// condition — an unconfigured FPP MQTT collector contributes no
-	// goroutine at all, per contract section 4.4.
-	if mqttFPPCollector != nil {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			if err := mqttFPPCollector.Run(ctx); err != nil {
-				logger.Error("fpp mqtt collector connection ended", "error", err)
-			}
-		}()
-	}
+	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring
+	// resolumeMgr.Run immediately below: it keeps the current
+	// *fppmqtt.Collector bundle matching the active fpp.mqtt configuration,
+	// live, with no restart in either direction, and tears it down on
+	// ctx.Done() — see fppmqttmanager.go's own doc comment. Started
+	// UNCONDITIONALLY, replacing the old cfg.FPPMQTTBrokerURL != "" gated
+	// goroutine this block used to run: this loop is what notices a FIRST
+	// broker being configured (the zero-to-one transition ADR-039 decision
+	// 6 requires work with no restart). Counted in this function's own
+	// backgroundWG.Add(7) above.
+	go func() {
+		defer backgroundWG.Done()
+		fppMQTTMgr.Run(ctx, fppMQTTConfigSrc)
+	}()
 
 	// resolumeMgr.Run owns Track G seam G-2's own reconcile loop: it keeps
 	// the current bundle (collector, watcher, action dispatcher, recovery)
@@ -795,7 +812,7 @@ func Run() int {
 	// before returning (resolumeManager.Run's own doc comment) — mirroring
 	// reconcileFPPCollectors' identical "always running, adds/removes as
 	// configuration changes" shape one field over. Counted in this
-	// function's own backgroundWG.Add(6) above, alongside hub.Run and
+	// function's own backgroundWG.Add(7) above, alongside hub.Run and
 	// fppRunner.Run, rather than a standalone conditional Add — it is
 	// unconditional, matching them.
 	go func() {

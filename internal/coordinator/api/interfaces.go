@@ -76,6 +76,26 @@ type ResolumeLister interface {
 	ListInstances(ctx context.Context) ([]ResolumeInstanceView, error)
 }
 
+// FPPMQTTHostLister reports the id->HostName map fpp.mqtt currently
+// configures, live — not a startup snapshot. Used by
+// handlePutFPPEndpointsConfig (config.go) to cross-check a proposed
+// fpp.endpoints list against fpp.mqtt as it stands right now, mirroring
+// the identical live re-check that handler already runs against
+// [Dependencies.Resolume].
+type FPPMQTTHostLister interface {
+	CurrentHosts(ctx context.Context) (map[string]string, error)
+}
+
+// FPPMQTTSecretStore stores and reports presence of the fpp.mqtt broker
+// password (ADR-039 decision 7). The value itself is never read back
+// through this interface — only Set/Clear write it, and Has reports
+// presence only.
+type FPPMQTTSecretStore interface {
+	HasFPPMQTTPassword(ctx context.Context) (bool, error)
+	SetFPPMQTTPassword(ctx context.Context, password string) error
+	ClearFPPMQTTPassword(ctx context.Context) error
+}
+
 // ObservationFilter narrows GET /api/v1/observations per contract section
 // 6.1 ("filters resourceKind, resourceId, signal"). A nil field means no
 // filter on that dimension.

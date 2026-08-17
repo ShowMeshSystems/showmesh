@@ -97,6 +97,9 @@ type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsRespo
 // Track G seam G-2 (ADR-039).
 type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
 type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-3 (ADR-039).
+type SchemaFPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
+type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -574,6 +577,49 @@ export class ApiStore {
         '/config/resolume.instances/revisions',
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-3 (ADR-039): the fpp.mqtt configuration write
+  // surface. Unlike resolume.instances/fpp.endpoints, `set` is a PARTIAL
+  // UPDATE (every field independently optional — see
+  // ConfigFPPMQTTPutRequest's own doc comment); the caller builds a
+  // request object naming only the fields it actually intends to change.
+
+  /** `GET /api/v1/config/fpp.mqtt` (Track G seam G-3). Throws (404) when nothing has been configured yet. The broker password is never returned — `payload.passwordSet` reports presence only. */
+  async getFPPMQTTConfig(): Promise<SchemaFPPMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPMQTTConfigResponse>('/config/fpp.mqtt', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/fpp.mqtt` (Track G seam G-3). A key absent from
+   * request leaves that field's stored value unchanged (ADR-039 decision
+   * 5) — this is what lets the operator edit, say, only topicPrefix
+   * without re-typing a password `getFPPMQTTConfig` never gave back.
+   * Validated before activation (ADR-009) — a rejected payload throws and
+   * appends no revision.
+   */
+  async putFPPMQTTConfig(request: SchemaConfigFPPMQTTPutRequest): Promise<SchemaFPPMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPMQTTConfigResponse>('/config/fpp.mqtt', request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/fpp.mqtt/revisions` (Track G seam G-3): revision history, newest first, metadata only. */
+  async getFPPMQTTConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fpp.mqtt/revisions', controller.signal)
     } finally {
       this.endSideCall(controller)
     }

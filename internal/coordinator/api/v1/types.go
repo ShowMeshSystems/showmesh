@@ -933,6 +933,36 @@ type ResolumeInstancesConfigResponse struct {
 	RestartRequiredReason  string                         `json:"restartRequiredReason"`
 }
 
+// ConfigFPPMQTTPayload is the "fpp.mqtt" configuration kind's decoded
+// payload (Track G seam G-3, ADR-039): the "payload" member of GET and PUT
+// /config/fpp.mqtt's response. PasswordSet reports presence only — the
+// password itself never appears on this or any other wire type (ADR-039
+// decision 7). Hosts is never null on the wire.
+type ConfigFPPMQTTPayload struct {
+	BrokerURL   string            `json:"brokerURL"`
+	Username    string            `json:"username"`
+	TopicPrefix string            `json:"topicPrefix"`
+	Hosts       map[string]string `json:"hosts"`
+	PasswordSet bool              `json:"passwordSet"`
+}
+
+// FPPMQTTConfigResponse is the body of GET and PUT /config/fpp.mqtt,
+// mirroring [FPPEndpointsConfigResponse]'s shape. RestartRequired is
+// always false: this configuration applies without a restart from the
+// start (ADR-036 via ADR-039 decision 6).
+type FPPMQTTConfigResponse struct {
+	ServerTime             string               `json:"serverTime"`
+	Kind                   string               `json:"kind"`
+	Revision               int64                `json:"revision"`
+	Payload                ConfigFPPMQTTPayload `json:"payload"`
+	UpdatedAt              string               `json:"updatedAt"`
+	CreatedByPrincipalID   *string              `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string              `json:"createdByPrincipalName"`
+	Source                 string               `json:"source"`
+	RestartRequired        bool                 `json:"restartRequired"`
+	RestartRequiredReason  string               `json:"restartRequiredReason"`
+}
+
 // ConfigRevisionMeta is one element of [ConfigRevisionsResponse.Revisions]:
 // a config_revisions row's metadata, WITHOUT its payload — the revisions
 // list is for browsing history (which revision, when, by whom, from what

@@ -416,6 +416,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/fpp.mqtt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active fpp.mqtt configuration (Track G seam G-3, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_MQTT_*` into its store could not be persisted, in which case a configuration IS in effect. `restartRequired` is always `false`: the FPP MQTT collector follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start). The broker password is NEVER returned (ADR-039 decision 7): `passwordSet` reports presence only.
+         */
+        get: operations["getFPPMQTTConfig"];
+        /**
+         * Write a new fpp.mqtt configuration revision (Track G seam G-3, ADR-039)
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/fpp.endpoints` and `PUT /config/resolume.instances`, this is a PARTIAL UPDATE: every top-level field (`brokerURL`, `username`, `topicPrefix`, `hosts`, `password`) is independently optional. A key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5) — this is what makes the credential rule (decision 7) usable at all, since `GET` never returns the password and a PUT requiring every field present would erase a credential the operator never saw. A `null` `brokerURL`, `username`, or `topicPrefix` is rejected (pass `""` to explicitly clear that field); a `null` `hosts` is rejected (pass `{}` to explicitly configure zero hosts); a `null` or `""` `password` explicitly clears the stored credential.
+         *     Once merged with the current stored configuration, the result is validated (broker URL scheme/host, no userinfo, host id syntax, no duplicate `HostName` across two ids, and every host id cross-checked against the current `fpp.endpoints` configuration, read live at write time) BEFORE activation (ADR-009): a rejected write appends no revision.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_MQTT_BROKER_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     On success, the broker password (if a `password` key was present) is written to a dedicated secret file BEFORE the config revision — never into `config_revisions.payload_json`, which is immutable by design (ADR-009) and would otherwise leave a permanent copy of a rotatable secret (ADR-039 decision 7) — then a new immutable revision is appended and activated in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putFPPMQTTConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/fpp.mqtt/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * fpp.mqtt revision history, newest first (Track G seam G-3, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/fpp.mqtt`'s `404` for the same state. Carries no payload, so the password is not a concern here even in principle — see `ConfigRevisionMeta`.
+         */
+        get: operations["getFPPMQTTConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/resolume/composition": {
         parameters: {
             query?: never;
@@ -1584,6 +1631,44 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
+        /** @description The "fpp.mqtt" configuration kind's payload (Track G seam G-3, ADR-039), as it appears in the "payload" member of GET and PUT /config/fpp.mqtt's response. passwordSet reports presence only — the broker password itself never appears on this or any other wire type (ADR-039 decision 7). hosts is never null. */
+        ConfigFPPMQTTPayload: {
+            brokerURL: string;
+            username: string;
+            topicPrefix: string;
+            hosts: {
+                [key: string]: string;
+            };
+            passwordSet: boolean;
+        };
+        /** @description The request body of PUT /config/fpp.mqtt (Track G seam G-3, ADR-039). Unlike every other configuration kind's PUT request in this document, EVERY field here is independently optional: a key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5), which is what makes the credential rule (decision 7) usable at all — GET never returns the password, so a PUT that required every field present would erase a credential the operator never saw. See `PUT /config/fpp.mqtt`'s own description for the per-field null/empty handling this schema alone does not express (a null brokerURL/username/topicPrefix or a null hosts is rejected by the handler; a null or empty password explicitly clears it). */
+        ConfigFPPMQTTPutRequest: {
+            brokerURL?: string;
+            username?: string;
+            topicPrefix?: string;
+            hosts?: {
+                [key: string]: string;
+            };
+            password?: string | null;
+        };
+        /** @description The body of GET and PUT /config/fpp.mqtt. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: this configuration is applied without a restart from the start (ADR-036 via ADR-039 decision 6). */
+        FPPMQTTConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "fpp.mqtt";
+            revision: number;
+            payload: components["schemas"]["ConfigFPPMQTTPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
         /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
         ConfigRevisionMeta: {
             revision: number;
@@ -1596,12 +1681,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, and GET /config/resolume.instances/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, and Track G seam G-2 another). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, and GET /config/resolume.instances/revisions, and GET /config/fpp.mqtt/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track G seam G-2 another, and Track G seam G-3 another). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances" | "fpp.mqtt";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3373,6 +3458,97 @@ export interface operations {
         };
     };
     getResolumeInstancesConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPMQTTConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFPPMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFPPMQTTPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPMQTTConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPMQTTConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

@@ -348,6 +348,38 @@ type Dependencies struct {
 	// [Dependencies.ResolumeID] documents. Rendered on GET
 	// /resolume/recovery as settleDelaySeconds.
 	ResolumeRecoverySettleSeconds float64
+
+	// FPPMQTT is Track G seam G-3's live fpp.mqtt host map — see
+	// [FPPMQTTHostLister]. A nil field is replaced by [noFPPMQTTHostLister],
+	// under which the cross-check in handlePutFPPEndpointsConfig has
+	// nothing to enforce, matching this struct's standing "an unwired
+	// dependency is not this API failing" posture.
+	FPPMQTT FPPMQTTHostLister
+
+	// FPPMQTTSecret is Track G seam G-3's write-only credential surface for
+	// the fpp.mqtt broker password (ADR-039 decision 7) — see
+	// [FPPMQTTSecretStore]. A nil field is replaced by
+	// [noFPPMQTTSecretStore], under which GET reports no password set and a
+	// PUT naming one refuses loudly, matching every other unwired write
+	// dependency's posture.
+	FPPMQTTSecret FPPMQTTSecretStore
+
+	// FPPMQTTEnvVarSet is [Dependencies.FPPEndpointsEnvVarSet]'s mirror for
+	// Track G seam G-3: whether SHOWMESH_FPP_MQTT_BROKER_URL is currently
+	// set in the coordinator PROCESS's environment. Consumed by
+	// handlePutFPPMQTTConfig: a write is refused with 409 while this is
+	// true (ADR-039 decision 4). The zero value (false) is the same
+	// "nothing told this API otherwise" posture as every other unwired
+	// dependency in this struct.
+	FPPMQTTEnvVarSet bool
+
+	// FPPMQTTMigrationDeferred is [Dependencies.FPPEndpointsMigrationDeferred]'s
+	// mirror: this coordinator started with SHOWMESH_FPP_MQTT_BROKER_URL
+	// set, tried to migrate it into the store, and could not persist that
+	// write — see internal/coordinator's fppmqttsync.go. The zero value
+	// (false) is the same "nothing told this API otherwise" posture as
+	// every other unwired dependency here.
+	FPPMQTTMigrationDeferred bool
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -427,7 +459,36 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.ResolumeRecovery == nil {
 		d.ResolumeRecovery = noResolumeRecoveryProvider{}
 	}
+	if d.FPPMQTT == nil {
+		d.FPPMQTT = noFPPMQTTHostLister{}
+	}
+	if d.FPPMQTTSecret == nil {
+		d.FPPMQTTSecret = noFPPMQTTSecretStore{}
+	}
 	return d
+}
+
+// noFPPMQTTHostLister is [Dependencies.FPPMQTT]'s nil-safe default:
+// CurrentHosts always answers empty-and-successful, matching every other
+// no-op lister in this package.
+type noFPPMQTTHostLister struct{}
+
+func (noFPPMQTTHostLister) CurrentHosts(context.Context) (map[string]string, error) {
+	return nil, nil
+}
+
+// noFPPMQTTSecretStore is [Dependencies.FPPMQTTSecret]'s nil-safe default:
+// Has reports no password set, Set/Clear refuse loudly — matching every
+// other unwired write dependency's "refuse loudly, never fabricate
+// success" posture under this default.
+type noFPPMQTTSecretStore struct{}
+
+func (noFPPMQTTSecretStore) HasFPPMQTTPassword(context.Context) (bool, error) { return false, nil }
+func (noFPPMQTTSecretStore) SetFPPMQTTPassword(context.Context, string) error {
+	return errors.New("api: no fpp.mqtt secret store wired in")
+}
+func (noFPPMQTTSecretStore) ClearFPPMQTTPassword(context.Context) error {
+	return errors.New("api: no fpp.mqtt secret store wired in")
 }
 
 // noAssetSyncNudger is [Dependencies.AssetSyncNudger]'s nil-safe default:
@@ -1058,6 +1119,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/resolume.instances", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfig))
 	mux.HandleFunc("PUT /api/v1/config/resolume.instances", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeInstancesConfig))
 	mux.HandleFunc("GET /api/v1/config/resolume.instances/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeInstancesConfigRevisions))
+
+	// Track G seam G-3 (ADR-039): fpp.mqtt, mirroring fpp.endpoints in every
+	// respect except that PUT is a partial update over several independent
+	// fields (including the write-only broker password) rather than one
+	// required array — see fppmqttconfig.go's own file comment.
+	mux.HandleFunc("GET /api/v1/config/fpp.mqtt", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPMQTTConfig))
+	mux.HandleFunc("PUT /api/v1/config/fpp.mqtt", h.writeGuard(&scopeConfigWrite, h.handlePutFPPMQTTConfig))
+	mux.HandleFunc("GET /api/v1/config/fpp.mqtt/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPMQTTConfigRevisions))
 
 	// Step 7 seam B: node discovery and declaration (RES-008
 	// D2/D6). All three are behind config:write — declaring what hardware

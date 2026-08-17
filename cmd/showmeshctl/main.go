@@ -68,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdSurface(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
+	case "fpp-mqtt":
+		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
 		return cmdAssets(rest, stdout, stderr, clock)
 	case "version":
@@ -171,6 +173,10 @@ Commands:
                            versus what it actually holds (Track E seam E5)
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
+  fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
+                            prefix, host map); the password is never returned
+  fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
+                            named on the command line (write, requires config:write)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

@@ -23,6 +23,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
   ConfigFPPEndpointsPayload,
+  ConfigFPPMQTTPutRequest,
   ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
@@ -30,6 +31,7 @@ import type {
   ConfigShowMacro,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
+  FPPMQTTConfigResponse,
   Model,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
@@ -118,6 +120,25 @@ export function putResolumeInstancesConfig(
 
 export function getResolumeInstancesConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getResolumeInstancesConfigRevisions()
+}
+
+// Track G seam G-3 (ADR-039): the same thin pass-through pattern, for the
+// fpp.mqtt configuration write surface. putFPPMQTTConfig's request shape
+// is ConfigFPPMQTTPutRequest, not ConfigFPPMQTTPayload — every field is
+// independently optional (decision 5), unlike every other config kind's
+// PUT here.
+export function getFPPMQTTConfig(): Promise<FPPMQTTConfigResponse> {
+  return store.getFPPMQTTConfig()
+}
+
+export function putFPPMQTTConfig(
+  request: ConfigFPPMQTTPutRequest,
+): Promise<FPPMQTTConfigResponse> {
+  return store.putFPPMQTTConfig(request)
+}
+
+export function getFPPMQTTConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPMQTTConfigRevisions()
 }
 
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
