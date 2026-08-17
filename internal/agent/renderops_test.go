@@ -3,12 +3,22 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
+
+// newTestRenderOperations builds a renderOperations against dir, a fresh
+// timeline driven by clock, and a discarding logger — every call site below
+// used to call newRenderOperations(sup, store) directly before B3 added the
+// asset dir / timeline / logger parameters.
+func newTestRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, dir string, clock *fakeClock) *renderOperations {
+	return newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), discardLogger())
+}
 
 // newRenderTestSupervisor builds a Supervisor over fakeRenderStarter, whose
 // process reaches "running" immediately and never exits on its own — the
@@ -47,7 +57,7 @@ func TestHandleMessageRenderSurfaceApplyConfirmed(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
@@ -96,7 +106,7 @@ func TestHandleMessageRenderSurfaceApplyMissingSurfaceID(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
@@ -131,7 +141,7 @@ func TestHandleMessageRenderSurfaceApplyRejectsUnknownKey(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
@@ -157,7 +167,7 @@ func TestHandleMessageRenderSurfaceClearRemovesAssignment(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
@@ -199,7 +209,7 @@ func TestHandleMessageRenderPipelineRestart(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
@@ -226,7 +236,7 @@ func TestHandleMessageRenderTriggerSignalsOnlyForRenderActions(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	trigger := make(chan struct{}, 1)
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, trigger, clock.now, discardLogger())
@@ -287,7 +297,7 @@ func TestRenderOperationsRoundTripJSONParams(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {
 		t.Fatalf("applySurface: %v", err)
@@ -321,6 +331,7 @@ type fakeProbeProcess struct{ exitCh chan pipeline.ExitResult }
 func (p *fakeProbeProcess) Wait() pipeline.ExitResult { return <-p.exitCh }
 func (p *fakeProbeProcess) Kill() error               { return nil }
 func (p *fakeProbeProcess) Pid() int                  { return 1 }
+func (p *fakeProbeProcess) Stdin() (io.Writer, error) { return nil, pipeline.ErrNoStdin }
 
 // fakeProbeStarter returns a [pipeline.ProcessStarter] whose every process
 // immediately reports result from Wait.
@@ -346,7 +357,7 @@ func TestProbeTransportAvailableRecordsOnSupervisorSnapshot(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
 
 	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
@@ -386,7 +397,7 @@ func TestProbeTransportUnavailableRecordsReason(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{
 		SawRunningMarker: false,
 		StderrTail:       "ERROR: from element ...: Failed loading NDI SDK\n",
@@ -431,7 +442,7 @@ func TestHandleMessageRenderTransportProbeFiresRenderTrigger(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
-	renderOps := newRenderOperations(sup, store)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
 	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
 
 	renderTrigger := make(chan struct{}, 1)

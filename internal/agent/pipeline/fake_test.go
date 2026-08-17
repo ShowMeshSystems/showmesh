@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"io"
 	"sync"
 	"time"
 )
@@ -18,10 +20,12 @@ func (testLogger) Error(string, ...any) {}
 // nothing is actually spawned, so restart/backoff policy tests run in
 // milliseconds and never depend on gst-launch-1.0 being installed.
 type fakeProcess struct {
-	mu       sync.Mutex
-	exitCh   chan ExitResult
-	killed   bool
-	killFunc func()
+	mu         sync.Mutex
+	exitCh     chan ExitResult
+	killed     bool
+	killFunc   func()
+	stdinBytes []byte
+	stdinFail  bool
 }
 
 func newFakeProcess() *fakeProcess {
@@ -59,6 +63,36 @@ func (p *fakeProcess) Kill() error {
 }
 
 func (p *fakeProcess) Pid() int { return 1 }
+
+// Stdin returns p itself as an io.Writer: writes are recorded (for a test
+// to assert against) unless stdinFail is set, in which case every write
+// errors — simulating a closed pipe / dead process without spawning
+// anything real.
+func (p *fakeProcess) Stdin() (io.Writer, error) { return p, nil }
+
+func (p *fakeProcess) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stdinFail {
+		return 0, errors.New("fakeProcess: simulated stdin write failure")
+	}
+	p.stdinBytes = append(p.stdinBytes, b...)
+	return len(b), nil
+}
+
+func (p *fakeProcess) stdinSnapshot() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]byte, len(p.stdinBytes))
+	copy(out, p.stdinBytes)
+	return out
+}
+
+func (p *fakeProcess) setStdinFail(fail bool) {
+	p.mu.Lock()
+	p.stdinFail = fail
+	p.mu.Unlock()
+}
 
 // exitNow delivers res as this process's exit outcome.
 func (p *fakeProcess) exitNow(res ExitResult) {

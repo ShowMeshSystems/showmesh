@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -270,4 +271,5 @@ func (p *fakeRenderProcess) Kill() error {
 	}
 	return nil
 }
-func (p *fakeRenderProcess) Pid() int { return 1 }
+func (p *fakeRenderProcess) Pid() int                  { return 1 }
+func (p *fakeRenderProcess) Stdin() (io.Writer, error) { return io.Discard, nil }

@@ -5,6 +5,7 @@ import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
 import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
+import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { formatAbsolute } from '../app/time'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
@@ -86,6 +87,13 @@ export function NodeDetail() {
                 serverTimeReceivedAt={model.serverTimeReceivedAt}
                 connected={connected}
               />
+            </section>
+          </PanelErrorBoundary>
+
+          <PanelErrorBoundary panelLabel="Render">
+            <section className="panel">
+              <h3 className="panel__title">Render</h3>
+              <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
             </section>
           </PanelErrorBoundary>
 

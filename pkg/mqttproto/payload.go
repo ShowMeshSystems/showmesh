@@ -630,6 +630,12 @@ type RenderSurfaceReport struct {
 	FramesLate    int64 `json:"framesLate"`
 	FramesDropped int64 `json:"framesDropped"`
 
+	// FramesRate is the frame writer's own measured achieved output rate in
+	// frames/second (ADR-040's obligation), nil until it has completed at
+	// least one full sampling window — never a plausible-looking zero and
+	// never the surface's configured frameRate echoed back.
+	FramesRate *float64 `json:"framesRate"`
+
 	// Transport names the output transport this surface's pipeline is
 	// configured for (e.g. "ndi"); empty when not yet meaningful (seam B2a
 	// runs a test-pattern pipeline with no real output stage).

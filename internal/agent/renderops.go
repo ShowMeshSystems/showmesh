@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
+	"github.com/showmeshsystems/showmesh/pkg/fseq"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 // renderConfirmDeadline bounds how long render.surface.apply,
@@ -106,13 +110,31 @@ func isRenderAction(action string) bool {
 	}
 }
 
+// frameWriterHandle bundles a running B3 [pipeline.FrameWriter] with the
+// resources its lifetime owns: the open FSEQ file (closed on
+// render.surface.clear or a re-apply) and the cancel function for the
+// goroutine running it.
+type frameWriterHandle struct {
+	fw     *pipeline.FrameWriter
+	fseq   *fseq.File
+	cancel context.CancelFunc
+}
+
 // renderOperations holds the four render.* allowlisted operations' shared
-// dependencies: the pipeline supervisor and the on-disk assignment store
+// dependencies: the pipeline supervisor, the on-disk assignment store
 // (build contract ruling 4 — a re-read at boot resumes rendering with no
-// coordinator reachable).
+// coordinator reachable), the node's asset directory (where a
+// render.surface.apply's fseqFilename resolves to), and the shared
+// MultiSync timeline B3's frame writers read position from.
 type renderOperations struct {
-	sup   *pipeline.Supervisor
-	store *pipeline.AssignmentStore
+	sup      *pipeline.Supervisor
+	store    *pipeline.AssignmentStore
+	assetDir string
+	timeline *multisync.Timeline
+	logger   pipeline.Logger
+
+	mu      sync.Mutex
+	writers map[string]*frameWriterHandle
 
 	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
 	// to [pipeline.ProbeNDISend]. nil (the production default, set by
@@ -124,8 +146,281 @@ type renderOperations struct {
 	probeStarter pipeline.ProcessStarter
 }
 
-func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore) *renderOperations {
-	return &renderOperations{sup: sup, store: store}
+func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, logger pipeline.Logger) *renderOperations {
+	return &renderOperations{
+		sup:      sup,
+		store:    store,
+		assetDir: assetDir,
+		timeline: timeline,
+		logger:   logger,
+		writers:  make(map[string]*frameWriterHandle),
+	}
+}
+
+// Shutdown stops every currently-running frame writer and closes its FSEQ
+// file. Called once, at agent shutdown, before [pipeline.Supervisor.
+// Shutdown] stops the pipeline processes themselves.
+func (o *renderOperations) Shutdown() {
+	o.mu.Lock()
+	ids := make([]string, 0, len(o.writers))
+	for id := range o.writers {
+		ids = append(ids, id)
+	}
+	o.mu.Unlock()
+	for _, id := range ids {
+		o.stopFrameWriter(id)
+	}
+}
+
+// stopFrameWriter cancels and waits for surfaceID's current frame writer
+// (if any) and closes its FSEQ file, then removes it from the map. Called
+// before starting a replacement (a re-apply) and on render.surface.clear.
+// Not called on render.pipeline.restart: the pipeline process restarting
+// does not mean the surface's assignment changed, and the frame writer
+// already tolerates a mid-session process restart (it re-fetches stdin
+// every tick — see [pipeline.Supervisor.Stdin]).
+func (o *renderOperations) stopFrameWriter(surfaceID string) {
+	o.mu.Lock()
+	h, ok := o.writers[surfaceID]
+	if ok {
+		delete(o.writers, surfaceID)
+	}
+	o.mu.Unlock()
+	if !ok {
+		return
+	}
+	h.cancel()
+	h.fw.Stop()
+	_ = h.fseq.Close()
+}
+
+// buildFSEQAssignment parses the FSEQ-specific fields of a render.surface.
+// apply params map (channelRange, geometry, frameRate, fseqFilename,
+// fseqContentHash). ok is false when fseqFilename is absent — this is not
+// an error: an assignment with no FSEQ information is still a valid
+// request for B2a's test-pattern pipeline, matching renderApplyKnownKeys'
+// existing "accepted and persisted, not yet all consumed" posture.
+func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment, ok bool, err error) {
+	rawFilename, has := params["fseqFilename"]
+	if !has {
+		return fseqAssignment{}, false, nil
+	}
+	filename, isStr := rawFilename.(string)
+	if !isStr || filename == "" {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename must be a non-empty string, got %T", action, rawFilename)
+	}
+	if filepath.Base(filename) != filename {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename %q must be a bare filename, not a path", action, filename)
+	}
+
+	contentHash, verr := requireString(action, params, "fseqContentHash", "fseqContentHash")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+
+	channelRangeRaw, verr := requireObject(action, params, "channelRange", "channelRange")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	// show.surface.channelRange.startChannel is the operator-facing
+	// xLights UI number and is validated coordinator-side as >= 1: it is
+	// 1-BASED. pkg/fseq is 0-based throughout, matching the file. This
+	// subtraction is the ONE place that conversion happens in this
+	// package — see RES-017's own rule against scattering "-1" across
+	// call sites, and frame.go's FrameWriter, which only ever receives an
+	// already-0-based channelStart.
+	startChannel1Based, verr := requireInt(action, channelRangeRaw, "startChannel", "channelRange.startChannel")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	if startChannel1Based < 1 {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.channelRange.startChannel must be at least 1, got %d", action, startChannel1Based)
+	}
+	channelCount, verr := requireInt(action, channelRangeRaw, "channelCount", "channelRange.channelCount")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	if channelCount < 1 {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.channelRange.channelCount must be at least 1, got %d", action, channelCount)
+	}
+
+	geometryRaw, verr := requireObject(action, params, "geometry", "geometry")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	width, verr := requireInt(action, geometryRaw, "width", "geometry.width")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	height, verr := requireInt(action, geometryRaw, "height", "geometry.height")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+	pixelFormat, verr := requireString(action, geometryRaw, "pixelFormat", "geometry.pixelFormat")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+
+	frameRate, verr := requireInt(action, params, "frameRate", "frameRate")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+
+	return fseqAssignment{
+		fseqFilename:    filename,
+		fseqContentHash: contentHash,
+		channelStart0:   startChannel1Based - 1,
+		channelCount:    channelCount,
+		width:           width,
+		height:          height,
+		pixelFormat:     pixelFormat,
+		frameRate:       frameRate,
+	}, true, nil
+}
+
+// fseqAssignment is buildFSEQAssignment's parsed, still-0-based-converted
+// result.
+type fseqAssignment struct {
+	fseqFilename    string
+	fseqContentHash string
+	channelStart0   int
+	channelCount    int
+	width           int
+	height          int
+	pixelFormat     string
+	frameRate       int
+}
+
+// requireObject, requireString, and requireInt look up key in params (the
+// map's own field name, e.g. "startChannel") and report errors using label
+// (the full dotted path an operator would recognize, e.g.
+// "channelRange.startChannel") — the two differ for any nested field, since
+// params here is already the inner object's own map, not the top-level
+// params map. Passing key as its own label (the top-level-field case) is
+// fine; conflating the two for a NESTED field was this function's own
+// bug once (a lookup for "channelRange.startChannel" against a map whose
+// only keys are "startChannel"/"channelCount" always misses) — kept as two
+// parameters specifically so that mistake cannot recur silently.
+func requireObject(action string, params map[string]any, key, label string) (map[string]any, error) {
+	raw, ok := params[key]
+	if !ok {
+		return nil, fmt.Errorf("%s: params.%s is required", action, label)
+	}
+	v, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: params.%s must be an object, got %T", action, label, raw)
+	}
+	return v, nil
+}
+
+func requireString(action string, params map[string]any, key, label string) (string, error) {
+	raw, ok := params[key]
+	if !ok {
+		return "", fmt.Errorf("%s: params.%s is required", action, label)
+	}
+	v, ok := raw.(string)
+	if !ok || v == "" {
+		return "", fmt.Errorf("%s: params.%s must be a non-empty string, got %T", action, label, raw)
+	}
+	return v, nil
+}
+
+// requireInt extracts an integer from a map decoded from JSON via
+// encoding/json into map[string]any, where every JSON number decodes as
+// float64 — never assume the value is already an int.
+func requireInt(action string, params map[string]any, key, label string) (int, error) {
+	raw, ok := params[key]
+	if !ok {
+		return 0, fmt.Errorf("%s: params.%s is required", action, label)
+	}
+	v, ok := raw.(float64)
+	if !ok {
+		return 0, fmt.Errorf("%s: params.%s must be a number, got %T", action, label, raw)
+	}
+	return int(v), nil
+}
+
+// buildAssignedSpec builds this surface's real (or, absent FSEQ
+// information, test-pattern) pipeline spec and, for the real case, its
+// [pipeline.FrameWriter] — not yet started. assetDir-relative resolution
+// of fseqFilename and content-hash verification both happen here: ADR-028
+// requires a node never resolve an asset by filename alone trusting the
+// coordinator's say-so blindly, so a content-hash mismatch refuses the
+// assignment rather than rendering unverified bytes.
+func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any) (pipeline.Spec, *fseq.File, fseqAssignment, error) {
+	a, ok, err := buildFSEQAssignment(action, params)
+	if err != nil {
+		return pipeline.Spec{}, nil, fseqAssignment{}, err
+	}
+	if !ok {
+		spec, serr := applyOutputSink(pipeline.DefaultTestPatternSpec(surfaceID), surfaceID, params)
+		if serr != nil {
+			return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: %w", action, serr)
+		}
+		return spec, nil, fseqAssignment{}, nil
+	}
+
+	path := filepath.Join(assetDir, a.fseqFilename)
+	gotHash, err := hashFile(path)
+	if err != nil {
+		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: reading fseq asset %q: %w", action, a.fseqFilename, err)
+	}
+	if gotHash != a.fseqContentHash {
+		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf(
+			"%s: fseq asset %q content hash %q does not match assignment's %q (ADR-028: identity is content, not filename)",
+			action, a.fseqFilename, gotHash, a.fseqContentHash)
+	}
+
+	f, err := fseq.Open(path)
+	if err != nil {
+		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: opening fseq asset %q: %w", action, a.fseqFilename, err)
+	}
+
+	spec, err := pipeline.FSEQSourceSpec(surfaceID, a.width, a.height, a.pixelFormat, a.frameRate)
+	if err != nil {
+		_ = f.Close()
+		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: %w", action, err)
+	}
+	// buildFSEQAssignment does not itself parse params.output — the sink is
+	// attached here, uniformly with the test-pattern-fallback branch above,
+	// so a real assignment's NDI/HDMI choice and a diagnostic assignment's
+	// choice go through exactly one code path (renderspec.go's
+	// applyOutputSink), never two that could disagree.
+	spec, err = applyOutputSink(spec, surfaceID, params)
+	if err != nil {
+		_ = f.Close()
+		return pipeline.Spec{}, nil, fseqAssignment{}, fmt.Errorf("%s: %w", action, err)
+	}
+
+	return spec, f, a, nil
+}
+
+// ResumeAssignment re-applies a persisted assignment at agent startup
+// (build contract ruling 4: a node that restarts with no coordinator
+// reachable resumes rendering from its own on-disk state). It is the same
+// build-then-Apply-then-start-frame-writer sequence applySurface uses,
+// minus the persistence write (already on disk) and the post-dispatch
+// confirmation poll (nothing is waiting on a boot-time resume's result).
+func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
+	const action = "render.surface.apply (resumed at boot)"
+
+	spec, f, a, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
+	if err != nil {
+		return err
+	}
+	if err := o.sup.Apply(spec); err != nil {
+		if f != nil {
+			_ = f.Close()
+		}
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	if f != nil {
+		if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("%s: starting frame writer: %w", action, err)
+		}
+	}
+	return nil
 }
 
 // applySurface is the OperationFunc for "render.surface.apply": validate
@@ -159,16 +454,50 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: persisting assignment: %w", action, err)
 	}
 
-	spec, err := buildSurfaceSpec(surfaceID, params)
+	spec, f, a, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
 	if err != nil {
 		return OperationResult{}, err
 	}
 
 	if err := o.sup.Apply(spec); err != nil {
+		if f != nil {
+			_ = f.Close()
+		}
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
 	}
 
+	// A re-apply of a surface that already had a frame writer running
+	// replaces it: stop the old one (and close its FSEQ file) before
+	// starting the new one, so two writers never race the same pipeline's
+	// stdin.
+	o.stopFrameWriter(surfaceID)
+	if f != nil {
+		if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+			_ = f.Close()
+			return OperationResult{}, fmt.Errorf("%s: starting frame writer: %w", action, err)
+		}
+	}
+
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateRunning}, executedAt)
+}
+
+// startFrameWriter builds and launches surfaceID's [pipeline.FrameWriter]
+// against the already-open fseq file f, wiring it to o.sup and o.timeline.
+// The caller keeps ownership of f on error (closes it itself); on success
+// the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
+// closing it.
+func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
+	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, o.logger)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+
+	o.mu.Lock()
+	o.writers[surfaceID] = &frameWriterHandle{fw: fw, fseq: f, cancel: cancel}
+	o.mu.Unlock()
+	return nil
 }
 
 // clearSurface is the OperationFunc for "render.surface.clear": stop the
@@ -186,6 +515,8 @@ func (o *renderOperations) clearSurface(ctx context.Context, params map[string]a
 	}
 
 	executedAt := now()
+
+	o.stopFrameWriter(surfaceID)
 
 	if err := o.sup.Clear(surfaceID); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)

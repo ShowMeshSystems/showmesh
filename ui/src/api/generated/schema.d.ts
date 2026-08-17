@@ -164,6 +164,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/render/surfaces/{surfaceId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch render.surface.apply to a node (Track B seam B2b-front)
+         * @description Behind `render:command`. Resolves the surface's COMPLETE self-contained assignment — its show.surface configuration plus the coordinator-resolved runtime filename and content hash of its current FSEQ asset for `sequenceId` (identity: show + sequence + target + content hash, never a filename — ADR-028) — and dispatches it to the node over MQTT (build contract ruling 4: the node is told its surface, it does not discover it). Refuses with `400` naming exactly what could not be resolved (no active show, the surface is not assigned to this node, no current asset for the requested sequence, or more than one current asset matches it) rather than ever dispatching a partial assignment. Confirms by `surface.pipeline.state` evidence dated at or after dispatch (ADR-003); a `200` is never conflated with the pipeline having actually reached `running` — see RenderCommandResult.outcome.
+         */
+        post: operations["dispatchRenderSurfaceApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/render/surfaces/{surfaceId}/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch render.surface.clear to a node (Track B seam B2b-front)
+         * @description Behind `render:command`. Stops the surface's pipeline and clears its persisted assignment. Confirms by `surface.pipeline.state` evidence reporting `stopped`, dated at or after dispatch (ADR-003).
+         */
+        post: operations["dispatchRenderSurfaceClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/render/surfaces/{surfaceId}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch render.pipeline.restart to a node (Track B seam B2b-front)
+         * @description Behind `render:command`. Clears any fast-failure lockout and restarts the surface's pipeline from its currently-applied spec. Confirms by `surface.pipeline.state` evidence reporting `running`, dated at or after dispatch (ADR-003).
+         */
+        post: operations["dispatchRenderPipelineRestart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -1373,6 +1433,51 @@ export interface components {
             idempotencyKey: string;
             /** @description Optional; this action takes no parameters — a non-empty `params` object is a `400`. */
             params?: Record<string, never>;
+        };
+        /** @description The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply. */
+        RenderApplyRequest: {
+            /** @description Which of the show's sequences to resolve the surface's current FSEQ asset from — see this operation's own description for the identity rule (show + sequence + target + content hash). */
+            sequenceId: string;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key dispatches nothing and returns the original command's own result, flagged `replay: true`. */
+            idempotencyKey?: string;
+        };
+        /** @description The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/clear and .../restart, which take no parameters of their own beyond the path's surfaceId. */
+        RenderSurfaceRequest: {
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key dispatches nothing and returns the original command's own result, flagged `replay: true`. */
+            idempotencyKey?: string;
+        };
+        /** @description The body of a successful (200) response from any of this seam's three dispatch endpoints. */
+        RenderCommandResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["RenderCommandResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) render.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved, decided by confirming `surface.pipeline.state` evidence dated at or after dispatch. */
+        RenderCommandResult: {
+            commandId: string;
+            idempotencyKey: string;
+            /** @enum {string} */
+            action: "render.surface.apply" | "render.surface.clear" | "render.pipeline.restart";
+            nodeId: string;
+            surfaceId: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result. */
+            replay: boolean;
+            /**
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — matching FPPCommandResult.outcome's identical accepted-empty case.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "";
+            /**
+             * @description pkg/observation's six-value evidence-state vocabulary — the state of the evidence this outcome was actually decided from.
+             * @enum {string}
+             */
+            outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
+            /** @description A short, human-readable explanation. Always non-empty. */
+            outcomeReason: string;
+            /** Format: date-time */
+            dispatchedAt: string;
+            /** Format: date-time */
+            resolvedAt: string | null;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
         FPPCommandResponse: {
@@ -2915,6 +3020,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FPPInstanceResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchRenderSurfaceApply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                surfaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenderApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchRenderSurfaceClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                surfaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RenderSurfaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchRenderPipelineRestart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                surfaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RenderSurfaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderCommandResponse"];
                 };
             };
             400: components["responses"]["InvalidParameter"];

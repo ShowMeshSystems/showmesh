@@ -42,6 +42,31 @@ Additional logical surfaces, Raspberry Pi 4 / ARM nodes, and HDMI output are lat
 
 ## Evidence and findings
 
+### First renderer measurements, 2026-08-17 (Track B seam B3)
+
+The first numbers produced by a real renderer rather than by `videotestsrc`. Captured on the **development laptop** (macOS, arm64), not on renderer hardware, so they bound the algorithm and say nothing about the OptiPlex.
+
+| Measurement | Value |
+|---|---|
+| Extraction cost, warm | **272 µs** for a 45,241-byte buffer |
+| Extraction cost, cold (block decompress) | 1.49 ms |
+| Implied extraction ceiling | ~3,670 fps at that buffer size |
+| Achieved frame rate | **38.97 fps** against a 40 fps target |
+| Late frames | 0 |
+| Dropped frames | 0 |
+| Buffer size in that run | 30,000 bytes per frame |
+| Run length | 1 second |
+
+Real components in that run: the owner's real 303 MB show FSEQ, a real `multisync.Listener` and `Timeline` driven by real wire-format packets over a real loopback UDP socket, and a real `gst-launch-1.0` 1.28.6 subprocess reaching `PLAYING` and receiving frames over a real stdin pipe.
+
+**What this establishes.** Extraction is not the bottleneck, by roughly two orders of magnitude against a 25 ms frame period. That is the question [ADR-040](../decisions/ADR-040-renderer-extracts-channels-gstreamer-owns-frames.md) decision 2 needed answered, and it is why that boundary is defensible.
+
+**What it does not establish, and this record stays L0 for the profile.** The run was one second, on the wrong hardware, at a 30,000-byte buffer rather than a show-sized one, into a `fakesink` rather than an NDI sink, and **no real `fppd` was involved** — the MultiSync packets were synthesized with this project's own codec, so the test shares any misunderstanding that codec has. None of section 3's acceptance criteria is a one-second run on a development machine. ADR-026 decision 5's profile remains **intended rather than supported**.
+
+**The 38.97 fps is close to a tautology and the 272 µs is the real measurement.** A frame writer pacing itself to a 40 fps target prints something near 40 fps almost regardless of whether extraction is cheap. This is B0's lesson in a second form: ask which number in a bench result had the freedom to come out differently.
+
+---
+
 The renderer and reference-profile decisions above were settled by the project owner on 2026-08-13. They are architecture intent, not performance evidence, so this record remains L0 until the physical renderer-to-Resolume bench runs.
 
 These decisions are recorded as durable constraints in [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md), which also fixes the rule that the reference profile is described as intended rather than supported until this record's bench runs.

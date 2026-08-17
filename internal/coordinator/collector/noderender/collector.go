@@ -88,6 +88,18 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, rep),
 	}
 
+	// FramesRate is nil whenever the frame writer has not yet completed a
+	// full sampling window (see pipeline.FrameWriter.sampleRate's doc
+	// comment) — ADR-040's obligation is real achieved-rate evidence, so an
+	// unmeasured rate is NotCollected, never a fabricated zero and never
+	// the surface's configured frameRate echoed back.
+	if sf.FramesRate == nil {
+		obs = append(obs, notCollected(res, SignalSurfaceFramesRate,
+			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, rep))
+	}
+
 	// TransportAvailable is nil whenever this surface's transport has never
 	// been probed — an ndi surface only gets a value once render.surface.
 	// apply's own pipeline start or a render.transport.probe command has

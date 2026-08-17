@@ -116,6 +116,34 @@ function attentionFromNodes(nodes: Node[]): AttentionItem[] {
   return items
 }
 
+// Track B seam B2b-front: a surface's pipeline state, from node.render's
+// flat per-signal list. 'unknown' (evidence.state !== 'current' — stale,
+// unknown_age, not_collected, collection_failed, or unsupported) is kept
+// visually and semantically distinct from 'critical'/'warning', the same
+// rule attentionFromFPP/attentionFromResolume already apply: "the system
+// does not know" is not the same claim as "the system knows and it is
+// degraded." A surface this coordinator has simply never heard from
+// (not_collected) produces no item at all — that is the ordinary state
+// for a node with no surface applied yet, not something to flag.
+function attentionFromRender(nodes: Node[]): AttentionItem[] {
+  const items: AttentionItem[] = []
+  for (const node of nodes) {
+    for (const entry of node.render) {
+      if (entry.signal !== 'surface.pipeline.state') continue
+      const label = `${node.label ?? node.nodeId} surface "${entry.resource.id}"`
+      if (entry.state === 'not_collected') continue
+      if (entry.state !== 'current') {
+        items.push({ tone: 'unknown', text: `${label} pipeline state is ${entry.state}`, to: `/nodes/${node.nodeId}` })
+      } else if (entry.value === 'failed') {
+        items.push({ tone: 'critical', text: `${label} pipeline has failed`, to: `/nodes/${node.nodeId}` })
+      } else if (entry.value === 'restarting') {
+        items.push({ tone: 'warning', text: `${label} pipeline is restarting`, to: `/nodes/${node.nodeId}` })
+      }
+    }
+  }
+  return items
+}
+
 function sortByTone(items: AttentionItem[]): AttentionItem[] {
   const order: Record<AttentionTone, number> = { critical: 0, warning: 1, unknown: 2 }
   return [...items].sort((a, b) => order[a.tone] - order[b.tone])
@@ -128,6 +156,7 @@ export function Dashboard() {
     ...attentionFromFPP(model.fpp),
     ...attentionFromResolume(model.resolume),
     ...attentionFromNodes(model.nodes),
+    ...attentionFromRender(model.nodes),
   ])
   const resolumeInstance = model.resolume[0]
 

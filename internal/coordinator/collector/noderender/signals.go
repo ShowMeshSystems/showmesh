@@ -25,7 +25,15 @@ const (
 	SignalSurfaceFramesWritten       observation.SignalID = "surface.frames.written"
 	SignalSurfaceFramesLate          observation.SignalID = "surface.frames.late"
 	SignalSurfaceFramesDropped       observation.SignalID = "surface.frames.dropped"
-	SignalSurfaceTransportAvailable  observation.SignalID = "surface.transport.available"
+	// SignalSurfaceFramesRate is ADR-040's obligation: the achieved frame
+	// rate at the surface's configured geometry, so an operator who
+	// authors a matrix the hardware cannot sustain finds out from the
+	// dashboard instead of the wall. Only ever [observation.StateNotCollected]
+	// or a real measurement (see [mqttproto.RenderSurfaceReport.FramesRate])
+	// — never a plausible-looking zero and never the configured target rate
+	// echoed back.
+	SignalSurfaceFramesRate         observation.SignalID = "surface.frames.rate"
+	SignalSurfaceTransportAvailable observation.SignalID = "surface.transport.available"
 	// SignalSurfaceTransportReason is only ever emitted alongside
 	// SignalSurfaceTransportAvailable=false (Track B seam B4,
 	// [mqttproto.RenderSurfaceReport.TransportReason]'s identical
@@ -45,6 +53,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceFramesWritten,
 	SignalSurfaceFramesLate,
 	SignalSurfaceFramesDropped,
+	SignalSurfaceFramesRate,
 	SignalSurfaceTransportAvailable,
 	SignalSurfaceTransportReason,
 }

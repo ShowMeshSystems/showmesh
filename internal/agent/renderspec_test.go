@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 )
 
 func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
@@ -11,9 +13,9 @@ func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
 			"ndi":       map[string]any{"sourceName": "garage-window"},
 		},
 	}
-	spec, err := buildSurfaceSpec("surface-1", params)
+	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
-		t.Fatalf("buildSurfaceSpec: %v", err)
+		t.Fatalf("applyOutputSink: %v", err)
 	}
 
 	sawQueue := false
@@ -46,9 +48,9 @@ func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
 }
 
 func TestBuildSurfaceSpecFallsBackToTestPatternWhenOutputAbsent(t *testing.T) {
-	spec, err := buildSurfaceSpec("surface-1", map[string]any{})
+	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", map[string]any{})
 	if err != nil {
-		t.Fatalf("buildSurfaceSpec: %v", err)
+		t.Fatalf("applyOutputSink: %v", err)
 	}
 	assertFakesink(t, spec)
 }
@@ -60,9 +62,9 @@ func TestBuildSurfaceSpecFallsBackToTestPatternForHDMI(t *testing.T) {
 			"hdmi":      map[string]any{"display": "HDMI-1"},
 		},
 	}
-	spec, err := buildSurfaceSpec("surface-1", params)
+	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
-		t.Fatalf("buildSurfaceSpec: %v", err)
+		t.Fatalf("applyOutputSink: %v", err)
 	}
 	assertFakesink(t, spec)
 }
@@ -74,9 +76,9 @@ func TestBuildSurfaceSpecFallsBackWhenNDISourceNameEmpty(t *testing.T) {
 			"ndi":       map[string]any{"sourceName": ""},
 		},
 	}
-	spec, err := buildSurfaceSpec("surface-1", params)
+	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
-		t.Fatalf("buildSurfaceSpec: %v", err)
+		t.Fatalf("applyOutputSink: %v", err)
 	}
 	assertFakesink(t, spec)
 }

@@ -78,6 +78,28 @@ The source pattern was bars plus snow. **No further spike bench time is being sp
 
 ---
 
+## 2026-08-17 (Track G: operator surface parity, specified and built in one session)
+
+**Goal:** the owner could not connect Resolume Arena to the running test stack from any operator surface. Find out why, audit whether it was one variable or a pattern, and close it.
+
+**What it turned out to be.** `SHOWMESH_RESOLUME_URL` is an environment variable read once at startup, so connecting one of the three founding problems meant editing `deploy/.env` and restarting the container. **Every existing rule passed**: CLAUDE.md's CLI-parity constraint and ADR-030 are both conditioned on an endpoint existing, so a capability with zero surfaces owes nothing and is in perfect parity. FPP had already been rescued from this exact pattern in Step 7, and Track D seam D-1 reproduced it afterwards because the rescue was recorded as work done to FPP rather than as a rule.
+
+**The audit**, over 44 API paths, 22 `showmeshctl` commands, 16 UI routes, all 30 coordinator environment variables and the coordinator binary's own subcommands, found four capabilities on no surface at all (Resolume host, the FPP MQTT collector, the asset store settings, identity administration behind `docker exec` into a shell-less image), one the UI could do and the CLI could not (`PUT /config/show.macro/{id}`), and Track E's entire operator surface missing from the UI. Plus `principal:write`, declared and bundled into the admin role since Step 6 and checked by no handler, the fourth capability this project has shipped that nothing could reach.
+
+**Completed.** [ADR-039](../decisions/ADR-039-operator-configuration-is-store-backed.md), accepted by the owner, and seven seams built in parallel worktrees and opened as PRs #6 through #12. [TRACK-G-surface-parity.md](TRACK-G-surface-parity.md) carries the seam table and what each closes. [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is new: the authoritative register for every scarce identifier except ADR numbers, which is why there was no such register when two branches minted ADR-034 twice and exit codes 11 and 12 collided.
+
+**Decisions made:** ADR-039 (owner). Class 3 scoped out and back in the same day as seam G-8 (owner). Two queued for the owner in `docs/private/DECISION-QUEUE.md`: G-3's broker credential stored in a 0600 file rather than in the payload, which honours decision 7's load-bearing half and diverges from its literal text; and `SHOWMESH_INTEGRATION_BROKERS`, a fifth stranded capability.
+
+**A specification error, caught by a builder.** Track G's G-5 section listed `invalidate-all-sessions` as an API capability. That contradicts ADR-024 decision 9, which puts lockout recovery on a host-level subcommand not reachable over the API at any scope. An API path for it would undo every session revocation, reachable exactly when the API's own authority is in doubt. The builder refused to build it and said why; the spec was corrected rather than the code.
+
+**Verification gates.** `make check`, `go test -race ./...` and `make test-integration` green per seam and on the folded tree (645 UI tests, 435s race run on `internal/coordinator/api`). Both G-7 guards were deliberately broken and confirmed to fail naming the right thing, then reverted, verified independently by the orchestrator rather than taken on report. Cold-start acceptance runs per seam proved zero-to-one-and-back-to-zero with no restart.
+
+**Not proved.** Nothing ran against real show hardware. G-2 used a stub rather than a real Arena. G-8's write-scope flows were never exercised authenticated in a browser, and that seam added roughly 2,450 lines of UI with no test files of its own. Both are on `docs/private/PUNCH-LIST.md`. **No Track G PR has merged to `main`.**
+
+**Deferred:** `SHOWMESH_INTEGRATION_BROKERS`; `GET /audit` cannot be paged past 500 entries because its wire type carries no cursor; the `Access.tsx` and Track E view unit tests.
+
+---
+
 ## 2026-08-16 (Both track PRs reviewed, fixed, and merged; the repository consolidated; a local test stack stood up)
 
 **Goal:** review and merge PR #3 (Track E) and PR #4 (Track D), verify the work against each track's specification, clean up the build worktrees, and deploy a local test stack with a bootstrapped administrator.

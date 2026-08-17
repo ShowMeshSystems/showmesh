@@ -70,6 +70,13 @@ export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResp
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
+// Track B seam B2b-front: the three render.* dispatch endpoints' own
+// response shape, aliased for the identical reason.
+export type RenderCommandResult = components['schemas']['RenderCommandResult']
+// ObservationEntry is Node['render']'s element type, aliased here
+// separately so NodeDetail.tsx and the dashboard attention list can
+// import it directly rather than indexing through Node.
+export type ObservationEntry = components['schemas']['ObservationEntry']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
 // declaration. NodeDeclaration is also reachable as Node['declaration'],
 // aliased here separately for call sites (DomainBadges.tsx,

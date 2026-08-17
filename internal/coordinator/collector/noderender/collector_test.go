@@ -154,6 +154,54 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 }
 
+// TestPollFramesRateUnmeasuredIsNotCollected proves ADR-040's obligation:
+// before the agent's frame writer has completed a sampling window,
+// FramesRate is nil on the wire, and this must render as not_collected —
+// never a fabricated zero, and never the surface's configured frameRate
+// echoed back (samplePayload sets no frameRate at all, so any non-nil
+// Value here could only be a fabrication).
+func TestPollFramesRateUnmeasuredIsNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning) // FramesRate left nil
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	rate := findObs(t, obs, SignalSurfaceFramesRate)
+	if rate.Absence != observation.StateNotCollected {
+		t.Errorf("unmeasured frame rate: Absence = %q, want %q", rate.Absence, observation.StateNotCollected)
+	}
+	if rate.Value != nil {
+		t.Errorf("unmeasured frame rate: Value = %v, want nil", rate.Value)
+	}
+	if rate.Reason == "" {
+		t.Errorf("unmeasured frame rate: Reason is empty, want a stated reason (absent evidence must be stated, never omitted)")
+	}
+}
+
+// TestPollFramesRateMeasuredRendersFloat proves the other half: once the
+// agent has a real measurement, it renders as a value, not stuck
+// permanently at not_collected.
+func TestPollFramesRateMeasuredRendersFloat(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	measured := 39.87
+	payload.Surfaces[0].FramesRate = &measured
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	rate := findObs(t, obs, SignalSurfaceFramesRate)
+	if rate.Absence != "" {
+		t.Errorf("measured frame rate: Absence = %q, want empty", rate.Absence)
+	}
+	if v, ok := rate.Value.(float64); !ok || v != measured {
+		t.Errorf("measured frame rate: Value = %v, want %v", rate.Value, measured)
+	}
+}
+
 // TestPollStaleIsNeverHealthy proves ADR-011's core rule survives this
 // package specifically: a live report that has aged past DefaultValidFor
 // must report StateStale, never current.

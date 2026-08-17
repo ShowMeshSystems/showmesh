@@ -31,6 +31,7 @@ import type {
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   Model,
+  RenderCommandResult,
   RenderSettingsConfigResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
@@ -178,6 +179,24 @@ export function prevFPPPlaylistItem(instanceId: string): Promise<FPPCommandResul
 
 export function setFPPVolume(instanceId: string, volume: number): Promise<FPPCommandResult> {
   return store.setFPPVolume(instanceId, volume)
+}
+
+// Track B seam B2b-front: the three render.* dispatch endpoints. Same
+// thin pass-through pattern.
+export function applyRenderSurface(
+  nodeId: string,
+  surfaceId: string,
+  sequenceId: string,
+): Promise<RenderCommandResult> {
+  return store.applyRenderSurface(nodeId, surfaceId, sequenceId)
+}
+
+export function clearRenderSurface(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+  return store.clearRenderSurface(nodeId, surfaceId)
+}
+
+export function restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+  return store.restartRenderPipeline(nodeId, surfaceId)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same

@@ -114,9 +114,10 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		ConsecutiveFailures: s.ConsecutiveFailures,
 		LastExitCode:        s.LastExitCode,
 		LastStderr:          lastStderr,
-		FramesWritten:       0, // B2a has no frame writer; B3 populates this.
-		FramesLate:          0,
-		FramesDropped:       0,
+		FramesWritten:       s.FramesWritten,
+		FramesLate:          s.FramesLate,
+		FramesDropped:       s.FramesDropped,
+		FramesRate:          s.FramesRate,
 		Transport:           s.Transport,
 		TransportAvailable:  s.TransportAvailable,
 		TransportReason:     s.TransportReason,

@@ -22,22 +22,20 @@ type surfaceOutputParams struct {
 	} `json:"hdmi"`
 }
 
-// buildSurfaceSpec assembles surfaceID's pipeline spec for
-// render.surface.apply: [pipeline.DefaultTestPatternSpec]'s source and
-// queue stages (source extraction is not this seam's job) with the sink
-// stage selected by params.output.transport. Build contract ruling 5's
-// queue stays exactly where DefaultTestPatternSpec already puts it, before
-// whichever sink is chosen, so the thread boundary is never lost by
-// swapping sinks.
+// applyOutputSink swaps base's "sink" stage for the one named by
+// params.output.transport, leaving every other stage (including build
+// contract ruling 5's queue-before-sink) untouched. base is whichever
+// pipeline the caller already built — [pipeline.DefaultTestPatternSpec] for
+// a surface with no FSEQ information, or [pipeline.FSEQSourceSpec]'s real
+// extraction pipeline for one with — so a real assignment's output choice
+// and a diagnostic assignment's go through this one path.
 //
-// An absent or unrecognized output, HDMI (this seam builds no HDMI sink),
-// or an NDI output with no sourceName yet all fall back to the same
-// fakesink test-pattern spec seam B2a always used, rather than refusing the
-// apply outright — a surface not yet fully configured for output still
-// gets a runnable diagnostic pipeline.
-func buildSurfaceSpec(surfaceID string, params map[string]any) (pipeline.Spec, error) {
-	base := pipeline.DefaultTestPatternSpec(surfaceID)
-
+// An absent or unrecognized output, HDMI (this seam builds no HDMI sink —
+// ADR-026 decision 4: NDI support is never evidence for HDMI support), or
+// an NDI output with no sourceName all fall back to base's own fakesink
+// unchanged, rather than refusing the apply outright — a surface not yet
+// fully configured for output still gets a runnable diagnostic pipeline.
+func applyOutputSink(base pipeline.Spec, surfaceID string, params map[string]any) (pipeline.Spec, error) {
 	raw, ok := params["output"]
 	if !ok {
 		return base, nil

@@ -1,9 +1,19 @@
 # ADR-040: The Renderer Extracts Channels; GStreamer Owns Every Frame the Audience Sees
 
-Status: **Proposed** — drafted 2026-08-17 by the Track B orchestration session
-for the owner to rule on. **Not accepted.** An unattended session drafts an ADR
-and never accepts one.
+Status: **Accepted** by the owner, 2026-08-17. Drafted the same day by the Track B
+orchestration session, which left it Proposed because an unattended session drafts
+an ADR and never accepts one.
 Date: 2026-08-17
+
+**The owner's reasoning on accepting it, recorded because it is a statement about
+how this project draws lines and not only about this one.** ADR-007's per-frame
+prohibition was written on 2026-08-10, before anyone understood the shape of the
+renderer. Setting the strict line first and then finding out where it has to be
+crossed was the cheaper order: the boundary was known and defended from day one,
+and crossing it required naming the crossing. That is the project's general
+pattern. The intentions are firm; what the real world permits is discovered by
+building, and a constraint that has to be narrowed once evidence arrives was still
+doing its job the whole time it stood unnarrowed.
 
 ## Context
 
