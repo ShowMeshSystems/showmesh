@@ -57,6 +57,8 @@ func cmdRender(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return exitOK
 	case "settings":
 		return cmdRenderSettings(rest, stdout, stderr, clock)
+	case "transport":
+		return cmdRenderTransport(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl render: unknown subcommand %q\n\n", sub)
 		printRenderUsage(stderr)
@@ -67,11 +69,12 @@ func cmdRender(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 func printRenderUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl render <subcommand> [flags]
 
-The render node's own configuration and control (Track B). Today this is
-only "settings", the render.settings configuration kind (ADR-039): what a
-surface draws while the MultiSync timeline is stopped, opened, or unknown
-(idleOutput), and the pipeline supervisor's bounded restart backoff
-(restartPolicy). A later seam adds "status", "apply", "clear", and
+The render node's own configuration and control (Track B): "settings", the
+render.settings configuration kind (ADR-039): what a surface draws while
+the MultiSync timeline is stopped, opened, or unknown (idleOutput), and the
+pipeline supervisor's bounded restart backoff (restartPolicy); and
+"transport", a surface's most recently probed output-transport evidence
+(Track B seam B4). A later seam adds "status", "apply", "clear", and
 "restart" here for the render pipeline itself.
 
 Subcommands:
@@ -83,6 +86,9 @@ Subcommands:
                         field required)
   settings revisions   list render.settings revision history, newest first
                         (requires config:write)
+  transport             show a surface's most recently probed transport
+                        availability and reason (open read; exits 22 when
+                        unavailable or never probed)
 
 Run "showmeshctl render <subcommand> --help" for flags specific to one
 subcommand.

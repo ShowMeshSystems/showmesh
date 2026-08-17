@@ -26,6 +26,12 @@ const (
 	SignalSurfaceFramesLate          observation.SignalID = "surface.frames.late"
 	SignalSurfaceFramesDropped       observation.SignalID = "surface.frames.dropped"
 	SignalSurfaceTransportAvailable  observation.SignalID = "surface.transport.available"
+	// SignalSurfaceTransportReason is only ever emitted alongside
+	// SignalSurfaceTransportAvailable=false (Track B seam B4,
+	// [mqttproto.RenderSurfaceReport.TransportReason]'s identical
+	// required-whenever-false rule) — an actionable reason, never a bare
+	// "unavailable."
+	SignalSurfaceTransportReason observation.SignalID = "surface.transport.reason"
 )
 
 // AllSignalIDs is every signal this package ever emits, in the order
@@ -40,6 +46,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceFramesLate,
 	SignalSurfaceFramesDropped,
 	SignalSurfaceTransportAvailable,
+	SignalSurfaceTransportReason,
 }
 
 // DefaultPollInterval is this collector's recommended [collector.Runner]

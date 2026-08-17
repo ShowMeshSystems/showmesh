@@ -1,4 +1,5 @@
 import { Fragment } from 'react'
+import type { ComponentType } from 'react'
 import type { Capability } from '../app/types'
 
 // The generic capability panel (spec section 6.4, OPERATOR-UI section 9,
@@ -50,4 +51,45 @@ export function CapabilityPanel({ capability }: CapabilityPanelProps) {
       </dl>
     </div>
   )
+}
+
+// RenderSurfaceCapabilityPanel is Track B seam B4's one entry in the
+// lookup table this file's own doc comment describes: "render.surface"
+// carries evidence (pixelFormats — the formats internal/agent/
+// capabilities.go actually verified with a real PLAYING transition, per
+// capability id/attributes) worth a dedicated, minimal layout rather than
+// the generic key/value dump. Nothing else about this capability id is
+// special-cased; an unrecognized or missing pixelFormats attribute falls
+// back to "none advertised" rather than throwing.
+export function RenderSurfaceCapabilityPanel({ capability }: CapabilityPanelProps) {
+  const rawFormats = capability.attributes?.pixelFormats
+  const pixelFormats = Array.isArray(rawFormats) ? rawFormats.map(String) : []
+  return (
+    <div className="panel" data-testid="capability-panel">
+      <p className="panel__title">{capability.id}</p>
+      <dl className="field-list">
+        <dt>version</dt>
+        <dd>{capability.version}</dd>
+        <dt>pixel formats</dt>
+        <dd className={pixelFormats.length === 0 ? 'text-muted' : undefined}>
+          {pixelFormats.length > 0 ? pixelFormats.join(', ') : 'none advertised'}
+        </dd>
+      </dl>
+    </div>
+  )
+}
+
+// capabilityPanels is the lookup table this file's own doc comment
+// promises: a capability-specific renderer keyed by capability id, with
+// [CapabilityPanel] as the fallback for every id absent from it — never a
+// hardcoded node or capability class, and never a reason for an unknown id
+// to blank the view.
+const capabilityPanels: Record<string, ComponentType<CapabilityPanelProps>> = {
+  'render.surface': RenderSurfaceCapabilityPanel,
+}
+
+// resolveCapabilityPanel picks the component a caller should render for a
+// given capability id.
+export function resolveCapabilityPanel(id: string): ComponentType<CapabilityPanelProps> {
+  return capabilityPanels[id] ?? CapabilityPanel
 }

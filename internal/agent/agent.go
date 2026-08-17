@@ -148,7 +148,12 @@ func Run() int {
 				logger.Warn("skipping a persisted render assignment with unparseable params", "surface_id", a.SurfaceID, "error", err)
 				continue
 			}
-			if err := sup.Apply(pipeline.DefaultTestPatternSpec(a.SurfaceID)); err != nil {
+			spec, err := buildSurfaceSpec(a.SurfaceID, params)
+			if err != nil {
+				logger.Warn("failed to build a persisted render assignment's pipeline spec at startup", "surface_id", a.SurfaceID, "error", err)
+				continue
+			}
+			if err := sup.Apply(spec); err != nil {
 				logger.Warn("failed to re-apply a persisted render assignment at startup", "surface_id", a.SurfaceID, "error", err)
 				continue
 			}

@@ -35,6 +35,35 @@ func TestNewRenderEnvelopeRejectsInvalidPayload(t *testing.T) {
 	}
 }
 
+// TestNewRenderEnvelopeRejectsFalseTransportAvailableWithNoReason proves
+// TransportReason's identical required-whenever-false rule (Track B seam
+// B4): a surface reporting TransportAvailable=false with an empty
+// TransportReason must never make it into a built envelope, matching
+// Reason's rule for PipelineState one field up.
+func TestNewRenderEnvelopeRejectsFalseTransportAvailableWithNoReason(t *testing.T) {
+	available := false
+	bad := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:          "surface-1",
+				PipelineState:      RenderPipelineStateRunning,
+				Transport:          "ndi",
+				TransportAvailable: &available,
+				TransportReason:    "", // invalid: required whenever transportAvailable is false
+				ObservedAt:         time.Now(),
+			},
+		},
+	}
+
+	_, err := NewRenderEnvelope(time.Now, "node-1", bad)
+	if err == nil {
+		t.Fatalf("NewRenderEnvelope returned no error for a payload RenderPayload.Validate rejects")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
 // TestNewRenderEnvelopeAcceptsValidPayload proves the guard does not
 // misfire on an ordinary valid payload (running with no reason, and a
 // non-running state with a reason).

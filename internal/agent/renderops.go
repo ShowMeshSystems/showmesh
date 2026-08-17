@@ -57,6 +57,13 @@ var renderApplyKnownKeys = map[string]bool{
 // render.pipeline.restart, which take only a surface identifier.
 var renderSurfaceKnownKeys = map[string]bool{"surfaceId": true}
 
+// renderTransportProbeKnownKeys is the key allowlist for
+// render.transport.probe, which (like clear/restart) takes only a surface
+// identifier: the probe result is recorded against that surface's snapshot
+// (see [pipeline.Supervisor.SetTransportProbe]) so it flows through the
+// existing render report rather than needing its own wire shape.
+var renderTransportProbeKnownKeys = map[string]bool{"surfaceId": true}
+
 // parseSurfaceID extracts and validates params.surfaceId, common to all
 // three render.* operations.
 func parseSurfaceID(action string, params map[string]any) (string, error) {
@@ -86,26 +93,35 @@ func rejectUnknownKeys(action string, params map[string]any, known map[string]bo
 	return nil
 }
 
-// isRenderAction reports whether action is one of this seam's three
+// isRenderAction reports whether action is one of this seam's four
 // allowlisted render.* operations — used by command.go's HandleMessage to
 // decide whether to signal renderTrigger after a genuinely-executed
 // command.
 func isRenderAction(action string) bool {
 	switch action {
-	case "render.surface.apply", "render.surface.clear", "render.pipeline.restart":
+	case "render.surface.apply", "render.surface.clear", "render.pipeline.restart", "render.transport.probe":
 		return true
 	default:
 		return false
 	}
 }
 
-// renderOperations holds the three render.* allowlisted operations' shared
+// renderOperations holds the four render.* allowlisted operations' shared
 // dependencies: the pipeline supervisor and the on-disk assignment store
 // (build contract ruling 4 — a re-read at boot resumes rendering with no
 // coordinator reachable).
 type renderOperations struct {
 	sup   *pipeline.Supervisor
 	store *pipeline.AssignmentStore
+
+	// probeStarter is the [pipeline.ProcessStarter] probeTransport passes
+	// to [pipeline.ProbeNDISend]. nil (the production default, set by
+	// [newRenderOperations]) selects the real process starter; tests in
+	// this package set it directly (same-package access, no exported
+	// setter needed) to exercise probeTransport's wiring without shelling
+	// out to a real gst-launch-1.0 — pipeline/probe_test.go already covers
+	// the probe mechanism itself exhaustively against fakes and reality.
+	probeStarter pipeline.ProcessStarter
 }
 
 func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore) *renderOperations {
@@ -143,7 +159,12 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, fmt.Errorf("%s: persisting assignment: %w", action, err)
 	}
 
-	if err := o.sup.Apply(pipeline.DefaultTestPatternSpec(surfaceID)); err != nil {
+	spec, err := buildSurfaceSpec(surfaceID, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+
+	if err := o.sup.Apply(spec); err != nil {
 		return OperationResult{}, fmt.Errorf("%s: %w", action, err)
 	}
 
@@ -197,6 +218,47 @@ func (o *renderOperations) restartPipeline(ctx context.Context, params map[strin
 	}
 
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateRunning}, executedAt)
+}
+
+// probeTransport is the OperationFunc for "render.transport.probe": run a
+// real NDI state-transition probe ([pipeline.ProbeNDISend]) and record the
+// outcome on surfaceID's snapshot so it reaches the next render report
+// (command.go's renderTrigger fires after this, same as the other three
+// render.* operations). Unlike applySurface/clearSurface/restartPipeline,
+// this operation's own effect (the probe) is synchronous and complete by
+// the time it returns — there is no separate asynchronous state to poll
+// for, so Confirmed reports the probe's own result (available or not),
+// not a read-back of something else.
+func (o *renderOperations) probeTransport(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	const action = "render.transport.probe"
+	const transport = "ndi" // the only transport this build has a real probe for; see ProbeNDISend.
+
+	surfaceID, err := parseSurfaceID(action, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := rejectUnknownKeys(action, params, renderTransportProbeKnownKeys); err != nil {
+		return OperationResult{}, err
+	}
+
+	executedAt := now()
+	result := pipeline.ProbeNDISend(ctx, o.probeStarter)
+	observedAt := now()
+
+	o.sup.SetTransportProbe(surfaceID, transport, result.Available, result.Reason, observedAt)
+
+	return OperationResult{
+		Confirmed: result.Available,
+		Signal:    "node.render.transport_probe",
+		Value: map[string]any{
+			"surfaceId": surfaceID,
+			"transport": transport,
+			"available": result.Available,
+			"reason":    result.Reason,
+		},
+		ExecutedAt: executedAt,
+		ObservedAt: observedAt,
+	}, nil
 }
 
 // awaitAndReport polls the supervisor for evidence, dated at or after

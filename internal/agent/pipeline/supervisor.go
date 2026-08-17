@@ -75,13 +75,13 @@ type Snapshot struct {
 	LastExitCode *int
 	LastStderr   string
 
-	// Transport and TransportAvailable are always "" / nil in this seam —
-	// B2a's pipeline has no real output stage, so there is nothing to
-	// report and nothing has been probed. See [mqttproto.
-	// RenderSurfaceReport.TransportAvailable]'s doc comment on why nil
-	// means genuinely unprobed, not "false."
+	// Transport, TransportAvailable and TransportReason are "" / nil / ""
+	// until [runner.setTransportProbe] records a real probe result — see
+	// [mqttproto.RenderSurfaceReport.TransportAvailable]'s doc comment on
+	// why nil means genuinely unprobed, not "false."
 	Transport          string
 	TransportAvailable *bool
+	TransportReason    string
 
 	ObservedAt time.Time
 }
@@ -234,6 +234,20 @@ func (r *runner) Snapshot() Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.snap.clone()
+}
+
+// setTransportProbe stores a probe's outcome under lock, touching only
+// Transport/TransportAvailable/TransportReason/ObservedAt — see
+// [Supervisor.SetTransportProbe]'s doc comment for why updating the shared
+// ObservedAt here is safe.
+func (r *runner) setTransportProbe(transport string, available bool, reason string, observedAt time.Time) {
+	r.mu.Lock()
+	r.snap.Transport = transport
+	v := available
+	r.snap.TransportAvailable = &v
+	r.snap.TransportReason = reason
+	r.snap.ObservedAt = observedAt
+	r.mu.Unlock()
 }
 
 // Pid reports the OS pid of the currently-running process, or 0 when
@@ -596,6 +610,27 @@ func (s *Supervisor) SnapshotAll() []Snapshot {
 		out = append(out, r.Snapshot())
 	}
 	return out
+}
+
+// SetTransportProbe records surfaceID's most recent transport probe result
+// directly on its snapshot, independent of the runner's own apply/clear/
+// restart control loop — a probe (internal/agent/renderops.go's
+// "render.transport.probe") is diagnostic evidence about a transport, not a
+// pipeline lifecycle transition, and may legitimately run before any
+// surface has ever been applied. Creates the runner if surfaceID has none
+// yet, matching Apply/Clear/Restart's own runnerFor use.
+//
+// observedAt updates the snapshot's shared ObservedAt field. That is safe
+// against [Supervisor.AwaitState]: AwaitState only treats a snapshot as
+// confirming evidence when its State is one of the caller's wanted states
+// AND ObservedAt is fresh enough, so a probe bumping ObservedAt without a
+// concurrent Apply's state having actually changed can never manufacture a
+// false "confirmed" for a state that has not moved — see AwaitState's own
+// doc comment for the defect this project already shipped once by
+// comparing against stale evidence.
+func (s *Supervisor) SetTransportProbe(surfaceID, transport string, available bool, reason string, observedAt time.Time) {
+	r := s.runnerFor(surfaceID)
+	r.setTransportProbe(transport, available, reason, observedAt)
 }
 
 // AwaitState polls surfaceID's snapshot until it reports one of want with

@@ -88,18 +88,27 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, rep),
 	}
 
-	// TransportAvailable is nil whenever B4's probe has not run yet (seam
-	// B2a never probes) — an unprobed transport is [observation.
-	// StateNotCollected], never rendered as available or unavailable. See
-	// [observation.MeasuredUnknownAge]'s ADR-011 rule applied one layer up:
-	// nil here means "no attempt", not "unknown value of a known attempt",
-	// so this is NotCollected regardless of rep.retained, unlike every
-	// other field above.
+	// TransportAvailable is nil whenever this surface's transport has never
+	// been probed — an ndi surface only gets a value once render.surface.
+	// apply's own pipeline start or a render.transport.probe command has
+	// actually run [pipeline.ProbeNDISend] against it (internal/agent/
+	// renderops.go), and an hdmi surface has no probe at all yet. An
+	// unprobed transport is [observation.StateNotCollected], never rendered
+	// as available or unavailable. See [observation.MeasuredUnknownAge]'s
+	// ADR-011 rule applied one layer up: nil here means "no attempt", not
+	// "unknown value of a known attempt", so this is NotCollected
+	// regardless of rep.retained, unlike every other field above.
 	if sf.TransportAvailable == nil {
-		obs = append(obs, notCollected(res, SignalSurfaceTransportAvailable,
-			"transport availability has not been probed for this surface (Track B seam B4 is not built yet)", rep.receivedAt))
+		reason := "transport availability has not been probed for this surface"
+		obs = append(obs,
+			notCollected(res, SignalSurfaceTransportAvailable, reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceTransportReason, reason, rep.receivedAt),
+		)
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep))
+		obs = append(obs,
+			buildValue(nodeID, res, SignalSurfaceTransportAvailable, *sf.TransportAvailable, rep),
+			buildValue(nodeID, res, SignalSurfaceTransportReason, sf.TransportReason, rep),
+		)
 	}
 
 	return obs

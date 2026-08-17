@@ -42,12 +42,23 @@ func platformString() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
-// publishHello publishes cfg's identity and (per Config.Capabilities' doc
-// comment, ordinarily empty) capability set to the retained hello topic.
+// publishHello publishes cfg's identity and this node's capability set to
+// the retained hello topic. The capability set is cfg.Capabilities
+// verbatim when SHOWMESH_NODE_CAPABILITIES set it (an explicit operator
+// override always wins outright), otherwise a fresh call to
+// [detectCapabilities] — real detection, run again on every connect
+// (including every reconnect), not cached from boot, so a capability that
+// becomes available later (e.g. the NDI runtime gets installed) is
+// advertised on this node's next reconnect with no restart required.
 func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time) error {
 	topic, err := mqttproto.HelloTopic(cfg.NodeID)
 	if err != nil {
 		return fmt.Errorf("building hello topic: %w", err)
+	}
+
+	caps := cfg.Capabilities
+	if len(caps) == 0 {
+		caps = capabilityDetector(ctx)
 	}
 
 	env, err := mqttproto.NewHelloEnvelope(time.Now, cfg.NodeID, mqttproto.HelloPayload{
@@ -56,7 +67,7 @@ func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID 
 		AgentVersion: version.Version,
 		BootID:       bootID,
 		StartedAt:    startedAt,
-		Capabilities: cfg.Capabilities,
+		Capabilities: caps,
 	})
 	if err != nil {
 		return fmt.Errorf("building hello envelope: %w", err)

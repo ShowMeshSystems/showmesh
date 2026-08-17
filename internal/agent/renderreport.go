@@ -119,6 +119,7 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		FramesDropped:       0,
 		Transport:           s.Transport,
 		TransportAvailable:  s.TransportAvailable,
+		TransportReason:     s.TransportReason,
 		ObservedAt:          s.ObservedAt,
 	}
 }

@@ -167,15 +167,16 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo", "asset.fetch", and Track B seam B2a's three render.*
-// operations. Per ARCHITECTURE section 10.4 ("agents accept only
-// allowlisted operations"), this map itself IS the enforcement mechanism —
-// [CommandHandler.HandleMessage] refuses any Action that is not a key here,
-// never executes it, and never silently ignores it. assetDir and
-// assetAPIToken configure "asset.fetch" (see assets.go); render configures
-// the three render.* operations (see renderops.go). Adding a further
-// allowlisted operation later means adding a further entry to this map, not
-// building a second enforcement path.
+// "agent.echo", "asset.fetch", and Track B's four render.* operations
+// (seam B2a's apply/clear/restart, seam B4's transport.probe). Per
+// ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
+// this map itself IS the enforcement mechanism — [CommandHandler.
+// HandleMessage] refuses any Action that is not a key here, never executes
+// it, and never silently ignores it. assetDir and assetAPIToken configure
+// "asset.fetch" (see assets.go); render configures the four render.*
+// operations (see renderops.go). Adding a further allowlisted operation
+// later means adding a further entry to this map, not building a second
+// enforcement path.
 func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
@@ -187,6 +188,7 @@ func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperatio
 		ops["render.surface.apply"] = render.applySurface
 		ops["render.surface.clear"] = render.clearSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
+		ops["render.transport.probe"] = render.probeTransport
 	}
 	return ops
 }

@@ -189,6 +189,16 @@ const (
 	// what keeps these two states from ever being produced for the same
 	// reason in the first place).
 	exitAssetsUnknown = 21
+
+	// exitRenderUnavailable: "render transport" found the surface's
+	// transport unavailable — either a real probe confirmed it (Track B
+	// seam B4, [pipeline.ProbeNDISend]) or no probe evidence exists yet.
+	// Both are "cannot show the operator NDI is usable right now," which is
+	// what an operator running this command actually wants to know; a
+	// script that needs to distinguish "confirmed absent" from "never
+	// probed" should pass --output json and read the observation state
+	// directly rather than branching on this exit code alone.
+	exitRenderUnavailable = 22
 )
 
 // cliError carries an exit code alongside a human-readable message, so

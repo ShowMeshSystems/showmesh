@@ -117,6 +117,11 @@ func TestPollTransportUnprobedIsNotCollected(t *testing.T) {
 	if transport.Reason == "" {
 		t.Errorf("unprobed transport: Reason is empty, want a stated reason (absent evidence must be stated, never omitted)")
 	}
+
+	reason := findObs(t, obs, SignalSurfaceTransportReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("unprobed transport reason: Absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	}
 }
 
 // TestPollProbedTransportRendersBool proves the other half of the same
@@ -126,6 +131,7 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	st := NewStore()
 	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
 	payload.Surfaces[0].TransportAvailable = boolPtr(false)
+	payload.Surfaces[0].TransportReason = "NDI runtime not found"
 	st.Put("render-01", payload, false, time.Now())
 
 	c := New(st)
@@ -137,6 +143,14 @@ func TestPollProbedTransportRendersBool(t *testing.T) {
 	}
 	if v, ok := transport.Value.(bool); !ok || v != false {
 		t.Errorf("probed transport: Value = %v, want false", transport.Value)
+	}
+
+	reason := findObs(t, obs, SignalSurfaceTransportReason)
+	if reason.Absence != "" {
+		t.Errorf("transport reason: Absence = %q, want empty", reason.Absence)
+	}
+	if v, ok := reason.Value.(string); !ok || v != "NDI runtime not found" {
+		t.Errorf("transport reason: Value = %v, want %q", reason.Value, "NDI runtime not found")
 	}
 }
 

@@ -308,3 +308,144 @@ func TestRenderOperationsRoundTripJSONParams(t *testing.T) {
 		t.Fatalf("persisted frameRate = %v, want 40", reparsed["frameRate"])
 	}
 }
+
+// fakeProbeProcess is a [pipeline.ProcessHandle] that returns exactly one
+// pre-loaded [pipeline.ExitResult] from Wait, for probeTransport's own
+// tests — a different, simpler shape than fakeRenderStarter (above),
+// which fires onRunningMarker for a long-lived supervised pipeline;
+// [pipeline.ProbeNDISend] reads SawRunningMarker off ExitResult directly
+// and never registers an onRunningMarker callback at all (see
+// probe.go's runProbe), so this fake needs no callback handling.
+type fakeProbeProcess struct{ exitCh chan pipeline.ExitResult }
+
+func (p *fakeProbeProcess) Wait() pipeline.ExitResult { return <-p.exitCh }
+func (p *fakeProbeProcess) Kill() error               { return nil }
+func (p *fakeProbeProcess) Pid() int                  { return 1 }
+
+// fakeProbeStarter returns a [pipeline.ProcessStarter] whose every process
+// immediately reports result from Wait.
+func fakeProbeStarter(result pipeline.ExitResult) pipeline.ProcessStarter {
+	return func(_ context.Context, _ string, _ []string, _ func()) (pipeline.ProcessHandle, error) {
+		p := &fakeProbeProcess{exitCh: make(chan pipeline.ExitResult, 1)}
+		p.exitCh <- result
+		return p, nil
+	}
+}
+
+// TestProbeTransportAvailableRecordsOnSupervisorSnapshot proves
+// probeTransport's wiring end to end: a real state-transition-confirmed
+// probe (the fake starter stands in for the real gst-launch-1.0 subprocess;
+// pipeline/probe_test.go covers the probe mechanism itself) records
+// Transport/TransportAvailable on the named surface's snapshot, which is
+// exactly what renderreport.go reads to build the next render report — and
+// reports Confirmed: true with the matching Value.
+func TestProbeTransportAvailableRecordsOnSupervisorSnapshot(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true") // ResolveGstLaunch must succeed; the fake starter stands in for the rest.
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newRenderOperations(sup, store)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
+	if err != nil {
+		t.Fatalf("probeTransport: %v", err)
+	}
+	if !result.Confirmed {
+		t.Errorf("Confirmed = false, want true")
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok || val["available"] != true {
+		t.Errorf("Value = %#v, want available=true", result.Value)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Transport != "ndi" {
+		t.Errorf("snap.Transport = %q, want ndi", snap.Transport)
+	}
+	if snap.TransportAvailable == nil || !*snap.TransportAvailable {
+		t.Errorf("snap.TransportAvailable = %v, want true", snap.TransportAvailable)
+	}
+}
+
+// TestProbeTransportUnavailableRecordsReason proves the false path carries
+// a real, non-empty reason both in the OperationResult and on the
+// supervisor's snapshot (mqttproto.RenderPayload.Validate requires
+// TransportReason whenever TransportAvailable is false — this is what
+// prevents renderreport.go from ever publishing a payload that fails its
+// own wire-boundary validation).
+func TestProbeTransportUnavailableRecordsReason(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true")
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newRenderOperations(sup, store)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{
+		SawRunningMarker: false,
+		StderrTail:       "ERROR: from element ...: Failed loading NDI SDK\n",
+	})
+
+	result, err := renderOps.probeTransport(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now)
+	if err != nil {
+		t.Fatalf("probeTransport: %v", err)
+	}
+	if result.Confirmed {
+		t.Errorf("Confirmed = true, want false")
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok || val["available"] != false {
+		t.Errorf("Value = %#v, want available=false", result.Value)
+	}
+	if reason, _ := val["reason"].(string); reason == "" {
+		t.Errorf("Value[\"reason\"] is empty, want a real reason")
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.TransportAvailable == nil || *snap.TransportAvailable {
+		t.Errorf("snap.TransportAvailable = %v, want false", snap.TransportAvailable)
+	}
+	if snap.TransportReason == "" {
+		t.Errorf("snap.TransportReason is empty, want a real reason")
+	}
+}
+
+// TestHandleMessageRenderTransportProbeFiresRenderTrigger proves
+// render.transport.probe joins the other three render.* operations in
+// isRenderAction, so a probe dispatched through the real command path
+// republishes the render report immediately rather than waiting out the
+// next tick.
+func TestHandleMessageRenderTransportProbeFiresRenderTrigger(t *testing.T) {
+	t.Setenv("SHOWMESH_GST_LAUNCH", "/bin/true")
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newRenderOperations(sup, store)
+	renderOps.probeStarter = fakeProbeStarter(pipeline.ExitResult{SawRunningMarker: true})
+
+	renderTrigger := make(chan struct{}, 1)
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, renderTrigger, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := renderCmd("render.transport.probe", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	select {
+	case <-renderTrigger:
+	default:
+		t.Fatalf("renderTrigger did not fire for render.transport.probe")
+	}
+}
