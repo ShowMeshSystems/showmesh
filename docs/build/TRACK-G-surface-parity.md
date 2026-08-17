@@ -2,8 +2,34 @@
 
 [Build plan](BUILD-PLAN.md) · [Build log](BUILD-LOG.md) · [ADR-014](../decisions/ADR-014-operator-ui-is-a-client.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md) · [ADR-036](../decisions/ADR-036-dispatch-configuration-applies-without-a-restart.md)
 
-**Status:** specified 2026-08-17, not started. Owner called it critical and
-scheduled it ahead of Track B.
+**Status:** specified and built 2026-08-17. All seven seams are complete and
+open as pull requests; none has merged to `main`. Owner called the track
+critical and scheduled it ahead of Track B.
+
+| Seam | What it closes | PR |
+|---|---|---|
+| G-1 | [ADR-039](../decisions/ADR-039-operator-configuration-is-store-backed.md), accepted by the owner | on `main` |
+| G-2 | `resolume.instances`, the seam the track exists for | #7 |
+| G-3 | `fpp.mqtt` | #11 |
+| G-4 | `assets.settings` | #10 |
+| G-5 | identity administration, and `principal:write`'s first caller | #9 |
+| G-6 | `showmeshctl macro put` | #6 |
+| G-7 | the two ADR-039 decision 9 guards | #12 |
+| G-8 | the Operator UI for Track E | #8 |
+
+**PR #12 is the whole track folded into one branch plus G-7**, because the
+write-parity guard cannot be written against any single seam: it would pass
+for the wrong reason without G-6. Merge #12, or merge the six and take only
+its final commit. #10 and #11 base on #7.
+
+**What is not proved.** Nothing ran against real show hardware. G-2's
+reachability used a stub, not a real Arena. G-8's write-scope flows were
+never exercised authenticated in a browser, and that seam added roughly
+2,450 lines of UI with no test files of its own, which makes it the
+least-evidenced code in the track; both are on
+`docs/private/PUNCH-LIST.md`. Two owner decisions are queued: G-3's
+credential storage divergence from ADR-039 decision 7, and
+`SHOWMESH_INTEGRATION_BROKERS`.
 
 ## Why this track exists
 
