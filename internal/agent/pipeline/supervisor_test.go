@@ -167,7 +167,7 @@ var fastTestPolicy = restartPolicy{
 func TestSupervisorFastFailureLockout(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fs := &fakeStarter{}
-	fs.onStart = func(p *fakeProcess) {
+	fs.onStart = func(p *fakeProcess, _ func()) {
 		// Simulate an instant crash: exit before ever calling
 		// onRunningMarker, on its own goroutine so Start can return first
 		// (matching how a real process's exit is observed asynchronously).
@@ -212,7 +212,7 @@ func TestSupervisorFastFailureLockout(t *testing.T) {
 func TestSupervisorSlowRepeatedFailureStillLocksOut(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fs := &fakeStarter{}
-	fs.onStart = func(p *fakeProcess) {
+	fs.onStart = func(p *fakeProcess, _ func()) {
 		// Never call onRunningMarker — this attempt does not reach
 		// PLAYING — and advance the clock well past the old fixed
 		// fast-failure window before exiting, on its own goroutine so
@@ -249,6 +249,55 @@ func TestSupervisorSlowRepeatedFailureStillLocksOut(t *testing.T) {
 	defer cancel2()
 	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
 		t.Fatalf("explicit Restart after lockout did not reach StateRunning")
+	}
+}
+
+// TestSupervisorStaleRunningMarkerCannotOverwriteFailed is the F10
+// regression test: onRunningMarker fires from the process's own goroutine
+// with no ordering guarantee against the runner's loop already having
+// processed that same process's exit. Here the marker is captured but
+// deliberately not invoked until well after the runner has already entered
+// the fast-failure lockout with no restart scheduled — the scenario the
+// finding names as the worst case, because StateFailed has no further
+// transition to correct a wrongly-applied StateRunning. Without the
+// generation check, the stale marker stamps StateRunning, permanently
+// hiding a locked-out pipeline.
+func TestSupervisorStaleRunningMarkerCannotOverwriteFailed(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	var staleMarker func()
+	fs.onStart = func(p *fakeProcess, onRunningMarker func()) {
+		staleMarker = onRunningMarker // held, not called: this attempt never reports PLAYING
+		code := 1
+		go p.exitNow(ExitResult{ExitCode: &code, StderrTail: "immediate crash"})
+	}
+	oneShotLockout := fastTestPolicy
+	oneShotLockout.maxConsecutiveFastFailures = 1
+	sup := newSupervisorWithPolicy(clock.Now, fs.Start, testLogger{}, oneShotLockout)
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, 10*time.Millisecond); !ok {
+		t.Fatalf("never reached StateFailed")
+	}
+
+	// The stale marker arrives long after the lockout — the exact ordering
+	// F10 makes unreachable-by-construction in the old fake, since it used
+	// to call onRunningMarker synchronously inside Start.
+	if staleMarker == nil {
+		t.Fatalf("test setup bug: onRunningMarker was never captured")
+	}
+	staleMarker()
+
+	time.Sleep(200 * time.Millisecond)
+	snap, _ := sup.Snapshot("s1")
+	if snap.State != StateFailed {
+		t.Fatalf("State = %q after a stale onRunningMarker fired post-lockout, want %q (F10: a marker from a dead attempt must not overwrite a later state)", snap.State, StateFailed)
 	}
 }
 

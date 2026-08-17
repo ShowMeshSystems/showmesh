@@ -129,9 +129,41 @@ type runner struct {
 	stop chan struct{}
 	done chan struct{}
 
-	mu   sync.Mutex
-	snap Snapshot
-	pid  int // 0 when no process is currently running; diagnostics only, never part of the wire report
+	mu      sync.Mutex
+	snap    Snapshot
+	pid     int   // 0 when no process is currently running; diagnostics only, never part of the wire report
+	procGen int64 // see bumpProcGen and setRunningIfCurrent
+}
+
+// bumpProcGen advances the generation identifying which process attempt is
+// currently live and returns the new value. Called every time proc's
+// identity changes in [runner.loop] — a new attempt starting, or the
+// current one dying or being stopped — so a callback captured from an
+// attempt that is no longer current can be told so (F10): onRunningMarker
+// fires from that attempt's own goroutine, with no ordering guarantee
+// against the loop already having moved on (a fast-failure lockout with no
+// restart scheduled, or a new Apply/Restart superseding it), and a fake
+// process starter (unlike a real one) can even call it synchronously before
+// Start returns.
+func (r *runner) bumpProcGen() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.procGen++
+	return r.procGen
+}
+
+// setRunningIfCurrent applies StateRunning only if gen still names the
+// live process's current generation, so a marker from an already-dead or
+// already-superseded attempt can never stamp state onto whatever is
+// current now.
+func (r *runner) setRunningIfCurrent(gen int64) {
+	r.mu.Lock()
+	current := r.procGen
+	r.mu.Unlock()
+	if gen != current {
+		return
+	}
+	r.setState(StateRunning, "")
 }
 
 // Logger is the minimal logging surface this package needs, so it does not
@@ -259,6 +291,7 @@ func (r *runner) loop() {
 		r.mu.Lock()
 		r.pid = 0
 		r.mu.Unlock()
+		r.bumpProcGen() // this attempt is no longer current; see F10
 	}
 
 	attemptStart := func() {
@@ -276,9 +309,13 @@ func (r *runner) loop() {
 
 		r.setState(StateStarting, "pipeline started; PLAYING not yet observed")
 
+		// A new generation for this attempt, captured by onRunning before
+		// the starter is even called: some starters (the test fake) invoke
+		// the marker synchronously, before Start returns.
+		myGen := r.bumpProcGen()
 		ec := make(chan ExitResult, 1)
 		onRunning := func() {
-			r.setState(StateRunning, "")
+			r.setRunningIfCurrent(myGen)
 		}
 
 		startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -347,6 +384,11 @@ func (r *runner) loop() {
 			r.mu.Lock()
 			r.pid = 0
 			r.mu.Unlock()
+			// This attempt is dead whether or not a restart follows —
+			// bump now so a marker still in flight from it (F10) is
+			// stale even when no new attempt starts, e.g. the lockout
+			// branch below, which never calls attemptStart again.
+			r.bumpProcGen()
 
 			// Policy: consecFails counts consecutive attempts that never
 			// reached PLAYING. An attempt that did reach PLAYING before

@@ -76,8 +76,11 @@ type fakeStarter struct {
 	// onStart, when set, is called synchronously for every Start
 	// invocation and may kill the returned process immediately (via
 	// process.Kill()), simulating an instant crash — used for the
-	// fast-failure lockout test.
-	onStart func(process *fakeProcess)
+	// fast-failure lockout test. It also receives onRunningMarker directly,
+	// so a test can hold onto it and fire it later, on its own goroutine,
+	// after the runner has already moved on (F10) — something the fake's
+	// default behaviour cannot exercise at all.
+	onStart func(process *fakeProcess, onRunningMarker func())
 }
 
 type fakeStartCall struct {
@@ -92,11 +95,18 @@ func (f *fakeStarter) Start(_ context.Context, path string, args []string, onRun
 
 	p := newFakeProcess()
 	if f.onStart != nil {
-		f.onStart(p)
+		f.onStart(p, onRunningMarker)
 	} else if onRunningMarker != nil {
-		// Default behaviour: simulate reaching PLAYING immediately, like a
-		// healthy pipeline, unless the test wants finer control.
-		onRunningMarker()
+		// Default behaviour: simulate reaching PLAYING almost immediately,
+		// like a healthy pipeline, unless the test wants finer control. On
+		// its own goroutine, matching startRealProcess: onRunningMarker
+		// there fires from watchStdout, asynchronously, strictly after
+		// Start has already returned. Calling it synchronously here (as
+		// this fake used to) cannot produce the ordering a real process
+		// produces — where the runner's own loop can process an exit
+		// before a still-in-flight marker call is scheduled — which is
+		// exactly the race F10 exists to guard.
+		go onRunningMarker()
 	}
 	return p, nil
 }
