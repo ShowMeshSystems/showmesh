@@ -33,6 +33,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Run loads config, starts the MQTT connection manager and HTTP server, and
@@ -268,7 +269,19 @@ func Run() int {
 	// its own cadence; see noderender's package doc comment for why this
 	// never touches the network and is unconditional (a coordinator with
 	// no render node ever attached simply Polls an empty store forever).
-	fppRunner.Add(noderender.New(renderStore), noderender.DefaultPollInterval)
+	//
+	// Seeded from st's own persisted rows (seedNodeRenderKnownSurfaces)
+	// so a coordinator restart does not forget every surface a still-live
+	// node reported before the restart — without this, the FIRST poll
+	// after every restart would see nothing to diff against and could
+	// never emit the dropped-surface absence noderender.Collector.Poll
+	// depends on, turning every already-deployed surface row into a
+	// permanent ghost.
+	knownSurfaces, err := seedNodeRenderKnownSurfaces(ctx, st)
+	if err != nil {
+		logger.Warn("failed to seed node-render known-surfaces from the store; starting with none", "error", err)
+	}
+	fppRunner.Add(noderender.New(renderStore, noderender.WithKnownSurfaces(knownSurfaces)), noderender.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -1117,6 +1130,36 @@ func logBootstrapStateIfUnclaimed(ctx context.Context, identitySvc identity.Serv
 		"the data volume (identity.BootstrapFileName under SHOWMESH_DATA_DIR) and claim it with POST /api/v1/bootstrap, " +
 		"or run `showmesh-coordinator bootstrap` directly against this coordinator's data volume, before relying on this " +
 		"coordinator for a real show.")
+}
+
+// seedNodeRenderKnownSurfaces reads back every persisted surface.pipeline.
+// state row and groups it by the node that reported it (via
+// noderender.NodeFromSource), for noderender.WithKnownSurfaces. This is
+// what lets noderender.Collector.Poll emit a dropped-surface absence on the
+// very first poll after a restart, rather than only once one more real
+// delivery has arrived to compare against — a row from a source this
+// package's SourceFor never produced (e.g. none yet, a fresh store) is
+// silently skipped, not an error.
+func seedNodeRenderKnownSurfaces(ctx context.Context, st *store.Store) (map[string]map[string]struct{}, error) {
+	rows, err := st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceSurface,
+		Signal:       noderender.SignalSurfacePipelineState,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list persisted surface.pipeline.state observations: %w", err)
+	}
+	known := make(map[string]map[string]struct{})
+	for _, o := range rows {
+		nodeID, ok := noderender.NodeFromSource(o.Source)
+		if !ok {
+			continue
+		}
+		if known[nodeID] == nil {
+			known[nodeID] = make(map[string]struct{})
+		}
+		known[nodeID][o.Resource.ID] = struct{}{}
+	}
+	return known, nil
 }
 
 func newLogger(level string) *slog.Logger {

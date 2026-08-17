@@ -99,6 +99,74 @@ func TestSupervisorClearStopsAndDoesNotRestart(t *testing.T) {
 	}
 }
 
+// snapshotAllHas reports whether sup.SnapshotAll() currently names
+// surfaceID.
+func snapshotAllHas(sup *Supervisor, surfaceID string) bool {
+	for _, s := range sup.SnapshotAll() {
+		if s.SurfaceID == surfaceID {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSupervisorClearedSurfaceExcludedFromSnapshotAll proves the fix for a
+// cleared surface reporting StateStopped forever (CLAUDE.md Track B seam
+// B2b review finding): SnapshotAll — the render report publisher's own
+// source (internal/agent/renderreport.go) — must stop naming a surface
+// once it has been cleared, not keep reporting it as Stopped. Snapshot
+// (used by AwaitState to confirm the clear itself) is unaffected: it must
+// still see the Stopped transition.
+func TestSupervisorClearedSurfaceExcludedFromSnapshotAll(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	sup := NewSupervisor(clock.Now, fs.Start, testLogger{})
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+		t.Fatalf("never reached running before clearing")
+	}
+	if !snapshotAllHas(sup, "s1") {
+		t.Fatalf("s1 missing from SnapshotAll while running, want present")
+	}
+
+	if err := sup.Clear("s1"); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	// Confirm the clear itself via Snapshot/AwaitState — unaffected by the
+	// SnapshotAll exclusion below. isCleared is set by the SAME
+	// control-loop goroutine that just transitioned to Stopped (both
+	// inside loop's cmdClear branch), so observing Stopped here already
+	// happens-after setCleared(true).
+	if _, ok := sup.AwaitState(ctx2, "s1", []State{StateStopped}, time.Time{}, 5*time.Millisecond); !ok {
+		t.Fatalf("did not observe StateStopped after Clear")
+	}
+
+	if snapshotAllHas(sup, "s1") {
+		t.Fatalf("s1 still present in SnapshotAll after Clear, want excluded so the render report stops naming it")
+	}
+
+	// Re-applying must bring it back.
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("re-Apply: %v", err)
+	}
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel3()
+	if _, ok := sup.AwaitState(ctx3, "s1", []State{StateRunning}, time.Time{}, 5*time.Millisecond); !ok {
+		t.Fatalf("never reached running after re-Apply")
+	}
+	if !snapshotAllHas(sup, "s1") {
+		t.Fatalf("s1 missing from SnapshotAll after re-Apply, want present again")
+	}
+}
+
 // TestSupervisorCrashTriggersRestart proves the opposite of the Clear test:
 // an unrequested exit IS treated as a crash and does trigger a restart.
 func TestSupervisorCrashTriggersRestart(t *testing.T) {

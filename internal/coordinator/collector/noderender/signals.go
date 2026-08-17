@@ -7,8 +7,10 @@ import (
 )
 
 // SourceName is this collector's identity: the API's collectors[] list and
-// every observation's Source field, and [Store]'s own reservation
-// (docs/build/IDENTIFIER-REGISTER.md).
+// [Collector.ID]'s Runner-registration identity, matching [Store]'s own
+// reservation (docs/build/IDENTIFIER-REGISTER.md). Individual observations
+// this package produces stamp [SourceFor](nodeID) instead, not this
+// constant bare — see that function's doc comment.
 const SourceName = "node-render"
 
 // Signal vocabulary under the "surface" resource kind. One

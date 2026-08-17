@@ -674,6 +674,18 @@ type RenderPayload struct {
 // payload can never exceed [maxEnvelopeSize] regardless of what a caller
 // tries to put in it.
 func (p RenderPayload) Validate() error {
+	// p.Surfaces == nil covers BOTH an absent "surfaces" key and a literal
+	// JSON null — encoding/json leaves a slice field nil in both cases, so
+	// this is the only place that distinction can still be enforced (see
+	// this field's own doc comment: this package's encoder always emits
+	// "surfaces":[] for a node with none, never omits or nulls the key).
+	// Accepting nil here would treat "no assertion was made" the same as
+	// "this node affirmatively holds no surfaces", which is exactly the
+	// absent-key-as-empty-value defect this project has shipped before —
+	// see CLAUDE.md's recurring absent/null/empty lesson.
+	if p.Surfaces == nil {
+		return fmt.Errorf("%w: surfaces (a node reports \"surfaces\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
 	if len(p.Surfaces) > maxRenderSurfaces {
 		return fmt.Errorf("%w: %d surfaces, max %d", ErrPayloadTooLarge, len(p.Surfaces), maxRenderSurfaces)
 	}

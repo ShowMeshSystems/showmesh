@@ -58,7 +58,7 @@ func TestOpenAPIRenderApplyResponseMatchesRealResponse(t *testing.T) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
 	}()
 
 	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",

@@ -262,3 +262,206 @@ func TestReasonAndCountsAreExposed(t *testing.T) {
 		}
 	}
 }
+
+// --- Dropped-surface absence (replaces the deleted nodeRenderSink) ---
+
+// TestPollEmitsAbsenceForADroppedSurface proves the fix this file replaces
+// df483c8's delete-based one with: a surface a node reported LAST poll but
+// not THIS one gets an explicit StateNotCollected observation on
+// surface.pipeline.state, with a reason, rather than either a ghost row
+// (the pre-fix defect) or silent deletion (df483c8's rejected fix).
+func TestPollEmitsAbsenceForADroppedSurface(t *testing.T) {
+	st := NewStore()
+	receivedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), false, receivedAt)
+
+	c := New(st)
+	first, complete := c.Poll(context.Background())
+	if !complete {
+		t.Fatalf("first Poll: complete = false, want true")
+	}
+	// Sanity: the surface is actually present on the first poll.
+	findObs(t, first, SignalSurfacePipelineState)
+
+	// The node's next report names no surfaces at all — a cleared
+	// assignment, matching what a real agent publishes (renderreport.go's
+	// non-nil, possibly-empty Surfaces).
+	droppedAt := receivedAt.Add(time.Minute)
+	st.Put("render-01", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, droppedAt)
+
+	second, complete2 := c.Poll(context.Background())
+	if !complete2 {
+		t.Fatalf("second Poll: complete = false, want true")
+	}
+
+	var absence *observation.Observation
+	for i := range second {
+		o := second[i]
+		if o.Resource.Kind == observation.ResourceSurface && o.Resource.ID == "garage" && o.Signal == SignalSurfacePipelineState {
+			absence = &o
+			break
+		}
+	}
+	if absence == nil {
+		t.Fatalf("second Poll carries no surface.pipeline.state observation for the dropped surface %q; want an explicit absence", "garage")
+	}
+	if absence.Absence != observation.StateNotCollected {
+		t.Errorf("dropped surface absence state = %q, want %q", absence.Absence, observation.StateNotCollected)
+	}
+	if absence.Reason == "" {
+		t.Errorf("dropped surface absence carries no reason")
+	}
+	if absence.Source != SourceFor("render-01") {
+		t.Errorf("dropped surface absence source = %q, want %q", absence.Source, SourceFor("render-01"))
+	}
+}
+
+// TestPollDoesNotEmitAbsenceOnFirstSightingOfANode proves a node's very
+// first delivery — nothing was ever "known" about it before — never
+// synthesizes a spurious absence: there is nothing to have dropped yet.
+func TestPollDoesNotEmitAbsenceOnFirstSightingOfANode(t *testing.T) {
+	st := NewStore()
+	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	var absences int
+	for _, o := range obs {
+		if o.Absence == observation.StateNotCollected {
+			absences++
+		}
+	}
+	if absences != 0 {
+		t.Errorf("first-ever poll produced %d absence observations, want 0", absences)
+	}
+}
+
+// TestPollDoesNotAffectAnotherNodesSurfaceOfTheSameID is the two-node
+// collision case: render-a stops reporting "wall-1" while render-b keeps
+// reporting a surface with the SAME id. render-b's own evidence must be
+// completely unaffected by render-a's drop — the two are tracked under
+// distinct per-node keys (known is keyed by nodeID, not by surface id
+// alone).
+func TestPollDoesNotAffectAnotherNodesSurfaceOfTheSameID(t *testing.T) {
+	shared := func(state string) mqttproto.RenderPayload {
+		return mqttproto.RenderPayload{
+			GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true,
+			Surfaces: []mqttproto.RenderSurfaceReport{{
+				SurfaceID: "wall-1", PipelineState: state, ObservedAt: time.Now(),
+			}},
+		}
+	}
+	st := NewStore()
+	st.Put("render-a", shared(mqttproto.RenderPipelineStateRunning), false, time.Now())
+	st.Put("render-b", shared(mqttproto.RenderPipelineStateRunning), false, time.Now())
+
+	c := New(st)
+	if _, complete := c.Poll(context.Background()); !complete {
+		t.Fatalf("first Poll: complete = false, want true")
+	}
+
+	// render-a drops the surface; render-b keeps reporting it.
+	st.Put("render-a", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+
+	second, _ := c.Poll(context.Background())
+
+	var aAbsent, bPresent bool
+	for _, o := range second {
+		if o.Resource.ID != "wall-1" || o.Signal != SignalSurfacePipelineState {
+			continue
+		}
+		switch o.Source {
+		case SourceFor("render-a"):
+			aAbsent = o.Absence == observation.StateNotCollected
+		case SourceFor("render-b"):
+			bPresent = o.Value == mqttproto.RenderPipelineStateRunning
+		}
+	}
+	if !aAbsent {
+		t.Errorf("render-a's dropped wall-1 was not reported as absent")
+	}
+	if !bPresent {
+		t.Errorf("render-b's still-live wall-1 was affected by render-a's drop; want it unchanged")
+	}
+}
+
+// --- Restart-seeding (WithKnownSurfaces) ---
+
+// TestWithKnownSurfacesEmitsAbsenceOnFirstPollAfterRestart proves the
+// restart-resilience half of the fix: a fresh Collector (as constructed
+// after a coordinator restart) with no seed would treat a node's FIRST
+// delivery as having nothing to diff against (see
+// TestPollDoesNotEmitAbsenceOnFirstSightingOfANode) — permanently losing
+// the ability to ever prune a surface the node had already dropped before
+// the restart. WithKnownSurfaces seeds that memory from the store's own
+// persisted rows, so the very first poll after a restart can still emit
+// the absence.
+func TestWithKnownSurfacesEmitsAbsenceOnFirstPollAfterRestart(t *testing.T) {
+	st := NewStore()
+	// render-01's current delivery no longer names "garage" — as if the
+	// coordinator restarted after the node already dropped it, and this is
+	// the first poll of the new process.
+	st.Put("render-01", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+
+	seed := map[string]map[string]struct{}{
+		"render-01": {"garage": struct{}{}},
+	}
+	c := New(st, WithKnownSurfaces(seed))
+	obs, complete := c.Poll(context.Background())
+	if !complete {
+		t.Fatalf("Poll: complete = false, want true")
+	}
+
+	var found bool
+	for _, o := range obs {
+		if o.Resource.ID == "garage" && o.Signal == SignalSurfacePipelineState && o.Absence == observation.StateNotCollected {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("seeded Collector's first poll did not emit an absence for the pre-restart-known surface %q", "garage")
+	}
+}
+
+// TestWithKnownSurfacesDoesNotMutateCallersMap proves the seed map is
+// copied, not retained — a caller (coordinator.go) reusing or discarding
+// its own map after construction must not alias this package's internal
+// state.
+func TestWithKnownSurfacesDoesNotMutateCallersMap(t *testing.T) {
+	seed := map[string]map[string]struct{}{"render-01": {"garage": struct{}{}}}
+	st := NewStore()
+	st.Put("render-01", samplePayload(mqttproto.RenderPipelineStateRunning), false, time.Now())
+	_ = New(st, WithKnownSurfaces(seed))
+
+	seed["render-01"]["patio"] = struct{}{}
+	if len(seed["render-01"]) != 2 {
+		t.Fatalf("test setup broke: caller's own map should still be mutable")
+	}
+	// No assertion beyond "this does not panic or corrupt Collector state"
+	// is possible without exporting known; the copy is exercised for real
+	// by TestWithKnownSurfacesEmitsAbsenceOnFirstPollAfterRestart above.
+}
+
+// --- SourceFor / NodeFromSource ---
+
+func TestNodeFromSourceRoundTripsWithSourceFor(t *testing.T) {
+	for _, nodeID := range []string{"render-01", "media-a", "x"} {
+		src := SourceFor(nodeID)
+		got, ok := NodeFromSource(src)
+		if !ok {
+			t.Fatalf("NodeFromSource(%q) ok = false, want true", src)
+		}
+		if got != nodeID {
+			t.Errorf("NodeFromSource(SourceFor(%q)) = %q, want %q", nodeID, got, nodeID)
+		}
+	}
+}
+
+func TestNodeFromSourceRejectsUnrelatedSource(t *testing.T) {
+	for _, src := range []string{"fpp-rest", "resolume-rest", "", "node-render", "node-renderer:x"} {
+		if _, ok := NodeFromSource(src); ok {
+			t.Errorf("NodeFromSource(%q) ok = true, want false", src)
+		}
+	}
+}

@@ -144,6 +144,16 @@ type runner struct {
 	pid         int           // 0 when no process is currently running; diagnostics only, never part of the wire report
 	currentProc ProcessHandle // nil when no process is currently running; see stdin()
 	procGen     int64         // see bumpProcGen and setRunningIfCurrent
+
+	// cleared is true from a processed cmdClear until the next cmdApply.
+	// [Supervisor.SnapshotAll] (the render report publisher's source —
+	// internal/agent/renderreport.go) excludes a cleared runner entirely,
+	// so a cleared surface stops being reported rather than reporting
+	// StateStopped forever — see [Supervisor.Clear]'s doc comment. Local
+	// operation confirmation (Snapshot, AwaitState) is UNAFFECTED: those
+	// still need to observe the Stopped transition immediately after
+	// clearing to confirm the clear itself.
+	cleared bool
 }
 
 // bumpProcGen advances the generation identifying which process attempt is
@@ -218,6 +228,21 @@ func (r *runner) setState(state State, reason string) {
 	r.snap.Since = r.now()
 	r.snap.ObservedAt = r.snap.Since
 	r.mu.Unlock()
+}
+
+// setCleared records whether this runner's surface is currently cleared —
+// see the [runner.cleared] field's own doc comment.
+func (r *runner) setCleared(v bool) {
+	r.mu.Lock()
+	r.cleared = v
+	r.mu.Unlock()
+}
+
+// isCleared reports [runner.cleared] under lock.
+func (r *runner) isCleared() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cleared
 }
 
 // setCounters updates the restart-accounting fields under lock, without
@@ -401,12 +426,14 @@ func (r *runner) loop() {
 				// from whatever surface (or spec) was previously applied to
 				// this ID describe a session that has ended, not this one.
 				r.setFrameCounts(0, 0, 0)
+				r.setCleared(false)
 				attemptStart()
 			case cmdClear:
 				stopCurrent()
 				haveSpec = false
 				r.setFrameCounts(0, 0, 0)
 				r.setState(StateStopped, "cleared by operator")
+				r.setCleared(true)
 			case cmdRestart:
 				stopCurrent()
 				backoff = r.policy.initialBackoff
@@ -657,8 +684,15 @@ func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int
 	r.setFrameCounts(written, late, dropped)
 }
 
-// SnapshotAll reports every surface this Supervisor currently knows about,
-// for the render report publisher — see internal/agent/renderreport.go.
+// SnapshotAll reports every surface this Supervisor currently supervises,
+// for the render report publisher — see internal/agent/renderreport.go. A
+// CLEARED surface (Clear called and no Apply since) is excluded entirely,
+// not reported as StateStopped: this is what lets the coordinator's
+// noderender.Collector tell "this node cleared the surface" apart from
+// "this node has nothing to say about it yet" and emit an explicit absence
+// instead of a ghost StateStopped row that would otherwise persist forever
+// — see that package's Poll doc comment. A runner still exists internally
+// after Clear (Apply can reuse it), it is just no longer surfaced here.
 func (s *Supervisor) SnapshotAll() []Snapshot {
 	s.mu.Lock()
 	runners := make([]*runner, 0, len(s.runners))
@@ -669,6 +703,9 @@ func (s *Supervisor) SnapshotAll() []Snapshot {
 
 	out := make([]Snapshot, 0, len(runners))
 	for _, r := range runners {
+		if r.isCleared() {
+			continue
+		}
 		out = append(out, r.Snapshot())
 	}
 	return out

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -158,11 +159,15 @@ func renderCreateAsset(t *testing.T, st *store.Store, showID, sequenceID, target
 	return rec
 }
 
-func surfacePipelineStateObs(surfaceID, state string, observedAt, collectedAt time.Time) observation.Observation {
+// surfacePipelineStateObs builds evidence stamped as coming from nodeID —
+// [noderender.SourceFor], not the bare collector id — matching what a real
+// noderender.Collector.Poll actually writes to the store (see that
+// package's SourceFor doc comment).
+func surfacePipelineStateObs(nodeID, surfaceID, state string, observedAt, collectedAt time.Time) observation.Observation {
 	return mustObs(observation.Measured(
 		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
-		observation.SignalID(renderSignalPipelineState), state, observedAt,
-		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource("node-render"),
+		noderender.SignalSurfacePipelineState, state, observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
 	))
 }
 
@@ -290,7 +295,7 @@ func TestRenderApplyDispatchesCompleteAssignmentAndConfirms(t *testing.T) {
 	// the confirm loop actually polls rather than reading a stale snapshot.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
 	}()
 
 	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
@@ -406,5 +411,68 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 	}
 	if !result.Command.Replay {
 		t.Fatalf("replay = false, want true on the second request")
+	}
+}
+
+// TestRenderNodeSourceForMatchesNodeRenderPackage pins renderNodeSourceFor's
+// duplicated format against noderender.SourceFor's real one: this package
+// cannot import that collector package (TestPackageNeverImportsACollector),
+// so the two must be kept in sync by a test rather than the compiler.
+func TestRenderNodeSourceForMatchesNodeRenderPackage(t *testing.T) {
+	for _, nodeID := range []string{"media-01", "render-a", "x"} {
+		if got, want := renderNodeSourceFor(nodeID), noderender.SourceFor(nodeID); got != want {
+			t.Errorf("renderNodeSourceFor(%q) = %q, want %q (noderender.SourceFor)", nodeID, got, want)
+		}
+	}
+}
+
+// TestRenderApplyIgnoresAnotherNodesConflictingEvidence is the two-node
+// collision case (CLAUDE.md Track B seam B2b review finding): a DIFFERENT
+// node ("other-node") already reports surface "wall-1" as "running" with
+// fresh evidence, while the dispatch target "media-01" has reported
+// nothing about it yet. A confirmation loop that resolved across every
+// source ([ResolveObservations], which a nodeless caller legitimately
+// wants) would pick other-node's "running" reading and falsely confirm a
+// command dispatched to media-01. It must instead time out unconfirmed,
+// because media-01 itself has never reported this surface.
+func TestRenderApplyIgnoresAnotherNodesConflictingEvidence(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	// A DIFFERENT node's fresher, matching evidence for the SAME surface
+	// id — must never be read as media-01's own.
+	setup.obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("other-node", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second)),
+	})
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct{ Outcome string } `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "unconfirmed" {
+		t.Fatalf("outcome = %q, want %q — media-01 itself never reported this surface, so another node's matching evidence must not confirm it",
+			result.Command.Outcome, "unconfirmed")
 	}
 }

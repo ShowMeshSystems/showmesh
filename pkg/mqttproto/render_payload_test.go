@@ -1,6 +1,7 @@
 package mqttproto
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -63,5 +64,85 @@ func TestNewRenderEnvelopeAcceptsValidPayload(t *testing.T) {
 	}
 	if _, err := DecodeRenderPayload(env); err != nil {
 		t.Fatalf("DecodeRenderPayload on the built envelope: %v", err)
+	}
+}
+
+// TestRenderPayloadValidateRejectsNilSurfaces proves the absent/null vs
+// explicitly-empty distinction this field's own doc comment claims but
+// nothing previously enforced: a zero-value RenderPayload (Surfaces == nil,
+// exactly what an absent or literal-null "surfaces" key decodes to) must be
+// refused, never silently treated as "this node holds no surfaces" —
+// CLAUDE.md's most-repeated defect shape in this codebase.
+func TestRenderPayloadValidateRejectsNilSurfaces(t *testing.T) {
+	p := RenderPayload{GstLaunchAvailable: true, Surfaces: nil}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for a nil Surfaces payload")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestRenderPayloadValidateAcceptsExplicitlyEmptySurfaces is
+// TestRenderPayloadValidateRejectsNilSurfaces's counterpart: a node that
+// holds no assignment sends a real, explicit "surfaces":[], and that must
+// keep validating exactly as it always has.
+func TestRenderPayloadValidateAcceptsExplicitlyEmptySurfaces(t *testing.T) {
+	p := RenderPayload{GstLaunchAvailable: true, Surfaces: []RenderSurfaceReport{}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate() returned an error for an explicit, empty Surfaces slice: %v", err)
+	}
+}
+
+// TestDecodeRenderPayloadRejectsAbsentSurfacesKey drives the defect at the
+// wire, not just through the Go struct: a hand-built JSON object with no
+// "surfaces" key at all (unreachable from this package's own constructors,
+// which always emit the key — see RenderPayload.Surfaces's doc comment —
+// but reachable from any other producer, malicious or buggy) must be
+// refused by DecodeRenderPayload, not silently decoded as "this node holds
+// no surfaces".
+func TestDecodeRenderPayloadRejectsAbsentSurfacesKey(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"gstLaunchPath":      "/usr/bin/gst-launch-1.0",
+		"gstLaunchAvailable": true,
+		// "surfaces" deliberately omitted.
+	})
+	if err != nil {
+		t.Fatalf("marshal raw payload: %v", err)
+	}
+	env, err := newEnvelope(time.Now, SchemaNodeRenderV1, "node-1", json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("build envelope: %v", err)
+	}
+	env.Payload = raw // newEnvelope would otherwise re-marshal the RawMessage; keep it exact.
+
+	_, err = DecodeRenderPayload(env)
+	if err == nil {
+		t.Fatalf("DecodeRenderPayload returned no error for a payload with no \"surfaces\" key")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestDecodeRenderPayloadRejectsNullSurfacesKey is
+// TestDecodeRenderPayloadRejectsAbsentSurfacesKey's sibling: a literal
+// `"surfaces": null` must be refused identically, not treated as "no
+// surfaces" either.
+func TestDecodeRenderPayloadRejectsNullSurfacesKey(t *testing.T) {
+	raw := []byte(`{"gstLaunchPath":"","gstLaunchAvailable":true,"surfaces":null}`)
+	env, err := newEnvelope(time.Now, SchemaNodeRenderV1, "node-1", json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("build envelope: %v", err)
+	}
+	env.Payload = raw
+
+	_, err = DecodeRenderPayload(env)
+	if err == nil {
+		t.Fatalf("DecodeRenderPayload returned no error for a literal \"surfaces\": null")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
 	}
 }

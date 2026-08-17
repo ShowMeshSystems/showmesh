@@ -418,7 +418,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	})
 	h.writeRenderAudit(ctx, now, identity.AuditDispatch, in, inserted, "")
 
-	confirmed, outcomeState, outcomeReason := h.confirmRenderCommand(ctx, in.SurfaceID, in.DesiredState, dispatchedAt)
+	confirmed, outcomeState, outcomeReason := h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
 	resolvedAt := h.now()
 	outcome := "unconfirmed"
 	if confirmed {
@@ -489,8 +489,10 @@ func (h *handlers) writeRenderAudit(ctx context.Context, now time.Time, kind ide
 // renderCommandConfirmDeadline — the same never-a-pre-existing-reading
 // fence resolveConfirmationEvidence applies for FPP commands
 // (fppcommand_evidence.go), reimplemented here for observation.
-// ResourceSurface rather than observation.ResourceFPP.
-func (h *handlers) confirmRenderCommand(ctx context.Context, surfaceID, wantState string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+// ResourceSurface rather than observation.ResourceFPP. nodeID is the node
+// THIS dispatch was sent to — see evaluateRenderSurfaceState for why that
+// matters.
+func (h *handlers) confirmRenderCommand(ctx context.Context, nodeID, surfaceID, wantState string, dispatchedAt time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	if h.deps.Observations == nil {
 		return false, string(observation.StateNotCollected), "no observation source is configured"
 	}
@@ -499,7 +501,7 @@ func (h *handlers) confirmRenderCommand(ctx context.Context, surfaceID, wantStat
 	defer ticker.Stop()
 
 	for {
-		confirmed, outcomeState, outcomeReason = h.evaluateRenderSurfaceState(ctx, surfaceID, wantState, dispatchedAt)
+		confirmed, outcomeState, outcomeReason = h.evaluateRenderSurfaceState(ctx, nodeID, surfaceID, wantState, dispatchedAt)
 		if confirmed {
 			return true, outcomeState, outcomeReason
 		}
@@ -516,24 +518,51 @@ func (h *handlers) confirmRenderCommand(ctx context.Context, surfaceID, wantStat
 
 const renderSignalPipelineState = "surface.pipeline.state"
 
-func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, surfaceID, wantState string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
+// renderNodeSourceFor mirrors internal/coordinator/collector/noderender.
+// SourceFor's exact wire format (that package's SourceName constant plus a
+// ':' plus the node id) without importing that collector package — this
+// package's own TestPackageNeverImportsACollector (resolumeinstances_test.go)
+// forbids importing any internal/coordinator/collector/... package at all,
+// so GET /resolume/instances and this API stay servable from stored
+// evidence with no client capable of reaching a live device. Both sides of
+// this format are pinned by TestRenderNodeSourceForMatchesNodeRenderPackage.
+func renderNodeSourceFor(nodeID string) string {
+	return "node-render:" + nodeID
+}
+
+// evaluateRenderSurfaceState reads the surface.pipeline.state evidence
+// belonging specifically to the node this command was dispatched to
+// (renderNodeSourceFor(nodeID)), never a value ResolveObservations picked
+// among every node that has ever reported surfaceID. Two nodes CAN both
+// hold a row for the same surfaceID — a surface reassigned mid-transition,
+// or a cleared runner (see internal/agent/pipeline.Supervisor.Clear) whose
+// old node kept reporting it — and reading the resolved (i.e. most-recent-
+// across-every-node) winner would let a stale reading from a DIFFERENT node
+// confirm or unconfirm a command this dispatch never touched. This is the
+// same schemaV4 (resource, signal, source) row noderender.Collector wrote,
+// so the source's own identity already disambiguates it, with no
+// resolution needed for a caller that knows exactly which node it dispatched to.
+func (h *handlers) evaluateRenderSurfaceState(ctx context.Context, nodeID, surfaceID, wantState string, notBefore time.Time) (confirmed bool, outcomeState, outcomeReason string) {
 	kind := observation.ResourceSurface
 	sig := observation.SignalID(renderSignalPipelineState)
+	wantSource := renderNodeSourceFor(nodeID)
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
 	if err != nil {
 		return false, string(observation.StateCollectionFailed), "reading surface.pipeline.state for confirmation: " + err.Error()
 	}
-	var candidates []observation.Observation
-	for _, o := range obs {
-		if o.Resource.Kind == kind && o.Resource.ID == surfaceID && o.Signal == sig {
-			candidates = append(candidates, o)
+	var o observation.Observation
+	var found bool
+	for _, cand := range obs {
+		if cand.Resource.Kind == kind && cand.Resource.ID == surfaceID && cand.Signal == sig && cand.Source == wantSource {
+			o = cand
+			found = true
+			break
 		}
 	}
-	if len(candidates) == 0 {
-		return false, string(observation.StateNotCollected), "no surface.pipeline.state observation is recorded for this surface yet"
+	if !found {
+		return false, string(observation.StateNotCollected), fmt.Sprintf(
+			"no surface.pipeline.state observation is recorded for this surface from node %s yet", nodeID)
 	}
-	resolved := ResolveObservations(candidates)
-	o := resolved[0]
 	src := o.Source
 	if src == "" {
 		src = "unknown source"

@@ -144,12 +144,14 @@ func TestHandleMessageMalformedRenderIsDropped(t *testing.T) {
 	sink := &fakeRenderSink{}
 	m := newTestManagerWithRenderSink(t, clock, sink)
 
-	// NewRenderEnvelope itself does not validate its payload (it marshals
-	// whatever it is given — mqttproto.newEnvelope), so the malformed
-	// payload — a surface with an empty SurfaceID, which fails
-	// RenderPayload.Validate — is built by hand, matching how a real
-	// misbehaving agent would produce one on the wire.
-	badEnv, err := mqttproto.NewRenderEnvelope(nil, "render-01", mqttproto.RenderPayload{})
+	// The malformed payload this test actually exercises — a surface with
+	// an empty SurfaceID, which fails RenderPayload.Validate — is built by
+	// hand below and swapped in after construction, matching how a real
+	// misbehaving agent would produce one on the wire. NewRenderEnvelope
+	// itself validates (RenderPayload.Surfaces must be a non-nil slice, per
+	// that field's own doc comment), so the envelope built here carries a
+	// valid, explicitly-empty Surfaces to get past that call.
+	badEnv, err := mqttproto.NewRenderEnvelope(nil, "render-01", mqttproto.RenderPayload{Surfaces: []mqttproto.RenderSurfaceReport{}})
 	if err != nil {
 		t.Fatalf("build render envelope: %v", err)
 	}

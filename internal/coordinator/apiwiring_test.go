@@ -16,6 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -573,6 +574,140 @@ func TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged(t *testing.T) {
 	}
 	if len(after) != 1 {
 		t.Fatalf("after the pruning delivery: %d observations remain, want 1 (fpp.port.16.current_ma must be pruned)", len(after))
+	}
+}
+
+// renderSurfacePayload builds a one-surface [mqttproto.RenderPayload], for
+// surfaceID.
+func renderSurfacePayload(surfaceID string) mqttproto.RenderPayload {
+	return mqttproto.RenderPayload{
+		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
+		GstLaunchAvailable: true,
+		Surfaces: []mqttproto.RenderSurfaceReport{{
+			SurfaceID:     surfaceID,
+			PipelineState: mqttproto.RenderPipelineStateRunning,
+			Since:         time.Unix(1000, 0).UTC(),
+			FramesWritten: 10,
+			Transport:     "ndi",
+			ObservedAt:    time.Unix(2000, 0).UTC(),
+		}},
+	}
+}
+
+// TestFPPSinkPrunesADroppedRenderSurfaceViaAbsence is this codebase's
+// replacement for df483c8's rejected DeleteObservationsForResource
+// approach: noderender is wired to the SAME shared fppSink every other
+// collector uses (coordinator.go), because noderender.Collector.Poll now
+// earns its own completeness claim by emitting an explicit absence for a
+// surface it no longer reports, rather than needing a caller with special
+// knowledge to delete it. Drives the real noderender.Collector against a
+// real *store.Store via fppSink — a fake would only prove this package's
+// own assumptions back at itself.
+//
+// Mutation-checked (collector_test.go's own
+// TestPollEmitsAbsenceForADroppedSurface already covers the collector in
+// isolation; this proves the PERSISTED result all the way through
+// ReplaceObservations' per-signal pruning): if noderender.Collector stopped
+// emitting the absence, this test would see the OLD ghost-row shape (7
+// stale signals) survive unpruned, since there would be no key for that
+// surface at all in the delivery.
+func TestFPPSinkPrunesADroppedRenderSurfaceViaAbsence(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs, complete)
+
+	before, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (before): %v", err)
+	}
+	if len(before) < 2 {
+		t.Fatalf("after the first poll: %d observations stored for surface %q, want several", len(before), "garage")
+	}
+
+	// render-a's node clears its render assignment: its next report names
+	// no surfaces at all. render-b is unaffected and keeps reporting
+	// "patio" every cycle, which is what keeps this poll's overall batch
+	// non-empty.
+	renderStore.Put("render-a", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+
+	obs2, complete2 := c.Poll(ctx)
+	if !complete2 {
+		t.Fatalf("second Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs2, complete2)
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (after): %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after render-a cleared its surface: %d observations remain for %q, want exactly 1 (the absence row)", len(after), "garage")
+	}
+	if after[0].Signal != noderender.SignalSurfacePipelineState {
+		t.Errorf("surviving row's signal = %q, want %q", after[0].Signal, noderender.SignalSurfacePipelineState)
+	}
+	if after[0].Absence != observation.StateNotCollected {
+		t.Errorf("surviving row's absence state = %q, want %q", after[0].Absence, observation.StateNotCollected)
+	}
+	if after[0].Reason == "" {
+		t.Errorf("surviving absence row carries no reason")
+	}
+
+	// Sanity: render-b's still-live surface must be unaffected either way.
+	stillThere, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "patio"})
+	if err != nil {
+		t.Fatalf("list observations (patio): %v", err)
+	}
+	if len(stillThere) < 2 {
+		t.Errorf("render-b's still-live surface %q lost rows too, want unaffected (%d remain)", "patio", len(stillThere))
+	}
+}
+
+// TestSeedNodeRenderKnownSurfacesGroupsByNode proves coordinator.go's
+// restart-seeding helper: it reads back persisted surface.pipeline.state
+// rows and groups them by the node that produced each one, via
+// noderender.NodeFromSource, so a fresh Collector after a restart is not
+// starting with amnesia about every surface a still-live node had already
+// reported.
+func TestSeedNodeRenderKnownSurfacesGroupsByNode(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	if err := st.ReplaceObservations(ctx, obs); err != nil {
+		t.Fatalf("persist observations: %v", err)
+	}
+
+	known, err := seedNodeRenderKnownSurfaces(ctx, st)
+	if err != nil {
+		t.Fatalf("seedNodeRenderKnownSurfaces: %v", err)
+	}
+	if _, ok := known["render-a"]["garage"]; !ok {
+		t.Errorf("known[render-a] = %v, want it to contain %q", known["render-a"], "garage")
+	}
+	if _, ok := known["render-b"]["patio"]; !ok {
+		t.Errorf("known[render-b] = %v, want it to contain %q", known["render-b"], "patio")
+	}
+	if _, ok := known["render-a"]["patio"]; ok {
+		t.Errorf("known[render-a] wrongly contains render-b's surface %q", "patio")
 	}
 }
 
