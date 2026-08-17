@@ -140,8 +140,18 @@ card (surface name, node, timeline state, reason) and exists because "the
 projector shows something wrong" is the report this track will actually
 receive.
 
-**This is a product decision and the track document already flagged it.** It
-is ruled here so B2 and B3 can build; it is queued for the owner.
+**Confirmed by the owner, 2026-08-17, with one refinement.** `black` stands
+as the default. The refinement is on `diagnostic`: it must be **generated
+content** and never a held frame, so an alternate flat colour, test bars, or
+the identification card above all qualify and freezing the last rendered
+frame does not. The reason is the same one that makes `black` the default: a
+still picture on a house cannot be told apart from a crashed renderer, so a
+diagnostic mode that freezes defeats its own purpose.
+
+`hold` remains a selectable option rather than being removed, and it carries
+that hazard explicitly: an operator choosing it is choosing an output that
+looks identical to a failure. It is never a default and never what
+`diagnostic` falls back to.
 
 ### Ruling 4: the node is told its surface; it does not discover it
 

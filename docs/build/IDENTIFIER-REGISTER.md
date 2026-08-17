@@ -180,6 +180,30 @@ validation case; minting it after `N=1` has spread through the signal names
 is the latent defect ADR-026 decision 3 warns about. The resource id is the
 `show.surface` configuration object id.
 
+**Individual `surface.*` signals**, all inside the namespace reserved above,
+listed because the last row was minted after the others had shipped:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `surface.pipeline.state` | shipped | Track B seam B2 |
+| `surface.reason` | shipped | Track B seam B2 |
+| `surface.restart.count` | shipped | Track B seam B2 |
+| `surface.consecutive.failures` | shipped | Track B seam B2 |
+| `surface.frames.written` | shipped | Track B seam B2 |
+| `surface.frames.late` | shipped | Track B seam B2 |
+| `surface.frames.dropped` | shipped | Track B seam B2 |
+| `surface.transport.available` | **reserved** | Track B seam B4 |
+| `surface.frames.rate` | **reserved** | Track B seam B5 (ADR-040's measurement obligation) |
+
+**`surface.frames.rate` is what ADR-040 costs.** That record makes matrix
+size a performance parameter rather than an architectural boundary, so
+nothing refuses a large surface; the achieved frame rate at the configured
+geometry therefore has to be reported as evidence, or an operator who
+authors a matrix the hardware cannot sustain finds out from the wall rather
+than from the dashboard. It is a measured rate: where no measurement exists
+it is `not_collected` with a stated reason, never a plausible-looking zero
+and never the configured target rate echoed back.
+
 ## MQTT topics
 
 ADR-008 conventions, `pkg/mqttproto`. No track has needed a new topic since
