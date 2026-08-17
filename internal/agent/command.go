@@ -167,20 +167,28 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo" and "asset.fetch". Per ARCHITECTURE section 10.4 ("agents
-// accept only allowlisted operations"), this map itself IS the enforcement
-// mechanism — [CommandHandler.HandleMessage] refuses any Action that is not
-// a key here, never executes it, and never silently ignores it. assetDir and
-// assetAPIToken configure "asset.fetch" (see assets.go); adding a further
+// "agent.echo", "asset.fetch", and Track B seam B2a's three render.*
+// operations. Per ARCHITECTURE section 10.4 ("agents accept only
+// allowlisted operations"), this map itself IS the enforcement mechanism —
+// [CommandHandler.HandleMessage] refuses any Action that is not a key here,
+// never executes it, and never silently ignores it. assetDir and
+// assetAPIToken configure "asset.fetch" (see assets.go); render configures
+// the three render.* operations (see renderops.go). Adding a further
 // allowlisted operation later means adding a further entry to this map, not
 // building a second enforcement path.
-func newOperationRegistry(assetDir, assetAPIToken string) map[string]OperationFunc {
+func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
-	return map[string]OperationFunc{
+	ops := map[string]OperationFunc{
 		"agent.echo":  state.apply,
 		"asset.fetch": fetch.run,
 	}
+	if render != nil {
+		ops["render.surface.apply"] = render.applySurface
+		ops["render.surface.clear"] = render.clearSurface
+		ops["render.pipeline.restart"] = render.restartPipeline
+	}
+	return ops
 }
 
 // idempotencyCacheEntry is one bounded-cache slot: the idempotency key it
@@ -330,24 +338,33 @@ type CommandHandler struct {
 	// needs evidence that post-dates the action" requirement applied to a
 	// sync, not just a single command.
 	assetFetchTrigger chan<- struct{}
+
+	// renderTrigger, when non-nil, is signalled after any genuinely-executed
+	// "render.*" operation completes, so renderreport.go's publisher can
+	// republish immediately instead of waiting for its next tick — matching
+	// assetFetchTrigger's identical purpose, one seam over.
+	renderTrigger chan<- struct{}
 }
 
 // newCommandHandler builds a CommandHandler for nodeID, wiring
 // [newOperationRegistry]'s allowlist (configured with assetDir and
-// assetAPIToken for "asset.fetch") and a fresh [idempotencyCache]. It takes
-// no Publisher: mqtt.go constructs a fresh *mqttConn per connection
+// assetAPIToken for "asset.fetch", and render for the three render.*
+// operations — nil disables them, which every test in this package that
+// does not exercise rendering does) and a fresh [idempotencyCache]. It
+// takes no Publisher: mqtt.go constructs a fresh *mqttConn per connection
 // (matching how advertise.go and heartbeat.go already do), so
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(assetDir, assetAPIToken),
+		ops:               newOperationRegistry(assetDir, assetAPIToken, render),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,
 		assetFetchTrigger: assetFetchTrigger,
+		renderTrigger:     renderTrigger,
 	}
 }
 
@@ -549,6 +566,15 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			// dropped duplicate trigger here is correct, not lossy in any
 			// way that matters — the inventory publisher only needs to know
 			// "a fetch completed since I last checked," not how many.
+		}
+	}
+	if isRenderAction(cmd.Action) && h.renderTrigger != nil {
+		select {
+		case h.renderTrigger <- struct{}{}:
+		default:
+			// Same non-blocking, drop-duplicate reasoning as
+			// assetFetchTrigger above; the render report publisher only
+			// needs to know "something changed since I last checked."
 		}
 	}
 }
