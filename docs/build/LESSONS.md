@@ -550,3 +550,33 @@ The deeper cause is worse than an oversight. **FPP had already been rescued from
 The audit also found `principal:write` declared, bundled into the admin role since Step 6, and checked by no handler. That is the fourth capability this project has shipped that nothing can reach.
 
 **Rule:** a rule that enforces consistency between surfaces cannot detect a capability that is missing from all of them, so state separately that the capability must exist. And when a defect is fixed in one subsystem, ask whether the fix is a rule; if it is, write it as one, because a correction recorded only as work done is a correction the next subsystem does not inherit. ADR-039 is that rule, and its two enforcement tests exist because this one had been honoured by discipline alone.
+
+## A shared test host makes one suite's failures look like another's defects
+
+**Track G, 2026-08-17, found independently by two seams within hours.** Two builders in separate worktrees ran `make test-integration` at overlapping times on one laptop. The suite starts a real Mosquitto and talks to a `showmesh-bench-fpp-master` container, and neither is namespaced per worktree, so the two runs fought over one broker container name and port and one nine-hour-old bench FPP container.
+
+What made it expensive is the shape of the failures. They were **FPP timing and broker tests, unrelated to either diff, and a different set on each run.** That is indistinguishable from a real intermittent defect in code neither builder had touched, and the honest response to it is to investigate, which is what both did. One seam's first two runs failed and its third passed clean after isolating the broker name and port and pointing the bench URL somewhere unreachable so those tests skipped legitimately. The other saw a clean run, then four to five failures on an immediate rerun, then clean again after removing a leftover container.
+
+Both builders reported the failures rather than citing only their clean runs, which is what let the pattern be recognised at all. A builder that had quietly reported the passing run would have hidden a host-level constraint that will mislead every future parallel session.
+
+**Rule:** a test suite that owns named external resources is a single-instance suite, whatever the test runner's parallelism says. Before believing an integration failure in a session running alongside others, isolate the shared resources and re-run; **a failure set that changes between runs is a collision, not a defect.** And when a shared-host constraint is discovered, it belongs in the project instructions rather than in the transcript of the session that hit it, because the next session to hit it will be a different one.
+
+## An audit scoped by filename misses the file next to it
+
+**Track G seam G-7, 2026-08-17.** The Track G audit enumerated every `SHOWMESH_*` setting by reading `internal/coordinator/config/config.go` and found four operator-facing capabilities stranded in the environment. The guard test written at the end of the same track parses **every non-test file in that package** with `go/parser`, and on its first run found a fifth: `SHOWMESH_INTEGRATION_BROKERS`, which declares the external MQTT brokers a `show.action`'s `mqtt` target may name. It is genuinely operator-facing, it fails ADR-039 decision 2's own test, and it lives in `integrationbrokers.go`, a sibling file of the same package.
+
+The audit was not careless. It read the file that holds the constants, and that file holds almost all of them. The method was the defect: **a human audit picks a file, and a package is not a file.**
+
+What made this recoverable is that the guard recorded the finding honestly. The easy resolutions were to promote the variable onto the legitimate start-time list, which would have made the test pass while asserting something false, or to drop it, which would have made the test pass while hiding a capability. It went into an explicitly-labelled known-gap group with a stated reason and a decision-queue entry.
+
+**Rule:** when a manual audit produces a rule, write the enforcement to a broader scope than the audit used, and expect it to find something the audit did not. And when an enforcement test can be made green by widening its own allow-list, the allow-list needs named groups with stated reasons rather than one undifferentiated set, because the shape of the entry is the only thing that stops the easy resolution.
+
+## A clean merge is not evidence of a correct merge
+
+**Track G, folding six seams, 2026-08-17.** Two seams independently added structurally similar code to the same files: near-identical new function bodies, a new struct type each, a new section component each. Git merged several of these **with no conflict markers at all**, because its diff aligned the two similar new bodies as one edit rather than as two additions. The result silently dropped a `HostRow` type declaration, two doc comments, and part of a `beforeEach` block.
+
+Nothing in the merge output suggested a problem. `tsc --noEmit` caught it, and re-reading the merged regions confirmed it.
+
+This is a different failure from the shared-`enum` collision the previous fold hit, where two YAML mappings ended up with duplicate keys and the conformance suite caught it. Both share the same root: **git reconciles text, and two seams adding similar-shaped code to one file is exactly where text-level reconciliation produces plausible, compiling, wrong output.**
+
+**Rule:** after any merge where both sides added new code to the same file, run the type checker and the full suite before committing, and re-read the merged regions rather than trusting the absence of conflict markers. A merge that produced no conflicts in a file both sides extended is a claim to verify, not a result to accept.
