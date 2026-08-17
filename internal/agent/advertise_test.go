@@ -64,7 +64,7 @@ func TestPublishHelloTopicRetainQoSAndPayload(t *testing.T) {
 	}
 	startedAt := time.Date(2026, 8, 10, 11, 0, 0, 0, time.UTC)
 
-	if err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", startedAt); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestPublishHelloAdvertisesConfiguredCapabilities(t *testing.T) {
 		Capabilities: capability.Set{{ID: "matrix.render", Version: 1}},
 	}
 
-	if err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestPublishHelloDetectsCapabilitiesWhenNoOverrideConfigured(t *testing.T) {
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
-	if err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
+	if _, err := publishHello(context.Background(), pub, cfg, "boot-1", time.Now()); err != nil {
 		t.Fatalf("publishHello() error = %v", err)
 	}
 
