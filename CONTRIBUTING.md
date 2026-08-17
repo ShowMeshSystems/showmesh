@@ -79,6 +79,14 @@ These rules came from real defects. [`docs/build/LESSONS.md`](docs/build/LESSONS
 
 ## Pull requests
 
+### Human documentation lives in `showmesh-docs`
+
+Operator guides, tutorials, integration usage, troubleshooting, public reference, and other human-facing documentation belong in the separate [`ShowMeshSystems/showmesh-docs`](https://github.com/ShowMeshSystems/showmesh-docs) repository. This repository remains authoritative for implementation, `api/openapi.yaml`, tests, engineering specifications, ADRs, research evidence, build plans, and agent/contributor guidance.
+
+Do not copy this repository's `docs/` tree into the public site. Verify human-facing claims against code, tests that constrain the behavior, the OpenAPI contract, compiled CLI help, and captured running-system evidence; engineering prose can lag implementation. Public docs may summarize architecture but never supersede its engineering source.
+
+There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. Those mechanisms are intentionally deferred until the first release process is defined.
+
 - One coherent change per PR. Name the ADRs and research records it is bound by or touches.
 - If it changes a wire type, update `api/openapi.yaml` — the conformance test runs in both directions and will fail otherwise.
 - If it changes an API payload consumed by the UI, regenerate the types (`make ui-gen-check` tells you) — CI fails on any diff.
