@@ -190,10 +190,14 @@ const (
 	// reason in the first place).
 	exitAssetsUnknown = 21
 
-	// exitRenderUnavailable: either "render status" found no render
-	// evidence at all for the requested node (never published a render
-	// report — distinct from a node that HAS reported and is simply
-	// stale/unknown/failed, which prints normally and exits 0), or
+	// exitRenderUnavailable: either "render status" found no SURFACE
+	// render evidence for the requested node — never published a render
+	// report at all, or published one naming no surfaces yet (a node's
+	// node.multisync.* facts, finding 7, are published as soon as it
+	// connects and do not by themselves count: they say nothing about
+	// whether any surface is rendering) — distinct from a node that HAS
+	// reported surface evidence and is simply stale/unknown/failed, which
+	// prints normally and exits 0), or
 	// "render transport" found the surface's transport unavailable —
 	// either a real probe confirmed it (Track B seam B4,
 	// [pipeline.ProbeNDISend]) or no probe evidence exists yet. All three

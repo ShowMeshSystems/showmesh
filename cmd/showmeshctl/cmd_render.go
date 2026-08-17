@@ -134,10 +134,13 @@ func cmdRenderStatus(args []string, stdout, stderr io.Writer, clock func() time.
 	fs, g := newFlagSet("showmeshctl render status", stderr)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl render status [flags] <node-id>")
-		_, _ = fmt.Fprintln(stderr, "\nShow per-surface render evidence for one node (GET /api/v1/nodes/{nodeId}).")
-		_, _ = fmt.Fprintln(stderr, "Exits 22 (unavailable) if this node has never published a render report at")
-		_, _ = fmt.Fprintln(stderr, "all — a node that HAS reported, even if stale or unknown, prints normally")
-		_, _ = fmt.Fprintln(stderr, "and exits 0: reported evidence is never treated the same as no evidence.")
+		_, _ = fmt.Fprintln(stderr, "\nShow per-surface render evidence for one node (GET /api/v1/nodes/{nodeId}),")
+		_, _ = fmt.Fprintln(stderr, "plus that node's node.multisync.* listener status, if reported.")
+		_, _ = fmt.Fprintln(stderr, "Exits 22 (unavailable) if this node has no SURFACE render evidence — either")
+		_, _ = fmt.Fprintln(stderr, "it has never published a render report, or it has reported but named no")
+		_, _ = fmt.Fprintln(stderr, "surfaces yet (node.multisync.* alone does not count). A node that HAS")
+		_, _ = fmt.Fprintln(stderr, "reported surface evidence, even if stale or unknown, prints normally and")
+		_, _ = fmt.Fprintln(stderr, "exits 0: reported evidence is never treated the same as no evidence.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -170,11 +173,20 @@ func cmdRenderStatus(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	printClockSkew(stderr, serverTime, clock())
 
+	// exitRenderUnavailable is decided on SURFACE evidence specifically
+	// (finding 7): node.multisync.* entries are node-level facts the agent
+	// publishes as soon as it connects, independent of whether any surface
+	// has ever been assigned, so their presence alone must never read as
+	// "this node's render pipeline is available" — that would report a
+	// node with zero surfaces as available the instant its MultiSync
+	// listener binds.
+	available := hasSurfaceEvidence(n.Render)
+
 	if g.output == outputJSON {
 		if err := printJSON(stdout, n.Render); err != nil {
 			return reportError(stderr, "render status", err)
 		}
-		if len(n.Render) == 0 {
+		if !available {
 			return exitRenderUnavailable
 		}
 		return exitOK
@@ -188,25 +200,51 @@ func cmdRenderStatus(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitRenderUnavailable
 	}
 	printRenderStatus(stdout, nodeID, n.Render)
+	if !available {
+		_, _ = fmt.Fprintf(stdout, "render status %s: no surface render evidence yet (no surface has been assigned or reported)\n", nodeID)
+		return exitRenderUnavailable
+	}
 	return exitOK
 }
 
-// printRenderStatus groups n.Render (a flat per-signal list) by surface
-// and prints one block per surface, mirroring format.go's own
-// grouped-evidence conventions elsewhere in this program.
+// hasSurfaceEvidence reports whether entries carries at least one
+// surface-resource observation, as opposed to only node-resource ones
+// (currently just node.multisync.listening/reason — finding 7).
+func hasSurfaceEvidence(entries []observationEntry) bool {
+	for _, e := range entries {
+		if e.Resource.Kind == "surface" {
+			return true
+		}
+	}
+	return false
+}
+
+// printRenderStatus groups n.Render (a flat per-signal list) by resource
+// and prints one block per resource, mirroring format.go's own
+// grouped-evidence conventions elsewhere in this program. Node-resource
+// entries (node.multisync.* — finding 7) print under their own "node <id>:"
+// header rather than being mislabeled as a surface: one MultiSync listener
+// serves every surface a node supervises, so it is a node-level fact, not a
+// surface one.
 func printRenderStatus(w io.Writer, nodeID string, entries []observationEntry) {
-	bySurface := make(map[string][]observationEntry)
+	byResource := make(map[string][]observationEntry)
+	kindByID := make(map[string]string)
 	var order []string
 	for _, e := range entries {
-		if _, seen := bySurface[e.Resource.ID]; !seen {
+		if _, seen := byResource[e.Resource.ID]; !seen {
 			order = append(order, e.Resource.ID)
+			kindByID[e.Resource.ID] = e.Resource.Kind
 		}
-		bySurface[e.Resource.ID] = append(bySurface[e.Resource.ID], e)
+		byResource[e.Resource.ID] = append(byResource[e.Resource.ID], e)
 	}
 	_, _ = fmt.Fprintf(w, "render status for node %s:\n", nodeID)
-	for _, surfaceID := range order {
-		_, _ = fmt.Fprintf(w, "  surface %s:\n", surfaceID)
-		for _, e := range bySurface[surfaceID] {
+	for _, resourceID := range order {
+		label := "surface"
+		if kindByID[resourceID] == "node" {
+			label = "node"
+		}
+		_, _ = fmt.Fprintf(w, "  %s %s:\n", label, resourceID)
+		for _, e := range byResource[resourceID] {
 			reason := ""
 			if e.Reason != nil {
 				reason = " — " + *e.Reason
