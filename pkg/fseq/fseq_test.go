@@ -125,12 +125,19 @@ func TestSparseMultiRange_TableOrderNotSorted(t *testing.T) {
 }
 
 // TestSparseOverlapBoundary claims that adjacent sparse ranges sharing a
-// boundary channel are readable, not refused. This shape was found in a
-// real file pulled from an FPP host's own sequences/ directory (not a
-// hypothesised edge case): two ranges {10,20} and {29,15} both claim
-// absolute channel 29. RES-017 §6's own inference that files from
-// xLights' export path are sorted and disjoint does not hold for this
-// file.
+// boundary channel are readable, not refused, AND that the shared channel
+// resolves to range 1's (table order) byte rather than range 0's. This
+// shape was found in a real file pulled from an FPP host's own
+// sequences/ directory (not a hypothesised edge case): two ranges {10,20}
+// and {29,15} both claim absolute channel 29. RES-017 §6's own inference
+// that files from xLights' export path are sorted and disjoint does not
+// hold for this file.
+//
+// The fixture packs range 0 as all 'A' and range 1 as all 'B', so the two
+// candidate values for channel 29 disagree and this test can actually
+// tell first-wins from last-wins apart — a fixture whose two ranges share
+// one per-channel source value (as a real xLights file's do) cannot, and
+// previously let this test pass under either resolution order.
 func TestSparseOverlapBoundary(t *testing.T) {
 	f := fixtureSparseOverlapBoundary(t)
 	ranges := f.SparseRanges()
@@ -140,25 +147,26 @@ func TestSparseOverlapBoundary(t *testing.T) {
 
 	// The full union [10, 44) must be readable as one request, spanning
 	// both ranges and their shared channel (range 0 covers [10,30),
-	// range 1 covers [29,44), overlapping at channel 29).
+	// range 1 covers [29,44), overlapping at channel 29): 19 'A's for
+	// channels 10..28, then 15 'B's for channels 29..43 — channel 29
+	// resolves to range 1's byte, not range 0's.
+	want := append(bytesOf('A', 19), bytesOf('B', 15)...)
 	dst := make([]byte, 34)
 	if err := f.ChannelRange(1, 10, 34, dst); err != nil {
 		t.Fatalf("ChannelRange across the overlap: %v", err)
 	}
-	for i, b := range dst {
-		if want := expectedByte(1, uint32(10+i)); b != want {
-			t.Fatalf("byte %d (abs channel %d) = %d, want %d", i, 10+i, b, want)
-		}
+	if string(dst) != string(want) {
+		t.Fatalf("ChannelRange(10,34) = %q, want %q (channel 29 must resolve to range 1's 'B', last in table order)", dst, want)
 	}
 
 	// The shared boundary channel alone, requested on its own, must also
-	// resolve rather than being treated as ambiguous.
+	// resolve to range 1's byte rather than being treated as ambiguous.
 	one := make([]byte, 1)
 	if err := f.ChannelRange(1, 29, 1, one); err != nil {
 		t.Fatalf("ChannelRange(boundary channel alone): %v", err)
 	}
-	if want := expectedByte(1, 29); one[0] != want {
-		t.Fatalf("boundary channel = %d, want %d", one[0], want)
+	if one[0] != 'B' {
+		t.Fatalf("boundary channel = %q, want 'B' (range 1, last in table order)", one[0])
 	}
 }
 
