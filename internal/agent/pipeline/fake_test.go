@@ -1,0 +1,132 @@
+package pipeline
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+// testLogger discards everything; tests assert on Supervisor state, not on
+// log lines.
+type testLogger struct{}
+
+func (testLogger) Info(string, ...any)  {}
+func (testLogger) Warn(string, ...any)  {}
+func (testLogger) Error(string, ...any) {}
+
+// fakeProcess is a [ProcessHandle] whose exit is entirely test-controlled:
+// nothing is actually spawned, so restart/backoff policy tests run in
+// milliseconds and never depend on gst-launch-1.0 being installed.
+type fakeProcess struct {
+	mu       sync.Mutex
+	exitCh   chan ExitResult
+	killed   bool
+	killFunc func()
+}
+
+func newFakeProcess() *fakeProcess {
+	return &fakeProcess{exitCh: make(chan ExitResult, 1)}
+}
+
+func (p *fakeProcess) Wait() ExitResult { return <-p.exitCh }
+
+// Kill matches a real process's Kill: it must cause Wait (and thus
+// stopCurrent's blocking <-exitCh) to unblock, exactly like a real SIGKILL
+// causes a real process's Wait to return. By default it delivers a
+// Signaled exit; killFunc, when set, runs instead and is responsible for
+// eventually delivering an exit itself.
+func (p *fakeProcess) Kill() error {
+	p.mu.Lock()
+	already := p.killed
+	p.killed = true
+	fn := p.killFunc
+	p.mu.Unlock()
+	if already {
+		return nil
+	}
+	if fn != nil {
+		fn()
+		return nil
+	}
+	// Non-blocking: if this process already delivered its own exit (e.g. a
+	// crash raced this Kill) the buffered channel already holds a value,
+	// and a second send here must not block forever.
+	select {
+	case p.exitCh <- ExitResult{Signaled: true}:
+	default:
+	}
+	return nil
+}
+
+func (p *fakeProcess) Pid() int { return 1 }
+
+// exitNow delivers res as this process's exit outcome.
+func (p *fakeProcess) exitNow(res ExitResult) {
+	p.exitCh <- res
+}
+
+// fakeStarter is a [ProcessStarter] recording every call and handing back
+// caller-controlled [fakeProcess] instances, proving (per this seam's
+// injectable-seam requirement) that the supervisor's call site actually
+// invokes the starter it was given.
+type fakeStarter struct {
+	mu    sync.Mutex
+	calls []fakeStartCall
+
+	// onStart, when set, is called synchronously for every Start
+	// invocation and may kill the returned process immediately (via
+	// process.Kill()), simulating an instant crash — used for the
+	// fast-failure lockout test.
+	onStart func(process *fakeProcess)
+}
+
+type fakeStartCall struct {
+	path string
+	argv []string
+}
+
+func (f *fakeStarter) Start(_ context.Context, path string, args []string, onRunningMarker func()) (ProcessHandle, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeStartCall{path: path, argv: append([]string(nil), args...)})
+	f.mu.Unlock()
+
+	p := newFakeProcess()
+	if f.onStart != nil {
+		f.onStart(p)
+	} else if onRunningMarker != nil {
+		// Default behaviour: simulate reaching PLAYING immediately, like a
+		// healthy pipeline, unless the test wants finer control.
+		onRunningMarker()
+	}
+	return p, nil
+}
+
+func (f *fakeStarter) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// fakeClock is an injectable, manually-advanced clock matching this
+// codebase's now-func convention, so restart-policy tests never depend on
+// real wall-clock timing.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock(start time.Time) *fakeClock {
+	return &fakeClock{now: start}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
