@@ -2,11 +2,11 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: not started. Specified 2026-08-16 from the owner's reference-show workflow.
+Status: not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17.
 
 ## Goal
 
-Replace the reference installation's brittle Background Music plugin loop with a persisted, observable ShowMesh night-session controller. FPP schedules the operating-day intents; the deployed resting FSEQ supplies inter-show duration; ShowMesh coordinates relative audio, lighting, projection, playlist, announcement, and safe-power transitions.
+Replace the reference installation's brittle Background Music plugin loop with a persisted, observable ShowMesh night-session controller. FPP schedules the operating-day intents; the deployed resting FSEQ supplies inter-show duration; ShowMesh coordinates relative audio, lighting, projection, playlist, and announcement transitions, plus optional configured site-power actions.
 
 ## Why this is a dedicated controller
 
@@ -21,7 +21,7 @@ The night controller instead consumes finite logical actions and FPP observation
 - Track C must supply background sessions, announcements, gain, fades, and node-local playback before the integrated audio path is complete.
 - Track D supplies confirmed resting visual and blackout operations. Track E's logical-action wiring must make those adapter operations invocable without protocol paths in the session definition.
 - Track E supplies exact asset identity, per-target FSEQ variants, duration metadata, and node-local audio assets.
-- Initial power integration may use the existing external MQTT action and response contract. A full Home Assistant provider is not a prerequisite.
+- Optional power integration may use the existing external MQTT action and response contract. Neither that integration nor a full Home Assistant provider is a prerequisite for the night loop.
 
 These dependencies do not prevent F1–F3 from being built against fakes and recorded observations. They prevent an integrated acceptance claim.
 
@@ -40,7 +40,7 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 
 ### F1. Versioned configuration and validation
 
-Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show playlist references, asset/action references, and relative cue timing only. Validation rejects calendar fields, a manual duplicate rest duration, a resting playlist that is not exactly the expected one-item FSEQ playlist, missing action references, impossible offsets, unsafe power grouping, and assets without usable duration metadata.
+Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show playlist references, asset/action references, and relative cue timing only. Validation rejects calendar fields, a manual duplicate rest duration, a resting playlist that is not exactly the expected one-item FSEQ playlist, missing referenced actions, impossible offsets, configured unsafe power grouping, and assets without usable duration metadata. Power, climate, and interlock blocks are optional; their absence is valid. When present, validation enforces unique rule names, the closed lifecycle-phase and posture/unavailable enums, exactly one guarded phase per rule, power domain and provenance metadata, and an explicit complete removal policy for every presentation power-off binding. Prerequisite lists and delays are bounded and cannot recurse into their own power-off binding.
 
 Configuration pins revisions for an active session. Editing a show at 8 PM cannot silently change the controller running that night.
 
@@ -74,29 +74,33 @@ This is a purpose-built relative cue runner inside the night controller, not a g
 
 Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves, local asset readiness, and the configured duck/interrupt policy. Add output-specific validation so a PulseMesh binding can require MP3 without narrowing the generic asset store.
 
-### F6. Power and thermal integration
+### F6. Optional power, thermal, and interlock integration
 
-Bind presentation power and optional Home Assistant thermal-profile requests through logical actions. Model environmental and presentation power as separate targets. Gate automated projector strike on fresh safe-temperature evidence where configured, supervise projector shutdown/cooldown, and never remove enclosure heating, thermostat, sensors, or exhaust/circulation control with presentation power.
+Add the optional rule mechanism with `observe`, `block`, and `disabled` postures, the required unavailable-source behavior for blocking rules, and phase-filtered evaluation. A rule may withhold only the lifecycle phase it declares; for example, a cooldown rule remains visible but cannot gate `start-night`.
 
-Ship `force-power-off` only as an explicit operator action with separate authorization and audit presentation.
+Bind any configured presentation power and Home Assistant thermal-profile requests through logical actions. Every power binding declares `presentation`, `environmental`, `mixed`, or `unknown` domain and whether that classification is provider-supplied or operator-declared. Generic MQTT and Home Assistant actions are operator-declared because ShowMesh cannot inspect their physical targets. `power-down-presentation` rejects every domain except `presentation`.
+
+Every presentation power-off binding explicitly selects `immediate` with an operator safety attestation, or `after-actions` with ordered prerequisites and confirmations. There is no default, and partial configurations are invalid. Gate automated projector strike on fresh safe-temperature evidence only where a blocking rule requests it, supervise shutdown/cooldown only where those steps are selected by the removal policy, and never remove enclosure heating, thermostat, sensors, or exhaust/circulation control with presentation power.
+
+If a deployment configures `force-power-off`, ship it only as an explicit operator action with separate authorization and audit presentation. F6 is not a prerequisite for installations that omit site control.
 
 ### F7. Operator surfaces
 
-Add CLI coverage first, then UI configuration and operation. Show lifecycle state, final-cycle status, content-derived boundary, next cue, pending intents, per-cue evidence, audio gain, brightness ceiling/multiplier, thermal readiness, and recovery guidance. The UI contains no orchestration logic.
+Add CLI coverage first, then UI configuration and operation. Show lifecycle state, final-cycle status, content-derived boundary, next cue, pending intents, per-cue evidence, audio gain, brightness ceiling/multiplier, configured interlock/site-control state, and recovery guidance. Optional sections render as `not_configured`, not warnings. The UI contains no orchestration logic.
 
 ### F8. Integrated and failure verification
 
-Run every acceptance scenario in `RESTING-MODE.md` against the complete FPP, audio, projection, and MQTT/Home Assistant path. Include overnight repetition and failure injection. Update RES-007 and RES-016 only to the evidence level actually reached.
+Run every acceptance scenario in `RESTING-MODE.md` first with no site-control/interlock configuration, then against the reference installation's configured MQTT/Home Assistant path. Exercise every posture, both unavailable-source choices, phase isolation, override authorization, domain/provenance rejection, both removal policies, and partial-configuration rejection. Include overnight repetition and failure injection. Update RES-007 and RES-016 only to the evidence level actually reached.
 
 ## Safety and failure direction
 
 - A running show continues through coordinator or broker loss.
 - An ambiguous restart never launches a show by guess.
 - Missing evidence is `unknown`, not success and not automatically failure.
-- An unsafe projector strike interlock blocks automated strike.
-- Ordinary fade and power-down defer behind an unexpectedly live show.
-- Only an explicitly invoked emergency/force operation may interrupt playback or remove power immediately.
-- Loss of ShowMesh may leave presentation equipment on longer; it must not make an unsafe hard-off more likely.
+- A configured blocking interlock with an unsafe outcome blocks only its declared phase; observe-only, disabled, absent, and other-phase rules do not.
+- Configured ordinary fade and power-down defer behind an unexpectedly live show.
+- Only an explicitly configured and invoked emergency/force operation may interrupt playback or remove power immediately.
+- Where power control is configured, loss of ShowMesh may leave presentation equipment on longer; it must not make an unsafe hard-off more likely.
 
 ## Acceptance criteria
 
@@ -104,13 +108,17 @@ Run every acceptance scenario in `RESTING-MODE.md` against the complete FPP, aud
 - Changing the resting FSEQ from five to seven minutes changes the next transition without changing a duration field.
 - Independent lighting, projection, and audio fade offsets produce the configured theater-style blackout sequence.
 - A final-show request in either live or resting state results in exactly one final complete show and then repeating end-of-night resting.
-- A fade or power-down arriving without, before, or after the final-show request closes admission monotonically and never permits an additional show.
+- A fade, or a configured power-down, arriving without, before, or after the final-show request closes admission monotonically and never permits an additional show.
 - Readiness from a prior preparation epoch, and delayed pre-show/start commands without a new valid epoch, cannot start a night.
 - Christmas midnight and Halloween 1:00 AM fade schedules use the same ShowMesh session definition.
 - FPP brightness ceilings survive transition fade-down/fade-up through a bench-proven independent transition-gain seam; unsupported configurations are rejected rather than approximated.
 - Restart and loss cases preserve live playback and never double-start a playlist.
 - Crashes before and after the first outward cue dispatch resolve from the durable outbox without duplicate non-idempotent effects or a falsely satisfied launch barrier.
-- Presentation shutdown leaves environmental heating/cooling control active.
+- A configuration with no power, climate, or interlocks completes the full night loop without degraded status.
+- Observe rules never withhold action, disabled rules never evaluate, blocking rules honor their explicit unavailable-source and override policies, and a shutdown-only rule cannot gate night startup.
+- Presentation power-off rejects environmental, mixed, unknown, and unclassified targets; operator-declared MQTT provenance is exposed honestly rather than presented as verified wiring.
+- Immediate removal requires an explicit all-target safety attestation; after-actions removal completes its ordered prerequisites; missing or partial policy configuration is rejected.
+- Where presentation shutdown is configured, it leaves environmental heating/cooling control active.
 - CLI operation remains possible with the UI container absent.
 - The entire cycle is observed end to end; unit tests alone cannot complete this track.
 

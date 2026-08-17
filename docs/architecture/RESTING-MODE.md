@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Audio Engine](AUDIO-ENGINE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track F](../build/TRACK-F-resting-mode.md)
 
-Status: Accepted architecture baseline — specified, not implemented or integrated  
+Status: Accepted architecture baseline — specified, not implemented or integrated; optional site-control/interlock posture clarified 2026-08-17
 Audience: Maintainers, operators, and agents implementing the night-session controller
 
 ## 1. Purpose
@@ -29,7 +29,9 @@ Authority is split three ways:
 2. **Authored content owns duration.** The deployed resting FSEQ variant defines the inter-show rest length.
 3. **ShowMesh owns relative choreography.** It advances an FPP-authorized session and schedules offsets around observed media boundaries.
 
-ShowMesh configuration may contain durations that are intrinsic to command execution: fade duration, lead time, blackout hold, announcement delay, confirmation deadline, retry backoff, cooldown, and safety timeout. It must not contain dates, weekdays, time zones, cron expressions, or a wall-clock show schedule.
+ShowMesh configuration may contain durations that are intrinsic to command execution: fade duration, lead time, blackout hold, announcement delay, confirmation deadline, retry backoff, optional cooldown, and optional interlock timeout. It must not contain dates, weekdays, time zones, cron expressions, or a wall-clock show schedule.
+
+Power control, environmental integration, and interlocks are optional capabilities. The night loop is valid without any of them. Readiness evaluates only requirements enabled by the active show and installation configuration.
 
 ## 3. Lifecycle vocabulary
 
@@ -51,15 +53,15 @@ All commands are asynchronous, idempotent by invocation identity where available
 
 ### 4.1 `prepare-site`
 
-Opens a new persisted preparation epoch and enters `preparing` when the prior session is `inactive` or `stopped`, then requests the configured show-day infrastructure profile through named logical actions. A deployment may use it for presentation power and for requesting a Home Assistant thermal mode. It does not directly cycle a heater, exhaust fan, or thermostat.
+Opens a new persisted preparation epoch and enters `preparing` when the prior session is `inactive` or `stopped`, then runs any configured show-day preparation actions. A deployment may use it for presentation power or a Home Assistant thermal mode; a deployment with neither still opens a valid epoch. ShowMesh does not directly cycle a heater, exhaust fan, or thermostat.
 
-Every later preparation command attaches to this epoch. A duplicate within the same preparation or active session is an idempotent no-op. It is rejected during finalization or fade-out. The epoch becomes eligible for readiness and pre-show only after fresh evidence that presentation power-on preparation occurred after the prior stop; a delayed command from the prior operating day cannot reopen a presentation from state alone.
+Every later preparation command attaches to this epoch. A duplicate within the same preparation or active session is an idempotent no-op. It is rejected during finalization or fade-out. The epoch becomes eligible for readiness and pre-show after every configured blocking preparation requirement has fresh post-epoch evidence. With no blocking preparation requirements, it is eligible immediately. A delayed command from the prior operating day cannot satisfy a new epoch using old evidence.
 
 ### 4.2 `run-readiness`
 
-Starts the full readiness evaluation for the current preparation epoch: required nodes, exact asset variants, FPP state, projection bindings, audio outputs, controlled devices, environmental conditions, and any installation-specific interlocks. It is rejected when no preparation epoch is open.
+Starts readiness evaluation for the current preparation epoch: required nodes, exact asset variants, FPP state, projection bindings, audio outputs, and only the controlled devices, environmental signals, and interlocks enabled for this installation/show. It is rejected when no preparation epoch is open.
 
-The result records the epoch, completion time, and evidence times. `start-night` requires a completed result from the same epoch within a configured maximum age and re-evaluates safety interlocks at execution. Readiness from a prior operating day is never adopted into a new epoch.
+The result records the epoch, completion time, and evidence times. `start-night` requires a completed result from the same epoch within a configured maximum age and re-evaluates only blocking interlocks whose declared phase guards `start-night` or its immediately required actions. A shutdown, cooldown, or power-removal interlock is reported in readiness but cannot gate night startup. Readiness from a prior operating day is never adopted into a new epoch.
 
 ### 4.3 `start-preshow`
 
@@ -104,7 +106,7 @@ Fades the active non-live presentation to stopped. Receipt closes admission imme
 
 ### 4.7 `power-down-presentation`
 
-Requests safe presentation shutdown after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. It performs device-specific shutdown and cooldown before removing presentation power. It never removes environmental power.
+Closes the session after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. If presentation-power actions are configured, it performs their configured shutdown, confirmation, and cooldown steps. With no power actions, it records `not_configured` for that optional phase and reaches `stopped` without error. Any configured power action must remain scoped away from environmental protection.
 
 ## 5. Reference operating day
 
@@ -113,7 +115,7 @@ Times below document the reference installation's shape. They are examples confi
 | Example time | FPP or external action | ShowMesh responsibility |
 |---|---|---|
 | 4:00 PM | `prepare-site` | Open the operating-day preparation epoch; optionally request a show-day thermal profile if the enclosure is not already maintained continuously. |
-| 4:10 PM | Presentation power-on intent | Power LEDs, moving heads, render/audio equipment, and safely strike projectors once thermal requirements are met. |
+| 4:10 PM | Optional presentation power-on intent | Where configured, power LEDs, moving heads, render/audio equipment, and strike projectors after any configured blocking requirements pass. |
 | 4:15 PM | `run-readiness` | Begin verification as devices become observable. |
 | 4:30 PM | `start-preshow` | Start projections, background music, countdowns, and configured resting presentation. |
 | 5:00 PM | `start-night` | Begin the first transition and then launch the first show playlist. |
@@ -122,7 +124,7 @@ Times below document the reference installation's shape. They are examples confi
 | 11:30 PM | `request-final-show` | Finish the current show or allow the next normally timed show, then close admission. |
 | After final show | Event-driven | Enter end-of-night resting; background music and projections return and the resting FSEQ repeats. |
 | Christmas 12:00 AM; Halloween 1:00 AM | `fade-out-night` | Fade presentation elements to stopped. |
-| Example five minutes later | `power-down-presentation` | Safely shut down and remove presentation power after cooldown. |
+| Example five minutes later | Optional `power-down-presentation` | Where configured, safely shut down and remove presentation power after any required cooldown. |
 
 The Christmas and Halloween fade times illustrate per-show FPP schedules. ShowMesh stores neither time.
 
@@ -227,11 +229,38 @@ Resting projections, countdowns, pre-show text, blackout, and resting layers are
 
 Every additional presentation system joins the same cue model by providing named actions with honest confirmation and fallback metadata.
 
-## 10. Power, enclosure climate, and Home Assistant
+## 10. Optional power, interlocks, enclosure climate, and Home Assistant
 
-### 10.1 Separate power domains
+None of this section is required to run a night session. Deployments opt into the actions and evidence they actually have. Missing optional integration is `not_configured`, not degraded or failed.
 
-Presentation and environmental power are different groups:
+### 10.1 Configurable interlocks
+
+An interlock is a named rule attached to exactly one lifecycle phase. Rule names are unique within a configuration revision. The v1 phase enum is `prepare-site`, `presentation-power-on`, `projector-strike`, `run-readiness`, `start-preshow`, `start-night`, `enter-resting`, `fade-out-night`, and `power-down-presentation`; unknown values are rejected rather than treated as observational. ShowMesh ships the rule mechanism, not universal device requirements or thresholds. Enabled rules declare:
+
+- the phase it guards, such as preparation, projector strike, show start, fade-out, or power removal;
+- its signal/evidence source and expected condition;
+- freshness and evaluation timeout;
+- posture: `observe` or `block`;
+- operator-facing failure text;
+- for `block` only, required `onUnavailable: block|allow` with no default;
+- for `block` only, required `overridePolicy: none|authorized-operator` with no default.
+
+The closed behavior matrix is:
+
+| Posture | Condition false | Source unavailable |
+|---|---|---|
+| `observe` | Report failed observation; never withhold. | Report `unknown`; never withhold. |
+| `block`, `onUnavailable: block` | Withhold only the declared phase/action. | Report `unknown` and withhold that phase/action. |
+| `block`, `onUnavailable: allow` | Withhold only the declared phase/action. | Report `unknown` and allow that phase/action. |
+| `disabled` | Do not evaluate. | Do not evaluate. |
+
+A disabled entry contains only its name, phase, and `posture: disabled`; signal, condition, freshness, timeout, unavailable, and override fields are rejected. An observe rule may not set `onUnavailable` or `overridePolicy` because it never withholds. A block rule must set both. An override is accepted only when that rule declares `authorized-operator`, the caller has the required permission, and the override identifies the rule, phase, reason, and bounded invocation/session scope in the audit log. These validation rules make contradictory combinations invalid rather than implementation-defined.
+
+Only rules for the phase currently being entered can withhold that phase. Other rules may be prefetched and displayed but have no control effect until their own phase. A deployment with no interlocks proceeds from ordinary readiness evidence. There is no built-in projector-temperature interlock, mandatory cooldown, or assumed Home Assistant installation.
+
+### 10.2 Separate power domains when power control is configured
+
+When ShowMesh controls power, presentation and environmental power are different groups:
 
 ```text
 presentation:
@@ -242,30 +271,45 @@ environmental:
   exhaust and circulation fans
 ```
 
-`power-down-presentation` must never remove environmental power.
+Every configured power binding declares:
 
-### 10.2 Home Assistant owns the thermal loop
+- `powerDomain: presentation|environmental|mixed|unknown`;
+- `domainProvenance: provider|operator-declared`;
+- the named logical action it invokes.
 
-Home Assistant owns continuous freeze protection, thermostat cycling, exhaust control, and protection against over-cooling. In severe weather it may heat continuously for days before a show. While projectors run, it may need exhaust fans to remove their heat while maintaining a minimum safe enclosure temperature.
+A provider may supply domain provenance only when it can authoritatively identify every target. Generic MQTT and Home Assistant service-call bindings are `operator-declared`: ShowMesh can validate the declaration but cannot infer or verify the physical wiring behind a topic, entity, relay, or downstream automation. Operator surfaces and audit evidence must preserve that distinction.
+
+`power-down-presentation` accepts only bindings declared as `powerDomain: presentation`. It rejects `environmental`, `mixed`, and `unknown` bindings rather than guessing. A deployment may omit the command and all power bindings entirely.
+
+Every presentation power-off binding also declares one removal policy, with no default:
+
+- `immediate`: `immediateSafeAttestation` explicitly records that every target may safely lose power as soon as the action runs;
+- `after-actions`: a non-empty ordered list of required shutdown actions, confirmations, delays, or evidence conditions must complete before removal.
+
+An aggregate binding containing any target that is not safe for immediate removal must use `after-actions`. Prerequisite lists and delays are finite, non-negative, limited by versioned schema bounds, and may not invoke the same power-off binding directly or indirectly. Missing domain, provenance, policy, or prerequisites required by the selected policy makes the configuration invalid. This keeps cooldown behavior configurable without treating it as optional by accident after a device that needs it has been configured.
+
+### 10.3 Optional Home Assistant thermal integration
+
+In the reference installation, Home Assistant owns continuous freeze protection, thermostat cycling, exhaust control, and protection against over-cooling. In severe weather it may heat continuously for days before a show. While projectors run, it may need exhaust fans to remove their heat while maintaining a minimum safe enclosure temperature. This is an installation profile, not a ShowMesh requirement.
 
 ShowMesh does not implement that thermostat. It may invoke a named Home Assistant mode such as `show-preheat`, `projectors-running`, or `standby`, and may observe temperature, mode, and fan/heater state as readiness evidence. Names are installation configuration, not product constants.
 
-Projector strike is gated by the configured safe temperature when current evidence is available. An unsafe or stale measurement blocks automated strike and alerts the operator; it does not cause ShowMesh to take over thermostat control.
+If an operator configures a blocking projector-strike temperature interlock, unsafe or stale evidence behaves according to that rule and may block automated strike. An observe-only rule reports the same evidence without blocking. With no rule, ShowMesh assumes no thermal interlock. No posture causes ShowMesh to take over thermostat control.
 
-### 10.3 Safe shutdown
+### 10.4 Optional safe shutdown
 
-Normal presentation shutdown:
+When an `after-actions` removal policy is configured, normal presentation shutdown may:
 
-1. waits for live playback and the presentation fade to finish;
-2. requests proper projector shutdown;
-3. observes shutdown where supported;
-4. waits for configured or observed projector cooldown;
-5. removes presentation power through named MQTT/Home Assistant actions;
-6. requests the normal environmental standby profile without disabling protection.
+1. wait for live playback and the presentation fade to finish;
+2. request proper projector shutdown;
+3. observe shutdown where supported;
+4. wait for configured or observed projector cooldown;
+5. remove presentation power through named MQTT/Home Assistant actions;
+6. request the normal environmental standby profile without disabling protection.
 
-A separate manual `force-power-off` action is required for immediate removal. Normal scheduled shutdown never silently escalates to it.
+An ordinary `immediate` policy is valid only for targets explicitly attested safe for immediate removal. A separately configured manual `force-power-off` action may bypass ordinary prerequisites, but it has its own authorization and audit presentation and is never inferred from the ordinary policy. Deployments without ShowMesh power control expose no such action. Normal scheduled shutdown never silently escalates to it.
 
-For the initial installation, the existing MQTT/Node-RED response-contract action is sufficient. A full Home Assistant control provider may replace the binding later without changing the lifecycle contract. A much later direct FPP/Home Assistant hard cutoff may exist as a final fallback, scheduled beyond the maximum possible show and cooldown window.
+For the reference installation, the existing MQTT/Node-RED response-contract action is sufficient. A full Home Assistant control provider may replace the binding later without changing the lifecycle contract. A direct FPP/Home Assistant hard cutoff may exist as an installation-specific final fallback, scheduled beyond its configured maximum show and cooldown window.
 
 ## 11. Persistence, restart, and loss of coordination
 
@@ -331,14 +375,36 @@ nightSession:
     projectionFadeIn: 10s
     audioFadeIn: 8s
 
-  actions:
+  # Entire block is omitted where ShowMesh does not manage site power/climate.
+  siteControl:
     requestThermalProfile: home-assistant-show-preheat
-    presentationPowerOn: site-presentation-on
-    presentationPowerOff: site-presentation-off
-    projectorShutdown: projectors-safe-off
+    presentationPowerOn:
+      action: site-presentation-on
+      powerDomain: presentation
+      domainProvenance: operator-declared
+    presentationPowerOff:
+      action: site-presentation-off
+      powerDomain: presentation
+      domainProvenance: operator-declared
+      removalPolicy: after-actions
+      prerequisites:
+        - action: projectors-safe-off
+          requireConfirmation: true
+        - delay: 5m
+
+  # Each rule is optional and independently observe-only, blocking, or disabled.
+  interlocks:
+    - name: projector-strike-temperature
+      phase: projector-strike
+      signal: enclosure-temperature
+      condition: ">= configured-safe-minimum"
+      freshness: 30s
+      posture: block
+      onUnavailable: block
+      overridePolicy: authorized-operator
 ```
 
-No field contains a wall-clock time.
+No field contains a wall-clock time. Omitting `siteControl` and `interlocks` is valid and disables no part of the rest/show loop.
 
 ## 13. Readiness and validation
 
@@ -348,16 +414,18 @@ Before `start-night`, ShowMesh must report at least:
 - configured FPP resting playlist exists, contains exactly the expected FSEQ item, contains no FPP audio item, and can run one-shot or repeated as requested;
 - parseable non-zero duration and cue offsets within the usable timeline;
 - show playlist present and not unexpectedly busy;
-- required audio and announcement assets local and hash-current;
-- background output and configured maximum gain available;
-- required projection actions resolve uniquely and are ready;
+- configured audio and announcement assets local and hash-current;
+- configured background output and maximum gain available;
+- configured projection actions resolve uniquely and are ready;
 - required logical actions have valid confirmation/fallback declarations;
-- environmental evidence is safe enough for automated projector strike, or explicitly unavailable with operator handling;
-- presentation power actions cannot target the environmental group;
+- configured observe-only interlocks report their current outcome without blocking;
+- blocking interlocks for the phase being entered have fresh passing evidence, explicitly allow unavailable evidence, or have an explicit override permitted by that rule; other-phase failures remain visible but do not block;
+- configured power bindings declare their domain and provenance, and presentation power-off bindings target only the presentation domain;
+- every configured presentation power-off binding has an explicit valid `immediate` or `after-actions` removal policy;
 - final-show and fade-out commands exist in the FPP-facing vocabulary;
 - where scheduled brightness and ShowMesh fades affect the same output, an observed ceiling plus an independent transition-gain control exists; otherwise that fade configuration is rejected.
 
-Readiness is evidence, not a refusal to continue by default. Safety interlocks such as unsafe projector strike are the explicit exceptions.
+Readiness is evidence, not a refusal to continue by default. Only rules explicitly configured with `posture: block` may withhold their guarded action. Missing optional power, climate, or interlock configuration is `not_configured`, never failure.
 
 ## 14. Observability
 
@@ -372,7 +440,7 @@ The API, CLI, UI, audit log, and change stream expose:
 - per-cue dispatched/completed/confirmed outcome;
 - current FPP brightness ceiling and transition gain where observable;
 - active background and announcement sessions and effective gain;
-- thermal readiness and presentation/environmental power state;
+- configured interlock outcomes, declared power domain and provenance, removal policy/progress, and presentation/environmental power state, or `not_configured`;
 - recovery/degradation reason and required operator action.
 
 Post-show evidence must distinguish playlist completion, blackout activation, resting FSEQ activation, projections restored, background audio restored, and end-of-night repeat state.
@@ -392,6 +460,12 @@ Implementation is not complete until observed end-to-end behavior covers:
 9. a missing/mismatched FSEQ, paused FPP, unexpected playlist, and stale position observation;
 10. a missing `start-preshow`, duplicate `start-night`, stale start after shutdown, reordered final/fade commands, and a fade command received before a final-show request;
 11. a crash before the first cue send, after the send but before outcome persistence, and while the show-launch barrier is pending;
-12. cold-enclosure strike refusal, projector-generated heat requiring exhaust, and environmental protection surviving presentation power-off;
-13. an unexpectedly late live show deferring ordinary fade and power-off;
-14. PulseMesh MP3 validation without restricting local-output asset formats.
+12. a complete night with no power, climate, or interlock configuration;
+13. the reference profile's blocking cold-enclosure rule, projector-generated heat requiring exhaust, and environmental protection surviving configured presentation power-off;
+14. an unexpectedly late live show deferring ordinary configured fade and power-off;
+15. PulseMesh MP3 validation without restricting local-output asset formats;
+16. false and unavailable `observe` rules reporting without blocking, and `disabled` rules never evaluating;
+17. unavailable `block` rules exercising both required `onUnavailable` choices, plus permitted and forbidden manual overrides;
+18. a failing shutdown-only interlock remaining visible without gating `start-night`;
+19. rejection of environmental, mixed, and unknown presentation power-off bindings, while preserving whether domain provenance is provider-supplied or operator-declared;
+20. valid `immediate` and `after-actions` removal policies, plus rejection of missing policies, incomplete prerequisites, and aggregate immediate-off bindings containing a target that requires ordered shutdown.

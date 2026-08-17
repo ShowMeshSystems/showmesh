@@ -23,7 +23,7 @@ FPP owns dates, wall-clock times, weekdays, recurring schedules, and the install
 - `start-night`
 - `request-final-show`
 - `fade-out-night`
-- `power-down-presentation`
+- optional `power-down-presentation`, only where ShowMesh-managed power exists
 
 ShowMesh does not activate a presentation because a local clock reached a configured time. The core configuration accepts no cron expression, weekday, time zone, date, or wall-clock `at` field.
 
@@ -60,7 +60,11 @@ After the final playlist ends, ShowMesh enters end-of-night resting and starts i
 
 `fade-out-night` ends that resting presentation. If it arrives while a show is unexpectedly live, ordinary behavior is to defer the fade until the playlist finishes. Interrupting a live show requires a separate, explicit emergency or force command.
 
-Shutdown intent is monotonic. Receiving `fade-out-night` or `power-down-presentation` closes admission immediately, cancels any armed future-show transition, and cannot be undone by a late `request-final-show`. A transition commits by atomically persisting its marker and a durable outbox record for the first outward-facing cue before dispatch; after that marker, the show is treated as final and allowed to complete rather than reversing a transition the audience has begun to see or hear. Cue recovery observes first and retries only with a stable end-to-end idempotency identity; ambiguity never satisfies the show-launch barrier.
+Shutdown intent is monotonic. Receiving `fade-out-night`, or a configured `power-down-presentation`, closes admission immediately, cancels any armed future-show transition, and cannot be undone by a late `request-final-show`. A transition commits by atomically persisting its marker and a durable outbox record for the first outward-facing cue before dispatch; after that marker, the show is treated as final and allowed to complete rather than reversing a transition the audience has begun to see or hear. Cue recovery observes first and retries only with a stable end-to-end idempotency identity; ambiguity never satisfies the show-launch barrier.
+
+Power actions, environmental integration, and lifecycle interlocks are optional configuration, not universal night-session requirements. Deployments without them run the same content loop and report those optional phases as `not_configured`. A configured interlock explicitly chooses observe-only, blocking, or disabled behavior and can affect only its declared lifecycle phase.
+
+Configured power bindings declare their power domain and whether that classification is provider-supplied or operator-declared. Generic MQTT declarations are not evidence of physical wiring. Presentation power-off accepts only presentation-domain targets and requires an explicit immediate-safe attestation or an ordered prerequisite policy; it never guesses whether cooldown or another shutdown step is needed.
 
 ### 5. A future scheduler is a replaceable authority, not a core feature
 
