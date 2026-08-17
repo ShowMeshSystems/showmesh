@@ -3,7 +3,7 @@ import { useModelContext } from '../app/ModelContext'
 import { ControlPlaneBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
-import { resolveCapabilityPanel } from '../components/CapabilityPanel'
+import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { formatAbsolute } from '../app/time'
 

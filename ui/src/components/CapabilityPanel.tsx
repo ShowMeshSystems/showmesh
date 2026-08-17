@@ -1,5 +1,4 @@
 import { Fragment } from 'react'
-import type { ComponentType } from 'react'
 import type { Capability } from '../app/types'
 
 // The generic capability panel (spec section 6.4, OPERATOR-UI section 9,
@@ -77,19 +76,4 @@ export function RenderSurfaceCapabilityPanel({ capability }: CapabilityPanelProp
       </dl>
     </div>
   )
-}
-
-// capabilityPanels is the lookup table this file's own doc comment
-// promises: a capability-specific renderer keyed by capability id, with
-// [CapabilityPanel] as the fallback for every id absent from it — never a
-// hardcoded node or capability class, and never a reason for an unknown id
-// to blank the view.
-const capabilityPanels: Record<string, ComponentType<CapabilityPanelProps>> = {
-  'render.surface': RenderSurfaceCapabilityPanel,
-}
-
-// resolveCapabilityPanel picks the component a caller should render for a
-// given capability id.
-export function resolveCapabilityPanel(id: string): ComponentType<CapabilityPanelProps> {
-  return capabilityPanels[id] ?? CapabilityPanel
 }

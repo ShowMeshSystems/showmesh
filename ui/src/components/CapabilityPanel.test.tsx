@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CapabilityPanel, RenderSurfaceCapabilityPanel, resolveCapabilityPanel } from './CapabilityPanel'
+import { CapabilityPanel, RenderSurfaceCapabilityPanel } from './CapabilityPanel'
+import { resolveCapabilityPanel } from './capabilityPanelRegistry'
 import type { Capability } from '../app/types'
 
 // See EvidenceValue.test.tsx for why this is registered explicitly here.
