@@ -1498,6 +1498,11 @@ export interface components {
             dispatchedAt: string;
             /** Format: date-time */
             resolvedAt: string | null;
+            /**
+             * @description The render.settings.idleOutput value RESOLVED and sent to the node as part of THIS render.surface.apply assignment. Empty for render.surface.clear/render.pipeline.restart/render.transport.probe, which carry no idleOutput.
+             * @enum {string}
+             */
+            idleOutput: "black" | "hold" | "diagnostic" | "";
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
         FPPCommandResponse: {
@@ -2070,6 +2075,8 @@ export interface components {
             createdByPrincipalId: string | null;
             createdByPrincipalName: string | null;
             source: string;
+            /** @description States that idleOutput takes effect on each surface's own next render.surface.apply dispatch, never on an already-applied surface — there is no config-push path to a node beyond that assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always non-empty. */
+            idleOutputEffectiveNote: string;
         };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
