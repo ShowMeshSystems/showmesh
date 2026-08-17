@@ -58,6 +58,20 @@ export type SessionResponse = components['schemas']['SessionResponse']
 export type PrincipalSummary = components['schemas']['PrincipalSummary']
 export type SessionInfo = components['schemas']['SessionInfo']
 
+// Track G seam G-5: identity administration over the API. PrincipalObject
+// is the admin surface's own full object, distinct from PrincipalSummary
+// above (SessionResponse's narrower "who am I" shape).
+export type PrincipalObject = components['schemas']['PrincipalObject']
+export type PrincipalsResponse = components['schemas']['PrincipalsResponse']
+export type PrincipalResponse = components['schemas']['PrincipalResponse']
+export type CreatePrincipalRequest = components['schemas']['CreatePrincipalRequest']
+export type SetPrincipalRoleRequest = components['schemas']['SetPrincipalRoleRequest']
+export type SetPrincipalPasswordRequest = components['schemas']['SetPrincipalPasswordRequest']
+export type TokenObject = components['schemas']['TokenObject']
+export type TokensResponse = components['schemas']['TokensResponse']
+export type IssueTokenRequest = components['schemas']['IssueTokenRequest']
+export type IssueTokenResponse = components['schemas']['IssueTokenResponse']
+
 // Step 7 seam A (RES-008 D1): the configuration write surface's shapes,
 // aliased for the identical reason as every type above. Not part of
 // `Model` — see store.ts's "Step 7 seam A" section header comment for why

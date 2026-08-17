@@ -137,6 +137,15 @@ type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsRespo
 type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
 type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
 type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
+// Track G seam G-5: identity administration over the API.
+type SchemaPrincipalsResponse = components['schemas']['PrincipalsResponse']
+type SchemaPrincipalResponse = components['schemas']['PrincipalResponse']
+type SchemaCreatePrincipalRequest = components['schemas']['CreatePrincipalRequest']
+type SchemaSetPrincipalRoleRequest = components['schemas']['SetPrincipalRoleRequest']
+type SchemaSetPrincipalPasswordRequest = components['schemas']['SetPrincipalPasswordRequest']
+type SchemaTokensResponse = components['schemas']['TokensResponse']
+type SchemaIssueTokenRequest = components['schemas']['IssueTokenRequest']
+type SchemaIssueTokenResponse = components['schemas']['IssueTokenResponse']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -862,6 +871,147 @@ export class ApiStore {
   /** `{"action":"setLayerMaster","params":{layer,master}}` — see [dispatchResolumeAction]. */
   async setResolumeLayerMaster(layer: string, master: number): Promise<SchemaResolumeActionResult> {
     return this.dispatchResolumeAction({ action: 'setLayerMaster', params: { layer, master } })
+  }
+
+  // -- Track G seam G-5: identity administration over the API -----------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as Step 7 seam A's fpp.endpoints methods above:
+  // principals and tokens are not part of the SSE snapshot/delta stream
+  // (ADR-020 change-stream resources), so there is nothing here for
+  // `wakeReadLoop()` to do. Every write requires principal:write and every
+  // read requires principal:read (ADR-024, ADR-039 decision 8) — the
+  // Access view (views/Access.tsx) is this surface's only caller and
+  // gates itself on those scopes via `evaluateScope`, mirroring
+  // Configuration.tsx's own posture for config:write.
+
+  /** `GET /api/v1/principals` (Track G seam G-5). Requires principal:read. */
+  async listPrincipals(): Promise<SchemaPrincipalsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPrincipalsResponse>('/principals', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals` (Track G seam G-5). Requires principal:write. */
+  async createPrincipal(payload: SchemaCreatePrincipalRequest): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>('/principals', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/principals/{id}/role` (Track G seam G-5). Throws (409)
+   * when this would leave no enabled principal able to reach
+   * principal:write (ADR-039 decision 8) — the caller renders the thrown
+   * error via `describeApiError`, matching every other write in this app.
+   */
+  async setPrincipalRole(id: string, payload: SchemaSetPrincipalRoleRequest): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/role`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/principals/{id}/disable` (Track G seam G-5). Throws
+   * (409) when this is the coordinator's last enabled administrator
+   * (ADR-039 decision 8).
+   */
+  async disablePrincipal(id: string): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/disable`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/enable` (Track G seam G-5). Never refused for lockout — enabling only ever adds back a way to authenticate. */
+  async enablePrincipal(id: string): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/enable`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/password` (Track G seam G-5). Bumps the target principal's generation, invalidating its existing sessions and tokens. */
+  async resetPrincipalPassword(
+    id: string,
+    payload: SchemaSetPrincipalPasswordRequest,
+  ): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/password`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/principals/{id}/tokens` (Track G seam G-5). Requires principal:read. Never carries a digest or a raw value. */
+  async listPrincipalTokens(id: string): Promise<SchemaTokensResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaTokensResponse>(
+        `/principals/${encodeURIComponent(id)}/tokens`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/tokens` (Track G seam G-5). The response's `value` is this token's only appearance on the wire, ever again (ADR-024 decision 1). */
+  async issuePrincipalToken(id: string, payload: SchemaIssueTokenRequest): Promise<SchemaIssueTokenResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaIssueTokenResponse>(
+        `/principals/${encodeURIComponent(id)}/tokens`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/principals/{id}/tokens/{tokenId}` (Track G seam G-5). Throws (409) when this is the last credential able to reach principal:write (ADR-039 decision 8). */
+  async revokePrincipalToken(id: string, tokenId: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(
+        `/principals/${encodeURIComponent(id)}/tokens/${encodeURIComponent(tokenId)}`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   // -- Track D seam D-2a (ADR-032): the Resolume composition upload

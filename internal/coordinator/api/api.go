@@ -1330,6 +1330,33 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/resolume/instances", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstances))
 	mux.HandleFunc("GET /api/v1/resolume/instances/{instanceId}", h.readGuard(identity.ScopeObservationRead, h.handleResolumeInstance))
 
+	// --- Track G seam G-5: identity administration over the API ---
+	//
+	// Reads require principal:read; writes require principal:write and go
+	// through writeGuard (decision 6's CSRF check comes free from that one
+	// guard, exactly like every other write in this package). Neither is
+	// ever gated by [Options.CloseReads] — identity administration is
+	// exactly as sensitive as GET /api/v1/audit, never one of ADR-024
+	// decision 4's four pre-existing open-by-default read resources.
+	// Bootstrap (creating the FIRST principal) has no route here — ADR-024
+	// decision 9 keeps it coordinator-local, since there is no principal
+	// yet to authenticate this surface's own guards against. See
+	// principals.go's own doc comment for the fail-closed audit pattern
+	// every write below follows, and for [handlers.wouldLockOutAdministration],
+	// which guards role change, disable, and token revoke against removing
+	// the coordinator's last reachable administrator (requirement 3 /
+	// ADR-039 decision 8).
+	mux.HandleFunc("GET /api/v1/principals", h.requireScope(identity.ScopePrincipalRead, h.handleListPrincipals))
+	mux.HandleFunc("POST /api/v1/principals", h.writeGuard(&scopePrincipalWrite, h.handleCreatePrincipal))
+	mux.HandleFunc("GET /api/v1/principals/{id}", h.requireScope(identity.ScopePrincipalRead, h.handleGetPrincipal))
+	mux.HandleFunc("PUT /api/v1/principals/{id}/role", h.writeGuard(&scopePrincipalWrite, h.handleSetPrincipalRole))
+	mux.HandleFunc("POST /api/v1/principals/{id}/enable", h.writeGuard(&scopePrincipalWrite, h.handleEnablePrincipal))
+	mux.HandleFunc("POST /api/v1/principals/{id}/disable", h.writeGuard(&scopePrincipalWrite, h.handleDisablePrincipal))
+	mux.HandleFunc("POST /api/v1/principals/{id}/password", h.writeGuard(&scopePrincipalWrite, h.handleResetPrincipalPassword))
+	mux.HandleFunc("GET /api/v1/principals/{id}/tokens", h.requireScope(identity.ScopePrincipalRead, h.handleListPrincipalTokens))
+	mux.HandleFunc("POST /api/v1/principals/{id}/tokens", h.writeGuard(&scopePrincipalWrite, h.handleIssuePrincipalToken))
+	mux.HandleFunc("DELETE /api/v1/principals/{id}/tokens/{tokenId}", h.writeGuard(&scopePrincipalWrite, h.handleRevokeToken))
+
 	// Catch-all for anything else under /api/ (an unknown path version, or
 	// a typo'd v1 route): see handleUnknownAPIPath's doc comment.
 	//

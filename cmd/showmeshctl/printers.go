@@ -584,3 +584,59 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 		_, _ = fmt.Fprintln(w)
 	}
 }
+
+// printPrincipalsTable renders GET /api/v1/principals (Track G seam G-5).
+func printPrincipalsTable(w io.Writer, resp principalsResponse) {
+	if len(resp.Principals) == 0 {
+		_, _ = fmt.Fprintln(w, "(no principals)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tNAME\tKIND\tROLE\tDISABLED\tHAS PASSWORD\tRESERVED\tCREATED AT")
+	for _, p := range resp.Principals {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\t%v\t%s\n",
+			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.HasPassword, p.Reserved, p.CreatedAt.Format(time.RFC3339))
+	}
+	_ = tw.Flush()
+}
+
+// printPrincipalDetail renders one principalObject -- POST/GET/PUT .../role,
+// POST .../enable, .../disable, and .../password all share this shape.
+func printPrincipalDetail(w io.Writer, p principalObject) {
+	_, _ = fmt.Fprintf(w, "ID:           %s\n", p.ID)
+	_, _ = fmt.Fprintf(w, "Name:         %s\n", p.Name)
+	_, _ = fmt.Fprintf(w, "Kind:         %s\n", p.Kind)
+	_, _ = fmt.Fprintf(w, "Role:         %s\n", p.Role)
+	_, _ = fmt.Fprintf(w, "Disabled:     %v\n", p.Disabled)
+	_, _ = fmt.Fprintf(w, "Has password: %v\n", p.HasPassword)
+	_, _ = fmt.Fprintf(w, "Reserved:     %v\n", p.Reserved)
+	_, _ = fmt.Fprintf(w, "Created at:   %s\n", p.CreatedAt.Format(time.RFC3339))
+}
+
+// printTokensTable renders GET /api/v1/principals/{id}/tokens (Track G
+// seam G-5). Never prints a digest or a raw value -- tokenObject carries
+// neither.
+func printTokensTable(w io.Writer, resp tokensResponse) {
+	if len(resp.Tokens) == 0 {
+		_, _ = fmt.Fprintln(w, "(no tokens)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tHINT\tLABEL\tCREATED AT\tEXPIRES\tLAST USED")
+	for _, t := range resp.Tokens {
+		label := t.Label
+		if label == "" {
+			label = "-"
+		}
+		expires := "never"
+		if t.ExpiresAt != nil {
+			expires = t.ExpiresAt.Format(time.RFC3339)
+		}
+		lastUsed := "never"
+		if t.LastUsedAt != nil {
+			lastUsed = t.LastUsedAt.Format(time.RFC3339)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Hint, label, t.CreatedAt.Format(time.RFC3339), expires, lastUsed)
+	}
+	_ = tw.Flush()
+}

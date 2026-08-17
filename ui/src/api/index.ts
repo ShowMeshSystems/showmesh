@@ -39,6 +39,17 @@ export type {
   NodeDeclaration,
   NodeEvidence,
   PrincipalSummary,
+  // Track G seam G-5: identity administration over the API.
+  PrincipalObject,
+  PrincipalsResponse,
+  PrincipalResponse,
+  CreatePrincipalRequest,
+  SetPrincipalRoleRequest,
+  SetPrincipalPasswordRequest,
+  TokenObject,
+  TokensResponse,
+  IssueTokenRequest,
+  IssueTokenResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionSummary,
   ResolumeCompositionUploadResponse,
@@ -149,6 +160,15 @@ export {
   blackoutResolume,
   setResolumeLayerBypass,
   setResolumeLayerMaster,
+  listPrincipals,
+  createPrincipal,
+  setPrincipalRole,
+  disablePrincipal,
+  enablePrincipal,
+  resetPrincipalPassword,
+  listPrincipalTokens,
+  issuePrincipalToken,
+  revokePrincipalToken,
 } from './useModel'
 
 // Track D seam D-2a: the progress shape [uploadResolumeComposition]'s

@@ -72,6 +72,10 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
 		return cmdAssets(rest, stdout, stderr, clock)
+	case "principal":
+		return cmdPrincipal(rest, stdout, stderr, clock)
+	case "token":
+		return cmdToken(rest, stdout, stderr, clock)
 	case "version":
 		return cmdVersion(rest, stdout, stderr, clock)
 	default:
@@ -106,6 +110,19 @@ config:write). A macro run is accepted asynchronously (202): "macro run"
 and "run show" never wait for a run to finish unless given --follow, and
 --follow itself times out on IDLE silence, never on total duration — see
 "showmeshctl macro run --help".
+
+Track G seam G-5 gave this program "principal" and "token": identity
+administration that previously required container/host exec access to the
+coordinator's own distroless image. Reads need principal:read; writes need
+principal:write and are audited. Disabling the coordinator's last enabled
+administrator, changing its role away from one that holds principal:write,
+or revoking the last credential able to reach that scope, is refused with
+409 (ADR-039 decision 8) — a deliberate refusal, not a bug: it costs an
+administrative retry rather than an unrecoverable coordinator with no shell
+to recover it from. The coordinator's own host subcommands
+("showmesh-coordinator list-principals", "create-principal", and friends)
+remain the break-glass path for a coordinator with no reachable
+administrator at all.
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -177,6 +194,22 @@ Commands:
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
                             named on the command line (write, requires config:write)
+  principal list                       list every principal (requires principal:read)
+  principal create -name -kind -role [--password|--password-stdin]
+                           create a principal (write, requires principal:write)
+  principal disable <id>              disable a principal (write; refused 409 if this
+                                       is the last enabled administrator, ADR-039)
+  principal enable <id>               enable a principal (write)
+  principal reset-password <id> [--password|--password-stdin]
+                           reset a principal's password (write)
+  principal set-role <id> <role>      change a principal's role (write; refused 409 if
+                                       this would leave no reachable administrator)
+  token list <principalId>            list a principal's API tokens (requires principal:read)
+  token issue <principalId> [--label] [--expires]
+                           issue an API token (write; value shown exactly once)
+  token revoke <principalId> <tokenId>
+                           revoke an API token (write; refused 409 if this is the last
+                           credential able to reach principal:write, ADR-039)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 

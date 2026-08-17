@@ -26,6 +26,7 @@ import { MacroRunView } from '../views/MacroRunView'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
 import { ResolumeView } from '../views/ResolumeView'
+import { Access } from '../views/Access'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -60,6 +61,8 @@ export default function App() {
             <Route path="actions" element={<ShowActions />} />
             <Route path="actions/new" element={<ShowActionDetail isNew />} />
             <Route path="actions/:id" element={<ShowActionDetail />} />
+            {/* Track G seam G-5: identity administration's own view. */}
+            <Route path="access" element={<Access />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
