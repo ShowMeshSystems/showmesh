@@ -405,6 +405,41 @@ func resolumeInstancesMigrationDeferredProblem() v1.Problem {
 	}
 }
 
+// fppMQTTEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s mirror for
+// Track G seam G-3 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/fpp.mqtt with 409 while SHOWMESH_FPP_MQTT_BROKER_URL is
+// still set, for the identical reason — a write accepted now cannot
+// survive this coordinator's own next restart.
+func fppMQTTEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: SHOWMESH_FPP_MQTT_BROKER_URL is still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because SHOWMESH_FPP_MQTT_BROKER_URL is still set in this coordinator's " +
+			"environment — accepting it now would conflict with that variable on the next restart. Remove " +
+			"SHOWMESH_FPP_MQTT_BROKER_URL, SHOWMESH_FPP_MQTT_USERNAME, SHOWMESH_FPP_MQTT_PASSWORD, " +
+			"SHOWMESH_FPP_MQTT_TOPIC_PREFIX, and SHOWMESH_FPP_MQTT_HOSTS and restart this coordinator once, then retry.",
+	}
+}
+
+// fppMQTTMigrationDeferredProblem is [fppEndpointsMigrationDeferredProblem]'s
+// mirror: the standard remedy above is not safe while the startup
+// migration is deferred, because no store configuration exists yet —
+// removing the variables and restarting would resolve this coordinator to
+// an unconfigured fpp.mqtt collector.
+func fppMQTTMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_MQTT_BROKER_URL was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_FPP_MQTT_* migration could not be saved on this boot, " +
+			"so the store holds no fpp.mqtt configuration yet. Do NOT remove SHOWMESH_FPP_MQTT_* — they are " +
+			"currently the only copy of this coordinator's FPP MQTT configuration. Check the coordinator's data " +
+			"volume (often full, read-only, or damaged) and restart; the migration retries on every boot. Once it " +
+			"succeeds, remove the variables and retry.",
+	}
+}
+
 // discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
 // [handlers.handleStartDiscoveryRun] refuses a second discovery run while
 // one is already in flight on this coordinator, rather than queuing it —

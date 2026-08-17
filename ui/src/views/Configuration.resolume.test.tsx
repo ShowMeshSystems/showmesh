@@ -14,18 +14,25 @@ import { ApiError } from '../api/errors'
 // half's own three API functions are mocked here too, defaulted to a
 // resolved "already configured" state so this file's tests exercise only
 // the Resolume section, undisturbed by the FPP section's own fetch.
+// Track G seam G-3 (ADR-039) added a third section (FPPMQTTSection) the
+// identical way; its own three API functions are mocked here too, purely
+// so this file's tests are not derailed by an unmocked real fetch.
 const {
   getFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
+  getFPPMQTTConfig,
+  getFPPMQTTConfigRevisions,
 } = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   getFPPEndpointsConfigRevisions: vi.fn(),
   getResolumeInstancesConfig: vi.fn(),
   putResolumeInstancesConfig: vi.fn(),
   getResolumeInstancesConfigRevisions: vi.fn(),
+  getFPPMQTTConfig: vi.fn(),
+  getFPPMQTTConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -36,6 +43,8 @@ vi.mock('../api', async (importOriginal) => {
     getResolumeInstancesConfig,
     putResolumeInstancesConfig,
     getResolumeInstancesConfigRevisions,
+    getFPPMQTTConfig,
+    getFPPMQTTConfigRevisions,
   }
 })
 
@@ -89,6 +98,11 @@ beforeEach(() => {
       'https://showmesh.dev/problems/resource-not-found'),
   )
   getFPPEndpointsConfigRevisions.mockResolvedValue(emptyFPPRevisions)
+  getFPPMQTTConfig.mockRejectedValue(
+    new ApiError('no fpp.mqtt configuration has been created yet; PUT one to create it', 404,
+      'https://showmesh.dev/problems/resource-not-found'),
+  )
+  getFPPMQTTConfigRevisions.mockResolvedValue({ serverTime: '2026-08-17T00:00:00Z', kind: 'fpp.mqtt', revisions: [] })
 })
 
 afterEach(() => {
@@ -98,6 +112,8 @@ afterEach(() => {
   getResolumeInstancesConfig.mockReset()
   putResolumeInstancesConfig.mockReset()
   getResolumeInstancesConfigRevisions.mockReset()
+  getFPPMQTTConfig.mockReset()
+  getFPPMQTTConfigRevisions.mockReset()
 })
 
 describe('Configuration: Resolume instances section', () => {

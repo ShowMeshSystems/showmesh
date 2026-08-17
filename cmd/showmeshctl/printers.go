@@ -403,6 +403,49 @@ func printResolumeInstancesConfig(w io.Writer, resp resolumeInstancesConfigRespo
 	_ = tw.Flush()
 }
 
+// printFPPMQTTConfig renders GET/PUT /api/v1/config/fpp.mqtt (Track G seam
+// G-3, ADR-039), mirroring printFPPEndpointsConfig's shape. The password
+// itself never appears on the wire (decision 7); only "set"/"not set".
+func printFPPMQTTConfig(w io.Writer, resp fppMQTTConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	if resp.Payload.BrokerURL == "" {
+		_, _ = fmt.Fprintln(w, "(no FPP MQTT broker configured)")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "brokerURL:   %s\n", resp.Payload.BrokerURL)
+	_, _ = fmt.Fprintf(w, "username:    %s\n", resp.Payload.Username)
+	_, _ = fmt.Fprintf(w, "topicPrefix: %s\n", resp.Payload.TopicPrefix)
+	_, _ = fmt.Fprintf(w, "password:    %s\n", fppMQTTPasswordLabel(resp.Payload.PasswordSet))
+
+	if len(resp.Payload.Hosts) == 0 {
+		_, _ = fmt.Fprintln(w, "(no hosts configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tHOSTNAME")
+	for id, name := range resp.Payload.Hosts {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", id, name)
+	}
+	_ = tw.Flush()
+}
+
+func fppMQTTPasswordLabel(set bool) string {
+	if set {
+		return "set"
+	}
+	return "not set"
+}
+
 // printConfigRevisionsTable renders GET
 // /api/v1/config/fpp.endpoints/revisions, newest first.
 func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {

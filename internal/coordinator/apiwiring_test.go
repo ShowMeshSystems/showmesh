@@ -311,61 +311,28 @@ func TestFPPCollectorStatusListerHasStableID(t *testing.T) {
 	}
 }
 
-// TestFPPMQTTCollectorStatusListerReflectsConfigured is
-// [fppMQTTCollectorStatusLister]'s own regression guard, mirroring
-// [TestFPPCollectorStatusListerHasStableID] for the second collector
-// source Step 5 adds: not_configured with a non-null reason when
-// configured is false, running with a nil reason when it is true, always
-// exactly one entry at the fixed id [fppMQTTCollectorSourceID].
-func TestFPPMQTTCollectorStatusListerReflectsConfigured(t *testing.T) {
-	unconfigured := fppMQTTCollectorStatusLister{configured: false}
-	states, err := unconfigured.CollectorStatuses(context.Background())
-	if err != nil {
-		t.Fatalf("collector statuses (unconfigured): %v", err)
-	}
-	if len(states) != 1 {
-		t.Fatalf("len(states) = %d, want exactly 1", len(states))
-	}
-	if states[0].ID != fppMQTTCollectorSourceID {
-		t.Errorf("ID = %q, want %q", states[0].ID, fppMQTTCollectorSourceID)
-	}
-	if states[0].State != string(api.CollectorNotConfigured) {
-		t.Errorf("State = %q, want %q", states[0].State, api.CollectorNotConfigured)
-	}
-	if states[0].Reason == nil {
-		t.Errorf("Reason = nil, want a non-null reason naming why nothing is configured")
-	}
-
-	configured := fppMQTTCollectorStatusLister{configured: true}
-	states, err = configured.CollectorStatuses(context.Background())
-	if err != nil {
-		t.Fatalf("collector statuses (configured): %v", err)
-	}
-	if len(states) != 1 {
-		t.Fatalf("len(states) = %d, want exactly 1", len(states))
-	}
-	if states[0].ID != fppMQTTCollectorSourceID {
-		t.Errorf("ID = %q, want %q", states[0].ID, fppMQTTCollectorSourceID)
-	}
-	if states[0].State != string(api.CollectorRunning) {
-		t.Errorf("State = %q, want %q", states[0].State, api.CollectorRunning)
-	}
-	if states[0].Reason != nil {
-		t.Errorf("Reason = %v, want nil while running", states[0].Reason)
-	}
-}
+// [fppMQTTCollectorStatusLister]'s own regression guard used to live here.
+// Track G seam G-3 (ADR-039) replaced that startup-snapshot type with
+// *fppMQTTManager, whose live CollectorStatuses behavior — including the
+// not_configured/running transition — is now covered by
+// fppmqttmanager_test.go's TestFPPMQTTManagerReconcileZeroToOneToZero.
 
 // TestMultiCollectorStatusListerConcatenatesBothSources is contract section
 // 5.4's "generalize fppCollectorStatusLister... so both collectors appear"
-// acceptance criterion, exercised directly against the real type
+// acceptance criterion, exercised directly against the real types
 // coordinator.go wires into api.Dependencies.Collectors: both the REST and
 // MQTT collectors' own single-row statuses must appear together, in the
 // order they were given, with neither one able to suppress or overwrite
 // the other's entry.
 func TestMultiCollectorStatusListerConcatenatesBothSources(t *testing.T) {
+	mqttMgr, _ := newTestFPPMQTTManager(t)
+	mqttMgr.reconcile(context.Background(), config.FPPMQTTConfig{
+		BrokerURL: "tcp://127.0.0.1:1", Hosts: map[string]string{"player-01": "player-01"},
+	}, "")
+
 	lister := multiCollectorStatusLister{
 		fppCollectorStatusLister{endpoints: fixedFPPEndpoints{{ID: "player-01", URL: "http://10.0.1.20"}}},
-		fppMQTTCollectorStatusLister{configured: true},
+		mqttMgr,
 	}
 
 	states, err := lister.CollectorStatuses(context.Background())
