@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,105 @@ func TestProbeVideoFormatBuildsCapsFilterForRequestedFormat(t *testing.T) {
 		t.Errorf("argv = %v, want a capsfilter caps string naming format=UYVY", argv)
 	}
 }
+
+// capturingHandle wraps a real [ProcessHandle] and records its ExitResult
+// into out, so a test can inspect the raw captured stderr a real
+// gst-launch-1.0 process actually produced — the same result ProbeNDISend
+// itself received and turned into a Reason string — rather than only ever
+// seeing a fake's scripted stderr.
+type capturingHandle struct {
+	ProcessHandle
+	out *ExitResult
+}
+
+func (c *capturingHandle) Wait() ExitResult {
+	r := c.ProcessHandle.Wait()
+	*c.out = r
+	return r
+}
+
+// capturingRealStarter is a [ProcessStarter] that runs the REAL
+// [startRealProcess] (a genuine gst-launch-1.0 child process, not a fake)
+// and captures its ExitResult into out via [capturingHandle].
+func capturingRealStarter(out *ExitResult) ProcessStarter {
+	return func(ctx context.Context, path string, args []string, onRunningMarker func()) (ProcessHandle, error) {
+		h, err := startRealProcess(ctx, path, args, onRunningMarker)
+		if err != nil {
+			return nil, err
+		}
+		return &capturingHandle{ProcessHandle: h, out: out}, nil
+	}
+}
+
+// TestProbeNDISendRealMachine runs ProbeNDISend against the REAL
+// gst-launch-1.0 on whatever machine this test executes on — no fake
+// starter, no stubbed ResolveGstLaunch — closing the exact gap the build
+// contract's B4 section calls out: every other test in this file drives
+// the probe through a simulation of a real process, so none of them prove
+// the probe reports a REAL machine's REAL state correctly.
+//
+// It deliberately does not assert a fixed Available value, because that
+// depends on whether the node running this test has the NDI runtime
+// installed. What it does assert is the invariant this whole seam exists
+// to guarantee (Available implies no reason needed; !Available implies a
+// real, non-empty, actionable reason — never "unavailable" with nothing
+// else said), and it logs the actual outcome so a human reading test
+// output learns what this specific machine reported.
+//
+// On the machine this test was written and verified on, gst-launch-1.0 is
+// installed with the ndisink element present but the NDI runtime library
+// itself absent — see this seam's own report — so the second half of this
+// test (gated on `gst-inspect-1.0 ndisink` actually finding the element)
+// additionally proves ndiUnavailableReasonMarker matched genuinely captured
+// stderr from a real process, not merely the string probe_test.go's own
+// fakeStarter tests were told to emit.
+func TestProbeNDISendRealMachine(t *testing.T) {
+	requireGstLaunch(t)
+
+	var captured ExitResult
+	got := ProbeNDISend(context.Background(), capturingRealStarter(&captured))
+	t.Logf("ProbeNDISend on this machine: Available=%v Reason=%q rawStderr=%q",
+		got.Available, got.Reason, captured.StderrTail)
+
+	if got.Available && got.Reason != "" {
+		t.Errorf("Available=true but Reason=%q, want empty", got.Reason)
+	}
+	if !got.Available && got.Reason == "" {
+		t.Errorf("Available=false but Reason is empty, want a non-empty, actionable reason")
+	}
+
+	if got.Available {
+		t.Logf("this machine has a usable NDI runtime; nothing further to check")
+		return
+	}
+
+	if _, err := exec.LookPath("gst-inspect-1.0"); err != nil {
+		t.Logf("gst-inspect-1.0 not found; skipping the marker-specific check (cannot tell element-absent from runtime-absent here)")
+		return
+	}
+	if err := exec.Command("gst-inspect-1.0", "ndisink").Run(); err != nil {
+		t.Logf("gst-inspect-1.0 ndisink reports the element absent on this machine (%v); a missing-element failure is a different case than the runtime-dlopen trap this seam targets, so the marker check does not apply here", err)
+		return
+	}
+
+	// ndisink IS present (proven above, independently of ProbeNDISend), so
+	// a failed transition here is specifically the SDK-dlopen trap this
+	// whole seam exists to catch — real stderr must actually contain the
+	// marker, and Reason must be the actionable install pointer, not the
+	// generic fallback.
+	if !strings.Contains(captured.StderrTail, ndiUnavailableReasonMarker) {
+		t.Errorf("ndisink is present but this real run's stderr does not contain %q: got %q — the marker this package matches on was never actually exercised against real gst-launch-1.0 output",
+			ndiUnavailableReasonMarker, captured.StderrTail)
+	}
+	if !strings.Contains(got.Reason, "install the NDI SDK runtime") {
+		t.Errorf("Reason = %q, want the actionable NDI install pointer (ndiUnavailableReason's non-generic branch)", got.Reason)
+	}
+}
+
+// Compile-time check that *capturingHandle still satisfies ProcessHandle
+// (embedding hides a signature change that would otherwise only surface as
+// a runtime panic on Kill/Pid/Stdin).
+var _ ProcessHandle = (*capturingHandle)(nil)
 
 func containsArg(argv []string, want string) bool {
 	for _, a := range argv {
