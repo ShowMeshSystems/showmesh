@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -239,5 +242,145 @@ func TestCmdMacroRunTooSmallTimeoutIsRaisedAndNoted(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "1ms") || !strings.Contains(stderr.String(), minMacroClientTimeout.String()) {
 		t.Errorf("stderr = %q, want a note naming both the requested and floor timeout values", stderr.String())
+	}
+}
+
+// TestCmdMacroPutSendsTheFileContents mirrors TestCmdActionPutSendsTheFileContents
+// (cmd_action_test.go): "macro put" PUTs the file's own bytes unmodified,
+// against the show.macro route.
+func TestCmdMacroPutSendsTheFileContents(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.macro","id":"begin-set","revision":2,
+			"payload":{"show":"halloween-2026","label":"Begin set","description":"","steps":[
+				{"id":"projectors","action":"projectors-on","onFailure":"abort","onUnconfirmed":"continue",
+				 "localFallback":{"class":"coordinator-required","reason":"projector power is MQTT-only"}}
+			]},
+			"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "macro.json")
+	payload := `{"show":"halloween-2026","label":"Begin set","steps":[{"id":"projectors","action":"projectors-on","localFallback":{"class":"coordinator-required","reason":"projector power is MQTT-only"}}]}`
+	if err := os.WriteFile(file, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"put", "--file", file, "--server", ts.URL, "--token", "t", "begin-set"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/api/v1/config/show.macro/begin-set" {
+		t.Errorf("path = %q, want /api/v1/config/show.macro/begin-set", gotPath)
+	}
+	if strings.TrimSpace(string(gotBody)) != payload {
+		t.Errorf("body = %s, want the file's own contents unmodified: %s", gotBody, payload)
+	}
+	if !strings.Contains(stdout.String(), "begin-set") || !strings.Contains(stdout.String(), "projectors") {
+		t.Errorf("stdout = %q, want the written macro's definition rendered back", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "revision 2 is now active") {
+		t.Errorf("stderr = %q, want a note that revision 2 is now active", stderr.String())
+	}
+}
+
+// TestCmdMacroPutRejectsInvalidJSON mirrors TestCmdActionPutRejectsInvalidJSON:
+// a malformed payload is refused client-side before any request is sent.
+func TestCmdMacroPutRejectsInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(file, []byte("not json"), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"put", "--file", file, "--server", "http://unused.invalid", "begin-set"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+}
+
+// TestCmdMacroPutRequiresExactlyOneArg mirrors TestCmdActionPutRequiresExactlyOneArg.
+func TestCmdMacroPutRequiresExactlyOneArg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"put"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want exitUsage", code)
+	}
+}
+
+// TestCmdMacroPutServerRejectionIsNotSwallowed proves a server-side
+// validation refusal (a step referencing an unknown action) surfaces as
+// the server's own problem response rather than being reported as a
+// client-side success, and that no revision note is printed for a
+// refused write.
+func TestCmdMacroPutServerRejectionIsNotSwallowed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/show-config-field-unknown-reference","title":"Invalid show configuration","status":400,
+			"detail":"steps[0].action: no show.action object with id \"does-not-exist\" has an active revision"}`)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "macro.json")
+	payload := `{"show":"halloween-2026","label":"Begin set","steps":[{"id":"s1","action":"does-not-exist","localFallback":{"class":"coordinator-required","reason":"n/a"}}]}`
+	if err := os.WriteFile(file, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"put", "--file", file, "--server", ts.URL, "--token", "t", "begin-set"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage (%d, the unrecognized-problem-type/400 fallback); stderr=%s", code, exitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "does-not-exist") {
+		t.Errorf("stderr = %q, want the server's own refusal detail surfaced", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "is now active") {
+		t.Errorf("stderr = %q, want no revision-active note for a refused write", stderr.String())
+	}
+}
+
+// TestCmdMacroDispatchesPut proves "showmeshctl macro put" is reachable
+// through the real top-level dispatcher (run, main.go), not only by
+// calling cmdMacroPut directly — TestCmdResolumeDispatchesStatus's own
+// reasoning (ADR-030's "a capability nothing calls is not shipped").
+func TestCmdMacroDispatchesPut(t *testing.T) {
+	var gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.macro","id":"begin-set","revision":1,
+			"payload":{"show":"halloween-2026","label":"Begin set","description":"","steps":[]},
+			"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "macro.json")
+	if err := os.WriteFile(file, []byte(`{"show":"halloween-2026","label":"Begin set","steps":[]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"macro", "put", "--file", file, "--server", ts.URL, "--token", "t", "begin-set"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
 	}
 }

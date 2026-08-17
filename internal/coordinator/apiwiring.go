@@ -520,29 +520,30 @@ func (l fppCollectorStatusLister) CollectorStatuses(ctx context.Context) ([]api.
 // not a considered choice.
 const fppMQTTCollectorSourceID = "fpp-mqtt"
 
-// fppMQTTCollectorStatusLister reports the FPP MQTT collector's own run
-// state for GET /api/v1/snapshot's "collectors" list, mirroring
-// [fppCollectorStatusLister]'s shape for the second collector source Step 5
-// adds: always exactly one entry, id [fppMQTTCollectorSourceID],
-// [api.CollectorRunning] when SHOWMESH_FPP_MQTT_BROKER_URL is configured,
-// [api.CollectorNotConfigured] naming why when it is not. configured is
-// supplied by coordinator.go from the same condition that decides whether
-// to construct and register the *fppmqtt.Collector at all — this type
-// carries no reference to that collector itself (nor to
-// internal/coordinator/config), just the one boolean its status reporting
-// actually needs, since a collector that fails to construct never reaches
-// this far in Run's wiring in any case (see coordinator.go).
-type fppMQTTCollectorStatusLister struct {
-	configured bool
+// fppMQTTSecretAdapter implements [api.FPPMQTTSecretStore] over the fpp.mqtt
+// secret file (Track G seam G-3, ADR-039 decision 7) — see
+// internal/coordinator/config/fppmqttsecret.go.
+type fppMQTTSecretAdapter struct {
+	dataDir string
 }
 
-func (l fppMQTTCollectorStatusLister) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
-	if !l.configured {
-		reason := "no FPP MQTT broker configured (SHOWMESH_FPP_MQTT_BROKER_URL is unset)"
-		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
-	}
-	return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+func (a fppMQTTSecretAdapter) HasFPPMQTTPassword(context.Context) (bool, error) {
+	return config.HasFPPMQTTPassword(a.dataDir)
 }
+
+func (a fppMQTTSecretAdapter) SetFPPMQTTPassword(_ context.Context, password string) error {
+	return config.WriteFPPMQTTPassword(a.dataDir, password)
+}
+
+func (a fppMQTTSecretAdapter) ClearFPPMQTTPassword(context.Context) error {
+	return config.ClearFPPMQTTPassword(a.dataDir)
+}
+
+// fppMQTTCollectorStatusLister (Step 5) reported this collector's status
+// from a startup snapshot boolean. Track G seam G-3 (ADR-039) replaced it
+// with *fppMQTTManager (fppmqttmanager.go), which answers live rather than
+// from a value captured once at process start — see that type's own
+// CollectorStatuses doc comment.
 
 // multiCollectorStatusLister concatenates several [api.CollectorStatusLister]
 // values into one, so api.Dependencies' single Collectors field — an

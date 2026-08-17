@@ -1,7 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Configuration } from './Configuration'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
@@ -21,10 +21,43 @@ import { ApiError } from '../api/errors'
 // Configuration.tsx ... not new work"), so this file no longer needs to
 // mock the composition endpoints at all — its own tests live in
 // ResolumeCompositionUpload.test.tsx and ResolumeView.test.tsx.
-const { getFPPEndpointsConfig, putFPPEndpointsConfig, getFPPEndpointsConfigRevisions } = vi.hoisted(() => ({
+// tested. Its own three API functions are mocked here too, purely so every
+// EXISTING test below — none of which is about Resolume — is not derailed
+// by that section making a real, unmocked network call: default to the
+// "nothing configured yet" 404 every fresh coordinator answers with, which
+// (matching the FPP section's own 404 handling) renders quiet text, never
+// an alert, so `findByRole('alert')`/`queryByRole('alert')` assertions
+// below still see only the FPP section's own alert. Resolume-specific
+// behavior has its own coverage in Configuration.resolume.test.tsx.
+// Track G seam G-3 (ADR-039) added a third section (FPPMQTTSection) the
+// identical way, and Track G seam G-4 added a fourth
+// (AssetsSettingsSection), both with the identical default-404 treatment.
+const {
+  getFPPEndpointsConfig,
+  putFPPEndpointsConfig,
+  getFPPEndpointsConfigRevisions,
+  getResolumeInstancesConfig,
+  putResolumeInstancesConfig,
+  getResolumeInstancesConfigRevisions,
+  getFPPMQTTConfig,
+  putFPPMQTTConfig,
+  getFPPMQTTConfigRevisions,
+  getAssetsSettingsConfig,
+  putAssetsSettingsConfig,
+  getAssetsSettingsConfigRevisions,
+} = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   putFPPEndpointsConfig: vi.fn(),
   getFPPEndpointsConfigRevisions: vi.fn(),
+  getResolumeInstancesConfig: vi.fn(),
+  putResolumeInstancesConfig: vi.fn(),
+  getResolumeInstancesConfigRevisions: vi.fn(),
+  getFPPMQTTConfig: vi.fn(),
+  putFPPMQTTConfig: vi.fn(),
+  getFPPMQTTConfigRevisions: vi.fn(),
+  getAssetsSettingsConfig: vi.fn(),
+  putAssetsSettingsConfig: vi.fn(),
+  getAssetsSettingsConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -33,7 +66,55 @@ vi.mock('../api', async (importOriginal) => {
     getFPPEndpointsConfig,
     putFPPEndpointsConfig,
     getFPPEndpointsConfigRevisions,
+    getResolumeInstancesConfig,
+    putResolumeInstancesConfig,
+    getResolumeInstancesConfigRevisions,
+    getFPPMQTTConfig,
+    putFPPMQTTConfig,
+    getFPPMQTTConfigRevisions,
+    getAssetsSettingsConfig,
+    putAssetsSettingsConfig,
+    getAssetsSettingsConfigRevisions,
   }
+})
+
+beforeEach(() => {
+  getResolumeInstancesConfig.mockRejectedValue(
+    new ApiError(
+      'no resolume.instances configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getResolumeInstancesConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'resolume.instances',
+    revisions: [],
+  })
+  getFPPMQTTConfig.mockRejectedValue(
+    new ApiError(
+      'no fpp.mqtt configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getFPPMQTTConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'fpp.mqtt',
+    revisions: [],
+  })
+  getAssetsSettingsConfig.mockRejectedValue(
+    new ApiError(
+      'no assets.settings configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getAssetsSettingsConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'assets.settings',
+    revisions: [],
+  })
 })
 
 afterEach(() => {
@@ -41,6 +122,15 @@ afterEach(() => {
   getFPPEndpointsConfig.mockReset()
   putFPPEndpointsConfig.mockReset()
   getFPPEndpointsConfigRevisions.mockReset()
+  getResolumeInstancesConfig.mockReset()
+  putResolumeInstancesConfig.mockReset()
+  getResolumeInstancesConfigRevisions.mockReset()
+  getFPPMQTTConfig.mockReset()
+  putFPPMQTTConfig.mockReset()
+  getFPPMQTTConfigRevisions.mockReset()
+  getAssetsSettingsConfig.mockReset()
+  putAssetsSettingsConfig.mockReset()
+  getAssetsSettingsConfigRevisions.mockReset()
 })
 
 function renderConfiguration(model: Model) {
@@ -147,7 +237,12 @@ describe('Configuration', () => {
     getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
     renderConfiguration(makeModel({ session: adminSession }))
 
-    expect(await screen.findByText(/configuration has been created yet/i)).toBeInTheDocument()
+    // Scoped to the FPP section specifically: the Resolume section below it
+    // (Track G seam G-2) renders the identically-worded "configuration has
+    // been created yet" reason for its OWN default-mocked 404, so an
+    // unscoped query would match both.
+    const fppSection = (await screen.findByText(/FPP endpoints/)).closest('section')!
+    expect(await within(fppSection).findByText(/configuration has been created yet/i)).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 

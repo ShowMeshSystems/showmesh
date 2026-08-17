@@ -342,6 +342,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/principals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every principal (Track G seam G-5)
+         * @description Requires `principal:read`. Includes the built-in Resolume recovery principal (`reserved: true`) — visible wherever principals are listed, but not something anything can authenticate as.
+         */
+        get: operations["listPrincipals"];
+        put?: never;
+        /**
+         * Create a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Never guarded by the last-administrator lockout rule (requirement 3): creating a principal can only ever add a way to authenticate, never remove one. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["createPrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One principal (Track G seam G-5)
+         * @description Requires `principal:read`.
+         */
+        get: operations["getPrincipal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a principal's role (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["setPrincipalRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Never guarded by the last-administrator lockout rule: re-enabling only ever adds back a way to authenticate. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["enablePrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a principal (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when this would disable the coordinator's last enabled administrator (requirement 3 / ADR-039 decision 8). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["disablePrincipal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a principal's password (Track G seam G-5)
+         * @description Requires `principal:write`. Bumps the target principal's generation counter (identical to the `showmesh-coordinator reset-password` subcommand), invalidating every session and token this principal currently holds. Never guarded by the last-administrator lockout rule: the new password is itself a credential, not a removal of one. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["resetPrincipalPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List one principal's API tokens (Track G seam G-5)
+         * @description Requires `principal:read`. Never renders a digest or a raw token value (ADR-024 decision 1) — only IssueTokenResponse.value ever does, exactly once, at creation.
+         */
+        get: operations["listPrincipalTokens"];
+        put?: never;
+        /**
+         * Issue an API token for a principal (Track G seam G-5)
+         * @description Requires `principal:write`. The response's `value` field is this token's only appearance anywhere on the wire, ever again (ADR-024 decision 1). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        post: operations["issuePrincipalToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/principals/{id}/tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an API token (Track G seam G-5)
+         * @description Requires `principal:write`. Refused with `409` when this is the last credential able to reach `principal:write` (requirement 3 / ADR-039 decision 8: a password on another enabled administrator, or another active token, must remain). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/fpp.endpoints": {
         parameters: {
             query?: never;
@@ -362,6 +530,146 @@ export interface paths {
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPEndpointsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/resolume.instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active resolume.instances configuration (Track G seam G-2, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_RESOLUME_URL`/`SHOWMESH_RESOLUME_ID` into its store could not be persisted, in which case a configuration IS in effect and `GET /resolume/instances` lists it. `restartRequired` is always `false`: the Resolume collector set follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start).
+         */
+        get: operations["getResolumeInstancesConfig"];
+        /**
+         * Write a new resolume.instances configuration revision (Track G seam G-2, ADR-039)
+         * @description Requires `config:write` (admin only). The request body's `instances` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero instances is an explicit empty array (`"instances": []`). No other top-level field is accepted.
+         *     At most one instance is accepted today; a second is refused with `400` naming the limit — the schema itself stays a list (this surface may grow past one instance later without a breaking change), the limit is enforced by validation. Each instance's id and URL are validated (node-id syntax, http/https scheme, non-empty host, no userinfo) and cross-checked against every currently configured `fpp.endpoints` id, read live at write time — a collision is refused with `400` naming both ids, because both collectors are registered on one shared runner keyed by id.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_RESOLUME_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction: the standard remedy (remove the variable, restart once) is unsafe if the startup migration could not be persisted, and `detail` says so explicitly in that case.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putResolumeInstancesConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/resolume.instances/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * resolume.instances revision history, newest first (Track G seam G-2, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/resolume.instances`'s `404` for the same state.
+         */
+        get: operations["getResolumeInstancesConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/fpp.mqtt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active fpp.mqtt configuration (Track G seam G-3, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_MQTT_*` into its store could not be persisted, in which case a configuration IS in effect. `restartRequired` is always `false`: the FPP MQTT collector follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start). The broker password is NEVER returned (ADR-039 decision 7): `passwordSet` reports presence only.
+         */
+        get: operations["getFPPMQTTConfig"];
+        /**
+         * Write a new fpp.mqtt configuration revision (Track G seam G-3, ADR-039)
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/fpp.endpoints` and `PUT /config/resolume.instances`, this is a PARTIAL UPDATE: every top-level field (`brokerURL`, `username`, `topicPrefix`, `hosts`, `password`) is independently optional. A key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5) — this is what makes the credential rule (decision 7) usable at all, since `GET` never returns the password and a PUT requiring every field present would erase a credential the operator never saw. A `null` `brokerURL`, `username`, or `topicPrefix` is rejected (pass `""` to explicitly clear that field); a `null` `hosts` is rejected (pass `{}` to explicitly configure zero hosts); a `null` or `""` `password` explicitly clears the stored credential.
+         *     Once merged with the current stored configuration, the result is validated (broker URL scheme/host, no userinfo, host id syntax, no duplicate `HostName` across two ids, and every host id cross-checked against the current `fpp.endpoints` configuration, read live at write time) BEFORE activation (ADR-009): a rejected write appends no revision.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_MQTT_BROKER_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     On success, the broker password (if a `password` key was present) is written to a dedicated secret file BEFORE the config revision — never into `config_revisions.payload_json`, which is immutable by design (ADR-009) and would otherwise leave a permanent copy of a rotatable secret (ADR-039 decision 7) — then a new immutable revision is appended and activated in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putFPPMQTTConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/fpp.mqtt/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * fpp.mqtt revision history, newest first (Track G seam G-3, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/fpp.mqtt`'s `404` for the same state. Carries no payload, so the password is not a concern here even in principle — see `ConfigRevisionMeta`.
+         */
+        get: operations["getFPPMQTTConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/assets.settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active assets.settings configuration (Track G seam G-4, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/resolume.instances`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of one or more of `SHOWMESH_ASSET_CONTENT_BASE_URL`/`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`/ `SHOWMESH_ASSET_SYNC_INTERVAL`/`SHOWMESH_ASSET_INVENTORY_INTERVAL` into its store could not be persisted, in which case a configuration IS in effect. `SHOWMESH_ASSET_DIR` is never part of this kind (ADR-039 decision 2) and stays environment-only. `restartRequired` is always `false`: the live asset sync service follows this configuration promptly with no restart (ADR-036 applied to this kind from the start).
+         */
+        get: operations["getAssetsSettingsConfig"];
+        /**
+         * Write a new assets.settings configuration revision (Track G seam G-4, ADR-039)
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/resolume.instances`'s whole-array replace, every one of the four fields (`contentBaseUrl`, `maxUploadBytes`, `syncIntervalSeconds`, `inventoryIntervalSeconds`) is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or, on the very first write, default) value alone. A field that IS present must not be JSON `null` — `null` is refused with `400` naming the field; pass `""` for `contentBaseUrl` to deliberately disable asset sync. Any other top-level field is refused. The merged result is validated as a whole before activation (ADR-009): `maxUploadBytes`, `syncIntervalSeconds`, and `inventoryIntervalSeconds` must all be positive, and a non-empty `contentBaseUrl` must be an http/https URL with a host and no userinfo.
+         *     Refused with `409` outright, before the body is even read, while any of the four `SHOWMESH_ASSET_*` settings variables is still set in this coordinator's own process environment — mirroring `PUT /config/resolume.instances`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putAssetsSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/assets.settings/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * assets.settings revision history, newest first (Track G seam G-4, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/resolume.instances/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/assets.settings`'s `404` for the same state.
+         */
+        get: operations["getAssetsSettingsConfigRevisions"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1477,6 +1785,82 @@ export interface components {
             serverTime: string;
             entries: components["schemas"]["AuditEntry"][];
         };
+        /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret — reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
+        PrincipalObject: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: "human" | "machine";
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            disabled: boolean;
+            hasPassword: boolean;
+            reserved: boolean;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The body of GET /principals. */
+        PrincipalsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            principals: components["schemas"]["PrincipalObject"][];
+        };
+        /** @description The body of GET /principals/{id}, POST /principals, PUT /principals/{id}/role, POST /principals/{id}/enable, POST /principals/{id}/disable, and POST /principals/{id}/password. */
+        PrincipalResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            principal: components["schemas"]["PrincipalObject"];
+        };
+        /** @description The body of POST /principals. password may be absent, null, or an empty string — all three mean "no password, token-only" (a machine principal that will only ever use an issued token), matching this coordinator's own create-principal subcommand. */
+        CreatePrincipalRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: "human" | "machine";
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+            password?: string;
+        };
+        /** @description The body of PUT /principals/{id}/role. Refused with `409` when the requested role would leave no enabled principal able to reach `principal:write` (Track G seam G-5 requirement 3). */
+        SetPrincipalRoleRequest: {
+            /** @enum {string} */
+            role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
+        };
+        /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty — a reset that silently clears a password would leave a human principal with no way to sign in at all. */
+        SetPrincipalPasswordRequest: {
+            password: string;
+        };
+        /** @description One API token's non-secret metadata — never a digest or the raw token value, which is rendered exactly once, by IssueTokenResponse.value, and never again by this or any other schema (ADR-024 decision 1). */
+        TokenObject: {
+            id: string;
+            principalId: string;
+            hint: string;
+            label: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string | null;
+            /** Format: date-time */
+            lastUsedAt: string | null;
+        };
+        /** @description The body of GET /principals/{id}/tokens. */
+        TokensResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            tokens: components["schemas"]["TokenObject"][];
+        };
+        /** @description The body of POST /principals/{id}/tokens. expiresAt absent or null both mean "never expires" (ADR-024 decision 1's default) — the same meaning either way, so there is no absent-vs-null ambiguity for this field to resolve, unlike ConfigFPPEndpointsPayload.endpoints. */
+        IssueTokenRequest: {
+            label?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+        };
+        /** @description The body of POST /principals/{id}/tokens. value carries the token's plaintext exactly once (ADR-024 decision 1) — no other response in this contract ever renders it again, including a later GET /principals/{id}/tokens. */
+        IssueTokenResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            token: components["schemas"]["TokenObject"];
+            value: string;
+        };
         /** @description One FPP instance's (id, url) pair (RES-008 D1) — the same shape `SHOWMESH_FPP_ENDPOINTS` carries. */
         ConfigFPPEndpoint: {
             id: string;
@@ -1507,6 +1891,110 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
+        /** @description One Resolume Arena instance's (id, url) pair (Track G seam G-2, ADR-039) — the same shape `SHOWMESH_RESOLUME_URL`/ `SHOWMESH_RESOLUME_ID` carried. */
+        ConfigResolumeInstance: {
+            id: string;
+            url: string;
+        };
+        /**
+         * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null — an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema — see `PUT /config/resolume.instances`'s own description).
+         *     This schema is deliberately NOT closed (no `additionalProperties: false`), mirroring `ConfigFPPEndpointsPayload`'s identical reasoning: ADR-020 requires this published document stay additive-only-compatible for a client reading a RESPONSE, and the request-side strictness (rejecting an unrecognized top-level field) is enforced by the coordinator's own handler, not by this schema.
+         */
+        ConfigResolumeInstancesPayload: {
+            instances: components["schemas"]["ConfigResolumeInstance"][];
+        };
+        /** @description The body of GET and PUT /config/resolume.instances. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: this configuration is applied without a restart from the start (ADR-036). The field is retained rather than removed because this contract is additive-only within a major version. */
+        ResolumeInstancesConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "resolume.instances";
+            revision: number;
+            payload: components["schemas"]["ConfigResolumeInstancesPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
+        /** @description The "fpp.mqtt" configuration kind's payload (Track G seam G-3, ADR-039), as it appears in the "payload" member of GET and PUT /config/fpp.mqtt's response. passwordSet reports presence only — the broker password itself never appears on this or any other wire type (ADR-039 decision 7). hosts is never null. */
+        ConfigFPPMQTTPayload: {
+            brokerURL: string;
+            username: string;
+            topicPrefix: string;
+            hosts: {
+                [key: string]: string;
+            };
+            passwordSet: boolean;
+        };
+        /** @description The request body of PUT /config/fpp.mqtt (Track G seam G-3, ADR-039). Unlike every other configuration kind's PUT request in this document, EVERY field here is independently optional: a key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5), which is what makes the credential rule (decision 7) usable at all — GET never returns the password, so a PUT that required every field present would erase a credential the operator never saw. See `PUT /config/fpp.mqtt`'s own description for the per-field null/empty handling this schema alone does not express (a null brokerURL/username/topicPrefix or a null hosts is rejected by the handler; a null or empty password explicitly clears it). */
+        ConfigFPPMQTTPutRequest: {
+            brokerURL?: string;
+            username?: string;
+            topicPrefix?: string;
+            hosts?: {
+                [key: string]: string;
+            };
+            password?: string | null;
+        };
+        /** @description The body of GET and PUT /config/fpp.mqtt. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: this configuration is applied without a restart from the start (ADR-036 via ADR-039 decision 6). */
+        FPPMQTTConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "fpp.mqtt";
+            revision: number;
+            payload: components["schemas"]["ConfigFPPMQTTPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
+        /** @description The "assets.settings" configuration kind's payload (Track G seam G-4, ADR-039) as it appears in a RESPONSE: the "payload" member of GET/PUT /config/assets.settings, with all four fields always present. syncIntervalSeconds/inventoryIntervalSeconds are seconds, matching this contract's existing "...Seconds" convention — NUMBER, not integer, matching ResolumeRecoveryResponse.settleDelaySeconds' identical choice one seam over: an integer-second encoding silently truncates a legitimate sub-second interval to zero. SHOWMESH_ASSET_DIR has no field here — it stays environment-only (ADR-039 decision 2). */
+        ConfigAssetsSettingsPayload: {
+            /** @description Empty is a real, deliberate state: the asset sync service does not run, and nothing ever reaches a node over the network. */
+            contentBaseUrl: string;
+            /** @description Always positive. */
+            maxUploadBytes: number;
+            /** @description Always positive. */
+            syncIntervalSeconds: number;
+            /** @description Always positive. */
+            inventoryIntervalSeconds: number;
+        };
+        /** @description The body PUT /config/assets.settings accepts. Unlike ConfigAssetsSettingsPayload (a response, where every field is always present), every field here is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or default) value alone (ADR-039 decision 5). A field that IS present must not be JSON `null` — refused with 400 naming the field. This schema is deliberately NOT closed (no additionalProperties: false), matching every other PUT payload schema in this contract: the coordinator's own handler enforces top-level-field strictness on the request, not this published schema (see ConfigResolumeInstancesPayload's identical reasoning). */
+        ConfigAssetsSettingsPutPayload: {
+            contentBaseUrl?: string;
+            maxUploadBytes?: number;
+            syncIntervalSeconds?: number;
+            inventoryIntervalSeconds?: number;
+        };
+        /** @description The body of GET and PUT /config/assets.settings, mirroring ResolumeInstancesConfigResponse's shape exactly (env->store migration, singleton object, no-restart apply). createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: every field of this kind applies to the already-running asset sync service with no restart (ADR-039 decision 6). */
+        AssetsSettingsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "assets.settings";
+            revision: number;
+            payload: components["schemas"]["ConfigAssetsSettingsPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
         /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
         ConfigRevisionMeta: {
             revision: number;
@@ -1519,12 +2007,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, and GET /config/resolume.recovery/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more and Track D seam D-3a another). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, and GET /config/assets.settings/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, and Track G seams G-2, G-3, and G-4 one each more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances" | "fpp.mqtt" | "assets.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3163,6 +3651,392 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listPrincipals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createPrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePrincipalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly created principal. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setPrincipalRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPrincipalRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The principal with its new role. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: this would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enablePrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disablePrincipal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: disabling this principal would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resetPrincipalPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPrincipalPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPrincipalTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokensResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    issuePrincipalToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IssueTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The token's metadata, plus its plaintext value. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueTokenResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                tokenId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token was revoked. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Refused: revoking this token would leave no enabled principal able to reach `principal:write` (requirement 3 / ADR-039 decision 8). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
     getFPPEndpointsConfig: {
         parameters: {
             query?: never;
@@ -3226,6 +4100,279 @@ export interface operations {
             };
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstancesConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putResolumeInstancesConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigResolumeInstancesPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstancesConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPMQTTConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFPPMQTTConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFPPMQTTPutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPMQTTConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPMQTTConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAssetsSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsSettingsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putAssetsSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigAssetsSettingsPutPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsSettingsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAssetsSettingsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -58,6 +58,20 @@ export type SessionResponse = components['schemas']['SessionResponse']
 export type PrincipalSummary = components['schemas']['PrincipalSummary']
 export type SessionInfo = components['schemas']['SessionInfo']
 
+// Track G seam G-5: identity administration over the API. PrincipalObject
+// is the admin surface's own full object, distinct from PrincipalSummary
+// above (SessionResponse's narrower "who am I" shape).
+export type PrincipalObject = components['schemas']['PrincipalObject']
+export type PrincipalsResponse = components['schemas']['PrincipalsResponse']
+export type PrincipalResponse = components['schemas']['PrincipalResponse']
+export type CreatePrincipalRequest = components['schemas']['CreatePrincipalRequest']
+export type SetPrincipalRoleRequest = components['schemas']['SetPrincipalRoleRequest']
+export type SetPrincipalPasswordRequest = components['schemas']['SetPrincipalPasswordRequest']
+export type TokenObject = components['schemas']['TokenObject']
+export type TokensResponse = components['schemas']['TokensResponse']
+export type IssueTokenRequest = components['schemas']['IssueTokenRequest']
+export type IssueTokenResponse = components['schemas']['IssueTokenResponse']
+
 // Step 7 seam A (RES-008 D1): the configuration write surface's shapes,
 // aliased for the identical reason as every type above. Not part of
 // `Model` — see store.ts's "Step 7 seam A" section header comment for why
@@ -67,6 +81,33 @@ export type ConfigFPPEndpoint = components['schemas']['ConfigFPPEndpoint']
 export type ConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 export type ConfigRevisionMeta = components['schemas']['ConfigRevisionMeta']
 export type ConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+// Track G seam G-2 (ADR-039): the resolume.instances configuration write
+// surface, aliased for the identical reason as fpp.endpoints' own shapes
+// above — mirrors that kind exactly, including reusing ConfigRevisionMeta/
+// ConfigRevisionsResponse for its own revision history.
+export type ResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
+export type ConfigResolumeInstance = components['schemas']['ConfigResolumeInstance']
+export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-3 (ADR-039): the fpp.mqtt configuration write surface.
+// Unlike fpp.endpoints/resolume.instances, the PUT request shape
+// (ConfigFPPMQTTPutRequest) is NOT the same as the response payload shape
+// (ConfigFPPMQTTPayload, reached via FPPMQTTConfigResponse['payload']):
+// every PUT field is independently optional (ADR-039 decision 5) and the
+// response never carries the password itself (decision 7), only
+// `passwordSet`.
+export type FPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
+export type ConfigFPPMQTTPayload = components['schemas']['ConfigFPPMQTTPayload']
+export type ConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+// Track G seam G-4 (ADR-039): the assets.settings configuration write
+// surface, aliased for the identical reason as resolume.instances' own
+// shapes above. ConfigAssetsSettingsPutPayload is a SEPARATE type from
+// ConfigAssetsSettingsPayload (unlike every other config kind's PUT/GET
+// pair, which share one payload shape): every field of a PUT request is
+// independently optional, while a GET/PUT response always carries all
+// four.
+export type AssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
+export type ConfigAssetsSettingsPayload = components['schemas']['ConfigAssetsSettingsPayload']
+export type ConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
@@ -145,6 +186,35 @@ export type ResolumeCompositionLayerGroup = components['schemas']['ResolumeCompo
 export type ResolumeCompositionLayer = components['schemas']['ResolumeCompositionLayer']
 export type ResolumeCompositionColumn = components['schemas']['ResolumeCompositionColumn']
 export type ResolumeCompositionClip = components['schemas']['ResolumeCompositionClip']
+
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028). Aliased for the identical reason as every type above
+// (ADR-015). None of these is part of `Model` — this data is not a
+// resource ADR-020's change stream models, matching FPPEndpointsConfigResponse's
+// own reasoning above.
+export type ConfigShow = components['schemas']['ConfigShow']
+export type ConfigShowWrite = components['schemas']['ConfigShowWrite']
+export type ShowConfigResponse = components['schemas']['ShowConfigResponse']
+export type ConfigShowSurfaceChannelRange = components['schemas']['ConfigShowSurfaceChannelRange']
+export type ConfigShowSurfaceGeometry = components['schemas']['ConfigShowSurfaceGeometry']
+export type ConfigShowSurfaceNDIOutput = components['schemas']['ConfigShowSurfaceNDIOutput']
+export type ConfigShowSurfaceHDMI = components['schemas']['ConfigShowSurfaceHDMI']
+export type ConfigShowSurfaceOutput = components['schemas']['ConfigShowSurfaceOutput']
+export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
+export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+export type ConfigShowActive = components['schemas']['ConfigShowActive']
+export type ShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+export type Asset = components['schemas']['Asset']
+export type AssetResponse = components['schemas']['AssetResponse']
+export type AssetsListResponse = components['schemas']['AssetsListResponse']
+export type NodeAssetManifest = components['schemas']['NodeAssetManifest']
+export type MissingAsset = components['schemas']['MissingAsset']
+export type AssetGap = components['schemas']['AssetGap']
+export type ExtraAsset = components['schemas']['ExtraAsset']
+export type NodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+export type AssetManifestResponse = components['schemas']['AssetManifestResponse']
+export type AuditEntry = components['schemas']['AuditEntry']
+export type AuditResponse = components['schemas']['AuditResponse']
 
 /**
  * One recorded event, as held in the model. Identical to the wire

@@ -80,6 +80,27 @@ type mutableResolumeRecoveryProvider struct {
 	restoreRep        ResolumeRecoveryRestoreReportView
 	restoreErr        error
 	restoreConfigured bool
+	unconfigured      bool
+}
+
+// setUnconfigured makes Configured() report false — Track G seam G-2's own
+// addition, for a test that wires this fake in but wants to simulate a
+// resolumeManager currently holding zero instances (distinct from never
+// being wired at all, which every existing test already covers via
+// [noResolumeRecoveryProvider]).
+func (p *mutableResolumeRecoveryProvider) setUnconfigured() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unconfigured = true
+}
+
+// Configured defaults to true: every test predating Track G seam G-2
+// constructed this fake specifically to simulate "a real Resolume instance
+// is configured", and that meaning must not change under them.
+func (p *mutableResolumeRecoveryProvider) Configured() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.unconfigured
 }
 
 func (p *mutableResolumeRecoveryProvider) setRecord(r []ResolumeRecoveryRecordEntryView) {
@@ -235,6 +256,54 @@ func TestStreamResolumeRecoveryChangedOnToggleFlipAndRestore(t *testing.T) {
 	if restorePayload.LastRestore == nil || restorePayload.LastRestore.Outcome != "restored" {
 		t.Errorf("lastRestore = %+v, want outcome \"restored\"", restorePayload.LastRestore)
 	}
+}
+
+// TestStreamResolumeRecoveryChangedSkippedWhenUnconfigured is Track G seam
+// G-2's own regression test: replacing the `noResolumeRecoveryProvider`
+// type assertion in stream.go's resolumerecovery branch with
+// [ResolumeRecoveryProvider.Configured] must still skip the
+// "resolumerecovery:default" resource entirely when nothing is configured
+// — the exact posture the OLD type assertion gave for an unwired
+// dependency, now reachable a second way: a WIRED dependency (this fake,
+// not nil) that reports Configured()==false, matching what
+// [resolumeManager] does with zero bundles (resolumemanager.go). Before the
+// fix this branch ran unconditionally once ANY ResolumeRecoveryProvider was
+// wired, which would have published a event.resolumerecovery frame
+// claiming resolumeConfigured:true for a coordinator with nothing
+// configured — proved wrong here by asserting silence instead.
+func TestStreamResolumeRecoveryChangedSkippedWhenUnconfigured(t *testing.T) {
+	cs := &mutableResolumeRecoveryConfigStore{}
+	cs.setEnabled(true)
+	rec := &mutableResolumeRecoveryProvider{}
+	rec.setUnconfigured()
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		Config: cs, ResolumeRecovery: rec, ResolumeRecoverySettleSeconds: 8,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	api.Hub.Notify()
+	expectNoFrameWithin(t, r, 500*time.Millisecond,
+		"resolumeRecovery.changed must not fire while ResolumeRecovery.Configured() is false")
 }
 
 // TestStreamResolumeRecoveryChangedNotResentWhenNothingChanged is build

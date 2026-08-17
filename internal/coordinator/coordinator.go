@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,8 +21,6 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppmqtt"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/resolume"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -142,43 +139,73 @@ func Run() int {
 		return 1
 	}
 
+	// Track G seam G-2 (ADR-039): the SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID
+	// -> store migration and the identical disagreement rule
+	// resolveAuthoritativeFPPEndpoints already applies to its own
+	// variable(s) — see resolumeinstancessync.go. From this point on,
+	// envResolumeInstances is never read again: resolumeInstances is the
+	// AUTHORITATIVE list (0 or 1 entries) everything downstream — the
+	// boot-time collision re-check immediately below, and resolumeManager's
+	// own initial reconcile further down — must use instead.
+	var envResolumeInstances []config.ResolumeInstance
+	if cfg.ResolumeURL != "" {
+		envResolumeInstances = []config.ResolumeInstance{{ID: cfg.ResolumeID, URL: cfg.ResolumeURL}}
+	}
+	resolumeInstances, resolumeInstancesMigrationDeferred, err := resolveAuthoritativeResolumeInstances(ctx, st, identitySvc, envResolumeInstances, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative resolume.instances configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
 	// Track D seam D-1's identical re-check, for the identical reason:
 	// config.Config.Validate's own validateResolumeConfig only ever saw
-	// cfg.FPPEndpoints as parsed from the ENVIRONMENT, which may differ in
-	// existence (env unset, store populated) from the store-authoritative
-	// list resolveAuthoritativeFPPEndpoints just resolved above. A
-	// deployment that migrated SHOWMESH_FPP_ENDPOINTS into the store and
-	// removed the variable, then later set SHOWMESH_RESOLUME_URL to a
-	// value whose id now happens to match a store-only FPP endpoint id,
-	// would sail past config.Validate with nothing to compare against —
-	// this is the only place left that can still catch it before the two
-	// collectors are actually registered on one shared Runner below.
+	// cfg.FPPEndpoints and cfg.ResolumeURL/ResolumeID as parsed from the
+	// ENVIRONMENT, which may differ in existence (env unset, store
+	// populated) from what each side resolved to just above. A deployment
+	// that migrated either variable into the store and removed it, then
+	// later configured the other side to a value whose id now happens to
+	// collide, would sail past config.Validate with nothing to compare
+	// against — this is the only place left that can still catch it before
+	// either collector is registered on the shared Runner below.
 	//
-	// Gated on cfg.ResolumeURL != "", mirroring validateResolumeConfig's
-	// own gate exactly: cfg.ResolumeID defaults to "resolume" even with
-	// the collector disabled (see [config.Config.ResolumeID]'s doc
-	// comment), so an ungated check here would fatally refuse to start a
-	// coordinator that happens to have an FPP endpoint literally named
-	// "resolume" and no Resolume instance configured at all — a
-	// collision that can never actually happen, because the Resolume
-	// collector this id would apply to is never constructed.
-	// resolumeConfiguredID is threaded into apiDeps.ResolumeID below,
-	// gated on the SAME cfg.ResolumeURL != "" condition as the fatal
-	// re-check immediately above, so PUT /api/v1/config/fpp.endpoints
-	// (api/config.go's handlePutFPPEndpointsConfig, Track D seam D-1
-	// review finding 1) refuses a write under EXACTLY the condition this
-	// boot-time check would refuse to start under — never a superset
-	// (which would refuse writes this coordinator could never actually
-	// fail to boot from) and never a subset (which would accept a write
-	// this coordinator then cannot survive its own next restart).
+	// resolumeConfiguredID is threaded into apiDeps.ResolumeID below —
+	// see that field's own doc comment for why an empty string there means
+	// exactly "no Resolume instance configured", never a value nothing can
+	// actually collide with.
+	if err := config.ValidateResolumeInstances(resolumeInstances, cfg.FPPEndpoints); err != nil {
+		logger.Error("resolume.instances no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
 	var resolumeConfiguredID string
-	if cfg.ResolumeURL != "" {
-		if err := config.ValidateResolumeIDAgainstFPPEndpoints(cfg.ResolumeID, cfg.FPPEndpoints); err != nil {
-			logger.Error("SHOWMESH_RESOLUME_ID no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
-			_ = st.Close()
-			return 1
-		}
-		resolumeConfiguredID = cfg.ResolumeID
+	if len(resolumeInstances) > 0 {
+		resolumeConfiguredID = resolumeInstances[0].ID
+	}
+
+	// Track G seam G-3 (ADR-039): the SHOWMESH_FPP_MQTT_* -> store
+	// migration and disagreement rule, mirroring resolume.instances above
+	// — see fppmqttsync.go. From this point on, envFPPMQTT/envFPPMQTTPassword
+	// are never read again: fppMQTTCfg/fppMQTTPassword are AUTHORITATIVE.
+	envFPPMQTT := config.FPPMQTTConfig{
+		BrokerURL: cfg.FPPMQTTBrokerURL, Username: cfg.FPPMQTTUsername,
+		TopicPrefix: cfg.FPPMQTTTopicPrefix, Hosts: cfg.FPPMQTTHosts,
+	}
+	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, cfg.DataDir, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative fpp.mqtt configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+	// The identical re-check config.ValidateFPPMQTTHostIDs already performed
+	// against the env-parsed list at config-load time, re-run against the
+	// AUTHORITATIVE fpp.endpoints and fpp.mqtt lists — see the fpp.mqtt
+	// hosts cross-check above this block for why env-parsed alone is not
+	// enough once either side may be store-authoritative instead.
+	if err := config.ValidateFPPMQTTHostIDs(fppMQTTCfg.Hosts, cfg.FPPEndpoints); err != nil {
+		logger.Error("fpp.mqtt no longer cross-checks against the authoritative fpp.endpoints configuration", "error", err)
+		_ = st.Close()
+		return 1
 	}
 
 	// hub is assigned below, once api.New has built it, but inv (which can
@@ -208,16 +235,46 @@ func Run() int {
 		return 1
 	}
 
+	// Track G seam G-4 (ADR-039): the SHOWMESH_ASSET_CONTENT_BASE_URL/
+	// SHOWMESH_ASSET_MAX_UPLOAD_BYTES/SHOWMESH_ASSET_SYNC_INTERVAL/
+	// SHOWMESH_ASSET_INVENTORY_INTERVAL -> store migration and the identical
+	// disagreement rule resolveAuthoritativeResolumeInstances already
+	// applies to its own variable(s) — see assetsettingssync.go.
+	// SHOWMESH_ASSET_DIR is never part of this (ADR-039 decision 2) and
+	// stays read directly from cfg below.
+	var envAssetSettings config.AssetSettings
+	if cfg.AssetSettingsEnvVarsSet {
+		envAssetSettings = config.AssetSettings{
+			ContentBaseURL:    cfg.AssetContentBaseURL,
+			MaxUploadBytes:    cfg.AssetMaxUploadBytes,
+			SyncInterval:      cfg.AssetSyncInterval,
+			InventoryInterval: cfg.AssetInventoryInterval,
+		}
+	}
+	assetSettings, assetSettingsMigrationDeferred, err := resolveAuthoritativeAssetSettings(ctx, st, identitySvc, cfg.AssetSettingsEnvVarsSet, envAssetSettings, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative assets.settings configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
 	// Track E seam E5/E6: the asset manifest's sync service (ADR-028
 	// decision 7). Constructed unconditionally, over the SAME
 	// *broker.BrokerManager (bm) inventory just subscribed through, since
 	// asset.fetch commands are dispatched on the control-plane broker
-	// exactly like every other node command. assetSync.Run itself checks
-	// cfg.AssetContentBaseURL and logs+returns without starting a loop when
-	// it is empty (see assetsync.Service.Run's own doc comment) — there is
-	// no separate "if configured" gate here, matching that method's own
-	// contract rather than duplicating its condition.
-	assetSync := assetsync.NewService(st, bm, logger, cfg.AssetContentBaseURL, cfg.AssetInventoryInterval)
+	// exactly like every other node command. Seeded with the AUTHORITATIVE
+	// assets.settings resolved just above; assetSettingsSource/
+	// runAssetSettingsReconciler (assetsettingsmanager.go) keep it current
+	// without a restart from here on (ADR-039 decision 6). assetSync.Run
+	// itself checks its own live Enabled() and skips dispatch work — never
+	// returns — when it is false (see assetsync.Service.Run's own doc
+	// comment) — there is no separate "if configured" gate here, matching
+	// that method's own contract rather than duplicating its condition.
+	assetSync := assetsync.NewService(st, bm, logger, toAssetSyncSettings(assetSettings))
+	// Seeded with the boot-resolved settings so a deferred migration (or a
+	// store read failing before the source's first successful read) keeps
+	// the reconciler answering these values rather than the defaults.
+	assetSettingsSrc := newAssetSettingsSource(st, logger, assetSettings)
 
 	// The volume backend owns the asset bytes; SQLite holds only their
 	// metadata (ADR-028). A backend that cannot be opened is fatal, because
@@ -268,15 +325,13 @@ func Run() int {
 
 	// Track D seam D-2/B: the stored composition's tracked-object set
 	// (internal/coordinator/collector/resolume's CompositionStore),
-	// constructed here — regardless of cfg.ResolumeURL, and BEFORE
-	// resolumeWire just below (reordered from Track D seam D-2/A's
-	// original ordering specifically so that reordering could happen) —
-	// for the reason resolumeCompositionWiring's own doc comment gives:
-	// composition upload has no relationship to whether a live Resolume
-	// instance is configured, so this must not wait on that condition.
-	// Never fatal: see newResolumeCompositionWiring's own doc comment for
-	// why a failure to load here is logged and this coordinator still
-	// starts.
+	// constructed here — regardless of whether any Resolume instance is
+	// configured, and BEFORE resolumeMgr just below — for the reason
+	// resolumeCompositionWiring's own doc comment gives: composition
+	// upload has no relationship to whether a live Resolume instance is
+	// configured, so this must not wait on that condition. Never fatal:
+	// see newResolumeCompositionWiring's own doc comment for why a failure
+	// to load here is logged and this coordinator still starts.
 	resolumeCompositionWire := newResolumeCompositionWiring(ctx, st, logger)
 
 	// Track D seam C: the write-time reference resolver
@@ -287,59 +342,6 @@ func Run() int {
 	// (resolumereferencewiring.go's own doc comment).
 	resolumeReferences := newResolumeReferenceResolverAdapter(resolumeCompositionWire.store)
 
-	// Track D seam D-2/C: the Resolume Arena REST/WebSocket collector
-	// (internal/coordinator/collector/resolume), constructed here —
-	// BEFORE apiDeps, for the identical reason fppRunner itself just was —
-	// so apiDeps.Collectors (below) can read resolumeWire.status rather
-	// than a value that does not exist yet. It is handed
-	// resolumeCompositionWire.store directly (constructed just above) so
-	// resolume.Collector.Survey can see whatever composition is already
-	// active in the store, including one uploaded before this process
-	// ever started, with no restart required — see newResolumeWiring's own
-	// doc comment. See that same doc comment for why it joins this SAME
-	// fppRunner rather than a second collector.Runner, and for why every
-	// error path here is fatal: cfg.Validate already checked
-	// SHOWMESH_RESOLUME_URL's shape and SHOWMESH_RESOLUME_ID's syntax and
-	// uniqueness (config.validateResolumeConfig), so a construction
-	// failure here would mean that check and this package's own have
-	// drifted apart — the identical judgment the fpp.New loop further down
-	// already applies to its own endpoints, never a per-instance condition
-	// to skip past silently. resolumeWire.watcher is nil, and
-	// resolumeWire.status reports CollectorNotConfigured, when
-	// SHOWMESH_RESOLUME_URL is unset — no goroutine, no warning storm, no
-	// failed-connection signals for a feature the operator did not enable.
-	// resolumeRecoveryHolder is Track D seam D-3a's own late-binding cell:
-	// the Collector's own OnReachableTransition AND OnUnreachableTransition
-	// callbacks must both be supplied at construction time (immediately
-	// below), but the *resolume.Recovery either one calls cannot exist
-	// until AFTER the Collector and its ActionDispatcher do — see this
-	// cell's own store below, and resolumerecoverywiring.go's own top
-	// comment. Safe under the race detector: nothing can invoke either
-	// callback before fppRunner.Run(ctx) starts polling, several lines
-	// below where this cell is stored. Both halves of the pair must be
-	// wired: without the unreachable half no crash ever reaches
-	// [resolume.Recovery.CaptureCrashTarget], and every automatic restore
-	// finds an empty target.
-	var resolumeRecoveryHolder atomic.Pointer[resolume.Recovery]
-	resolumeWire, err := newResolumeWiring(ctx, cfg, fppRunner, resolumeCompositionWire.store, logger,
-		func(returnedAt time.Time) {
-			if rec := resolumeRecoveryHolder.Load(); rec != nil {
-				rec.HandleReachableTransition(ctx, returnedAt)
-			}
-		},
-		func(time.Time) {
-			if rec := resolumeRecoveryHolder.Load(); rec != nil {
-				rec.CaptureCrashTarget()
-			}
-		},
-	)
-	if err != nil {
-		logger.Error("failed to construct resolume collector/watcher", "error", err)
-		_ = bm.Disconnect(ctx)
-		_ = st.Close()
-		return 1
-	}
-
 	// fppEndpoints resolves the ACTIVE fpp.endpoints revision on demand
 	// rather than handing every consumer the list read at startup. See
 	// internal/coordinator/fppendpoints.go's own file comment for the
@@ -348,42 +350,50 @@ func Run() int {
 	// receiving commands until someone restarted this process.
 	fppEndpoints := newFPPEndpointSource(st, logger)
 
-	// resolumeActions is Track D seam D-3's own wiring gap, closed: D-3/A
-	// (internal/coordinator/collector/resolume's ActionDispatcher) and D-3/B
-	// (internal/coordinator/api's ResolumeActionDispatcher interface) were
-	// each built against a contract neither side could see the other's real
-	// types for, and nothing joined them — this line, and
-	// resolumeactionwiring.go's adapter it constructs, is that join. Left
-	// nil (api.Dependencies' own nil-safe default, noResolumeActionDispatcher)
-	// under the SAME cfg.ResolumeURL == "" gate resolumeWire.collector is
-	// nil under: a real *resolume.ActionDispatcher needs a real
-	// *resolume.Collector pointed at a real Resolume instance to ever
-	// dispatch anything against, and there is no such instance to construct
-	// one from when nothing is configured. noResolumeActionDispatcher
-	// already states that condition as a reason rather than a generic
-	// failure — GET /resolume/actions answers "(none — no
-	// ResolumeActionDispatcher is configured on this coordinator)" in its
-	// own "unsupported action" detail on any dispatch attempt, and no HTTP
-	// request ever reaches anything — so this file does not reimplement
-	// that posture, only gates on the identical condition that already
-	// decides it for resolumeWire.collector.
-	var resolumeActions api.ResolumeActionDispatcher
-	// resolumeRecovery/resolumeRecoveryAdapter are Track D seam D-3a's own
-	// wiring gap, closed the identical way: nil under the identical
-	// cfg.ResolumeURL == "" gate. The built-in recovery principal is
-	// ensured to exist regardless of whether the collector is configured
-	// — it costs one idempotent SQLite read/insert at startup and keeps
-	// "the principal exists" true even for a coordinator that enables
-	// Resolume later without a restart being required first.
+	// Track G seam G-2 (ADR-039): resolumeManager owns the live
+	// collector/watcher/action-dispatcher/recovery bundle for whichever
+	// Resolume instance resolume.instances currently names (0 or 1), and
+	// reconciles it against that configuration with no restart in either
+	// direction — see resolumemanager.go's own file comment. It replaces
+	// the old one-shot newResolumeWiring/newResolumeActionDispatcherAdapter/
+	// newResolumeRecoveryWiring call sequence this coordinator used to run
+	// exactly once, right here, for the process's whole life; every one of
+	// those three constructors is now called by resolumeMgr itself, on
+	// every reconfiguration.
+	//
+	// The built-in recovery principal is ensured to exist regardless of
+	// whether an instance is currently configured — it costs one idempotent
+	// SQLite read/insert at startup and keeps "the principal exists" true
+	// even for a coordinator that connects Resolume later with no restart.
 	ensureResolumeRecoveryPrincipal(ctx, identitySvc, logger)
-	var resolumeRecovery api.ResolumeRecoveryProvider
-	if resolumeWire.collector != nil {
-		recoveryDispatcher := resolume.NewActionDispatcher(resolumeWire.collector, resolume.ActionDispatcherOptions{})
-		recovery, recoveryAdapter := newResolumeRecoveryWiring(st, identitySvc, resolumeWire.collector, recoveryDispatcher, cfg.ResolumeRecoverySettle, logger, notifyHub)
-		resolumeRecoveryHolder.Store(recovery)
-		resolumeRecovery = recoveryAdapter
-		resolumeActions = newResolumeActionDispatcherAdapter(resolumeWire.collector)
-	}
+	resolumeMgr := newResolumeManager(cfg, fppRunner, resolumeCompositionWire.store, st, identitySvc, logger, notifyHub)
+	// The FIRST reconcile runs synchronously, here, BEFORE the HTTP server
+	// (further down) ever opens its listener — see resolumeMgr.Run's own
+	// doc comment for why: a request served the instant the listener opens
+	// must already see live state, never a manager that has not yet run
+	// its first pass.
+	resolumeMgr.reconcile(ctx, resolumeInstances)
+	// Seeded with the boot-resolved instance list so a deferred migration
+	// (or a store read failing before the source's first successful read)
+	// never manufactures an empty list and tears the bundle above down.
+	resolumeInstanceSrc := newResolumeInstanceSource(st, logger, resolumeInstances)
+
+	// Track G seam G-3 (ADR-039): fppMQTTManager owns the live
+	// *fppmqtt.Collector for whatever fpp.mqtt currently configures,
+	// mirroring resolumeMgr immediately above — see fppmqttmanager.go's own
+	// file comment. It replaces the old one-shot construction below cfg's
+	// FPPEndpoints loop used to perform exactly once, for the process's
+	// whole life.
+	// Seeded with the boot-resolved configuration for the same reason the
+	// Resolume source above is; the manager also answers CurrentHosts from
+	// this source, so the fpp.endpoints collision check sees the stored
+	// hosts even when no collector bundle is running.
+	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger, fppMQTTCfg, fppMQTTPassword)
+	fppMQTTMgr := newFPPMQTTManager(fppRunner, fppMQTTConfigSrc, logger)
+	// The FIRST reconcile runs synchronously, here, for the identical
+	// "no request may observe a partially-wired dependency" reason
+	// resolumeMgr.reconcile above does.
+	fppMQTTMgr.reconcile(ctx, fppMQTTCfg, fppMQTTPassword)
 
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
@@ -409,21 +419,21 @@ func Run() int {
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
 		// multiCollectorStatusLister (apiwiring.go) concatenates the two;
-		// the MQTT half's "configured" bit is exactly the same condition
-		// that decides whether *fppmqtt.Collector is constructed and
-		// registered below, so this line and that one can never disagree
-		// about whether FPP MQTT collection is enabled.
+		// fppMQTTMgr (Track G seam G-3) reports its own bundle live, so this
+		// line can never disagree with whether FPP MQTT collection is
+		// actually running.
 		Collectors: multiCollectorStatusLister{
 			fppCollectorStatusLister{endpoints: fppEndpoints},
-			fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""},
-			// Track D seam D-1: resolumeWire.status was already built above
-			// (newResolumeWiring), from the same cfg.ResolumeURL != ""
-			// condition that decided whether the collector itself was
-			// constructed and registered on fppRunner — this line and that
-			// one can never disagree about whether Resolume collection is
-			// enabled, the identical guarantee the FPP MQTT comment above
-			// states for its own pair.
-			resolumeWire.status,
+			// Track G seam G-3: fppMQTTMgr reports its OWN current state
+			// live, replacing the old fppMQTTCollectorStatusLister startup
+			// snapshot — mirroring resolumeMgr immediately below.
+			fppMQTTMgr,
+			// Track G seam G-2: resolumeMgr reports its OWN current state
+			// live (api.CollectorStatuses is called per request), so this
+			// entry and the manager's own actual bundle can never disagree —
+			// the identical guarantee the FPP MQTT comment above states for
+			// its own pair, now true across a no-restart reconfiguration too.
+			resolumeMgr,
 		},
 		// Identity is ADR-024's own dependency: wiring it in is what makes
 		// POST/GET/DELETE /api/v1/session, POST /api/v1/bootstrap, and
@@ -436,37 +446,41 @@ func Run() int {
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
 		// Track E: *store.Store satisfies api.AssetStore directly, the same
-		// way it satisfies Config above. AssetBackend and AssetMaxUploadBytes
-		// are the upload handler's two other halves; the byte limit lives in
-		// config rather than in the handler so the CLI can derive its own
-		// transfer budget from the same number.
-		Assets:              st,
-		AssetBackend:        assetBackend,
-		AssetMaxUploadBytes: cfg.AssetMaxUploadBytes,
+		// way it satisfies Config above.
+		Assets:       st,
+		AssetBackend: assetBackend,
 		// AssetManifests is seam E5's own dependency: *store.Store, not an
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
-		// AssetInventoryInterval is the same cfg.AssetInventoryInterval
-		// assetSync was already constructed from above, so the manifest's
-		// staleness window and the agent's own report cadence can never
-		// silently disagree about which number they mean.
-		AssetManifests:         st,
-		AssetInventoryInterval: cfg.AssetInventoryInterval,
+		AssetManifests: st,
+		// AssetSettings is Track G seam G-4's live, no-restart view of the
+		// assets.settings configuration kind (ADR-039 decision 6): the SAME
+		// *assetsync.Service constructed above straight in. It already
+		// satisfies api.AssetSettingsSource AND api.AssetSyncNudger with no
+		// adapter needed (assetmanifest.go's own compile-time assertions),
+		// so the upload byte limit, the manifest staleness window, and the
+		// sync-enabled note can never disagree with what Service.Run itself
+		// is currently using — there is exactly one live holder of this
+		// configuration kind, reached through one field. This replaces the
+		// old AssetMaxUploadBytes/AssetInventoryInterval/AssetSyncEnabled
+		// startup-snapshot fields, which could not change without a restart.
+		AssetSettings: assetSync,
 		// AssetSyncNudger wires the SAME *assetsync.Service constructed
 		// above straight in: its Nudge method already satisfies
 		// api.AssetSyncNudger with no adapter needed (the identical
 		// property fppRunnerNudger's own doc comment notes for
 		// *collector.Runner one field over). This is what makes an upload
 		// or a show activation trigger a sync pass immediately instead of
-		// waiting out cfg.AssetSyncInterval (up to 5 minutes) — the
+		// waiting out the configured sync interval (up to 5 minutes) — the
 		// capability existed and was tested but had no production caller
 		// until this line.
 		AssetSyncNudger: assetSync,
-		// AssetSyncEnabled mirrors assetSync.Enabled() (cfg.
-		// AssetContentBaseURL != ""), read from the SAME already-constructed
-		// Service rather than re-deriving the emptiness check here, so this
-		// can never disagree with what Service.Run itself decided.
-		AssetSyncEnabled: assetSync.Enabled(),
+		// AssetSettingsEnvVarsSet/AssetSettingsMigrationDeferred are Track G
+		// seam G-4's mirror of ResolumeInstancesEnvVarSet/
+		// ResolumeInstancesMigrationDeferred above — see those two fields'
+		// own doc comments, which apply unchanged here.
+		AssetSettingsEnvVarsSet:        cfg.AssetSettingsEnvVarsSet,
+		AssetSettingsMigrationDeferred: assetSettingsMigrationDeferred,
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must
@@ -497,59 +511,61 @@ func Run() int {
 		// write time rather than accepting 200 and refusing to boot on the
 		// next restart.
 		FPPMQTTHostIDs: cfg.FPPMQTTHosts,
-		// ResolumeID plumbs cfg.ResolumeID through to api.Dependencies ONLY
-		// when the Resolume collector is enabled (cfg.ResolumeURL != ""),
-		// matching the boot-time re-check just above
-		// (config.ValidateResolumeIDAgainstFPPEndpoints) by the identical
-		// gate: cfg.ResolumeID defaults to "resolume" even with the
-		// collector disabled, so passing it unconditionally here would make
-		// handlePutFPPEndpointsConfig (api/config.go) refuse an endpoint id
-		// that can never actually collide with anything, since no Resolume
-		// collector is ever constructed for it to collide with. Track D
-		// seam D-1 review finding 1.
+		// ResolumeID plumbs resolumeConfiguredID (resolved from the
+		// AUTHORITATIVE resolume.instances list, above) through to
+		// api.Dependencies — see that field's own doc comment for why an
+		// empty string means exactly "no Resolume instance configured".
+		// This is now a startup snapshot ONLY: handlePutFPPEndpointsConfig
+		// (api/config.go) additionally re-reads resolume.instances live at
+		// write time (Track G seam G-2), so a Resolume instance connected
+		// or changed after this coordinator started is still caught.
 		ResolumeID: resolumeConfiguredID,
 		// Deliberately no ResolumeCompositionID field here (Track D seam
 		// D-2a review finding F): the stored composition's config_objects
 		// id is a fixed constant inside the api package
 		// (resolumeCompositionObjectIDConst in resolumecomposition.go),
-		// not derived from cfg.ResolumeID. An earlier version of this line
-		// plumbed cfg.ResolumeID through unconditionally, which meant
-		// renaming SHOWMESH_RESOLUME_ID for a reason unrelated to the
-		// composition subsystem — e.g. disambiguating a second live
-		// Resolume instance — would silently orphan every stored
-		// composition revision. See that constant's own doc comment.
-		// ResolumeActions is Track D seam D-3's own dispatcher, wired above
-		// (resolumeActions) under the identical cfg.ResolumeURL != "" gate
-		// resolumeWire.collector is built under. Wiring it in is what makes
-		// POST /api/v1/resolume/actions do anything other than always
-		// answer "no ResolumeActionDispatcher is configured on this
-		// coordinator" against api.noResolumeActionDispatcher's no-op
-		// default — the read-only-until-now gap this task's own report
-		// names explicitly: every action compiled, passed its own tests,
-		// and reached nothing.
-		ResolumeActions: resolumeActions,
-		// ResolumeReferences is Track D seam C's own write-time reference
-		// resolver, built above unconditionally (resolumeReferences) —
-		// unlike resolumeActions, this is never gated on cfg.ResolumeURL,
-		// because show.action write validation must work whether or not a
-		// live Resolume instance is configured.
+		// not derived from any Resolume instance id. See that constant's
+		// own doc comment.
+		//
+		// ResolumeActions, Resolume, and ResolumeRecovery are all wired to
+		// the SAME resolumeMgr (Track G seam G-2, resolumemanager.go),
+		// constructed once, above, before this coordinator's HTTP server
+		// ever starts serving. Every request through any of the three sees
+		// resolumeMgr's CURRENT bundle, live — unlike every other field in
+		// this struct, these three can change what they answer while this
+		// process runs, because resolume.instances applies without a
+		// restart (ADR-036) and the old per-process nil defaults these used
+		// to hold (noResolumeActionDispatcher, noResolumeLister,
+		// noResolumeRecoveryProvider) were a startup-only snapshot of
+		// exactly one condition: cfg.ResolumeURL != "".
+		ResolumeActions:    resolumeMgr,
 		ResolumeReferences: resolumeReferences,
-		// Resolume: resolumeInstanceLister (resolumewiring.go) reads whatever
-		// the D-2/C collector has already persisted, gated on
-		// resolumeConfiguredID exactly like ResolumeID above — the same
-		// cfg.ResolumeURL != "" condition decides both, so GET
-		// /resolume/instances and Dependencies.ResolumeID can never
-		// disagree about whether a Resolume instance is configured.
-		Resolume: resolumeInstanceLister{st: st, instanceID: resolumeConfiguredID},
-		// ResolumeRecovery is Track D seam D-3a's own recovery controller,
-		// wired above under the identical cfg.ResolumeURL != "" gate
-		// resolumeActions is built under (nil otherwise, against
-		// api.noResolumeRecoveryProvider's no-op default). ResolumeRecoverySettleSeconds
-		// is threaded through unconditionally (matching FPPMQTTTopicPrefix's
-		// own "defaults regardless of whether the feature is active"
-		// posture) since it costs nothing when unused.
-		ResolumeRecovery:              resolumeRecovery,
+		Resolume:           resolumeMgr,
+		ResolumeRecovery:   resolumeMgr,
+		// ResolumeRecoverySettleSeconds is threaded through unconditionally
+		// (matching FPPMQTTTopicPrefix's own "defaults regardless of
+		// whether the feature is active" posture) since it costs nothing
+		// when unused.
 		ResolumeRecoverySettleSeconds: cfg.ResolumeRecoverySettle.Seconds(),
+		// ResolumeInstancesEnvVarSet/ResolumeInstancesMigrationDeferred are
+		// Track G seam G-2's mirror of FPPEndpointsEnvVarSet/
+		// FPPEndpointsMigrationDeferred above — see those two fields' own
+		// doc comments, which apply unchanged here.
+		ResolumeInstancesEnvVarSet:         cfg.ResolumeURL != "",
+		ResolumeInstancesMigrationDeferred: resolumeInstancesMigrationDeferred,
+		// FPPMQTT is Track G seam G-3's live host map, read from fppMQTTMgr
+		// (the SAME manager wired into Collectors above) rather than a
+		// startup snapshot — see api.FPPMQTTHostLister's own doc comment.
+		FPPMQTT: fppMQTTMgr,
+		// FPPMQTTSecret is Track G seam G-3's write-only credential surface
+		// (ADR-039 decision 7), backed by the secret file under cfg.DataDir
+		// — see fppMQTTSecretAdapter (apiwiring.go).
+		FPPMQTTSecret: fppMQTTSecretAdapter{dataDir: cfg.DataDir},
+		// FPPMQTTEnvVarSet/FPPMQTTMigrationDeferred are
+		// FPPEndpointsEnvVarSet/FPPEndpointsMigrationDeferred's mirror for
+		// Track G seam G-3 — see those two fields' own doc comments.
+		FPPMQTTEnvVarSet:         cfg.FPPMQTTBrokerURL != "",
+		FPPMQTTMigrationDeferred: fppMQTTMigrationDeferred,
 		// Commands is Step 7 seam C's own dependency: *store.Store already
 		// satisfies api.CommandStore with no adapter (api.go's own
 		// compile-time assertion) — wiring it in is what makes
@@ -626,12 +642,10 @@ func Run() int {
 		Dispatch: macroDispatcher,
 		Brokers:  integrationBrokers,
 		// ResolumeActions is the SAME value apiDeps.ResolumeActions holds
-		// (wired above, under the identical cfg.ResolumeURL != "" gate
-		// resolumeWire.collector is built under) — Track D seam C's own
-		// "one dispatch path" rule: a macro's Resolume step and the HTTP
-		// endpoint dispatch through the identical
-		// api.ResolumeActionDispatcher, never two independently-wired
-		// copies of it.
+		// (resolumeMgr, wired above) — Track D seam C's own "one dispatch
+		// path" rule: a macro's Resolume step and the HTTP endpoint dispatch
+		// through the identical api.ResolumeActionDispatcher, never two
+		// independently-wired copies of it.
 		ResolumeActions: apiDeps.ResolumeActions,
 		Notify:          notifyHub,
 		Clock:           time.Now,
@@ -730,38 +744,11 @@ func Run() int {
 	}
 	go reconcileFPPCollectors(ctx, fppRunner, fppEndpoints, newFPPCollector, fppCollectorReconcileInterval, logger)
 
-	// Seam B's FPP MQTT collector (internal/coordinator/collector/fppmqtt),
-	// contract section 5.4: constructed and registered only when its broker
-	// URL is configured — unset SHOWMESH_FPP_MQTT_BROKER_URL means this
-	// collector does not exist at all for this process, no warning storm,
-	// no failed-connection signals for a feature the operator did not
-	// enable (contract section 4.4). cfg.Validate has already checked
-	// FPPMQTTHosts' ids against cfg.FPPEndpoints and FPPMQTTBrokerURL's
-	// shape (internal/coordinator/config's validateFPPMQTTConfig); fppmqtt.New
-	// re-checks the same shape on its own for the identical "safe to
-	// construct directly, without relying on config validation having
-	// already run" reason fpp.New already documents for the REST collector
-	// above, so a failure here would mean those two checks have drifted
-	// apart — a startup-worthy inconsistency in this binary, not a
-	// condition to skip past silently.
-	var mqttFPPCollector *fppmqtt.Collector
-	if cfg.FPPMQTTBrokerURL != "" {
-		mqttFPPCollector, err = fppmqtt.New(fppmqtt.Options{
-			BrokerURL:   cfg.FPPMQTTBrokerURL,
-			Username:    cfg.FPPMQTTUsername,
-			Password:    cfg.FPPMQTTPassword,
-			TopicPrefix: cfg.FPPMQTTTopicPrefix,
-			Hosts:       cfg.FPPMQTTHosts,
-			Logger:      logger,
-		})
-		if err != nil {
-			logger.Error("failed to construct fpp mqtt collector", "error", err)
-			_ = bm.Disconnect(ctx)
-			_ = st.Close()
-			return 1
-		}
-		fppRunner.Add(mqttFPPCollector, mqttFPPCollector.PollInterval())
-	}
+	// Track G seam G-3 (ADR-039): fppMQTTMgr already constructed and
+	// registered its collector, if configured, in its first synchronous
+	// reconcile call above (mirroring resolumeMgr) — replacing the old
+	// one-shot construction this block used to perform here. See
+	// fppmqttmanager.go's own file comment.
 
 	// The store and the broker each contribute independently to /readyz;
 	// readiness.Aggregate is not-ready as soon as either is, per ADR-011 —
@@ -791,7 +778,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(5)
+	backgroundWG.Add(8)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -803,19 +790,31 @@ func Run() int {
 	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
 	// (assetsync/sync.go), joined via the identical backgroundWG so
 	// shutdown waits for it cleanly like every other background loop here.
-	// It is a no-op loop (logs once and returns) when
-	// cfg.AssetContentBaseURL is unset — see assetSync's own construction
-	// comment above.
+	// Track G seam G-4 (ADR-039 decision 6): it no longer returns early
+	// when disabled — it keeps looping and picks up a later assets.settings
+	// change (including the zero-to-one transition) with no restart.
 	go func() {
 		defer backgroundWG.Done()
-		assetSync.Run(ctx, cfg.AssetSyncInterval)
+		assetSync.Run(ctx)
+	}()
+	// runAssetSettingsReconciler is the OTHER half of that same no-restart
+	// guarantee: it re-reads the active assets.settings configuration every
+	// assetSettingsReconcileInterval and applies any change to assetSync
+	// live (assetsettingsmanager.go). The FIRST value assetSync ever holds
+	// came from assetSettings, resolved synchronously above before this
+	// goroutine — or the HTTP server — ever starts, mirroring
+	// resolumeMgr.reconcile's identical "no request observes a pre-reconcile
+	// state" property.
+	go func() {
+		defer backgroundWG.Done()
+		runAssetSettingsReconciler(ctx, assetSettingsSrc, assetSync)
 	}()
 	// resolumeCompositionWire.Run owns Track D seam D-2/B's own periodic
 	// refresh loop (resolumewiring.go), started unconditionally — see
 	// resolumeCompositionWiring's own doc comment for why this does not
-	// share resolumeWire.watcher's cfg.ResolumeURL != "" gate. Joined via
-	// the identical backgroundWG so shutdown waits for it cleanly like
-	// every other background loop here.
+	// share resolumeMgr's "an instance is currently configured" gate.
+	// Joined via the identical backgroundWG so shutdown waits for it
+	// cleanly like every other background loop here.
 	go func() {
 		defer backgroundWG.Done()
 		resolumeCompositionWire.Run(ctx)
@@ -837,59 +836,42 @@ func Run() int {
 		watchUnclaimedBootstrap(ctx, identitySvc, logger)
 	}()
 
-	// mqttFPPCollector.Run owns the FPP MQTT broker connection's own
-	// lifecycle (connect, resubscribe across reconnects, graceful
-	// disconnect on ctx cancellation — see that method's doc comment),
-	// entirely separate from fppRunner's poll-loop goroutine above: Poll
-	// only ever renders whatever mqttFPPCollector's message store already
-	// holds (contract section 4.1 — Poll never touches the network), so the
-	// connection itself needs its own goroutine the same way hub.Run and
-	// fppRunner.Run already get theirs, joined via the identical
-	// backgroundWG so shutdown still waits for every one of them cleanly.
-	// Started (and only started) exactly when mqttFPPCollector was
-	// constructed above, matching that same cfg.FPPMQTTBrokerURL != ""
-	// condition — an unconfigured FPP MQTT collector contributes no
-	// goroutine at all, per contract section 4.4.
-	if mqttFPPCollector != nil {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			if err := mqttFPPCollector.Run(ctx); err != nil {
-				logger.Error("fpp mqtt collector connection ended", "error", err)
-			}
-		}()
-	}
+	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring
+	// resolumeMgr.Run immediately below: it keeps the current
+	// *fppmqtt.Collector bundle matching the active fpp.mqtt configuration,
+	// live, with no restart in either direction, and tears it down on
+	// ctx.Done() — see fppmqttmanager.go's own doc comment. Started
+	// UNCONDITIONALLY, replacing the old cfg.FPPMQTTBrokerURL != "" gated
+	// goroutine this block used to run: this loop is what notices a FIRST
+	// broker being configured (the zero-to-one transition ADR-039 decision
+	// 6 requires work with no restart). Counted in this function's own
+	// backgroundWG.Add(8) above.
+	go func() {
+		defer backgroundWG.Done()
+		fppMQTTMgr.Run(ctx)
+	}()
 
-	// resolumeWire.RunWatcherSupervisor owns the Resolume WebSocket
-	// connection's own lifecycle (connect, reconnect with backoff on any
-	// loss, graceful shutdown on ctx cancellation — see
-	// resolume.Watcher.Run's own doc comment) PLUS, as of Track D seam
-	// D-2/C, whether that connection is held open at all right now
-	// (ADR-033/TRACK-D-D2-SPEC.md §3.3's runtime WebSocket switch — see
-	// resolumeWiring.RunWatcherSupervisor's own doc comment). Entirely
-	// separate from fppRunner's poll-loop goroutine above the same way
-	// mqttFPPCollector.Run is: joined via the identical backgroundWG so
-	// shutdown waits for it cleanly, and started (and only started)
-	// exactly when resolumeWire.watcher was constructed above — an
-	// unconfigured Resolume collector contributes no goroutine at all.
-	// Never fatal: a lost, refused, or administratively-disabled
-	// connection is never fatal here or anywhere in this seam — see
-	// newResolumeWiring's own doc comment for the fatal/non-fatal split
-	// this wiring draws.
-	//
-	// There used to be a second goroutine here, resolumeWire.adapter.Run,
-	// which owned the only `GET /composition` read this seam performed.
-	// ADR-032 decision 2 forbids that call outright — measured live, it
-	// crashes the target Arena build — so the adapter, and the goroutine
-	// that ran it, are gone; resolumeWire.RunWatcherSupervisor is the only
-	// Resolume-specific background goroutine this seam starts now.
-	if resolumeWire.watcher != nil {
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			resolumeWire.RunWatcherSupervisor(ctx)
-		}()
-	}
+	// resolumeMgr.Run owns Track G seam G-2's own reconcile loop: it keeps
+	// the current bundle (collector, watcher, action dispatcher, recovery)
+	// matching the active resolume.instances configuration, live, with no
+	// restart in either direction — see resolumemanager.go's own doc
+	// comment. Started UNCONDITIONALLY, unlike the old
+	// resolumeWire.watcher-gated goroutine this replaces: this loop is what
+	// notices a FIRST instance being configured (the zero-to-one transition
+	// ADR-039 decision 6 requires work with no restart), so it must run
+	// even when nothing is configured yet at this exact line. Joined via
+	// the identical backgroundWG so shutdown waits for it cleanly, and its
+	// own ctx.Done() branch tears down whatever bundle is still active
+	// before returning (resolumeManager.Run's own doc comment) — mirroring
+	// reconcileFPPCollectors' identical "always running, adds/removes as
+	// configuration changes" shape one field over. Counted in this
+	// function's own backgroundWG.Add(8) above, alongside hub.Run and
+	// fppRunner.Run, rather than a standalone conditional Add — it is
+	// unconditional, matching them.
+	go func() {
+		defer backgroundWG.Done()
+		resolumeMgr.Run(ctx, resolumeInstanceSrc)
+	}()
 
 	serveErrCh := make(chan error, 1)
 	go func() {

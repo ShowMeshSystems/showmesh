@@ -39,6 +39,13 @@ const tokenHintChars = 6
 // display to the caller exactly once, its SHA-256 digest for storage, and
 // its non-secret display hint.
 type Token struct {
+	// ID is the stored row's own id — empty on the value [GenerateToken]
+	// alone returns, and set by [Service.IssueToken] after it has created
+	// the row, so a caller (Track G seam G-5's API and CLI surfaces) can
+	// name this exact token for a later list or revoke without a second
+	// lookup keyed on Hint.
+	ID string
+
 	// Value is the full token string, TokenPrefix followed by the random
 	// portion — this is what a caller presents as
 	// "Authorization: Bearer <Value>" and what [Service] never returns

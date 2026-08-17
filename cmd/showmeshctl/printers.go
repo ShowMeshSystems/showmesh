@@ -376,6 +376,103 @@ func printFPPEndpointsConfig(w io.Writer, resp fppEndpointsConfigResponse) {
 	_ = tw.Flush()
 }
 
+// printResolumeInstancesConfig renders GET/PUT
+// /api/v1/config/resolume.instances (Track G seam G-2, ADR-039), mirroring
+// printFPPEndpointsConfig's identical shape.
+func printResolumeInstancesConfig(w io.Writer, resp resolumeInstancesConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	if len(resp.Payload.Instances) == 0 {
+		_, _ = fmt.Fprintln(w, "(no Resolume instance configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tURL")
+	for _, e := range resp.Payload.Instances {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", e.ID, e.URL)
+	}
+	_ = tw.Flush()
+}
+
+// printFPPMQTTConfig renders GET/PUT /api/v1/config/fpp.mqtt (Track G seam
+// G-3, ADR-039), mirroring printFPPEndpointsConfig's shape. The password
+// itself never appears on the wire (decision 7); only "set"/"not set".
+func printFPPMQTTConfig(w io.Writer, resp fppMQTTConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	if resp.Payload.BrokerURL == "" {
+		_, _ = fmt.Fprintln(w, "(no FPP MQTT broker configured)")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "brokerURL:   %s\n", resp.Payload.BrokerURL)
+	_, _ = fmt.Fprintf(w, "username:    %s\n", resp.Payload.Username)
+	_, _ = fmt.Fprintf(w, "topicPrefix: %s\n", resp.Payload.TopicPrefix)
+	_, _ = fmt.Fprintf(w, "password:    %s\n", fppMQTTPasswordLabel(resp.Payload.PasswordSet))
+
+	if len(resp.Payload.Hosts) == 0 {
+		_, _ = fmt.Fprintln(w, "(no hosts configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tHOSTNAME")
+	for id, name := range resp.Payload.Hosts {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", id, name)
+	}
+	_ = tw.Flush()
+}
+
+func fppMQTTPasswordLabel(set bool) string {
+	if set {
+		return "set"
+	}
+	return "not set"
+}
+
+// printAssetsSettingsConfig renders GET/PUT
+// /api/v1/config/assets.settings (Track G seam G-4, ADR-039), mirroring
+// printResolumeInstancesConfig's identical shape.
+func printAssetsSettingsConfig(w io.Writer, resp assetsSettingsConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	contentBaseURL := resp.Payload.ContentBaseURL
+	if contentBaseURL == "" {
+		contentBaseURL = "(none — asset sync disabled)"
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintf(tw, "contentBaseUrl:\t%s\n", contentBaseURL)
+	_, _ = fmt.Fprintf(tw, "maxUploadBytes:\t%d\n", resp.Payload.MaxUploadBytes)
+	_, _ = fmt.Fprintf(tw, "syncInterval:\t%s\n", time.Duration(resp.Payload.SyncIntervalSeconds*float64(time.Second)).String())
+	_, _ = fmt.Fprintf(tw, "inventoryInterval:\t%s\n", time.Duration(resp.Payload.InventoryIntervalSeconds*float64(time.Second)).String())
+	_ = tw.Flush()
+}
+
 // printConfigRevisionsTable renders GET
 // /api/v1/config/fpp.endpoints/revisions, newest first.
 func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {
@@ -486,4 +583,60 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 		}
 		_, _ = fmt.Fprintln(w)
 	}
+}
+
+// printPrincipalsTable renders GET /api/v1/principals (Track G seam G-5).
+func printPrincipalsTable(w io.Writer, resp principalsResponse) {
+	if len(resp.Principals) == 0 {
+		_, _ = fmt.Fprintln(w, "(no principals)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tNAME\tKIND\tROLE\tDISABLED\tHAS PASSWORD\tRESERVED\tCREATED AT")
+	for _, p := range resp.Principals {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%v\t%v\t%s\n",
+			p.ID, p.Name, p.Kind, p.Role, p.Disabled, p.HasPassword, p.Reserved, p.CreatedAt.Format(time.RFC3339))
+	}
+	_ = tw.Flush()
+}
+
+// printPrincipalDetail renders one principalObject -- POST/GET/PUT .../role,
+// POST .../enable, .../disable, and .../password all share this shape.
+func printPrincipalDetail(w io.Writer, p principalObject) {
+	_, _ = fmt.Fprintf(w, "ID:           %s\n", p.ID)
+	_, _ = fmt.Fprintf(w, "Name:         %s\n", p.Name)
+	_, _ = fmt.Fprintf(w, "Kind:         %s\n", p.Kind)
+	_, _ = fmt.Fprintf(w, "Role:         %s\n", p.Role)
+	_, _ = fmt.Fprintf(w, "Disabled:     %v\n", p.Disabled)
+	_, _ = fmt.Fprintf(w, "Has password: %v\n", p.HasPassword)
+	_, _ = fmt.Fprintf(w, "Reserved:     %v\n", p.Reserved)
+	_, _ = fmt.Fprintf(w, "Created at:   %s\n", p.CreatedAt.Format(time.RFC3339))
+}
+
+// printTokensTable renders GET /api/v1/principals/{id}/tokens (Track G
+// seam G-5). Never prints a digest or a raw value -- tokenObject carries
+// neither.
+func printTokensTable(w io.Writer, resp tokensResponse) {
+	if len(resp.Tokens) == 0 {
+		_, _ = fmt.Fprintln(w, "(no tokens)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tHINT\tLABEL\tCREATED AT\tEXPIRES\tLAST USED")
+	for _, t := range resp.Tokens {
+		label := t.Label
+		if label == "" {
+			label = "-"
+		}
+		expires := "never"
+		if t.ExpiresAt != nil {
+			expires = t.ExpiresAt.Format(time.RFC3339)
+		}
+		lastUsed := "never"
+		if t.LastUsedAt != nil {
+			lastUsed = t.LastUsedAt.Format(time.RFC3339)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Hint, label, t.CreatedAt.Format(time.RFC3339), expires, lastUsed)
+	}
+	_ = tw.Flush()
 }

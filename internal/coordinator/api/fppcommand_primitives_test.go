@@ -101,33 +101,27 @@ func TestStartPlaylistConfirmsOnStatusAndNameMatch(t *testing.T) {
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
 	// Idle at dispatch time: ifBusy=refuse must not refuse (nothing else
-	// playing). Evidence catches up to playing+matching name shortly
-	// after dispatch, on a real background goroutine — the identical
-	// pattern fppcommand_handler_test.go's own
-	// TestFPPCommandConfirmsOnceEvidenceCatchesUp uses.
+	// playing). Evidence catches up to playing+matching name only once
+	// the fake FPP has RECEIVED the dispatch — a timed flip can win a
+	// race against the pre-dispatch read under a slow scheduler (the
+	// race detector measured it) and make the handler correctly send
+	// ifNotRunning=true against this test's "idle at dispatch" premise.
 	setup.obs.setObs([]observation.Observation{
 		fppStatusObs("bench-fpp", "idle", testNow, testNow),
 	})
+	srv.onRequest = func() {
+		setup.obs.setObs([]observation.Observation{
+			fppStatusObs("bench-fpp", "playing", testNow, testNow),
+			fppPlaylistNameObs("bench-fpp", "showmesh-test", testNow, testNow),
+		})
+	}
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
 	})
 
-	// Principal/token creation goes through real bcrypt hashing, which
-	// can itself take longer than a short sleep — the delayed obs update
-	// below must be timed from just before the REQUEST fires, not from
-	// before this setup, or it can race ahead of PreDispatchCheck's own
-	// (much earlier) read.
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
-
-	go func() {
-		time.Sleep(60 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{
-			fppStatusObs("bench-fpp", "playing", testNow, testNow),
-			fppPlaylistNameObs("bench-fpp", "showmesh-test", testNow, testNow),
-		})
-	}()
 
 	body := fppCommandBody("startPlaylist", "key-1", `{"playlist":"showmesh-test"}`)
 	req := newFPPCommandRequest(t, "bench-fpp", body, token)

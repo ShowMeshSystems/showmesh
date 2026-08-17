@@ -30,7 +30,11 @@ func assetManifestTestDeps(t *testing.T, svc identity.Service, st *store.Store) 
 	t.Helper()
 	deps := assetsTestDeps(t, svc, st)
 	deps.AssetManifests = st
-	deps.AssetInventoryInterval = assetManifestInventoryInterval
+	// deps.AssetSettings is already a *fakeAssetSettingsSource, wired by
+	// assetsTestDeps — mutated in place rather than replaced, so this
+	// file's own ContentBaseURL override below (AssetSyncEnabled's
+	// replacement) does not need to re-set the upload limit too.
+	deps.AssetSettings.(*fakeAssetSettingsSource).inventoryInterval = assetManifestInventoryInterval
 	return deps
 }
 
@@ -362,7 +366,7 @@ func TestNodeAssetManifestNotReadyNamesMissingAsset(t *testing.T) {
 // assetsync/sync.go's startup log line both promise that an unset content
 // base URL is stated as the reason no node can be confirmed ready — nothing
 // plumbed that promise through until this fix. assetManifestTestDeps never
-// sets AssetSyncEnabled, so its zero value (false) applies here, and a
+// sets a ContentBaseURL, so its zero value (empty) applies here, and a
 // not_ready node's reason must name the disabled sync.
 func TestNodeAssetManifestNotReadyStatesSyncDisabled(t *testing.T) {
 	api, st, auth := assetManifestAdminAPI(t)
@@ -378,21 +382,21 @@ func TestNodeAssetManifestNotReadyStatesSyncDisabled(t *testing.T) {
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "SHOWMESH_ASSET_CONTENT_BASE_URL") {
-		t.Fatalf("reason = %v, want it to name the disabled asset sync (AssetSyncEnabled defaults to false)", decoded.Manifest.Reason)
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, "contentBaseUrl") {
+		t.Fatalf("reason = %v, want it to name the disabled asset sync (ContentBaseURL defaults to empty)", decoded.Manifest.Reason)
 	}
 }
 
 // TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled is
-// TestNodeAssetManifestNotReadyStatesSyncDisabled's counterpart: with
-// AssetSyncEnabled explicitly true, the not_ready reason must NOT claim
-// sync is disabled — this fix states a fact, not a fixed suffix.
+// TestNodeAssetManifestNotReadyStatesSyncDisabled's counterpart: with a
+// ContentBaseURL configured, the not_ready reason must NOT claim sync is
+// disabled — this fix states a fact, not a fixed suffix.
 func TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	deps := assetManifestTestDeps(t, svc, st)
-	deps.AssetSyncEnabled = true
+	deps.AssetSettings.(*fakeAssetSettingsSource).contentBaseURL = "https://coordinator.example"
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	auth := map[string]string{"Authorization": "Bearer " + token}
@@ -408,8 +412,8 @@ func TestNodeAssetManifestNotReadyOmitsSyncDisabledNoteWhenEnabled(t *testing.T)
 	if decoded.Manifest.State != "not_ready" {
 		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
 	}
-	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "SHOWMESH_ASSET_CONTENT_BASE_URL") {
-		t.Fatalf("reason = %q, want it NOT to mention the disabled-sync note when AssetSyncEnabled is true", *decoded.Manifest.Reason)
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "contentBaseUrl") {
+		t.Fatalf("reason = %q, want it NOT to mention the disabled-sync note when ContentBaseURL is set", *decoded.Manifest.Reason)
 	}
 }
 
