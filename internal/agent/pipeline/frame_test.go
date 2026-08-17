@@ -121,7 +121,7 @@ func TestFrameWriterWritesContentWhilePlaying(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StateStopped, 5000)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -205,6 +205,107 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	}
 }
 
+// TestFrameWriterHoldDrawsLastContentFrame proves IdleOutputHold: once the
+// timeline goes idle, the writer keeps drawing the LAST successfully
+// extracted content frame rather than black — and never asks the FSEQ
+// source for a new frame while idle (the same "idle never touches the
+// source" invariant TestFrameWriterDrawsIdleOutputWhenStopped proves for
+// black).
+func TestFrameWriterHoldDrawsLastContentFrame(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 5, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.set(multisync.StatePlaying, 50) // 50ms / 5ms = frame 10 -> byte value 11
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputHold, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	// Wait for at least one real content frame to land before going idle.
+	waitFor(t, func() bool {
+		written, _, _ := fw.Counts()
+		return written >= 1
+	})
+	for _, b := range fp.stdinSnapshot() {
+		if b != 11 {
+			t.Fatalf("stdin byte = %d while Playing frame 10, want 11 (frame%%250+1)", b)
+		}
+	}
+
+	// Go idle. stdinBytes only ever grows (fake_test.go's Write appends),
+	// so the "already all 11s" state from the Playing phase above would
+	// trivially satisfy an unqualified "all bytes are 11" check with no
+	// bytes from the idle phase at all — mark the length NOW and only
+	// examine bytes written from this point on, so this test can actually
+	// fail if idle drew something else.
+	requestsBeforeIdle := len(source.requests)
+	lenBeforeIdle := len(fp.stdinSnapshot())
+	tl.set(multisync.StateStopped, 999999)
+	waitFor(t, func() bool {
+		snap := fp.stdinSnapshot()
+		return len(snap) > lenBeforeIdle && allBytesEqual(snap[lenBeforeIdle:], 11)
+	})
+
+	source.mu.Lock()
+	gotRequests := len(source.requests)
+	source.mu.Unlock()
+	if gotRequests != requestsBeforeIdle {
+		t.Fatalf("ChannelRange was called %d time(s) after going idle in hold mode; hold must never touch the FSEQ source", gotRequests-requestsBeforeIdle)
+	}
+}
+
+// allBytesEqual reports whether every byte in buf equals want.
+func allBytesEqual(buf []byte, want byte) bool {
+	for _, b := range buf {
+		if b != want {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFrameWriterDiagnosticNeverBlackAndNeverFrozen proves IdleOutputDiagnostic:
+// the drawn buffer is never the all-zero black sentinel, is regenerated
+// (not the last content frame held), and changes when sampled far enough
+// apart in wall-clock time — proving it is live-generated rather than a
+// frozen snapshot, the owner's explicit ruling on this mode.
+func TestFrameWriterDiagnosticNeverBlackAndNeverFrozen(t *testing.T) {
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+
+	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, 8, IdleOutputDiagnostic, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	got1 := fw.idleOutputFor(base)
+	for _, b := range got1 {
+		if b == 0 {
+			t.Fatalf("diagnostic output byte = 0 (black) at t0, want a generated non-zero fill")
+		}
+	}
+
+	got2 := fw.idleOutputFor(base.Add(diagnosticBlinkPeriod))
+	if allBytesEqual(got2, got1[0]) {
+		t.Fatalf("diagnostic output at t0+%s = %v, want it to differ from t0's %v — a diagnostic output must be REGENERATED, never frozen", diagnosticBlinkPeriod, got2, got1)
+	}
+	for _, b := range got2 {
+		if b == 0 {
+			t.Fatalf("diagnostic output byte = 0 (black) at t0+%s, want a generated non-zero fill", diagnosticBlinkPeriod)
+		}
+	}
+}
+
 // TestFrameWriterCountsDroppedOnStdinFailure proves a broken pipe is
 // counted, not swallowed and not treated as a reason to stop the writer's
 // own loop (build contract ruling 3: the frame writer never stops the
@@ -218,7 +319,7 @@ func TestFrameWriterCountsDroppedOnStdinFailure(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -254,7 +355,7 @@ func TestNewFrameWriterRefusesUncoveredChannelRange(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: 0} // every frame uncovered
 	tl := &fakeTimelineSource{}
 
-	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, testLogger{}); err == nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{}); err == nil {
 		t.Fatalf("NewFrameWriter with an uncovered channel range: want error, got nil")
 	}
 }

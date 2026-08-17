@@ -77,6 +77,8 @@ type renderCommandResult struct {
 
 	DispatchedAt string  `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
+
+	IdleOutput string `json:"idleOutput"`
 }
 
 type renderCommandResponse struct {
@@ -151,6 +153,9 @@ func reportRenderCommandResult(stdout io.Writer, cmdLabel string, result renderC
 	case "confirmed":
 		_, _ = fmt.Fprintf(stdout, "confirmed: %s on %s/%s (command %s): %s\n",
 			result.Action, result.NodeID, result.SurfaceID, result.CommandID, result.OutcomeReason)
+		if result.IdleOutput != "" {
+			_, _ = fmt.Fprintf(stdout, "  idleOutput: %s (resolved from render.settings at dispatch time)\n", result.IdleOutput)
+		}
 		return exitOK
 	case "unconfirmed":
 		_, _ = fmt.Fprintf(stdout, "unconfirmed: %s on %s/%s: %s (command %s)\n",

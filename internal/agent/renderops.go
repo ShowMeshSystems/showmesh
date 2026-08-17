@@ -54,7 +54,43 @@ var surfaceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 var renderApplyKnownKeys = map[string]bool{
 	"surfaceId": true, "show": true, "name": true, "node": true,
 	"channelRange": true, "geometry": true, "frameRate": true, "output": true,
-	"fseqFilename": true, "fseqContentHash": true,
+	"fseqFilename": true, "fseqContentHash": true, "idleOutput": true,
+}
+
+// idleOutputKnown is this package's own copy of render.settings.idleOutput's
+// three permitted values (internal/coordinator/config's renderIdleOutputs) —
+// independently reproduced, not imported, per this codebase's standing
+// each-side-of-a-wire-boundary-decodes-independently convention
+// (surfaceIDPattern's own doc comment already applies this once).
+var idleOutputKnown = map[string]bool{
+	pipeline.IdleOutputBlack:      true,
+	pipeline.IdleOutputHold:       true,
+	pipeline.IdleOutputDiagnostic: true,
+}
+
+// parseIdleOutput extracts params.idleOutput. Absent means an assignment
+// persisted before this field existed — an older render.surface.apply body
+// resumed at boot (build contract ruling 4) — and defaults to black, the
+// same "default when nothing was ever written" posture ADR-039 gives the
+// coordinator's own render.settings store, reapplied here for a value that
+// predates the field entirely. A JSON null or any other present-but-invalid
+// value (wrong type, empty, unrecognized) is refused rather than silently
+// defaulted: the coordinator always resolves and sends a concrete value
+// going forward, so a malformed one here means something upstream is wrong,
+// not that nothing was configured.
+func parseIdleOutput(action string, params map[string]any) (string, error) {
+	raw, ok := params["idleOutput"]
+	if !ok {
+		return pipeline.IdleOutputBlack, nil
+	}
+	v, isStr := raw.(string)
+	if !isStr || v == "" {
+		return "", fmt.Errorf("%s: params.idleOutput must be a non-empty string, got %T", action, raw)
+	}
+	if !idleOutputKnown[v] {
+		return "", fmt.Errorf("%s: params.idleOutput %q must be one of black, hold, diagnostic", action, v)
+	}
+	return v, nil
 }
 
 // renderSurfaceKnownKeys is the key allowlist for render.surface.clear and
@@ -196,10 +232,11 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 
 // buildFSEQAssignment parses the FSEQ-specific fields of a render.surface.
 // apply params map (channelRange, geometry, frameRate, fseqFilename,
-// fseqContentHash). ok is false when fseqFilename is absent — this is not
-// an error: an assignment with no FSEQ information is still a valid
-// request for B2a's test-pattern pipeline, matching renderApplyKnownKeys'
-// existing "accepted and persisted, not yet all consumed" posture.
+// fseqContentHash, idleOutput). ok is false when fseqFilename is absent —
+// this is not an error: an assignment with no FSEQ information is still a
+// valid request for B2a's test-pattern pipeline, matching
+// renderApplyKnownKeys' existing "accepted and persisted, not yet all
+// consumed" posture.
 func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment, ok bool, err error) {
 	rawFilename, has := params["fseqFilename"]
 	if !has {
@@ -266,6 +303,11 @@ func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment
 		return fseqAssignment{}, false, verr
 	}
 
+	idleOutput, verr := parseIdleOutput(action, params)
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+
 	return fseqAssignment{
 		fseqFilename:    filename,
 		fseqContentHash: contentHash,
@@ -275,6 +317,7 @@ func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment
 		height:          height,
 		pixelFormat:     pixelFormat,
 		frameRate:       frameRate,
+		idleOutput:      idleOutput,
 	}, true, nil
 }
 
@@ -289,6 +332,7 @@ type fseqAssignment struct {
 	height          int
 	pixelFormat     string
 	frameRate       int
+	idleOutput      string
 }
 
 // requireObject, requireString, and requireInt look up key in params (the
@@ -508,7 +552,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 // the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
 // closing it.
 func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
-	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, o.logger)
+	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.idleOutput, o.logger)
 	if err != nil {
 		return err
 	}

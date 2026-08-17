@@ -40,6 +40,15 @@ type RenderCommandResult struct {
 
 	DispatchedAt string  `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
+
+	// IdleOutput is the render.settings.idleOutput value RESOLVED and sent
+	// to the node as part of THIS render.surface.apply assignment — empty
+	// for render.surface.clear/render.pipeline.restart/render.transport.probe,
+	// which carry no idleOutput. Surfaced so a caller can see, without a
+	// second request, exactly what this surface was told to draw while
+	// idle; it reflects the value resolved at THIS dispatch, not whatever
+	// render.settings holds now if it has since changed.
+	IdleOutput string `json:"idleOutput"`
 }
 
 // RenderCommandResponse wraps RenderCommandResult with the standard

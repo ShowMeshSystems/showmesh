@@ -303,10 +303,24 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 	}
 	asset := matches[0]
 
+	// render.settings.idleOutput is resolved to a CONCRETE value here, at
+	// dispatch time, through the same [resolveRenderSettings] every other
+	// reader uses (rendersettings.go) — the node is told a resolved value
+	// and never has to know the coordinator's own default (build contract
+	// ruling 4: the assignment is complete and self-contained). A
+	// resolution error is treated the same as this function's other
+	// internal-error paths (return nil, nil, rendered as a 500 by the
+	// caller): render.settings' own store being unavailable is not a bad
+	// request.
+	settings, _, err := resolveRenderSettings(ctx, h.deps.Config)
+	if err != nil {
+		return nil, nil
+	}
+
 	raw, err := json.Marshal(renderApplyParamsPayload{
 		SurfaceID: surfaceID, Show: payload.Show, Name: payload.Name, Node: payload.Node,
 		ChannelRange: payload.ChannelRange, Geometry: payload.Geometry, FrameRate: payload.FrameRate, Output: payload.Output,
-		FSEQFilename: asset.Filename, FSEQContentHash: asset.ContentHash,
+		FSEQFilename: asset.Filename, FSEQContentHash: asset.ContentHash, IdleOutput: settings.IdleOutput,
 	})
 	if err != nil {
 		return nil, nil
@@ -319,9 +333,9 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 }
 
 // renderApplyParamsPayload's JSON key set matches
-// internal/agent/renderops.go's renderApplyKnownKeys exactly (ten keys,
-// surfaceId plus the nine show.surface/asset fields) — the same
-// independently-reproduced-on-purpose relationship
+// internal/agent/renderops.go's renderApplyKnownKeys exactly (eleven keys,
+// surfaceId plus the ten show.surface/asset/render.settings fields) — the
+// same independently-reproduced-on-purpose relationship
 // renderSurfaceIDPattern's own doc comment describes.
 type renderApplyParamsPayload struct {
 	SurfaceID       string                         `json:"surfaceId"`
@@ -334,6 +348,11 @@ type renderApplyParamsPayload struct {
 	Output          config.ShowSurfaceOutput       `json:"output"`
 	FSEQFilename    string                         `json:"fseqFilename"`
 	FSEQContentHash string                         `json:"fseqContentHash"`
+	// IdleOutput is render.settings.idleOutput RESOLVED at dispatch time
+	// (see resolveRenderApplyParams) — always one of black/hold/diagnostic,
+	// never absent, because this function always resolves a concrete value
+	// before building this payload.
+	IdleOutput string `json:"idleOutput"`
 }
 
 // renderDispatchInput is [handlers.executeRenderDispatch]'s input, kept as
@@ -475,7 +494,16 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		NodeID: in.NodeID, SurfaceID: in.SurfaceID, Replay: false,
 		Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
 		DispatchedAt: dispatchedFmt, ResolvedAt: &resolvedFmt,
+		IdleOutput: idleOutputFromParams(in.Params),
 	}, nil, nil
+}
+
+// idleOutputFromParams reads params["idleOutput"] back out of the very map
+// resolveRenderApplyParams built — empty (never a default) for
+// clear/restart/probe, whose params never carry it.
+func idleOutputFromParams(params map[string]any) string {
+	v, _ := params["idleOutput"].(string)
+	return v
 }
 
 // writeRenderAudit is the dispatch-side (pre-outcome) best-effort audit
@@ -744,7 +772,18 @@ func renderCommandResultFromRecord(rec store.CommandRecord, replay bool) v1.Rend
 		NodeID: nodeID, SurfaceID: surfaceID, Replay: replay,
 		Outcome: res.Outcome, OutcomeState: rec.OutcomeState, OutcomeReason: rec.OutcomeReason,
 		DispatchedAt: dispatchedAt, ResolvedAt: resolvedAt,
+		IdleOutput: decodeIdleOutputFromParamsJSON(rec.ParamsJSON),
 	}
+}
+
+// decodeIdleOutputFromParamsJSON mirrors decodeSurfaceIDFromParamsJSON one
+// field over, for a replayed idempotency key's already-resolved idleOutput.
+func decodeIdleOutputFromParamsJSON(raw string) string {
+	var p struct {
+		IdleOutput string `json:"idleOutput"`
+	}
+	_ = json.Unmarshal([]byte(raw), &p)
+	return p.IdleOutput
 }
 
 func decodeSurfaceIDFromParamsJSON(raw string) string {
