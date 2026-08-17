@@ -550,3 +550,13 @@ The deeper cause is worse than an oversight. **FPP had already been rescued from
 The audit also found `principal:write` declared, bundled into the admin role since Step 6, and checked by no handler. That is the fourth capability this project has shipped that nothing can reach.
 
 **Rule:** a rule that enforces consistency between surfaces cannot detect a capability that is missing from all of them, so state separately that the capability must exist. And when a defect is fixed in one subsystem, ask whether the fix is a rule; if it is, write it as one, because a correction recorded only as work done is a correction the next subsystem does not inherit. ADR-039 is that rule, and its two enforcement tests exist because this one had been honoured by discipline alone.
+
+## A shared test host makes one suite's failures look like another's defects
+
+**Track G, 2026-08-17, found independently by two seams within hours.** Two builders in separate worktrees ran `make test-integration` at overlapping times on one laptop. The suite starts a real Mosquitto and talks to a `showmesh-bench-fpp-master` container, and neither is namespaced per worktree, so the two runs fought over one broker container name and port and one nine-hour-old bench FPP container.
+
+What made it expensive is the shape of the failures. They were **FPP timing and broker tests, unrelated to either diff, and a different set on each run.** That is indistinguishable from a real intermittent defect in code neither builder had touched, and the honest response to it is to investigate, which is what both did. One seam's first two runs failed and its third passed clean after isolating the broker name and port and pointing the bench URL somewhere unreachable so those tests skipped legitimately. The other saw a clean run, then four to five failures on an immediate rerun, then clean again after removing a leftover container.
+
+Both builders reported the failures rather than citing only their clean runs, which is what let the pattern be recognised at all. A builder that had quietly reported the passing run would have hidden a host-level constraint that will mislead every future parallel session.
+
+**Rule:** a test suite that owns named external resources is a single-instance suite, whatever the test runner's parallelism says. Before believing an integration failure in a session running alongside others, isolate the shared resources and re-run; **a failure set that changes between runs is a collision, not a defect.** And when a shared-host constraint is discovered, it belongs in the project instructions rather than in the transcript of the session that hit it, because the next session to hit it will be a different one.
