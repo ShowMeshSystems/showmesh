@@ -31,38 +31,29 @@ const (
 // race on shared globals, and a Supervisor built with defaultRestartPolicy
 // is what production code gets.
 type restartPolicy struct {
-	// fastFailureWindow is how soon after a start attempt an exit counts as
-	// a "fast failure" for the consecutive-failure lockout, rather than a
-	// normal end to a pipeline that ran for a while.
-	fastFailureWindow time.Duration
-
-	// maxConsecutiveFastFailures bounds how many fast failures in a row a
-	// runner will retry before giving up and reporting StateFailed. This is
-	// the seam's own named acceptance criterion: a silent infinite restart
-	// loop is the failure mode that looks healthy from every angle except
-	// the wall, so retrying forever is never an option.
+	// maxConsecutiveFastFailures bounds how many consecutive start attempts
+	// may fail to reach PLAYING before a runner gives up and reports
+	// StateFailed, rather than retrying forever. This is the seam's own
+	// named acceptance criterion: a silent infinite restart loop is the
+	// failure mode that looks healthy from every angle except the wall, so
+	// retrying forever is never an option. See loop()'s crash-handling
+	// branch for why this is keyed to PLAYING evidence rather than a
+	// wall-clock window (F11).
 	maxConsecutiveFastFailures int64
 
 	// initialBackoff and maxBackoff bound the exponential backoff between
-	// restart attempts that are NOT fast failures (i.e. failures that
-	// haven't yet tripped the lockout).
+	// restart attempts.
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 }
 
 // defaultRestartPolicy is what [NewSupervisor] uses.
 //
-// SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for how long a
-// genuinely broken pipeline takes to fail versus how long a healthy one
-// takes to reach PLAYING, nor for the right backoff shape. These are
-// conservative guesses — fastFailureWindow=3s comfortably longer than
-// gst-launch's own startup cost on the reference hardware class (OptiPlex
-// 7040) and comfortably shorter than "the pipeline ran the show";
-// maxConsecutiveFastFailures=5 gives a transient failure (e.g. a
-// momentarily busy device) a few chances without looping indefinitely on a
-// permanently broken one.
+// SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for the right
+// backoff shape. maxConsecutiveFastFailures=5 gives a transient failure
+// (e.g. a momentarily busy device) a few chances without looping
+// indefinitely on a permanently broken one.
 var defaultRestartPolicy = restartPolicy{
-	fastFailureWindow:          3 * time.Second,
 	maxConsecutiveFastFailures: 5,
 	initialBackoff:             500 * time.Millisecond,
 	maxBackoff:                 30 * time.Second,
@@ -237,7 +228,6 @@ func (r *runner) loop() {
 		haveSpec     bool
 		proc         ProcessHandle
 		exitCh       chan ExitResult
-		startedAt    time.Time
 		backoff      = r.policy.initialBackoff
 		consecFails  int64
 		restartCount int64
@@ -303,7 +293,6 @@ func (r *runner) loop() {
 
 		proc = p
 		exitCh = ec
-		startedAt = r.now()
 
 		r.mu.Lock()
 		r.pid = p.Pid()
@@ -359,24 +348,33 @@ func (r *runner) loop() {
 			r.pid = 0
 			r.mu.Unlock()
 
-			// A crash, whether or not the process ever reached PLAYING
-			// first (a pipeline that starts, plays for a while, and then
-			// dies is still a crash from here on).
-			fast := r.now().Sub(startedAt) < r.policy.fastFailureWindow
+			// Policy: consecFails counts consecutive attempts that never
+			// reached PLAYING. An attempt that did reach PLAYING before
+			// dying resets it, because that is real evidence the pipeline
+			// spec itself works — deliberately NOT keyed to how much
+			// wall-clock time elapsed before the crash. The prior
+			// wall-clock-window version reset on any exit past
+			// fastFailureWindow, so a pipeline crashing every ~3.1s (just
+			// outside a 3s window) reset to 0 every time and could never
+			// reach the lockout below, restarting forever at the backoff
+			// cap — the exact silent infinite-restart shape this lockout
+			// exists to prevent. A crash before PLAYING is still counted
+			// even if it took a while, and a crash after PLAYING is never
+			// counted even if it happened fast.
 			restartCount++
-			if fast {
-				consecFails++
-			} else {
+			if res.SawRunningMarker {
 				consecFails = 0
+			} else {
+				consecFails++
 			}
 
 			exitCode := res.ExitCode
 			stderrTail := truncateStderr(res.StderrTail, maxStderrTailBytes, mqttproto.RenderStderrTruncatedSuffix)
 			r.setCounters(restartCount, consecFails, exitCode, stderrTail)
 
-			if fast && consecFails >= r.policy.maxConsecutiveFastFailures {
-				reason := fmt.Sprintf("pipeline failed %d consecutive times within %s of starting; last stderr: %s",
-					consecFails, r.policy.fastFailureWindow, oneLine(stderrTail))
+			if consecFails >= r.policy.maxConsecutiveFastFailures {
+				reason := fmt.Sprintf("pipeline failed %d consecutive times without reaching PLAYING; last stderr: %s",
+					consecFails, oneLine(stderrTail))
 				r.setState(StateFailed, reason)
 				r.logger.Warn("pipeline entered failed lockout after repeated fast failures",
 					"surface_id", r.surfaceID, "consecutive_failures", consecFails)

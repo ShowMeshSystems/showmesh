@@ -121,13 +121,13 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 		t.Fatalf("never reached running")
 	}
 
-	// Advance the clock past the fast-failure window so this crash is
-	// treated as a normal restart, not a fast failure, and simulate a
-	// crash by exiting the underlying fake process directly (never
-	// through Supervisor.Clear).
-	clock.Advance(defaultRestartPolicy.fastFailureWindow * 2)
+	// Simulate a crash by exiting the underlying fake process directly
+	// (never through Supervisor.Clear). SawRunningMarker: true records
+	// that this attempt actually reached PLAYING before dying, which is
+	// what resets consecFails per loop()'s policy (F11) rather than a
+	// wall-clock window.
 	code := 1
-	procs[0].exitNow(ExitResult{ExitCode: &code, StderrTail: "boom"})
+	procs[0].exitNow(ExitResult{ExitCode: &code, StderrTail: "boom", SawRunningMarker: true})
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
@@ -142,6 +142,9 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 	if snap.LastExitCode == nil || *snap.LastExitCode != 1 {
 		t.Fatalf("LastExitCode = %v, want 1", snap.LastExitCode)
 	}
+	if snap.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0: a crash after reaching PLAYING must reset the lockout counter", snap.ConsecutiveFailures)
+	}
 }
 
 // fastTestPolicy shrinks every restartPolicy duration so backoff- and
@@ -149,7 +152,6 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 // touching any package-level state (see newSupervisorWithPolicy's doc
 // comment on why this replaced mutating shared vars).
 var fastTestPolicy = restartPolicy{
-	fastFailureWindow:          3 * time.Second, // left real-sized; tests control "fast" via the fake clock instead
 	maxConsecutiveFastFailures: 5,
 	initialBackoff:             5 * time.Millisecond,
 	maxBackoff:                 20 * time.Millisecond,
@@ -196,6 +198,46 @@ func TestSupervisorFastFailureLockout(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if fs.callCount() != callsAtFailure {
 		t.Fatalf("callCount grew from %d to %d after entering StateFailed: restart loop did not stop", callsAtFailure, fs.callCount())
+	}
+}
+
+// TestSupervisorSlowRepeatedFailureStillLocksOut is the F11 regression
+// test: a pipeline that never reaches PLAYING must eventually lock out even
+// if every individual crash takes longer than the old fixed wall-clock
+// window used to require for the lockout to engage — the fake clock here
+// advances well past that old 3s figure before each crash. Before the fix,
+// any exit at or past that window reset the consecutive-failure counter to
+// 0 unconditionally, so a pipeline crashing just outside the window
+// restarted forever and never reached StateFailed.
+func TestSupervisorSlowRepeatedFailureStillLocksOut(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	fs.onStart = func(p *fakeProcess) {
+		// Never call onRunningMarker — this attempt does not reach
+		// PLAYING — and advance the clock well past the old fixed
+		// fast-failure window before exiting, on its own goroutine so
+		// Start can return first.
+		go func() {
+			clock.Advance(10 * time.Second)
+			code := 1
+			p.exitNow(ExitResult{ExitCode: &code, StderrTail: "slow crash, never healthy"})
+		}()
+	}
+	sup := newSupervisorWithPolicy(clock.Now, fs.Start, testLogger{}, fastTestPolicy)
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snap, ok := sup.AwaitState(ctx, "s1", []State{StateFailed}, time.Time{}, 10*time.Millisecond)
+	if !ok {
+		t.Fatalf("never reached StateFailed despite repeated crashes that never saw PLAYING; last snapshot: %+v", snap)
+	}
+	if snap.ConsecutiveFailures < fastTestPolicy.maxConsecutiveFastFailures {
+		t.Fatalf("ConsecutiveFailures = %d, want >= %d", snap.ConsecutiveFailures, fastTestPolicy.maxConsecutiveFastFailures)
 	}
 
 	// An explicit restart clears the lockout and tries again.
