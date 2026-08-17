@@ -289,13 +289,71 @@ func open(f *os.File) (*File, error) {
 		cachedBlock:      -1,
 	}
 	if compression == CompressionZstd {
-		dec, err := zstd.NewReader(nil)
+		// zstd.NewReader defaults maxDecodedSize to 64 GiB, and DecodeAll
+		// PRE-ALLOCATES a frame's declared FrameContentSize before this
+		// package's own post-decode size check ever runs (klauspost/compress
+		// v1.19.2, decoder.go DecodeAll). A block's true decoded size is
+		// already known from the block table, so decodeBlock checks a
+		// frame's declared FrameContentSize against it directly before ever
+		// calling DecodeAll (see decodeBlock). This decoder-level bound is
+		// deliberately loose (generous headroom over the largest legitimate
+		// block, floored well above any real block this format produces) —
+		// klauspost/compress clamps its window-size limit to this same
+		// value (newFrameDec), and a real file's declared window is
+		// quantized to a power of two that can run well past its actual
+		// decoded size, so a tight bound here falsely rejects real files.
+		// It exists only as a second layer for the case decodeBlock's
+		// explicit check cannot cover: a frame with no declared
+		// FrameContentSize at all.
+		bound := maxBlockDecodedSize(blocks, frameCount, channelCount) * 8
+		if bound < minZstdDecoderMaxMemory {
+			bound = minZstdDecoderMaxMemory
+		}
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(bound))
 		if err != nil {
 			return nil, err
 		}
 		file.dec = dec
 	}
 	return file, nil
+}
+
+// minZstdDecoderMaxMemory floors the per-file zstd decoder bound well above
+// anything a real FSEQ block decodes to (RES-017's captured files top out
+// far below this), so it exists purely to cap the pathological case (no
+// declared FrameContentSize) rather than to constrain ordinary files.
+const minZstdDecoderMaxMemory = 64 << 20 // 64 MiB
+
+// framesInBlock is the clamped frame span of block bi: the gap to the next
+// block's firstFrame, or to the file's frame count for the last block,
+// whichever is smaller. RES-017 §5 measured this producing a last block
+// that holds one frame in a file whose other blocks hold four. A free
+// function (not a *File method) so it is usable at Open time, before a
+// *File exists — see maxBlockDecodedSize.
+func framesInBlock(blocks []block, frameCount uint32, bi int) uint32 {
+	next := frameCount
+	if bi+1 < len(blocks) && blocks[bi+1].firstFrame < next {
+		next = blocks[bi+1].firstFrame
+	}
+	return next - blocks[bi].firstFrame
+}
+
+// maxBlockDecodedSize is the largest single block's expected decoded size
+// (frames in the block * channel count) across every block in the file,
+// with a floor of 1 byte so a degenerate zero-block/zero-channel file never
+// produces an invalid (zero) zstd.WithDecoderMaxMemory argument.
+func maxBlockDecodedSize(blocks []block, frameCount uint32, channelCount uint32) uint64 {
+	var max uint64
+	for bi := range blocks {
+		size := uint64(framesInBlock(blocks, frameCount, bi)) * uint64(channelCount)
+		if size > max {
+			max = size
+		}
+	}
+	if max == 0 {
+		max = 1
+	}
+	return max
 }
 
 // read3ByteUint assembles a little-endian 24-bit unsigned integer, the
@@ -650,18 +708,10 @@ func (f *File) blockIndexForFrame(frame uint32) int {
 	return i - 1
 }
 
-// framesInBlock is the clamped frame span of block bi: the gap to the
-// next block's firstFrame, or to the file's frame count for the last
-// block, whichever is smaller. RES-017 §5 measured this producing a
-// last block that holds one frame in a file whose other blocks hold four.
+// framesInBlock is the *File-bound convenience wrapper around the
+// package-level [framesInBlock] free function.
 func (f *File) framesInBlock(bi int) uint32 {
-	next := f.frameCount
-	if bi+1 < len(f.blocks) {
-		if f.blocks[bi+1].firstFrame < next {
-			next = f.blocks[bi+1].firstFrame
-		}
-	}
-	return next - f.blocks[bi].firstFrame
+	return framesInBlock(f.blocks, f.frameCount, bi)
 }
 
 func (f *File) decodeBlock(bi int) error {
@@ -674,8 +724,21 @@ func (f *File) decodeBlock(bi int) error {
 		return err
 	}
 
+	want := uint64(f.framesInBlock(bi)) * uint64(f.channelCount)
+
 	switch f.compression {
 	case CompressionZstd:
+		// The exact decoded size is already known (want) before a single
+		// byte is decompressed. A frame that declares a different
+		// FrameContentSize is refused here, before DecodeAll can act on
+		// that declaration — see [open]'s decoder-bound comment for why
+		// this precise check, not just a decoder-wide memory ceiling, is
+		// what actually stops a crafted block from pre-allocating on its
+		// own say-so.
+		var hdr zstd.Header
+		if err := hdr.Decode(f.rawBuf); err == nil && hdr.HasFCS && hdr.FrameContentSize != want {
+			return &ErrMalformed{Reason: fmt.Sprintf("block %d declares a decompressed size of %d bytes, expected exactly %d (%d frames * %d channels)", bi, hdr.FrameContentSize, want, f.framesInBlock(bi), f.channelCount)}
+		}
 		decoded, err := f.dec.DecodeAll(f.rawBuf, f.cachedData[:0])
 		if err != nil {
 			return fmt.Errorf("fseq: block %d failed to decompress: %w", bi, err)
@@ -685,7 +748,6 @@ func (f *File) decodeBlock(bi int) error {
 		return &ErrUnsupportedCompression{Type: f.compression}
 	}
 
-	want := uint64(f.framesInBlock(bi)) * uint64(f.channelCount)
 	if uint64(len(f.cachedData)) != want {
 		return &ErrMalformed{Reason: fmt.Sprintf("block %d decompressed to %d bytes, expected %d (%d frames * %d channels)", bi, len(f.cachedData), want, f.framesInBlock(bi), f.channelCount)}
 	}
