@@ -89,7 +89,11 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	// --- apply: the coordinator resolves the surface's complete assignment
 	// (including the just-uploaded asset's own runtime filename/content
 	// hash, never by filename alone) and confirms by evidence against the
-	// real agent's real gst-launch-1.0 pipeline. ---
+	// real agent's real gst-launch-1.0 pipeline. The pipeline genuinely
+	// reaches "running" — hdmi's fakesink fallback is a runnable process —
+	// but this build has no real hdmi sink, so that must show up as a
+	// DEGRADED running, never a plain one (the defect this file's review
+	// found and internal/agent/renderspec.go's applyOutputSink now fixes).
 	applyOut := mustCtl(t, coord, token, []string{"render", "apply"}, nodeID, surfaceID, "opener")
 	if !strings.Contains(applyOut, "confirmed:") {
 		t.Fatalf("render apply stdout = %q, want a confirmed outcome", applyOut)
@@ -98,10 +102,22 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 		t.Fatalf("render apply stdout = %q, want it to name the confirmed running state", applyOut)
 	}
 
-	// --- status after apply: reports the running pipeline ---
+	// --- status after apply: reports the running pipeline, but NEVER
+	// silently — surface.pipeline.reason and surface.transport.available
+	// must both carry real, actionable evidence that hdmi's output is a
+	// diagnostic fallback, proactively (no explicit render.transport.probe
+	// was ever dispatched in this test). ---
 	statusOut := mustCtl(t, coord, token, []string{"render", "status"}, nodeID)
 	if !strings.Contains(statusOut, surfaceID) || !strings.Contains(statusOut, "running") {
 		t.Fatalf("render status (after apply) = %q, want it to report surface %q running", statusOut, surfaceID)
+	}
+	if !strings.Contains(statusOut, "surface.pipeline.reason") || !strings.Contains(statusOut, "hdmi") {
+		t.Fatalf("render status (after apply) = %q, want surface.pipeline.reason to name hdmi's diagnostic fallback — "+
+			"a pipeline whose output nobody can see must never read as a silent success (ADR-029)", statusOut)
+	}
+	if !strings.Contains(statusOut, "surface.transport.available") || !strings.Contains(statusOut, "false") {
+		t.Fatalf("render status (after apply) = %q, want surface.transport.available=false, recorded from the "+
+			"apply itself with no probe dispatched", statusOut)
 	}
 
 	// --- restart: clears any fast-failure lockout and restarts from the

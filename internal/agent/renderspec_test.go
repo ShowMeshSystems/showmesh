@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
@@ -13,9 +14,15 @@ func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
 			"ndi":       map[string]any{"sourceName": "garage-window"},
 		},
 	}
-	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
+	spec, outcome, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
 		t.Fatalf("applyOutputSink: %v", err)
+	}
+	if !outcome.Configured || !outcome.RealSink || outcome.Reason != "" {
+		t.Errorf("outcome = %+v, want Configured=true RealSink=true Reason=\"\"", outcome)
+	}
+	if spec.OutputDegradedReason != "" {
+		t.Errorf("spec.OutputDegradedReason = %q, want empty for a real ndi sink", spec.OutputDegradedReason)
 	}
 
 	sawQueue := false
@@ -48,13 +55,27 @@ func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
 }
 
 func TestBuildSurfaceSpecFallsBackToTestPatternWhenOutputAbsent(t *testing.T) {
-	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", map[string]any{})
+	spec, outcome, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", map[string]any{})
 	if err != nil {
 		t.Fatalf("applyOutputSink: %v", err)
+	}
+	// No output was ever requested — this is NOT a degradation to report
+	// (nothing was asked for), unlike the hdmi/empty-sourceName cases
+	// below, which DID ask for a transport and did not get one.
+	if outcome.Configured {
+		t.Errorf("outcome.Configured = true for a bare apply with no output block, want false")
+	}
+	if spec.OutputDegradedReason != "" {
+		t.Errorf("spec.OutputDegradedReason = %q, want empty when output was never configured", spec.OutputDegradedReason)
 	}
 	assertFakesink(t, spec)
 }
 
+// TestBuildSurfaceSpecFallsBackToTestPatternForHDMI is this seam's own
+// regression test for the defect the review found: falling back to a
+// fakesink must never look like a plain, silent "running" — the returned
+// outcome and Spec.OutputDegradedReason must both carry a real,
+// actionable reason naming hdmi specifically.
 func TestBuildSurfaceSpecFallsBackToTestPatternForHDMI(t *testing.T) {
 	params := map[string]any{
 		"output": map[string]any{
@@ -62,9 +83,21 @@ func TestBuildSurfaceSpecFallsBackToTestPatternForHDMI(t *testing.T) {
 			"hdmi":      map[string]any{"display": "HDMI-1"},
 		},
 	}
-	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
+	spec, outcome, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
 		t.Fatalf("applyOutputSink: %v", err)
+	}
+	if !outcome.Configured || outcome.RealSink {
+		t.Fatalf("outcome = %+v, want Configured=true RealSink=false", outcome)
+	}
+	if outcome.Transport != "hdmi" {
+		t.Errorf("outcome.Transport = %q, want hdmi", outcome.Transport)
+	}
+	if !strings.Contains(outcome.Reason, "hdmi") {
+		t.Errorf("outcome.Reason = %q, want it to name hdmi specifically", outcome.Reason)
+	}
+	if spec.OutputDegradedReason != outcome.Reason {
+		t.Errorf("spec.OutputDegradedReason = %q, want it to match outcome.Reason %q", spec.OutputDegradedReason, outcome.Reason)
 	}
 	assertFakesink(t, spec)
 }
@@ -76,9 +109,18 @@ func TestBuildSurfaceSpecFallsBackWhenNDISourceNameEmpty(t *testing.T) {
 			"ndi":       map[string]any{"sourceName": ""},
 		},
 	}
-	spec, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
+	spec, outcome, err := applyOutputSink(pipeline.DefaultTestPatternSpec("surface-1"), "surface-1", params)
 	if err != nil {
 		t.Fatalf("applyOutputSink: %v", err)
+	}
+	if !outcome.Configured || outcome.RealSink {
+		t.Fatalf("outcome = %+v, want Configured=true RealSink=false", outcome)
+	}
+	if !strings.Contains(outcome.Reason, "sourceName") {
+		t.Errorf("outcome.Reason = %q, want it to name the missing sourceName specifically", outcome.Reason)
+	}
+	if spec.OutputDegradedReason == "" {
+		t.Errorf("spec.OutputDegradedReason is empty, want a real reason")
 	}
 	assertFakesink(t, spec)
 }

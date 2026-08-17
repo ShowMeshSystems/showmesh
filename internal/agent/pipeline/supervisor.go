@@ -156,6 +156,14 @@ type runner struct {
 	pid         int           // 0 when no process is currently running; diagnostics only, never part of the wire report
 	currentProc ProcessHandle // nil when no process is currently running; see stdin()
 	procGen     int64         // see bumpProcGen and setRunningIfCurrent
+
+	// degradedReason mirrors the currently-applied Spec's own
+	// OutputDegradedReason, set at cmdApply and read by
+	// setRunningIfCurrent — see that field's doc comment. Kept as its own
+	// field (not read off a stored Spec) so a restart, which re-attempts
+	// the SAME already-applied spec, does not need to keep the whole Spec
+	// value around just for this one field.
+	degradedReason string
 }
 
 // bumpProcGen advances the generation identifying which process attempt is
@@ -178,15 +186,30 @@ func (r *runner) bumpProcGen() int64 {
 // setRunningIfCurrent applies StateRunning only if gen still names the
 // live process's current generation, so a marker from an already-dead or
 // already-superseded attempt can never stamp state onto whatever is
-// current now.
+// current now. Reason carries r.degradedReason rather than always "": a
+// pipeline whose sink is a diagnostic fakesink because its requested
+// output.transport has no real sink in this build (or was misconfigured)
+// genuinely reaches PLAYING, but that must never read as a plain, silent
+// "running" — see Spec.OutputDegradedReason's doc comment.
 func (r *runner) setRunningIfCurrent(gen int64) {
 	r.mu.Lock()
 	current := r.procGen
+	reason := r.degradedReason
 	r.mu.Unlock()
 	if gen != current {
 		return
 	}
-	r.setState(StateRunning, "")
+	r.setState(StateRunning, reason)
+}
+
+// setDegradedReason records why the currently-applied spec's output is not
+// a real transport-backed sink, or "" when it is. Called at cmdApply from
+// the newly-applied Spec's own OutputDegradedReason, and cleared at
+// cmdClear — see [runner.setRunningIfCurrent].
+func (r *runner) setDegradedReason(reason string) {
+	r.mu.Lock()
+	r.degradedReason = reason
+	r.mu.Unlock()
 }
 
 // Logger is the minimal logging surface this package needs, so it does not
@@ -430,11 +453,13 @@ func (r *runner) loop() {
 				// from whatever surface (or spec) was previously applied to
 				// this ID describe a session that has ended, not this one.
 				r.setFrameCounts(0, 0, 0, nil)
+				r.setDegradedReason(spec.OutputDegradedReason)
 				attemptStart()
 			case cmdClear:
 				stopCurrent()
 				haveSpec = false
 				r.setFrameCounts(0, 0, 0, nil)
+				r.setDegradedReason("")
 				r.setState(StateStopped, "cleared by operator")
 			case cmdRestart:
 				stopCurrent()

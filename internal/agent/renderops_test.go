@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,6 +317,107 @@ func TestRenderOperationsRoundTripJSONParams(t *testing.T) {
 	}
 	if reparsed["frameRate"] != float64(40) {
 		t.Fatalf("persisted frameRate = %v, want 40", reparsed["frameRate"])
+	}
+}
+
+// TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning is this
+// seam's own regression test for the defect review found: a surface
+// configured for a transport this build cannot actually attach a real sink
+// for (hdmi — B4 implements ndi only) falls back to a diagnostic fakesink,
+// which genuinely reaches PLAYING, but that must NEVER read as a plain,
+// silent success (ADR-029). Both channels the review named must carry the
+// gap: pipeline.state's own Reason (non-empty even though state is
+// "running"), and surface.transport.available (false, with a stated
+// reason) — proactively, from the apply itself, with no explicit
+// render.transport.probe required.
+func TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	params := map[string]any{
+		"surfaceId": "surface-1",
+		"output": map[string]any{
+			"transport": "hdmi",
+			"hdmi":      map[string]any{"display": "HDMI-1"},
+		},
+	}
+	result, err := renderOps.applySurface(context.Background(), params, clock.now)
+	if err != nil {
+		t.Fatalf("applySurface: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("Confirmed = false, want true (the diagnostic pipeline genuinely reaches running); result = %+v", result)
+	}
+	val, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Value = %#v, want a map", result.Value)
+	}
+	if val["state"] != "running" {
+		t.Fatalf(`Value["state"] = %v, want "running" (the process really is in PLAYING)`, val["state"])
+	}
+	reason, _ := val["reason"].(string)
+	if reason == "" {
+		t.Fatalf(`Value["reason"] is empty for a "running" state whose sink is a diagnostic fallback — a silent success is exactly what ADR-029 forbids`)
+	}
+	if !strings.Contains(reason, "hdmi") {
+		t.Errorf("Value[\"reason\"] = %q, want it to name hdmi specifically", reason)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Reason == "" {
+		t.Errorf("snap.Reason is empty for a degraded-output surface reporting running, want a real reason")
+	}
+	if snap.Transport != "hdmi" {
+		t.Errorf("snap.Transport = %q, want hdmi", snap.Transport)
+	}
+	if snap.TransportAvailable == nil || *snap.TransportAvailable {
+		t.Fatalf("snap.TransportAvailable = %v, want a non-nil false — this is known false from the pipeline's own construction, no probe needed", snap.TransportAvailable)
+	}
+	if snap.TransportReason == "" {
+		t.Errorf("snap.TransportReason is empty, want a real reason")
+	}
+}
+
+// TestApplySurfaceWithRealNDISinkNeverTouchesTransportAvailable proves the
+// OTHER half: a surface whose spec genuinely got a real ndi sink must NOT
+// have this apply-time mechanism claim transport.available is true (or
+// touch it at all) — only a real [pipeline.ProbeNDISend] result (or the
+// pipeline's own future evidence) is entitled to say NDI actually works;
+// building a real sink is necessary but not sufficient evidence (ADR-026
+// decision 6 — element/spec presence is not runtime presence).
+func TestApplySurfaceWithRealNDISinkNeverTouchesTransportAvailable(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	params := map[string]any{
+		"surfaceId": "surface-1",
+		"output": map[string]any{
+			"transport": "ndi",
+			"ndi":       map[string]any{"sourceName": "garage-window"},
+		},
+	}
+	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {
+		t.Fatalf("applySurface: %v", err)
+	}
+
+	snap, ok := sup.Snapshot("surface-1")
+	if !ok {
+		t.Fatalf("no snapshot recorded for surface-1")
+	}
+	if snap.Reason != "" {
+		t.Errorf("snap.Reason = %q for a real ndi sink, want empty", snap.Reason)
+	}
+	if snap.TransportAvailable != nil {
+		t.Errorf("snap.TransportAvailable = %v for a real ndi sink with no probe run, want nil (unprobed, never assumed true)", snap.TransportAvailable)
 	}
 }
 
