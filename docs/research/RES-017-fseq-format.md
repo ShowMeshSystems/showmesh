@@ -301,7 +301,27 @@ The local tree read in full is FPP **8.4.2**. The deployed fleet runs FPP **9.4*
 - **OI-3.** Decide whether the parser exposes "channel absent from this file" as a distinct state through to the API surface. §6 argues it must.
 - **OI-4.** RES-004 owns the decode-cost measurement. Nothing in this record licenses a frame-rate claim.
 
-## 13. Citations
+## 13. Addendum: findings from building `pkg/fseq` (Track B seam B3, 2026-08-17)
+
+Everything in this section was measured while implementing and testing the parser this record specifies. It corrects one inference in §6 and independently confirms this record's own numbers against the owner's known-good decode of a second real file. The record's own status line is left as the orchestrator's call; this section only states what was found.
+
+### 13.1 Adjacent sparse ranges can overlap by one channel in a real, deployed file — §6's "sorted and disjoint" inference does not hold
+
+Measured on two on-disk copies of `We Three Kings by Tommee Profitt & We The Kingdom [Lyric Video] [cwBBSL14UTs] v3.fseq`, pulled from two different FPP hosts' own `sequences/` directories (`.../Haloween Lighting/FPP-01/sequences/` and `.../Lightingn Base /FPP-01/sequences/`): the sparse table is `[{start:1, length:2187}, {start:2187, length:10503}]`. Range 0 covers absolute channels 1..2187 inclusive; range 1 starts at 2187. Channel 2187 is claimed by both ranges.
+
+Checked byte-for-byte across all 10,023 frames of the file: the two copies of channel 2187 (one reached via range 0's offset, one via range 1's) never disagreed — 2,400 non-zero frames, 0 mismatches. This is expected: xLights' writer copies each range from one shared source buffer (`write(&data[a.first], a.second)` per range, §9), so an overlapping channel is the same source value written twice, not conflicting data.
+
+This means §6's inference ("files from that path will be sorted and disjoint... FPP's `SetNewRanges` in xLights merges and coalesces before writing") is **not correct for this file**. Whatever xLights path wrote this particular render did not coalesce the boundary.
+
+**A correction to §6's stated resolution rule.** §6 paraphrases the read side as "the *first* range with `start <= C < start+length`" claims a channel. Re-reading the quoted `UncompressedFrameData::readFrame` loop: it is an unconditional `memcpy(&data[rng.first], ...)` per range **in table order**, so for two ranges that both claim one absolute channel, the **later** range in table order overwrites the earlier one's byte in the reassembled buffer — last-table-order-wins, not first. `pkg/fseq`'s `ChannelRange` was initially built the way §6 describes (accumulate every range's overlap, then reject if the union doesn't tile the request with no double-coverage), and this exact file caused it to wrongly refuse a request that should have succeeded — a real per-target render, the shape a render node will actually receive, being rejected by an over-strict reading of an L0 inference. It now resolves overlaps last-table-order-wins, matching the C++, and still refuses a genuine gap (a channel no range claims at all) exactly as before.
+
+### 13.2 Cross-check against a second real file, decoded independently by the owner (not with this package)
+
+The owner rendered and independently hand-decoded the header and sparse table of `~/showmesh-fseq-samples/kpop 2026 MH Test.fseq` (303 MB, a full/non-sparse render that nonetheless carries 13 sparse ranges) before `pkg/fseq` was pointed at it. Every reported value matched what `pkg/fseq.Open` computes: `channelDataOffset=27992`, `stdHeaderLen=27838` (closing exactly as `32 + 3466*8 + 13*6`, independently confirming the 8-byte block entry, 6-byte sparse entry, and 12-bit block-count split on a real file), `channelsPerFrame=698120` (matching the sum of the 13 sparse-range lengths exactly), `frames=13853`, `stepTime=25`, zstd, and all 13 `(start, length)` pairs and their derived frame-data offsets. The declared block count (3466) versus this package's used (non-zero-length) count (3464) reproduces the exact 3466/3464 pair §5 and §10.2 already cite as a measured example — on this same file.
+
+Two real xLights UI (1-based) surface start channels supplied by the owner — matrix 1 at 25410, matrix 2 at 505410 — converted to this package's 0-based space (25409, 505409) and resolved through `resolveSegments`, land at frame-data offsets 24923 and 504923 respectively, matching the owner's independently computed values exactly. This is also the file that exercises real, non-hypothetical gaps: channels 735..740, 855..866 and 891..896 are genuinely absent from this render (between its sparse ranges) and `pkg/fseq.ChannelRange` refuses each with `*ErrChannelRangeNotCovered` rather than returning zeros.
+
+## 14. Citations
 
 Every remote source accessed **2026-08-17**.
 
