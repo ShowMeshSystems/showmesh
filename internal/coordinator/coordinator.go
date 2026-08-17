@@ -235,16 +235,43 @@ func Run() int {
 		return 1
 	}
 
+	// Track G seam G-4 (ADR-039): the SHOWMESH_ASSET_CONTENT_BASE_URL/
+	// SHOWMESH_ASSET_MAX_UPLOAD_BYTES/SHOWMESH_ASSET_SYNC_INTERVAL/
+	// SHOWMESH_ASSET_INVENTORY_INTERVAL -> store migration and the identical
+	// disagreement rule resolveAuthoritativeResolumeInstances already
+	// applies to its own variable(s) — see assetsettingssync.go.
+	// SHOWMESH_ASSET_DIR is never part of this (ADR-039 decision 2) and
+	// stays read directly from cfg below.
+	var envAssetSettings config.AssetSettings
+	if cfg.AssetSettingsEnvVarsSet {
+		envAssetSettings = config.AssetSettings{
+			ContentBaseURL:    cfg.AssetContentBaseURL,
+			MaxUploadBytes:    cfg.AssetMaxUploadBytes,
+			SyncInterval:      cfg.AssetSyncInterval,
+			InventoryInterval: cfg.AssetInventoryInterval,
+		}
+	}
+	assetSettings, assetSettingsMigrationDeferred, err := resolveAuthoritativeAssetSettings(ctx, st, identitySvc, cfg.AssetSettingsEnvVarsSet, envAssetSettings, time.Now, logger)
+	if err != nil {
+		logger.Error("failed to resolve the authoritative assets.settings configuration", "error", err)
+		_ = st.Close()
+		return 1
+	}
+
 	// Track E seam E5/E6: the asset manifest's sync service (ADR-028
 	// decision 7). Constructed unconditionally, over the SAME
 	// *broker.BrokerManager (bm) inventory just subscribed through, since
 	// asset.fetch commands are dispatched on the control-plane broker
-	// exactly like every other node command. assetSync.Run itself checks
-	// cfg.AssetContentBaseURL and logs+returns without starting a loop when
-	// it is empty (see assetsync.Service.Run's own doc comment) — there is
-	// no separate "if configured" gate here, matching that method's own
-	// contract rather than duplicating its condition.
-	assetSync := assetsync.NewService(st, bm, logger, cfg.AssetContentBaseURL, cfg.AssetInventoryInterval)
+	// exactly like every other node command. Seeded with the AUTHORITATIVE
+	// assets.settings resolved just above; assetSettingsSource/
+	// runAssetSettingsReconciler (assetsettingsmanager.go) keep it current
+	// without a restart from here on (ADR-039 decision 6). assetSync.Run
+	// itself checks its own live Enabled() and skips dispatch work — never
+	// returns — when it is false (see assetsync.Service.Run's own doc
+	// comment) — there is no separate "if configured" gate here, matching
+	// that method's own contract rather than duplicating its condition.
+	assetSync := assetsync.NewService(st, bm, logger, toAssetSyncSettings(assetSettings))
+	assetSettingsSrc := newAssetSettingsSource(st, logger)
 
 	// The volume backend owns the asset bytes; SQLite holds only their
 	// metadata (ADR-028). A backend that cannot be opened is fatal, because
@@ -409,37 +436,41 @@ func Run() int {
 		// adapter needed, the same way Identity is wired directly above.
 		Config: st,
 		// Track E: *store.Store satisfies api.AssetStore directly, the same
-		// way it satisfies Config above. AssetBackend and AssetMaxUploadBytes
-		// are the upload handler's two other halves; the byte limit lives in
-		// config rather than in the handler so the CLI can derive its own
-		// transfer budget from the same number.
-		Assets:              st,
-		AssetBackend:        assetBackend,
-		AssetMaxUploadBytes: cfg.AssetMaxUploadBytes,
+		// way it satisfies Config above.
+		Assets:       st,
+		AssetBackend: assetBackend,
 		// AssetManifests is seam E5's own dependency: *store.Store, not an
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
-		// AssetInventoryInterval is the same cfg.AssetInventoryInterval
-		// assetSync was already constructed from above, so the manifest's
-		// staleness window and the agent's own report cadence can never
-		// silently disagree about which number they mean.
-		AssetManifests:         st,
-		AssetInventoryInterval: cfg.AssetInventoryInterval,
+		AssetManifests: st,
+		// AssetSettings is Track G seam G-4's live, no-restart view of the
+		// assets.settings configuration kind (ADR-039 decision 6): the SAME
+		// *assetsync.Service constructed above straight in. It already
+		// satisfies api.AssetSettingsSource AND api.AssetSyncNudger with no
+		// adapter needed (assetmanifest.go's own compile-time assertions),
+		// so the upload byte limit, the manifest staleness window, and the
+		// sync-enabled note can never disagree with what Service.Run itself
+		// is currently using — there is exactly one live holder of this
+		// configuration kind, reached through one field. This replaces the
+		// old AssetMaxUploadBytes/AssetInventoryInterval/AssetSyncEnabled
+		// startup-snapshot fields, which could not change without a restart.
+		AssetSettings: assetSync,
 		// AssetSyncNudger wires the SAME *assetsync.Service constructed
 		// above straight in: its Nudge method already satisfies
 		// api.AssetSyncNudger with no adapter needed (the identical
 		// property fppRunnerNudger's own doc comment notes for
 		// *collector.Runner one field over). This is what makes an upload
 		// or a show activation trigger a sync pass immediately instead of
-		// waiting out cfg.AssetSyncInterval (up to 5 minutes) — the
+		// waiting out the configured sync interval (up to 5 minutes) — the
 		// capability existed and was tested but had no production caller
 		// until this line.
 		AssetSyncNudger: assetSync,
-		// AssetSyncEnabled mirrors assetSync.Enabled() (cfg.
-		// AssetContentBaseURL != ""), read from the SAME already-constructed
-		// Service rather than re-deriving the emptiness check here, so this
-		// can never disagree with what Service.Run itself decided.
-		AssetSyncEnabled: assetSync.Enabled(),
+		// AssetSettingsEnvVarsSet/AssetSettingsMigrationDeferred are Track G
+		// seam G-4's mirror of ResolumeInstancesEnvVarSet/
+		// ResolumeInstancesMigrationDeferred above — see those two fields'
+		// own doc comments, which apply unchanged here.
+		AssetSettingsEnvVarsSet:        cfg.AssetSettingsEnvVarsSet,
+		AssetSettingsMigrationDeferred: assetSettingsMigrationDeferred,
 		// FPPEndpointsEnvVarSet plumbs cfg.FPPEndpointsEnvSet — the RAW,
 		// pre-migration fact of whether SHOWMESH_FPP_ENDPOINTS is set in
 		// THIS PROCESS's environment — into the API package, which must
@@ -749,12 +780,24 @@ func Run() int {
 	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
 	// (assetsync/sync.go), joined via the identical backgroundWG so
 	// shutdown waits for it cleanly like every other background loop here.
-	// It is a no-op loop (logs once and returns) when
-	// cfg.AssetContentBaseURL is unset — see assetSync's own construction
-	// comment above.
+	// Track G seam G-4 (ADR-039 decision 6): it no longer returns early
+	// when disabled — it keeps looping and picks up a later assets.settings
+	// change (including the zero-to-one transition) with no restart.
 	go func() {
 		defer backgroundWG.Done()
-		assetSync.Run(ctx, cfg.AssetSyncInterval)
+		assetSync.Run(ctx)
+	}()
+	// runAssetSettingsReconciler is the OTHER half of that same no-restart
+	// guarantee: it re-reads the active assets.settings configuration every
+	// assetSettingsReconcileInterval and applies any change to assetSync
+	// live (assetsettingsmanager.go). The FIRST value assetSync ever holds
+	// came from assetSettings, resolved synchronously above before this
+	// goroutine — or the HTTP server — ever starts, mirroring
+	// resolumeMgr.reconcile's identical "no request observes a pre-reconcile
+	// state" property.
+	go func() {
+		defer backgroundWG.Done()
+		runAssetSettingsReconciler(ctx, assetSettingsSrc, assetSync)
 	}()
 	// resolumeCompositionWire.Run owns Track D seam D-2/B's own periodic
 	// refresh loop (resolumewiring.go), started unconditionally — see

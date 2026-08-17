@@ -463,6 +463,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/assets.settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active assets.settings configuration (Track G seam G-4, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/resolume.instances`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of one or more of `SHOWMESH_ASSET_CONTENT_BASE_URL`/`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`/ `SHOWMESH_ASSET_SYNC_INTERVAL`/`SHOWMESH_ASSET_INVENTORY_INTERVAL` into its store could not be persisted, in which case a configuration IS in effect. `SHOWMESH_ASSET_DIR` is never part of this kind (ADR-039 decision 2) and stays environment-only. `restartRequired` is always `false`: the live asset sync service follows this configuration promptly with no restart (ADR-036 applied to this kind from the start).
+         */
+        get: operations["getAssetsSettingsConfig"];
+        /**
+         * Write a new assets.settings configuration revision (Track G seam G-4, ADR-039)
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/resolume.instances`'s whole-array replace, every one of the four fields (`contentBaseUrl`, `maxUploadBytes`, `syncIntervalSeconds`, `inventoryIntervalSeconds`) is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or, on the very first write, default) value alone. A field that IS present must not be JSON `null` — `null` is refused with `400` naming the field; pass `""` for `contentBaseUrl` to deliberately disable asset sync. Any other top-level field is refused. The merged result is validated as a whole before activation (ADR-009): `maxUploadBytes`, `syncIntervalSeconds`, and `inventoryIntervalSeconds` must all be positive, and a non-empty `contentBaseUrl` must be an http/https URL with a host and no userinfo.
+         *     Refused with `409` outright, before the body is even read, while any of the four `SHOWMESH_ASSET_*` settings variables is still set in this coordinator's own process environment — mirroring `PUT /config/resolume.instances`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putAssetsSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/assets.settings/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * assets.settings revision history, newest first (Track G seam G-4, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/resolume.instances/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/assets.settings`'s `404` for the same state.
+         */
+        get: operations["getAssetsSettingsConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/resolume/composition": {
         parameters: {
             query?: never;
@@ -1669,6 +1715,42 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
+        /** @description The "assets.settings" configuration kind's payload (Track G seam G-4, ADR-039) as it appears in a RESPONSE: the "payload" member of GET/PUT /config/assets.settings, with all four fields always present. syncIntervalSeconds/inventoryIntervalSeconds are seconds, matching this contract's existing "...Seconds" convention — NUMBER, not integer, matching ResolumeRecoveryResponse.settleDelaySeconds' identical choice one seam over: an integer-second encoding silently truncates a legitimate sub-second interval to zero. SHOWMESH_ASSET_DIR has no field here — it stays environment-only (ADR-039 decision 2). */
+        ConfigAssetsSettingsPayload: {
+            /** @description Empty is a real, deliberate state: the asset sync service does not run, and nothing ever reaches a node over the network. */
+            contentBaseUrl: string;
+            /** @description Always positive. */
+            maxUploadBytes: number;
+            /** @description Always positive. */
+            syncIntervalSeconds: number;
+            /** @description Always positive. */
+            inventoryIntervalSeconds: number;
+        };
+        /** @description The body PUT /config/assets.settings accepts. Unlike ConfigAssetsSettingsPayload (a response, where every field is always present), every field here is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or default) value alone (ADR-039 decision 5). A field that IS present must not be JSON `null` — refused with 400 naming the field. This schema is deliberately NOT closed (no additionalProperties: false), matching every other PUT payload schema in this contract: the coordinator's own handler enforces top-level-field strictness on the request, not this published schema (see ConfigResolumeInstancesPayload's identical reasoning). */
+        ConfigAssetsSettingsPutPayload: {
+            contentBaseUrl?: string;
+            maxUploadBytes?: number;
+            syncIntervalSeconds?: number;
+            inventoryIntervalSeconds?: number;
+        };
+        /** @description The body of GET and PUT /config/assets.settings, mirroring ResolumeInstancesConfigResponse's shape exactly (env->store migration, singleton object, no-restart apply). createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: every field of this kind applies to the already-running asset sync service with no restart (ADR-039 decision 6). */
+        AssetsSettingsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "assets.settings";
+            revision: number;
+            payload: components["schemas"]["ConfigAssetsSettingsPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
         /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
         ConfigRevisionMeta: {
             revision: number;
@@ -1681,12 +1763,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, and GET /config/resolume.instances/revisions, and GET /config/fpp.mqtt/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track G seam G-2 another, and Track G seam G-3 another). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, and GET /config/assets.settings/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, and Track G seams G-2, G-3, and G-4 one each more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances" | "fpp.mqtt";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances" | "fpp.mqtt" | "assets.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3549,6 +3631,97 @@ export interface operations {
         };
     };
     getFPPMQTTConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAssetsSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsSettingsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putAssetsSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigAssetsSettingsPutPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsSettingsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAssetsSettingsConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

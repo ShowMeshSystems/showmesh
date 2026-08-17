@@ -183,6 +183,8 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdAssetsFetch(rest, stdout, stderr, clock)
 	case "manifest":
 		return cmdAssetsManifest(rest, stdout, stderr, clock)
+	case "settings":
+		return cmdAssetsSettings(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl assets: unknown subcommand %q\n\n", sub)
 		printAssetsUsage(stderr)
@@ -209,6 +211,9 @@ Subcommands:
                    before the file lands at --out
   manifest         show what each node should hold for the active show
                    versus what it actually holds (Track E seam E5)
+  settings         read or write the asset store's own configuration
+                   (content base URL, upload limit, sync/inventory
+                   intervals — Track G seam G-4, ADR-039)
 
 Run "showmeshctl assets <subcommand> --help" for flags specific to one
 subcommand.

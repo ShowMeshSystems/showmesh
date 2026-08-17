@@ -446,6 +446,33 @@ func fppMQTTPasswordLabel(set bool) string {
 	return "not set"
 }
 
+// printAssetsSettingsConfig renders GET/PUT
+// /api/v1/config/assets.settings (Track G seam G-4, ADR-039), mirroring
+// printResolumeInstancesConfig's identical shape.
+func printAssetsSettingsConfig(w io.Writer, resp assetsSettingsConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	contentBaseURL := resp.Payload.ContentBaseURL
+	if contentBaseURL == "" {
+		contentBaseURL = "(none — asset sync disabled)"
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintf(tw, "contentBaseUrl:\t%s\n", contentBaseURL)
+	_, _ = fmt.Fprintf(tw, "maxUploadBytes:\t%d\n", resp.Payload.MaxUploadBytes)
+	_, _ = fmt.Fprintf(tw, "syncInterval:\t%s\n", time.Duration(resp.Payload.SyncIntervalSeconds*float64(time.Second)).String())
+	_, _ = fmt.Fprintf(tw, "inventoryInterval:\t%s\n", time.Duration(resp.Payload.InventoryIntervalSeconds*float64(time.Second)).String())
+	_ = tw.Flush()
+}
+
 // printConfigRevisionsTable renders GET
 // /api/v1/config/fpp.endpoints/revisions, newest first.
 func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {

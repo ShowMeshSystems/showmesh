@@ -21,8 +21,6 @@ import { ApiError } from '../api/errors'
 // Configuration.tsx ... not new work"), so this file no longer needs to
 // mock the composition endpoints at all — its own tests live in
 // ResolumeCompositionUpload.test.tsx and ResolumeView.test.tsx.
-// Track G seam G-2 (ADR-039) added a second, independent section to this
-// page (ResolumeInstancesSection) alongside the FPP one this file already
 // tested. Its own three API functions are mocked here too, purely so every
 // EXISTING test below — none of which is about Resolume — is not derailed
 // by that section making a real, unmocked network call: default to the
@@ -32,7 +30,8 @@ import { ApiError } from '../api/errors'
 // below still see only the FPP section's own alert. Resolume-specific
 // behavior has its own coverage in Configuration.resolume.test.tsx.
 // Track G seam G-3 (ADR-039) added a third section (FPPMQTTSection) the
-// identical way, with the identical default-404 treatment.
+// identical way, and Track G seam G-4 added a fourth
+// (AssetsSettingsSection), both with the identical default-404 treatment.
 const {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
@@ -43,6 +42,9 @@ const {
   getFPPMQTTConfig,
   putFPPMQTTConfig,
   getFPPMQTTConfigRevisions,
+  getAssetsSettingsConfig,
+  putAssetsSettingsConfig,
+  getAssetsSettingsConfigRevisions,
 } = vi.hoisted(() => ({
   getFPPEndpointsConfig: vi.fn(),
   putFPPEndpointsConfig: vi.fn(),
@@ -53,6 +55,9 @@ const {
   getFPPMQTTConfig: vi.fn(),
   putFPPMQTTConfig: vi.fn(),
   getFPPMQTTConfigRevisions: vi.fn(),
+  getAssetsSettingsConfig: vi.fn(),
+  putAssetsSettingsConfig: vi.fn(),
+  getAssetsSettingsConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -67,6 +72,9 @@ vi.mock('../api', async (importOriginal) => {
     getFPPMQTTConfig,
     putFPPMQTTConfig,
     getFPPMQTTConfigRevisions,
+    getAssetsSettingsConfig,
+    putAssetsSettingsConfig,
+    getAssetsSettingsConfigRevisions,
   }
 })
 
@@ -95,6 +103,18 @@ beforeEach(() => {
     kind: 'fpp.mqtt',
     revisions: [],
   })
+  getAssetsSettingsConfig.mockRejectedValue(
+    new ApiError(
+      'no assets.settings configuration has been created yet; PUT one to create it',
+      404,
+      'https://showmesh.dev/problems/resource-not-found',
+    ),
+  )
+  getAssetsSettingsConfigRevisions.mockResolvedValue({
+    serverTime: '2026-08-12T00:00:00Z',
+    kind: 'assets.settings',
+    revisions: [],
+  })
 })
 
 afterEach(() => {
@@ -108,6 +128,9 @@ afterEach(() => {
   getFPPMQTTConfig.mockReset()
   putFPPMQTTConfig.mockReset()
   getFPPMQTTConfigRevisions.mockReset()
+  getAssetsSettingsConfig.mockReset()
+  putAssetsSettingsConfig.mockReset()
+  getAssetsSettingsConfigRevisions.mockReset()
 })
 
 function renderConfiguration(model: Model) {
