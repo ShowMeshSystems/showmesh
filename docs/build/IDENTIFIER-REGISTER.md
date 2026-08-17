@@ -186,14 +186,40 @@ listed because the last row was minted after the others had shipped:
 | Signal | Status | Owner |
 |---|---|---|
 | `surface.pipeline.state` | shipped | Track B seam B2 |
-| `surface.reason` | shipped | Track B seam B2 |
-| `surface.restart.count` | shipped | Track B seam B2 |
-| `surface.consecutive.failures` | shipped | Track B seam B2 |
+| `surface.pipeline.reason` | shipped | Track B seam B2 |
+| `surface.pipeline.restart_count` | shipped | Track B seam B2 |
+| `surface.pipeline.consecutive_failures` | shipped | Track B seam B2 |
 | `surface.frames.written` | shipped | Track B seam B2 |
 | `surface.frames.late` | shipped | Track B seam B2 |
 | `surface.frames.dropped` | shipped | Track B seam B2 |
-| `surface.transport.available` | **reserved** | Track B seam B4 |
-| `surface.frames.rate` | **reserved** | Track B seam B5 (ADR-040's measurement obligation) |
+| `surface.frames.rate` | shipped | Track B seam B5 (ADR-040's measurement obligation) |
+| `surface.transport.available` | shipped | Track B seam B4 |
+| `surface.transport.reason` | shipped | Track B seam B4 |
+| `surface.timeline.state` | **reserved** | Track B review fix, finding 7 |
+| `surface.timeline.position_ms` | **reserved** | Track B review fix, finding 7 |
+| `surface.output.mode` | **reserved** | Track B review fix, finding 7 |
+| `surface.output.idle_mode` | **reserved** | Track B review fix, finding 7 |
+| `node.multisync.listening` | **reserved** | Track B review fix, finding 7 (node-level, not surface) |
+| `node.multisync.reason` | **reserved** | Track B review fix, finding 7 (node-level, not surface) |
+
+**Four rows above were wrong until 2026-08-17 and the review caught it.** The
+register recorded `surface.reason`, `surface.restart.count` and
+`surface.consecutive.failures` while the code shipped
+`surface.pipeline.reason`, `surface.pipeline.restart_count` and
+`surface.pipeline.consecutive_failures`, and `surface.transport.reason` was
+absent from the register entirely. Four of ten wrong, in the register that
+exists for exactly this. Reserving is only worth anything if the reservation
+matches what ships, so a register entry is now written from the code rather
+than from the plan.
+
+**The six new rows are what finding 7 costs.** Nothing in this system reported
+whether a surface was drawing content or idle black, so a node whose MultiSync
+listener failed to bind emitted black at full rate while every counter and
+health signal read normal: a green dashboard and a black wall. The first four
+are per surface. The last two are **node-level rather than surface-level**,
+deliberately: one MultiSync listener serves every surface on a node, so
+attributing its failure to a surface would report the same fact N times and
+imply N independent faults.
 
 **`surface.frames.rate` is what ADR-040 costs.** That record makes matrix
 size a performance parameter rather than an architectural boundary, so

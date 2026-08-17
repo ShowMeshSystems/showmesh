@@ -143,7 +143,7 @@ func TestOpenRejectsBlockFirstFrameAtOrPastFrameCount(t *testing.T) {
 
 	block1 := make([]byte, 8)
 	binary.LittleEndian.PutUint32(block1[0:4], 4000000000) // firstFrame >= frameCount
-	binary.LittleEndian.PutUint32(block1[4:8], 4)           // length; contents irrelevant
+	binary.LittleEndian.PutUint32(block1[4:8], 4)          // length; contents irrelevant
 
 	data := append([]byte{}, hdr...)
 	data = append(data, block0...)
