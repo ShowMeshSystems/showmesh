@@ -146,6 +146,35 @@ export type ResolumeCompositionLayer = components['schemas']['ResolumeCompositio
 export type ResolumeCompositionColumn = components['schemas']['ResolumeCompositionColumn']
 export type ResolumeCompositionClip = components['schemas']['ResolumeCompositionClip']
 
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028). Aliased for the identical reason as every type above
+// (ADR-015). None of these is part of `Model` — this data is not a
+// resource ADR-020's change stream models, matching FPPEndpointsConfigResponse's
+// own reasoning above.
+export type ConfigShow = components['schemas']['ConfigShow']
+export type ConfigShowWrite = components['schemas']['ConfigShowWrite']
+export type ShowConfigResponse = components['schemas']['ShowConfigResponse']
+export type ConfigShowSurfaceChannelRange = components['schemas']['ConfigShowSurfaceChannelRange']
+export type ConfigShowSurfaceGeometry = components['schemas']['ConfigShowSurfaceGeometry']
+export type ConfigShowSurfaceNDIOutput = components['schemas']['ConfigShowSurfaceNDIOutput']
+export type ConfigShowSurfaceHDMI = components['schemas']['ConfigShowSurfaceHDMI']
+export type ConfigShowSurfaceOutput = components['schemas']['ConfigShowSurfaceOutput']
+export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
+export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+export type ConfigShowActive = components['schemas']['ConfigShowActive']
+export type ShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+export type Asset = components['schemas']['Asset']
+export type AssetResponse = components['schemas']['AssetResponse']
+export type AssetsListResponse = components['schemas']['AssetsListResponse']
+export type NodeAssetManifest = components['schemas']['NodeAssetManifest']
+export type MissingAsset = components['schemas']['MissingAsset']
+export type AssetGap = components['schemas']['AssetGap']
+export type ExtraAsset = components['schemas']['ExtraAsset']
+export type NodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+export type AssetManifestResponse = components['schemas']['AssetManifestResponse']
+export type AuditEntry = components['schemas']['AuditEntry']
+export type AuditResponse = components['schemas']['AuditResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

@@ -128,6 +128,19 @@ type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsRespo
 type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
 type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
 type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028) — show, show.surface, show.active, asset, and audit shapes.
+type SchemaConfigShowWrite = components['schemas']['ConfigShowWrite']
+type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
+type SchemaConfigShowSurface = components['schemas']['ConfigShowSurface']
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+type SchemaConfigShowActive = components['schemas']['ConfigShowActive']
+type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+type SchemaAssetResponse = components['schemas']['AssetResponse']
+type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
+type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
+type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaAuditResponse = components['schemas']['AuditResponse']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -795,11 +808,26 @@ export class ApiStore {
   // it silently renders empty/403 for the operator role these config
   // kinds exist to serve. See views/Macros.tsx and views/ShowActions.tsx.
 
-  /** `GET /api/v1/config/show.action` or `GET /api/v1/config/show.macro` — object ids, labels, and current revision only, never the full payloads (STEP-9-SPEC.md section 5.5). */
-  async listConfigObjects(kind: 'show.action' | 'show.macro'): Promise<SchemaConfigObjectsListResponse> {
+  /**
+   * `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`,
+   * `GET /api/v1/config/show`, or `GET /api/v1/config/show.surface` —
+   * object ids, labels, and current revision only, never the full
+   * payloads (STEP-9-SPEC.md section 5.5; Track G seam G-8 extends this
+   * to `show`/`show.surface`, same shape, same read posture). `show`
+   * narrows `show.surface` to one show's surfaces (`?show=`, ignored by
+   * every other kind, which the API does not accept it on).
+   */
+  async listConfigObjects(
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+    show?: string,
+  ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
     try {
-      return await this.client.getJson<SchemaConfigObjectsListResponse>(`/config/${kind}`, controller.signal)
+      const query = kind === 'show.surface' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
+      return await this.client.getJson<SchemaConfigObjectsListResponse>(
+        `/config/${kind}${query}`,
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }
@@ -892,6 +920,273 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show.macro/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-8: show, show.surface, show.active, assets, audit --
+  //
+  // Same "plain side-call, never touches `this.model` or the read loop"
+  // posture as every method above — none of this data is part of the SSE
+  // snapshot/delta stream. Reads (show/show.surface/show.active/assets/
+  // manifest) share the show.action/show.macro read posture just above
+  // (`show:macro:run` OR `config:write`); the audit log is the one
+  // exception (`audit:read` only, always, per api/openapi.yaml's own
+  // description of GET /audit — never one of the open-by-default reads).
+
+  /** `GET /api/v1/config/show/{id}`. Throws (404) when no such show exists. */
+  async getShow(id: string): Promise<SchemaShowConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowConfigResponse>(
+        `/config/show/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show/{id}` (ADR-027 decision 2). `config:write`
+   * only. Full replacement: an absent `notes` resolves to empty, never
+   * "keep the previous value" (ConfigShowWrite's own description).
+   */
+  async putShow(id: string, payload: SchemaConfigShowWrite): Promise<SchemaShowConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowConfigResponse>(
+        `/config/show/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.surface/{id}`. Throws (404) when no such surface exists. */
+  async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowSurfaceConfigResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.surface/{id}` (ADR-026). `config:write` only.
+   * Full replacement — every field is required on every write, including
+   * `channelRange` (the manual-channel-range path ADR-027 decision 4
+   * makes permanent, not a fallback) and exactly one of `output.ndi` /
+   * `output.hdmi` matching `output.transport`. Validated and normalized
+   * server-side; a rejected payload throws and appends no revision.
+   */
+  async putShowSurface(id: string, payload: SchemaConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowSurfaceConfigResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.surface/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowSurfaceRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.active` (ADR-027 decision 3). Throws (404)
+   * when nothing has ever been activated.
+   */
+  async getShowActive(): Promise<SchemaShowActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowActiveConfigResponse>('/config/show.active', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.active` (ADR-027 decision 3). `config:write`
+   * only. This is the sharp control: activating a different show changes
+   * what every node is expected to hold (ADR-028) — the caller
+   * (views/ShowActive.tsx) must confirm before calling this, never fire it
+   * from a bare click.
+   */
+  async putShowActive(payload: SchemaConfigShowActive): Promise<SchemaShowActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowActiveConfigResponse>(
+        '/config/show.active',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.active/revisions`: revision history, newest first, metadata only. */
+  async getShowActiveRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/show.active/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/assets`, optionally narrowed by show, sequence, and/or
+   * node (ADR-028). Metadata only — bytes never come down this path.
+   */
+  async listAssets(filter?: { show?: string; sequence?: string; node?: string }): Promise<SchemaAssetsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (filter?.show !== undefined && filter.show !== '') params.set('show', filter.show)
+      if (filter?.sequence !== undefined && filter.sequence !== '') params.set('sequence', filter.sequence)
+      if (filter?.node !== undefined && filter.node !== '') params.set('node', filter.node)
+      const query = params.toString()
+      return await this.client.getJson<SchemaAssetsListResponse>(
+        `/assets${query === '' ? '' : `?${query}`}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/assets`, `multipart/form-data` (ADR-028, ADR-030).
+   * Requires `asset:write`. `show`, `sequence`, `mediaType`, and
+   * `targetKind` are required on every call; `target` is required
+   * (non-empty) when `targetKind` is `"node"` — the caller
+   * (components/AssetUpload.tsx) must not omit it, since the target is
+   * part of the asset's own identity (ADR-028 decision 1). `onProgress`
+   * reports real byte counts, matching [uploadResolumeComposition]'s own
+   * contract; a rejected upload (400/413/507) registers nothing and the
+   * caller must not render it as stored (ADR-030: "a partial upload
+   * registers nothing").
+   */
+  async uploadAsset(
+    file: File,
+    fields: { show: string; sequence: string; mediaType: 'fseq' | 'audio' | 'media'; targetKind: 'node' | 'show'; target?: string },
+    onProgress: (progress: UploadProgress) => void,
+  ): Promise<SchemaAssetResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const formFields: Record<string, string> = {
+        show: fields.show,
+        sequence: fields.sequence,
+        mediaType: fields.mediaType,
+        targetKind: fields.targetKind,
+      }
+      if (fields.target !== undefined) formFields.target = fields.target
+      return await uploadFileWithProgress<SchemaAssetResponse>(
+        this.baseUrl,
+        '/assets',
+        file,
+        onProgress,
+        controller.signal,
+        formFields,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * The same-origin URL for `GET /api/v1/assets/{id}/content` (ADR-028).
+   * Never fetched by this store itself — a download is a plain browser
+   * navigation/anchor, which carries the session cookie same-origin per
+   * ADR-022 with no code here needing to touch the bytes.
+   */
+  assetContentUrl(id: string): string {
+    return `${this.baseUrl}/assets/${encodeURIComponent(id)}/content`
+  }
+
+  /**
+   * `GET /api/v1/assets/manifest` (ADR-028 seam E5): every declared
+   * node's asset readiness, "what should it hold" versus "what does it
+   * hold". `ready`/`not_ready`/`unknown` are three distinct states the
+   * caller (views/AssetManifest.tsx) must render distinctly — an
+   * `unknown` verdict is never evidence of absence.
+   */
+  async getAssetManifest(): Promise<SchemaAssetManifestResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAssetManifestResponse>('/assets/manifest', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/nodes/{nodeId}/assets`: the same verdict, for one node. 404 when nodeId is not declared. */
+  async getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeAssetManifestResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/assets`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/audit` (ADR-024 decision 11). Requires `audit:read`
+   * always — this is not one of the four pre-existing open-by-default
+   * reads (api/openapi.yaml's own description of this route).
+   */
+  async listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (filter?.since !== undefined) params.set('since', String(filter.since))
+      if (filter?.limit !== undefined) params.set('limit', String(filter.limit))
+      const query = params.toString()
+      return await this.client.getJson<SchemaAuditResponse>(
+        `/audit${query === '' ? '' : `?${query}`}`,
         controller.signal,
       )
     } finally {

@@ -26,6 +26,17 @@ import { MacroRunView } from '../views/MacroRunView'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
 import { ResolumeView } from '../views/ResolumeView'
+// Track G seam G-8 (TRACK-G-surface-parity.md "G-8"): routes for Track E's
+// previously UI-less surface — shows, surfaces, active-show activation,
+// the asset browser, the per-node manifest, and the audit log.
+import { Shows } from '../views/Shows'
+import { ShowDetail } from '../views/ShowDetail'
+import { ShowSurfaces } from '../views/ShowSurfaces'
+import { ShowSurfaceDetail } from '../views/ShowSurfaceDetail'
+import { ShowActive } from '../views/ShowActive'
+import { Assets } from '../views/Assets'
+import { AssetManifest } from '../views/AssetManifest'
+import { Audit } from '../views/Audit'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -60,6 +71,19 @@ export default function App() {
             <Route path="actions" element={<ShowActions />} />
             <Route path="actions/new" element={<ShowActionDetail isNew />} />
             <Route path="actions/:id" element={<ShowActionDetail />} />
+            {/* Track G seam G-8: "new" is listed before its ":id" sibling
+                for readability only, same non-load-bearing note as the
+                macro/action routes above. */}
+            <Route path="config/show" element={<Shows />} />
+            <Route path="config/show/new" element={<ShowDetail isNew />} />
+            <Route path="config/show/:id" element={<ShowDetail />} />
+            <Route path="config/show.surface" element={<ShowSurfaces />} />
+            <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
+            <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
+            <Route path="config/show.active" element={<ShowActive />} />
+            <Route path="assets" element={<Assets />} />
+            <Route path="assets/manifest" element={<AssetManifest />} />
+            <Route path="audit" element={<Audit />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
