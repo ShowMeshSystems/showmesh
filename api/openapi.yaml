@@ -3245,7 +3245,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [node, fpp, coordinator, resolume]
+          enum: [node, fpp, coordinator, resolume, surface]
         id:
           type: string
     Capability:
