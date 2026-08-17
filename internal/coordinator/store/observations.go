@@ -306,28 +306,6 @@ func (s *Store) ReplaceObservations(ctx context.Context, observations []observat
 	return nil
 }
 
-// DeleteObservationsForResource removes every stored row for the exact
-// (resource_kind, resource_id, source) triple, unconditionally — the
-// operation [Store.ReplaceObservations]'s own doc comment says that method
-// cannot perform: "a (resource, source) pair this call does not mention at
-// all is left completely untouched... passing zero observations is a
-// no-op". A caller reaches for this only when it has affirmative
-// knowledge that the resource itself is gone for that source (never
-// merely "this poll didn't mention it" — see
-// [collector.Collector.Poll]'s completeness doc comment for that
-// distinction). A no-op if no row matches.
-func (s *Store) DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id, source string) error {
-	guardNotInTx(ctx, "Store.DeleteObservationsForResource")
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM observations
-		WHERE resource_kind = ? AND resource_id = ? AND source = ?
-	`, string(kind), id, source)
-	if err != nil {
-		return fmt.Errorf("store: delete observations for resource: %s/%s source %q: %w", kind, id, source, err)
-	}
-	return nil
-}
-
 // ObservationFilter narrows [Store.ListObservations]. Every field is
 // optional (empty means "match any"); a zero-value ObservationFilter
 // matches every stored observation.

@@ -17,14 +17,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
@@ -660,83 +658,5 @@ func (s *fppSink) RecordObservations(ctx context.Context, observations []observa
 	}
 	if s.notify != nil && len(observations) > 0 {
 		s.notify()
-	}
-}
-
-// --- collector.Sink over *store.Store for noderender, scoped separately ---
-
-// nodeRenderSink adapts *store.Store to collector.Sink for
-// [noderender.Collector] specifically, rather than reusing fppSink: fppSink
-// is shared by collectors (fpp, fppmqtt, resolume) whose complete=true only
-// ever claims completeness for the ONE resource a given Poll call mentions
-// (see collector.Collector.Poll's own doc comment — "the resource(s) it is
-// reporting on this cycle"). noderender.Collector is structurally
-// different: it never touches the network, so every Poll renders its
-// ENTIRE push cache in one call and complete=true is a genuine claim over
-// EVERY surface across every node, not just the ones present this
-// delivery. A surface dropped entirely from that delivery (a cleared
-// render assignment) is therefore affirmatively known gone, not merely
-// unmentioned — the "complete: true is the licence to assert absence, so
-// it has to be earned" case actually being earned, because this
-// collector has no backoff or partial-poll concept that could make the
-// claim a lie.
-//
-// [store.Store.ReplaceObservations] cannot express that: its own doc
-// comment says a (resource, source) pair absent from a call is "left
-// completely untouched" — correct for fppSink's per-resource collectors,
-// wrong for noderender's whole-fleet one. This sink tracks the surface IDs
-// the previous delivery named and, for any that dropped out of the current
-// one entirely, deletes their rows via
-// [store.Store.DeleteObservationsForResource] — on top of
-// ReplaceObservations' existing per-signal pruning for surfaces that are
-// still present. notify is not wired for this sink at all: nothing on the
-// SSE stream reads this persisted table for surfaces (the live
-// node.changed frame is served straight from noderender.Store, notified
-// synchronously and independently by inventory.Manager.handleRender), so
-// there is no subscriber-facing reason to poke the hub from this poll
-// cycle — see coordinator.go's construction site.
-type nodeRenderSink struct {
-	st     *store.Store
-	logger *slog.Logger
-
-	mu    sync.Mutex
-	known map[string]struct{} // surface IDs named by the last complete delivery
-}
-
-func (s *nodeRenderSink) RecordObservations(ctx context.Context, observations []observation.Observation, complete bool) {
-	if complete {
-		if err := s.st.ReplaceObservations(ctx, observations); err != nil {
-			s.logger.Error("coordinator: failed to store render observations", "count", len(observations), "error", err)
-		}
-	} else {
-		// noderender.Collector.Poll never returns complete=false (see its
-		// own doc comment) — kept only so this type still satisfies
-		// collector.Sink honestly if that ever changes, matching fppSink's
-		// identical branch.
-		for _, obs := range observations {
-			if err := s.st.UpsertObservation(ctx, obs); err != nil {
-				s.logger.Error("coordinator: failed to store render observation",
-					"resource_kind", obs.Resource.Kind, "resource_id", obs.Resource.ID, "signal", obs.Signal, "error", err)
-			}
-		}
-		return
-	}
-
-	cur := make(map[string]struct{}, len(observations))
-	for _, o := range observations {
-		cur[o.Resource.ID] = struct{}{}
-	}
-	s.mu.Lock()
-	prev := s.known
-	s.known = cur
-	s.mu.Unlock()
-
-	for id := range prev {
-		if _, stillPresent := cur[id]; stillPresent {
-			continue
-		}
-		if err := s.st.DeleteObservationsForResource(ctx, observation.ResourceSurface, id, noderender.SourceName); err != nil {
-			s.logger.Error("coordinator: failed to prune a vanished surface's observations", "surface", id, "error", err)
-		}
 	}
 }

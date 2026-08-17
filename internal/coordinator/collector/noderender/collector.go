@@ -34,21 +34,9 @@ func (c *Collector) ID() string { return SourceName }
 // never touches the network — see the package doc comment — so it always
 // returns complete=true, exactly like fppmqtt.Collector.Poll: every call
 // renders the FULL current set of every surface every stored report
-// currently names, and that full set is the coordinator's ONLY authority
-// on which surfaces currently exist at all (unlike fpp.Collector, whose
-// complete=true only ever covers the one instance a call is about).
-//
-// [collector.Sink]'s ordinary completeness contract (as implemented by
-// store.Store.ReplaceObservations) prunes stale SIGNALS within a resource
-// that is still present in a delivery, but leaves a resource entirely
-// absent from a delivery untouched — so on its own, a surface dropped from
-// a node's next report (a cleared assignment) would NOT be pruned and
-// would survive as a ghost row forever. Pruning that case correctly
-// requires a caller that also knows this collector's completeness is
-// global, not merely per-resource — see internal/coordinator/apiwiring.go's
-// nodeRenderSink, which this collector is deliberately paired with instead
-// of the generic per-instance sink every other collector in this codebase
-// shares.
+// currently names, so a surface dropped from a node's next report (a
+// cleared assignment) is correctly pruned by [collector.Sink]'s completeness
+// contract rather than left behind as a ghost row.
 func (c *Collector) Poll(_ context.Context) ([]observation.Observation, bool) {
 	snap := c.store.snapshot()
 	var obs []observation.Observation
