@@ -250,4 +250,66 @@ describe('Dashboard', () => {
     expect(labels[0]).toContain('critical')
     expect(labels[1]).toContain('warning')
   })
+
+  // Track B seam B2b-front: a failed render pipeline is its own critical
+  // attention item, and 'unknown' (stale/collection_failed/etc evidence)
+  // stays distinct from both 'critical' and the ordinary healthy case —
+  // the same rule attentionFromFPP/attentionFromResolume already enforce.
+  it('surfaces a failed render pipeline as critical', () => {
+    const nodes = [
+      makeNode('media-01', {
+        render: [
+          makeEvidence({ signal: 'surface.pipeline.state', value: 'failed' }),
+        ].map((e) => ({ resource: { kind: 'surface' as const, id: 'wall-1' }, ...e })),
+      }),
+    ]
+    renderDashboard(makeModel({ nodes }))
+    const labels = attentionBadgeLabels()
+    expect(labels).toHaveLength(1)
+    expect(labels[0]).toContain('critical')
+    expect(screen.getByText(/pipeline has failed/)).toBeInTheDocument()
+  })
+
+  it('surfaces stale/unavailable render pipeline evidence as unknown, distinct from critical, and skips not_collected entirely', () => {
+    const nodes = [
+      makeNode('media-01', {
+        render: [
+          {
+            resource: { kind: 'surface' as const, id: 'wall-1' },
+            ...makeEvidence({ signal: 'surface.pipeline.state', value: 'running', state: 'stale' }),
+          },
+          {
+            resource: { kind: 'surface' as const, id: 'wall-2' },
+            ...makeEvidence({
+              signal: 'surface.pipeline.state',
+              value: null,
+              state: 'not_collected',
+              reason: 'never reported',
+            }),
+          },
+        ],
+      }),
+    ]
+    renderDashboard(makeModel({ nodes }))
+    const labels = attentionBadgeLabels()
+    expect(labels).toHaveLength(1)
+    expect(labels[0]).toContain('unknown')
+    expect(labels[0]).not.toContain('critical')
+    expect(screen.getByText(/wall-1.*pipeline state is stale/)).toBeInTheDocument()
+  })
+
+  it('does not flag a running or stopped pipeline', () => {
+    const nodes = [
+      makeNode('media-01', {
+        render: [
+          {
+            resource: { kind: 'surface' as const, id: 'wall-1' },
+            ...makeEvidence({ signal: 'surface.pipeline.state', value: 'running' }),
+          },
+        ],
+      }),
+    ]
+    renderDashboard(makeModel({ nodes }))
+    expect(screen.getByText(/Nothing needs attention/)).toBeInTheDocument()
+  })
 })

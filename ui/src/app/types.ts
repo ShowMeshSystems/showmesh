@@ -37,6 +37,9 @@ export type {
   ResourceRef,
   SessionInfo,
   SessionResponse,
+  // Track B seam B2b-front: the three render.* dispatch endpoints.
+  ObservationEntry,
+  RenderCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,
