@@ -19,6 +19,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 // shutdownTimeout bounds the clean-shutdown path (offline publish followed
@@ -135,6 +136,24 @@ func Run() int {
 	sup := pipeline.NewSupervisor(time.Now, nil, logger)
 	assignmentStore := pipeline.NewAssignmentStore(cfg.AssetDir)
 
+	// timeline is this node's single MultiSync-driven position estimate,
+	// shared by every surface's frame writer (ADR-026 N=1 is a renderer
+	// scope limit, not a reason to build N timelines; a future N>1 node
+	// still tracks one master's position). SetStepTime is called per
+	// surface, from that surface's own FSEQ file, on every apply/resume —
+	// see renderops.go's buildAssignedSpec and multisync.go's listener,
+	// which never calls SetStepTime itself (it has no file to read one
+	// from).
+	timeline := multisync.NewTimeline(time.Now, multisync.Config{})
+
+	multiSyncDone := make(chan struct{})
+	go func() {
+		defer close(multiSyncDone)
+		runMultiSyncListener(sigCtx, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, logger)
+	}()
+
+	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, logger)
+
 	// Reload every persisted surface assignment and re-apply it, so a node
 	// that restarts with no coordinator reachable resumes rendering
 	// (Track B build contract ruling 4) rather than sitting idle until a
@@ -148,15 +167,13 @@ func Run() int {
 				logger.Warn("skipping a persisted render assignment with unparseable params", "surface_id", a.SurfaceID, "error", err)
 				continue
 			}
-			if err := sup.Apply(pipeline.DefaultTestPatternSpec(a.SurfaceID)); err != nil {
+			if err := renderOps.ResumeAssignment(a.SurfaceID, params); err != nil {
 				logger.Warn("failed to re-apply a persisted render assignment at startup", "surface_id", a.SurfaceID, "error", err)
 				continue
 			}
 			logger.Info("resumed a persisted render assignment at startup", "surface_id", a.SurfaceID, "applied_at", a.AppliedAt)
 		}
 	}
-
-	renderOps := newRenderOperations(sup, assignmentStore)
 
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
@@ -207,15 +224,22 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat, asset inventory, and render report loops also select on
-	// sigCtx.Done() and exit on their own; wait for all three so none can
-	// race the final offline publish below with a publish still in flight.
+	// The heartbeat, asset inventory, render report, and MultiSync listener
+	// loops also select on sigCtx.Done() and exit on their own; wait for
+	// all four so none can race the final offline publish below with a
+	// publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
+	<-multiSyncDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+
+	// Stop every surface's frame writer before its pipeline: a writer still
+	// running against a process the supervisor is about to kill would just
+	// see every write fail, so stop the source before the sink.
+	renderOps.Shutdown()
 
 	// Stop every supervised pipeline's child process before disconnecting:
 	// a clean agent shutdown must not leave an orphaned gst-launch-1.0
