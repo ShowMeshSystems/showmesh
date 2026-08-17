@@ -376,6 +376,33 @@ func printFPPEndpointsConfig(w io.Writer, resp fppEndpointsConfigResponse) {
 	_ = tw.Flush()
 }
 
+// printResolumeInstancesConfig renders GET/PUT
+// /api/v1/config/resolume.instances (Track G seam G-2, ADR-039), mirroring
+// printFPPEndpointsConfig's identical shape.
+func printResolumeInstancesConfig(w io.Writer, resp resolumeInstancesConfigResponse) {
+	_, _ = fmt.Fprintf(w, "kind:      %s\n", resp.Kind)
+	_, _ = fmt.Fprintf(w, "revision:  %d\n", resp.Revision)
+	_, _ = fmt.Fprintf(w, "source:    %s\n", resp.Source)
+	_, _ = fmt.Fprintf(w, "createdBy: %s\n", stringOrDash(resp.CreatedByPrincipalName))
+	_, _ = fmt.Fprintf(w, "updatedAt: %s\n", resp.UpdatedAt.Format(time.RFC3339))
+	if resp.RestartRequired {
+		_, _ = fmt.Fprintf(w, "\nRESTART REQUIRED: %s\n\n", resp.RestartRequiredReason)
+	} else {
+		_, _ = fmt.Fprintf(w, "\n%s\n\n", resp.RestartRequiredReason)
+	}
+
+	if len(resp.Payload.Instances) == 0 {
+		_, _ = fmt.Fprintln(w, "(no Resolume instance configured)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tURL")
+	for _, e := range resp.Payload.Instances {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", e.ID, e.URL)
+	}
+	_ = tw.Flush()
+}
+
 // printConfigRevisionsTable renders GET
 // /api/v1/config/fpp.endpoints/revisions, newest first.
 func printConfigRevisionsTable(w io.Writer, resp configRevisionsResponse) {

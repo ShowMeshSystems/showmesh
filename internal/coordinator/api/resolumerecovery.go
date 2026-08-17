@@ -106,16 +106,20 @@ func (h *handlers) handleGetResolumeRecovery(w http.ResponseWriter, r *http.Requ
 }
 
 // resolumeRecoveryIsConfigured reports whether a real Resolume instance is
-// configured on this coordinator at all — false only for
-// [noResolumeRecoveryProvider], [Dependencies.ResolumeRecovery]'s nil-safe
-// default. Distinct from a toggle's own "configured" (whether a revision
-// has ever been written): a client renders "not configured" rather than
-// the toggle's default-ON value when this is false, since an operator who
+// configured on this coordinator RIGHT NOW, via [ResolumeRecoveryProvider.Configured].
+// Distinct from a toggle's own "configured" (whether a revision has ever
+// been written): a client renders "not configured" rather than the
+// toggle's default-ON value when this is false, since an operator who
 // believes recovery is armed and is wrong is worse off than one who knows
 // it is unavailable.
+//
+// Track G seam G-2 replaced a type assertion against
+// [noResolumeRecoveryProvider] here: once resolume.instances applies
+// without a restart, "wired in at all" and "configured right now" are
+// different facts, and only [ResolumeRecoveryProvider.Configured] can
+// answer the second one live.
 func resolumeRecoveryIsConfigured(p ResolumeRecoveryProvider) bool {
-	_, unconfigured := p.(noResolumeRecoveryProvider)
-	return !unconfigured
+	return p.Configured()
 }
 
 func mapResolumeRecoveryRecordEntry(e ResolumeRecoveryRecordEntryView) v1.ResolumeRecoveryRecordEntry {

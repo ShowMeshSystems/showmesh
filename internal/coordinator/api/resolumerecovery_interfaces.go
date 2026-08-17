@@ -72,15 +72,28 @@ type ResolumeRecoveryProvider interface {
 	// already carrying principalName as Principal — the caller (the
 	// wiring adapter) is the one place that knows who is acting.
 	Restore(ctx context.Context, principalName string) (ResolumeRecoveryRestoreReportView, error)
+
+	// Configured reports whether a live Resolume instance is configured on
+	// this coordinator RIGHT NOW. Added by Track G seam G-2: once
+	// resolume.instances applies without a restart (ADR-036), "is
+	// ResolumeRecovery wired in at all" and "is a Resolume instance
+	// currently configured" are no longer the same fact — a coordinator can
+	// be wired to a live manager that currently holds zero instances, the
+	// exact cold-start state this seam's own acceptance run starts from.
+	// [resolumeRecoveryIsConfigured] and stream.go's own resolumerecovery
+	// gate both call this instead of type-asserting against
+	// [noResolumeRecoveryProvider], which could only ever answer "wired or
+	// not", never "configured right now".
+	Configured() bool
 }
 
 // noResolumeRecoveryProvider is [Dependencies.ResolumeRecovery]'s nil-safe
-// default: Record answers empty, LastReport answers nil, and Restore
-// refuses loudly — matching this package's standing "an unwired
-// dependency is not this API failing" posture, EXCEPT that Restore is a
-// write and this package's own standing rule for an unwired write
-// dependency is to refuse loudly rather than fabricate success (matching
-// noCommandStore/noResolumeActionDispatcher).
+// default: Record answers empty, LastReport answers nil, Configured
+// answers false, and Restore refuses loudly — matching this package's
+// standing "an unwired dependency is not this API failing" posture, EXCEPT
+// that Restore is a write and this package's own standing rule for an
+// unwired write dependency is to refuse loudly rather than fabricate
+// success (matching noCommandStore/noResolumeActionDispatcher).
 type noResolumeRecoveryProvider struct{}
 
 func (noResolumeRecoveryProvider) Record() []ResolumeRecoveryRecordEntryView { return nil }
@@ -90,3 +103,4 @@ func (noResolumeRecoveryProvider) LastReport() *ResolumeRecoveryRestoreReportVie
 func (noResolumeRecoveryProvider) Restore(context.Context, string) (ResolumeRecoveryRestoreReportView, error) {
 	return ResolumeRecoveryRestoreReportView{}, errResolumeRecoveryNotConfigured
 }
+func (noResolumeRecoveryProvider) Configured() bool { return false }

@@ -51,8 +51,13 @@ const NAV_GROUPS: Array<{
   },
   {
     heading: 'Configure',
-    // /config holds both the FPP endpoints and the Resolume composition
-    // upload (ADR-032 decision 8), so the label names both.
+    // /config holds both the FPP endpoints and (Track G seam G-2, ADR-039)
+    // the Resolume instance connection, so the label names both. Before
+    // that seam this label named Resolume while Configuration.tsx held no
+    // Resolume content at all — the composition upload lives on /resolume,
+    // not here — which TRACK-G-surface-parity.md's own audit named as a
+    // placement fault seam G-2 was scoped to fix by making the label true
+    // rather than by changing it.
     items: [
       { to: '/config', label: 'FPP & Resolume', end: false },
       { to: '/actions', label: 'Show actions', end: false },

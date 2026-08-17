@@ -369,6 +369,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/resolume.instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active resolume.instances configuration (Track G seam G-2, ADR-039)
+         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_RESOLUME_URL`/`SHOWMESH_RESOLUME_ID` into its store could not be persisted, in which case a configuration IS in effect and `GET /resolume/instances` lists it. `restartRequired` is always `false`: the Resolume collector set follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start).
+         */
+        get: operations["getResolumeInstancesConfig"];
+        /**
+         * Write a new resolume.instances configuration revision (Track G seam G-2, ADR-039)
+         * @description Requires `config:write` (admin only). The request body's `instances` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero instances is an explicit empty array (`"instances": []`). No other top-level field is accepted.
+         *     At most one instance is accepted today; a second is refused with `400` naming the limit — the schema itself stays a list (this surface may grow past one instance later without a breaking change), the limit is enforced by validation. Each instance's id and URL are validated (node-id syntax, http/https scheme, non-empty host, no userinfo) and cross-checked against every currently configured `fpp.endpoints` id, read live at write time — a collision is refused with `400` naming both ids, because both collectors are registered on one shared runner keyed by id.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_RESOLUME_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction: the standard remedy (remove the variable, restart once) is unsafe if the startup migration could not be persisted, and `detail` says so explicitly in that case.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putResolumeInstancesConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/resolume.instances/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * resolume.instances revision history, newest first (Track G seam G-2, ADR-039)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/resolume.instances`'s `404` for the same state.
+         */
+        get: operations["getResolumeInstancesConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/resolume/composition": {
         parameters: {
             query?: never;
@@ -1507,6 +1554,36 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
+        /** @description One Resolume Arena instance's (id, url) pair (Track G seam G-2, ADR-039) — the same shape `SHOWMESH_RESOLUME_URL`/ `SHOWMESH_RESOLUME_ID` carried. */
+        ConfigResolumeInstance: {
+            id: string;
+            url: string;
+        };
+        /**
+         * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null — an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema — see `PUT /config/resolume.instances`'s own description).
+         *     This schema is deliberately NOT closed (no `additionalProperties: false`), mirroring `ConfigFPPEndpointsPayload`'s identical reasoning: ADR-020 requires this published document stay additive-only-compatible for a client reading a RESPONSE, and the request-side strictness (rejecting an unrecognized top-level field) is enforced by the coordinator's own handler, not by this schema.
+         */
+        ConfigResolumeInstancesPayload: {
+            instances: components["schemas"]["ConfigResolumeInstance"][];
+        };
+        /** @description The body of GET and PUT /config/resolume.instances. createdByPrincipalId and createdByPrincipalName are null for the one revision the startup env->store migration creates (source "env_migration"): a startup migration has no principal. restartRequired is always false: this configuration is applied without a restart from the start (ADR-036). The field is retained rather than removed because this contract is additive-only within a major version. */
+        ResolumeInstancesConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @constant */
+            kind: "resolume.instances";
+            revision: number;
+            payload: components["schemas"]["ConfigResolumeInstancesPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api" | "env_migration";
+            /** @constant */
+            restartRequired: false;
+            restartRequiredReason: string;
+        };
         /** @description One element of ConfigRevisionsResponse.revisions: a config revision's metadata, WITHOUT its payload. createdByPrincipalId and createdByPrincipalName are null for a revision created by the startup env->store migration (source "env_migration"). */
         ConfigRevisionMeta: {
             revision: number;
@@ -1519,12 +1596,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, and GET /config/resolume.recovery/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more and Track D seam D-3a another). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, and GET /config/resolume.instances/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, and Track G seam G-2 another). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "resolume.instances";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3226,6 +3303,97 @@ export interface operations {
             };
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstancesConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putResolumeInstancesConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigResolumeInstancesPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolumeInstancesConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getResolumeInstancesConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };
