@@ -49,23 +49,37 @@ const (
 	IdleOutputDiagnostic = "diagnostic"
 )
 
-// diagnosticFillHigh and diagnosticFillLow are the two constant byte values
-// [FrameWriter] alternates between for [IdleOutputDiagnostic]. Both
-// non-zero (never equal to black) and distinct from each other, so the
-// output is visibly not the all-zero idle buffer and visibly changes over
-// time — the owner's ruling that a diagnostic output must be GENERATED and
-// never a frozen frame, satisfied by picking between two precomputed
-// buffers rather than freezing whatever content last played.
+// diagnosticBackgroundFill and diagnosticBarFill are the two constant byte
+// values [IdleOutputDiagnostic] draws: a constant non-black field across
+// the whole surface, and a single vertical bar swept across it. Both
+// non-zero (never equal to black) and distinct from each other, so the bar
+// reads against the background instead of vanishing into it. A prior
+// version of this mode alternated the WHOLE surface between two flat grey
+// fills once a second; on a dark wall in a dark yard that reads as "is the
+// cable connected?" rather than as a diagnostic, because a viewer has to
+// already be staring at the exact moment it changes to notice anything.
+// The moving bar's own position is a clock a bystander can read against the
+// pipeline's frame period, which a synchronized whole-field blink is not.
 const (
-	diagnosticFillHigh byte = 0xC0
-	diagnosticFillLow  byte = 0x30
+	diagnosticBackgroundFill byte = 0x30
+	diagnosticBarFill        byte = 0xFF
 )
 
-// diagnosticBlinkPeriod is how long [FrameWriter] holds each of the two
-// diagnostic fill values before switching — long enough to read as
-// deliberate rather than flicker, short enough that a bystander watching
-// for more than a couple of seconds sees it change.
-const diagnosticBlinkPeriod = time.Second
+// diagnosticBarWidthDivisor sets [IdleOutputDiagnostic]'s moving bar width
+// to the surface's own width divided by this, clamped to at least one
+// pixel — wide enough to read on a large canvas-resolution surface, narrow
+// enough on a small virtual-matrix surface that it stays a moving mark
+// rather than a second flat field.
+const diagnosticBarWidthDivisor = 32
+
+// diagnosticPixelPeriod is how long [IdleOutputDiagnostic]'s bar holds each
+// column before advancing exactly one pixel. RES-004/the build contract's
+// B0 spike records the reference profile at 40 fps, a 25 ms frame period;
+// one pixel per reference frame period makes the bar advance visibly on
+// every tick at that rate without outrunning what a bystander can track by
+// eye, and ties the bar's speed to the profile this project actually
+// measured rather than to an arbitrary "looks nice" duration.
+const diagnosticPixelPeriod = 25 * time.Millisecond
 
 // FrameWriter extracts one surface's channel range from a local FSEQ file,
 // frame by frame, at the position [multisync.Timeline] reports, and writes
@@ -104,20 +118,38 @@ type FrameWriter struct {
 	// internal/agent/renderops.go's parseIdleOutput.
 	idleOutput string
 
-	// buf, idleBuf, diagBufHigh, and diagBufLow are all reused every frame
-	// (never (re)allocated on the hot path) — see build contract's "avoid
-	// an allocation per frame" rule. idleBuf is all-zero and never written
-	// to after construction. buf is overwritten by every successful
+	// buf, idleBuf, and diagBuf are all reused every frame (never
+	// (re)allocated on the hot path) — see build contract's "avoid an
+	// allocation per frame" rule. idleBuf is all-zero and never written to
+	// after construction. buf is overwritten by every successful
 	// ChannelRange call and, deliberately, NOT overwritten while idle —
 	// which is what lets [IdleOutputHold] draw it directly as "the last
 	// successfully extracted content frame" with no separate hold buffer
-	// and no copy. diagBufHigh/diagBufLow are filled once at construction
-	// with distinct constant values and picked between by wall-clock time
-	// (see idleOutputFor) — a fill, never a render (ADR-040).
-	buf         []byte
-	idleBuf     []byte
-	diagBufHigh []byte
-	diagBufLow  []byte
+	// and no copy. diagBuf is filled once at construction with the
+	// background constant and then mutated IN PLACE, one bar column at a
+	// time, by idleOutputFor — never reallocated and never rewritten in
+	// full (see idleOutputFor's own comment). Every byte diagBuf ever holds
+	// is one of two constants written at a computed offset: a fill, never a
+	// render, which is what keeps this on ShowMesh's side of ADR-040's line
+	// (it locates and copies bytes; it never reads, scales, or blends one).
+	buf     []byte
+	idleBuf []byte
+	diagBuf []byte
+
+	// diagWidth, diagHeight, diagRowBytes, and diagBarWidthBytes are
+	// [IdleOutputDiagnostic]'s geometry, resolved once at construction from
+	// the surface's own width/height/channelCount (see resolveGeometry) and
+	// never touched again. diagRowBytes is one row's stride in diagBuf;
+	// diagBarWidthBytes is the moving bar's width in bytes. diagLastCol is
+	// the column (in pixels) the bar currently occupies, -1 until the first
+	// diagnostic tick has drawn one — touched only by idleOutputFor, which
+	// (like currentRate below) runs exclusively on Run's own goroutine.
+	diagWidth         int
+	diagHeight        int
+	diagRowBytes      int
+	diagBarWidthBytes int
+	diagBytesPerPixel int
+	diagLastCol       int
 
 	// Atomic because Counts reads them from a caller's goroutine while
 	// writeOneFrame is incrementing them on the frame loop's.
@@ -176,7 +208,13 @@ type FrameWriter struct {
 // callers that resolve a concrete value (internal/agent/renderops.go)
 // already validate it against the known set before reaching here, so this
 // is defense in depth, never the place that rule is enforced.
-func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount int, idleOutput string, logger Logger) (*FrameWriter, error) {
+//
+// width and height are the surface's own show.surface.geometry — used only
+// to give [IdleOutputDiagnostic]'s moving bar row/column coordinates (see
+// resolveGeometry); every other idle mode and the content path ignore them
+// entirely and keep working from channelStart/channelCount alone exactly as
+// before.
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, idleOutput string, logger Logger) (*FrameWriter, error) {
 	probe := make([]byte, channelCount)
 	if source.FrameCount() > 0 {
 		if err := source.ChannelRange(0, channelStart, channelCount, probe); err != nil {
@@ -193,31 +231,63 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		idleOutput = IdleOutputBlack
 	}
 
-	diagHigh := make([]byte, channelCount)
-	diagLow := make([]byte, channelCount)
-	for i := range diagHigh {
-		diagHigh[i] = diagnosticFillHigh
-		diagLow[i] = diagnosticFillLow
+	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
+	diagBuf := make([]byte, channelCount)
+	for i := range diagBuf {
+		diagBuf[i] = diagnosticBackgroundFill
+	}
+	barWidthPx := diagW / diagnosticBarWidthDivisor
+	if barWidthPx < 1 {
+		barWidthPx = 1
 	}
 
 	fw := &FrameWriter{
-		surfaceID:    surfaceID,
-		sup:          sup,
-		logger:       logger,
-		source:       source,
-		timeline:     timeline,
-		channelStart: channelStart,
-		channelCount: channelCount,
-		stepTime:     stepTime,
-		idleOutput:   idleOutput,
-		buf:          make([]byte, channelCount),
-		idleBuf:      make([]byte, channelCount), // zero-valued: black for rgb/rgbw alike
-		diagBufHigh:  diagHigh,
-		diagBufLow:   diagLow,
-		stop:         make(chan struct{}),
-		done:         make(chan struct{}),
+		surfaceID:         surfaceID,
+		sup:               sup,
+		logger:            logger,
+		source:            source,
+		timeline:          timeline,
+		channelStart:      channelStart,
+		channelCount:      channelCount,
+		stepTime:          stepTime,
+		idleOutput:        idleOutput,
+		buf:               make([]byte, channelCount),
+		idleBuf:           make([]byte, channelCount), // zero-valued: black for rgb/rgbw alike
+		diagBuf:           diagBuf,
+		diagWidth:         diagW,
+		diagHeight:        diagH,
+		diagRowBytes:      diagW * diagBPP,
+		diagBarWidthBytes: barWidthPx * diagBPP,
+		diagBytesPerPixel: diagBPP,
+		diagLastCol:       -1,
+		stop:              make(chan struct{}),
+		done:              make(chan struct{}),
 	}
 	return fw, nil
+}
+
+// resolveGeometry turns a surface's own width/height/channelCount into the
+// row/column geometry [IdleOutputDiagnostic]'s moving bar draws against.
+// The normal case is exact: show.surface validation
+// (internal/coordinator/config/showsurface.go) already enforces
+// width*height*channelsPerPixel == channelCount, so bytesPerPixel is
+// recovered by division with no separate pixel-format lookup needed here.
+//
+// The degenerate case (width or height absent/non-positive, or the counts
+// do not divide evenly — should not occur for a validated assignment, but
+// this is the diagnostic path and must never panic on a bad one) falls back
+// to a single row of 1-byte "pixels" spanning the whole channel range, so
+// the bar still has something to sweep across rather than the constructor
+// failing over a display mode that exists specifically to keep reporting
+// something under a misconfiguration.
+func resolveGeometry(width, height, channelCount int) (w, h, bytesPerPixel int) {
+	if width > 0 && height > 0 && channelCount > 0 && channelCount%(width*height) == 0 {
+		return width, height, channelCount / (width * height)
+	}
+	if channelCount <= 0 {
+		return 1, 1, 1
+	}
+	return channelCount, 1, 1
 }
 
 // Run drives the frame loop on the calling goroutine until Stop is called
@@ -381,27 +451,95 @@ func (fw *FrameWriter) recordTick(start, tickTime time.Time, delivered bool) {
 	fw.reportCounts()
 }
 
-// idleOutputFor selects which precomputed buffer to draw for one idle
-// tick, per fw.idleOutput — no allocation, no per-byte write, just a
-// buffer reference chosen from what NewFrameWriter already built.
+// idleOutputFor selects (and, for diagnostic, updates) which buffer to draw
+// for one idle tick, per fw.idleOutput.
 //
-//   - [IdleOutputBlack]: idleBuf, all-zero.
+//   - [IdleOutputBlack]: idleBuf, all-zero, never written after
+//     construction.
 //   - [IdleOutputHold]: buf, the last successfully extracted content frame
 //     (buf is never touched while idle — see the FrameWriter struct's own
 //     doc comment on buf).
-//   - [IdleOutputDiagnostic]: diagBufHigh or diagBufLow, alternated by
-//     wall-clock time so the output visibly changes rather than freezing.
+//   - [IdleOutputDiagnostic]: diagBuf, a constant background with one
+//     vertical bar column swept across it, position derived from tick
+//     (wall-clock time), never from a per-call counter — so the position is
+//     itself a clock a bystander can check, and so a missed or delayed tick
+//     can never leave the bar in the wrong place. On the hot path this
+//     touches only the bar's own O(height) worth of bytes, never the whole
+//     buffer: at a 1080p-equivalent matrix diagBuf is ~6.2MB, and RES-004's
+//     day-0 budget leaves roughly 14% of one core spare at the reference 40
+//     fps profile (build contract, ruling 5) — that is not room to spend
+//     rewriting an idle screen every tick when erasing the old column and
+//     drawing the new one is column-width * height bytes, independent of
+//     the surface's width.
 func (fw *FrameWriter) idleOutputFor(tick time.Time) []byte {
 	switch fw.idleOutput {
 	case IdleOutputHold:
 		return fw.buf
 	case IdleOutputDiagnostic:
-		if (tick.UnixNano()/int64(diagnosticBlinkPeriod))%2 == 0 {
-			return fw.diagBufHigh
+		col := diagnosticBarColumn(tick, fw.diagWidth)
+		if col != fw.diagLastCol {
+			fw.drawDiagnosticBarColumn(col)
 		}
-		return fw.diagBufLow
+		return fw.diagBuf
 	default:
 		return fw.idleBuf
+	}
+}
+
+// diagnosticBarColumn is the pure function of wall-clock time behind
+// [IdleOutputDiagnostic]'s bar: which pixel column it occupies at tick, on
+// a surface diagWidth pixels wide. A pure function of (tick, diagWidth)
+// rather than a counter incremented per call, so a paused writer, a missed
+// tick, or two independent callers all agree on where the bar is without
+// coordinating — the same property that makes it "generated," never state
+// that can drift out of sync with itself.
+func diagnosticBarColumn(tick time.Time, diagWidth int) int {
+	if diagWidth <= 0 {
+		return 0
+	}
+	return int((tick.UnixNano() / int64(diagnosticPixelPeriod)) % int64(diagWidth))
+}
+
+// drawDiagnosticBarColumn moves [IdleOutputDiagnostic]'s bar to col:
+// erases the previously drawn column back to the background fill (skipped
+// on the very first call, fw.diagLastCol == -1), then draws col. Both steps
+// touch exactly diagHeight rows of diagBarWidthBytes each — O(height), not
+// O(width*height) — because a vertical bar's column bytes are the only
+// bytes that changed; every other byte in diagBuf is still whatever the
+// background fill (or a previous bar position, now erased) left there. See
+// idleOutputFor's own comment for why that difference is the point.
+func (fw *FrameWriter) drawDiagnosticBarColumn(col int) {
+	if fw.diagLastCol >= 0 {
+		fw.fillDiagnosticColumn(fw.diagLastCol, diagnosticBackgroundFill)
+	}
+	fw.fillDiagnosticColumn(col, diagnosticBarFill)
+	fw.diagLastCol = col
+}
+
+// fillDiagnosticColumn writes fill across the bar's width (diagBarWidthBytes,
+// clamped to the surface's own edge) in every row of diagBuf, at col — the
+// one primitive both erasing and drawing the bar reduce to.
+func (fw *FrameWriter) fillDiagnosticColumn(col int, fill byte) {
+	if fw.diagBytesPerPixel <= 0 || fw.diagRowBytes <= 0 {
+		return
+	}
+	startByte := col * fw.diagBytesPerPixel
+	endByte := startByte + fw.diagBarWidthBytes
+	if rowLimit := fw.diagRowBytes; endByte > rowLimit {
+		endByte = rowLimit
+	}
+	if endByte <= startByte {
+		return
+	}
+	for row := 0; row < fw.diagHeight; row++ {
+		base := row*fw.diagRowBytes + startByte
+		end := row*fw.diagRowBytes + endByte
+		if end > len(fw.diagBuf) {
+			break
+		}
+		for i := base; i < end; i++ {
+			fw.diagBuf[i] = fill
+		}
 	}
 }
 

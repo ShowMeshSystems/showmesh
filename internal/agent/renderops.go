@@ -639,7 +639,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 // the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
 // closing it.
 func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
-	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.idleOutput, o.logger)
+	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, a.idleOutput, o.logger)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -121,7 +122,7 @@ func TestFrameWriterWritesContentWhilePlaying(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputDiagnostic, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputDiagnostic, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -246,7 +247,7 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StateStopped, 5000)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestFrameWriterHoldDrawsLastContentFrame(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 50) // 50ms / 5ms = frame 10 -> byte value 11
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputHold, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputHold, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -350,35 +351,83 @@ func allBytesEqual(buf []byte, want byte) bool {
 }
 
 // TestFrameWriterDiagnosticNeverBlackAndNeverFrozen proves IdleOutputDiagnostic:
-// the drawn buffer is never the all-zero black sentinel, is regenerated
-// (not the last content frame held), and changes when sampled far enough
-// apart in wall-clock time — proving it is live-generated rather than a
-// frozen snapshot, the owner's explicit ruling on this mode.
+// the drawn buffer is never the all-zero black sentinel, and the buffer
+// idleOutputFor returns actually MUTATES between two ticks sampled far
+// enough apart in wall-clock time — not merely "differs from the black
+// idleBuf," but the same backing array visibly changing content, which is
+// the owner's explicit ruling that this mode must be generated, never a
+// frozen frame. Strengthened from the two-flat-fill original (see this
+// file's blame): idleOutputFor now returns the SAME backing array
+// (diagBuf, mutated in place — see frame.go's own doc comment on why that
+// is deliberate, not an oversight) every call, so this test copies before
+// comparing rather than relying on two distinct slices, and it directly
+// re-inspects the original slice header after the second call as its
+// mutation evidence.
 func TestFrameWriterDiagnosticNeverBlackAndNeverFrozen(t *testing.T) {
+	const diagWidth = 64
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
 	tl := &fakeTimelineSource{}
 
-	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, 8, IdleOutputDiagnostic, testLogger{})
+	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, diagWidth, diagWidth, 1, IdleOutputDiagnostic, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
 
 	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	got1 := fw.idleOutputFor(base)
+	buf1 := fw.idleOutputFor(base)
+	got1 := append([]byte(nil), buf1...)
 	for _, b := range got1 {
 		if b == 0 {
 			t.Fatalf("diagnostic output byte = 0 (black) at t0, want a generated non-zero fill")
 		}
 	}
 
-	got2 := fw.idleOutputFor(base.Add(diagnosticBlinkPeriod))
-	if allBytesEqual(got2, got1[0]) {
-		t.Fatalf("diagnostic output at t0+%s = %v, want it to differ from t0's %v — a diagnostic output must be REGENERATED, never frozen", diagnosticBlinkPeriod, got2, got1)
+	// Advance many pixel periods (never a frame count) so the bar visibly
+	// moves regardless of the chosen diagWidth — see diagnosticBarColumn,
+	// whose whole point is that position is a function of wall-clock time,
+	// not of how many times this loop has been called.
+	advance := 10 * diagnosticPixelPeriod
+	got2 := append([]byte(nil), fw.idleOutputFor(base.Add(advance))...)
+	if bytes.Equal(got1, got2) {
+		t.Fatalf("diagnostic output at t0+%s = %v, want it to differ from t0's %v — a diagnostic output must be REGENERATED, never frozen", advance, got2, got1)
 	}
 	for _, b := range got2 {
 		if b == 0 {
-			t.Fatalf("diagnostic output byte = 0 (black) at t0+%s, want a generated non-zero fill", diagnosticBlinkPeriod)
+			t.Fatalf("diagnostic output byte = 0 (black) at t0+%s, want a generated non-zero fill", advance)
 		}
+	}
+
+	// The mutation-in-place proof: buf1 (never re-read since the first
+	// call) is the exact same backing array idleOutputFor just wrote got2's
+	// bytes into — if this equals the original t0 snapshot, idleOutputFor
+	// stopped mutating the buffer it returns and is now allocating fresh
+	// ones instead (also a hot-path allocation, which the build contract
+	// forbids).
+	if bytes.Equal(got1, buf1) {
+		t.Fatalf("diagBuf's backing array is unchanged after a second idleOutputFor call at t0+%s; want it mutated in place", advance)
+	}
+}
+
+// TestDiagnosticBarAdvancesExactPixelsAtReferenceRate proves
+// diagnosticBarColumn's contract directly: at the reference 40 fps profile
+// (25ms tick cadence, matching diagnosticPixelPeriod), the bar advances by
+// EXACTLY one column per tick — not "eventually moves," but a specific,
+// checkable number of pixels for a specific, checkable elapsed time. Uses a
+// diagWidth wide enough that the run never wraps modulo width, so the
+// subtraction below is a direct pixel count rather than a wrapped one.
+func TestDiagnosticBarAdvancesExactPixelsAtReferenceRate(t *testing.T) {
+	const referenceStepTime = 25 * time.Millisecond // reference 40fps cadence (RES-004 / build contract ruling 5)
+	const diagWidth = 1000
+	const ticks = 10
+
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	col0 := diagnosticBarColumn(base, diagWidth)
+	colN := diagnosticBarColumn(base.Add(ticks*referenceStepTime), diagWidth)
+
+	wantAdvance := int(int64(ticks*referenceStepTime) / int64(diagnosticPixelPeriod))
+	if got := colN - col0; got != wantAdvance {
+		t.Fatalf("bar advanced %d column(s) over %d reference-rate ticks (%s elapsed), want exactly %d (diagnosticPixelPeriod=%s)",
+			got, ticks, ticks*referenceStepTime, wantAdvance, diagnosticPixelPeriod)
 	}
 }
 
@@ -395,7 +444,7 @@ func TestFrameWriterCountsDroppedOnStdinFailure(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -431,7 +480,7 @@ func TestNewFrameWriterRefusesUncoveredChannelRange(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: 0} // every frame uncovered
 	tl := &fakeTimelineSource{}
 
-	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{}); err == nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{}); err == nil {
 		t.Fatalf("NewFrameWriter with an uncovered channel range: want error, got nil")
 	}
 }
@@ -538,7 +587,7 @@ func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
