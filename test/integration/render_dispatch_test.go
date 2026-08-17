@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/fseq/fseqtest"
 )
 
 // This file is Track B seam B2b-front's own acceptance proof, following
@@ -26,10 +28,17 @@ import (
 // asset's runtime filename/content hash by identity — ADR-028) proved
 // against a real uploaded asset, a real show.surface, and a real agent
 // that actually starts and stops a gst-launch-1.0 pipeline.
+//
+// Asset sync is REAL here rather than stubbed, and the FSEQ is genuinely
+// valid: since seam B3, applySurface hashes the node-local file against the
+// assignment's content hash and parses it, so an assignment whose bytes
+// never reached the node (or reached it as a placeholder string) fails
+// before any pipeline starts. That makes this the first test in which an
+// FSEQ moves through the asset store to a node and is then rendered.
 func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 	requireBroker(t)
 	dataDir := t.TempDir()
-	coord, token, _ := startAssetCoordinator(t, dataDir, false)
+	coord, token, _ := startAssetCoordinator(t, dataDir, true)
 
 	showID := "show-" + uniqueSuffix()
 	nodeID := "node-" + uniqueSuffix()
@@ -45,8 +54,19 @@ func TestRenderApplyClearRestartAgainstRealAgent(t *testing.T) {
 		"--pixel-format", "rgb", "--frame-rate", "40", "--transport", "ndi", "--ndi-source-name", "test-source",
 	}, surfaceID)
 
-	filePath := writeTempFile(t, "opener.fseq", []byte("fake fseq bytes for the render dispatch acceptance test"))
+	// 24 channels so the surface's 12-channel range at start channel 1 is a
+	// genuine sub-range rather than the whole file, and 40 frames at 25 ms
+	// so the frame writer has a second of real content to walk.
+	filePath := writeTempFile(t, "opener.fseq", fseqtest.Build(24, 40, 25))
 	uploadNodeAsset(t, coord, token, showID, "opener", "fseq", nodeID, filePath)
+
+	// The node must actually hold the bytes before apply: since B3 the
+	// agent hashes and parses its local copy, so applying before sync
+	// completes fails on a missing file rather than on anything this test
+	// is about.
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		return apiNodeManifestState(t, coord, nodeID) == "ready"
+	}, "node asset manifest to become ready so the FSEQ is on the node before apply")
 
 	// --- status before apply: no render report published yet -> exitRenderUnavailable (22) ---
 	code, stdout, stderr := runCtl(t, coord, token, []string{"render", "status"}, nodeID)

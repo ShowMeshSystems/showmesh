@@ -191,7 +191,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 echo "test-integration: running against $SHOWMESH_TEST_MQTT_BROKER (container $CONTAINER_NAME)"
-if ! go test -tags=integration -race -count=1 -timeout=8m -v ./test/integration/...; then
+if ! go test -tags=integration -race -count=1 -timeout=8m -v ${SHOWMESH_TEST_RUN:+-run "$SHOWMESH_TEST_RUN"} ./test/integration/...; then
   echo "test-integration: go test failed; dumping $CONTAINER_NAME logs before teardown" >&2
   docker logs "$CONTAINER_NAME" >&2 || true
   exit 1
