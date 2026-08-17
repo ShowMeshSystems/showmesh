@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { applyRenderSurface, clearRenderSurface, getShowSurface, listConfigObjects, restartRenderPipeline } from '../api'
+import { applyRenderSurface, clearRenderSurface, listShowSurfacesForNode, restartRenderPipeline } from '../api'
 import type { ObservationEntry, RenderCommandResult } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope } from '../app/session'
@@ -36,10 +36,11 @@ type ConfiguredSurfacesState =
 // assigned to nodeId (payload.node) — the set `showmeshctl render apply`
 // already reaches without any prior render report, and the render report
 // alone cannot see (a supervisor entry, and so a report row, exists only
-// AFTER an apply). listConfigObjects's summary shape carries `show`, not
-// `node` (STEP-9-SPEC.md section 5.5 predates show.surface), so each
-// candidate is fetched in full to filter by node — bounded by ADR-026's
-// v1 one-surface-per-node scope, not an unbounded fan-out.
+// AFTER an apply). GET /config/show.surface?node=<id> filters server-side,
+// so this is one HTTP call regardless of how many surfaces are
+// configured — an external review of PR #14 found the earlier
+// listConfigObjects + per-row getShowSurface fan-out costing one HTTP
+// call per configured surface just to read its node field.
 function useConfiguredSurfaceIds(nodeId: string, allowed: boolean): ConfiguredSurfacesState {
   const [state, setState] = useState<ConfiguredSurfacesState>({ kind: 'idle' })
 
@@ -50,16 +51,10 @@ function useConfiguredSurfaceIds(nodeId: string, allowed: boolean): ConfiguredSu
     }
     let cancelled = false
     setState({ kind: 'loading' })
-    listConfigObjects('show.surface')
-      .then(async (resp) => {
-        const resolved = await Promise.all(
-          resp.objects.map(async (obj) => {
-            const full = await getShowSurface(obj.id)
-            return full.payload.node === nodeId ? obj.id : null
-          }),
-        )
+    listShowSurfacesForNode(nodeId)
+      .then((resp) => {
         if (cancelled) return
-        setState({ kind: 'loaded', surfaceIds: resolved.filter((id): id is string => id !== null) })
+        setState({ kind: 'loaded', surfaceIds: resp.objects.map((obj) => obj.id) })
       })
       .catch((err: unknown) => {
         if (cancelled) return

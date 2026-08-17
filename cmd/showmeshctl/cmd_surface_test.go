@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,67 @@ func TestCmdSurfaceListPassesShowFilter(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "garage") {
 		t.Errorf("stdout = %q, want it to name the surface id", stdout.String())
+	}
+}
+
+// TestCmdSurfaceListPassesNodeFilter proves CLI parity (CLAUDE.md's "every
+// API capability gets CLI coverage in the step that adds it") for the
+// server-side ?node= filter added for the PR #14 review finding.
+//
+// Broken and confirmed to fail: reverted --node to a parsed-but-unused
+// flag — gotQuery came back empty instead of "node=render-01" and the
+// test failed on that assertion. Restored afterward.
+func TestCmdSurfaceListPassesNodeFilter(t *testing.T) {
+	var gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.surface","objects":[
+			{"id":"garage","label":"Garage Door","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-16T20:00:00Z"}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdSurface([]string{"list", "--server", ts.URL, "--node", "render-01"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/config/show.surface" {
+		t.Errorf("path = %q, want /api/v1/config/show.surface", gotPath)
+	}
+	if gotQuery != "node=render-01" {
+		t.Errorf("query = %q, want node=render-01", gotQuery)
+	}
+}
+
+// TestCmdSurfaceListPassesShowAndNodeFilterTogether proves both flags
+// reach the request at once, matching the API's AND semantics.
+func TestCmdSurfaceListPassesShowAndNodeFilterTogether(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","kind":"show.surface","objects":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdSurface(
+		[]string{"list", "--server", ts.URL, "--show", "halloween-2026", "--node", "render-01"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")),
+	)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	q, err := url.ParseQuery(gotQuery)
+	if err != nil {
+		t.Fatalf("parsing query %q: %v", gotQuery, err)
+	}
+	if q.Get("show") != "halloween-2026" || q.Get("node") != "render-01" {
+		t.Errorf("query = %q, want both show=halloween-2026 and node=render-01", gotQuery)
 	}
 }
 

@@ -117,6 +117,7 @@ export {
   declareNode,
   deleteNodeDeclaration,
   listConfigObjects,
+  listShowSurfacesForNode,
   getShowSurface,
   getShowAction,
   putShowAction,

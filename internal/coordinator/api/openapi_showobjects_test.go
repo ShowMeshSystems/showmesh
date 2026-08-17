@@ -71,6 +71,17 @@ func TestOpenAPIShowObjectsResponsesMatchRealResponses(t *testing.T) {
 	_, listSurfaceBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface", auth)
 	assertMatchesSchema(t, c, "ConfigObjectsListResponse", listSurfaceBody)
 
+	// PR #14 review finding: GET /config/show.surface?node= against a real
+	// response, and the sibling kinds' 400 Problem for the same parameter.
+	_, listSurfaceByNodeBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface?node=render-01", auth)
+	assertMatchesSchema(t, c, "ConfigObjectsListResponse", listSurfaceByNodeBody)
+
+	nodeFilterRejectedResp, nodeFilterRejectedBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action?node=render-01", auth)
+	if nodeFilterRejectedResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET show.action?node=: status = %d, want 400; body: %s", nodeFilterRejectedResp.StatusCode, nodeFilterRejectedBody)
+	}
+	assertMatchesSchema(t, c, "Problem", nodeFilterRejectedBody)
+
 	_, revSurfaceBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface/garage/revisions", auth)
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revSurfaceBody)
 

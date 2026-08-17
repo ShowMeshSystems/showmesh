@@ -225,8 +225,14 @@ export function listConfigObjects(
   return store.listConfigObjects(kind)
 }
 
-// Finding 16: lets the UI resolve which node a candidate show.surface
-// object is assigned to (the list summary above does not carry `node`).
+// Server-side node filter (GET /config/show.surface?node=) — see
+// store.ts's listShowSurfacesForNode. Replaces the earlier
+// listConfigObjects + per-row getShowSurface fan-out RenderSurfacePanel.tsx
+// used to resolve which show.surface objects are assigned to a node.
+export function listShowSurfacesForNode(nodeId: string): Promise<SchemaConfigObjectsListResponse> {
+  return store.listShowSurfacesForNode(nodeId)
+}
+
 export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
   return store.getShowSurface(id)
 }
