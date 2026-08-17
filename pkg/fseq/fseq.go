@@ -246,6 +246,15 @@ func open(f *os.File) (*File, error) {
 			if len(blocks) > 0 && rb.firstFrame <= prevFirstFrame {
 				return nil, &ErrMalformed{Reason: fmt.Sprintf("block table firstFrame is not strictly increasing at frame %d after %d", rb.firstFrame, prevFirstFrame)}
 			}
+			if rb.firstFrame >= frameCount {
+				// Without this, framesInBlock's uint32 subtraction
+				// (next-firstFrame) wraps for any block starting past the
+				// end of the file, and maxBlockDecodedSize takes the MAX
+				// across blocks, so one bad entry poisons the zstd decoder
+				// bound for the whole file (measured: a single such entry
+				// turned a 64 MiB bound into ~9 TB).
+				return nil, &ErrMalformed{Reason: fmt.Sprintf("block table firstFrame %d is at or past the file's frame count %d", rb.firstFrame, frameCount)}
+			}
 			if off+uint64(rb.length) > size {
 				return nil, &ErrMalformed{Reason: fmt.Sprintf("block at offset %d length %d runs past end of file (%d bytes)", off, rb.length, size)}
 			}
@@ -294,8 +303,10 @@ func open(f *os.File) (*File, error) {
 		// package's own post-decode size check ever runs (klauspost/compress
 		// v1.19.2, decoder.go DecodeAll). A block's true decoded size is
 		// already known from the block table, so decodeBlock checks a
-		// frame's declared FrameContentSize against it directly before ever
-		// calling DecodeAll (see decodeBlock). This decoder-level bound is
+		// frame's declared FrameContentSize against it, and also rejects
+		// any block containing more than one concatenated zstd frame
+		// (RES-017 §5/§8: exactly one standalone zstd frame per block), all
+		// before ever calling DecodeAll (see decodeBlock). This decoder-level bound is
 		// deliberately loose (generous headroom over the largest legitimate
 		// block, floored well above any real block this format produces) —
 		// klauspost/compress clamps its window-size limit to this same
@@ -330,10 +341,19 @@ const minZstdDecoderMaxMemory = 64 << 20 // 64 MiB
 // that holds one frame in a file whose other blocks hold four. A free
 // function (not a *File method) so it is usable at Open time, before a
 // *File exists — see maxBlockDecodedSize.
+//
+// Saturates to 0 rather than wrapping if next <= firstFrame. Open already
+// rejects any block whose firstFrame is at or past the file's frame count,
+// which is what makes that case unreachable here; this is the
+// belt-and-braces so a future caller that skips Open's validation gets 0,
+// never a uint32 underflow into the billions.
 func framesInBlock(blocks []block, frameCount uint32, bi int) uint32 {
 	next := frameCount
 	if bi+1 < len(blocks) && blocks[bi+1].firstFrame < next {
 		next = blocks[bi+1].firstFrame
+	}
+	if next <= blocks[bi].firstFrame {
+		return 0
 	}
 	return next - blocks[bi].firstFrame
 }
@@ -354,6 +374,62 @@ func maxBlockDecodedSize(blocks []block, frameCount uint32, channelCount uint32)
 		max = 1
 	}
 	return max
+}
+
+// zstdFrameByteLen returns the exact number of bytes the single zstd frame
+// starting at data[0] occupies — frame header, every block, and the
+// trailing checksum if present — without decompressing anything. Each
+// block header (RFC 8878 §3.1.1.2, the same 3-byte bitfield
+// klauspost/compress's decodeheader.go parses for only the first block)
+// gives that block's compressed size directly, so the frame's total length
+// is walkable from headers alone. This is what lets decodeBlock detect a
+// second zstd frame concatenated after the first: if the walked length is
+// shorter than the block's raw bytes, something follows the one frame this
+// format is allowed to contain.
+func zstdFrameByteLen(data []byte) (int, error) {
+	var hdr zstd.Header
+	if err := hdr.Decode(data); err != nil {
+		return 0, err
+	}
+	if !hdr.FirstBlock.OK {
+		return 0, io.ErrUnexpectedEOF
+	}
+	pos := hdr.HeaderSize
+	size := hdr.FirstBlock.CompressedSize
+	last := hdr.FirstBlock.Last
+	for {
+		if pos+3 > len(data) {
+			return 0, io.ErrUnexpectedEOF
+		}
+		pos += 3 // this block's header, already accounted for by hdr on the first iteration
+		if pos+size > len(data) {
+			return 0, io.ErrUnexpectedEOF
+		}
+		pos += size
+		if last {
+			break
+		}
+		if pos+3 > len(data) {
+			return 0, io.ErrUnexpectedEOF
+		}
+		bh := uint32(data[pos]) | uint32(data[pos+1])<<8 | uint32(data[pos+2])<<16
+		last = bh&1 != 0
+		switch (bh >> 1) & 3 {
+		case 0, 2: // raw, compressed: size field is the byte count on the wire
+			size = int(bh >> 3)
+		case 1: // RLE: one content byte regardless of decompressed size
+			size = 1
+		default: // reserved
+			return 0, fmt.Errorf("fseq: reserved zstd block type")
+		}
+	}
+	if hdr.HasCheckSum {
+		if pos+4 > len(data) {
+			return 0, io.ErrUnexpectedEOF
+		}
+		pos += 4
+	}
+	return pos, nil
 }
 
 // read3ByteUint assembles a little-endian 24-bit unsigned integer, the
@@ -747,6 +823,17 @@ func (f *File) decodeBlock(bi int) error {
 		var hdr zstd.Header
 		if err := hdr.Decode(f.rawBuf); err == nil && hdr.HasFCS && hdr.FrameContentSize != want {
 			return &ErrMalformed{Reason: fmt.Sprintf("block %d declares a decompressed size of %d bytes, expected exactly %d (%d frames * %d channels)", bi, hdr.FrameContentSize, want, f.framesInBlock(bi), f.channelCount)}
+		}
+		// hdr.Decode above parses only the FIRST zstd frame in the block.
+		// DecodeAll loops over every frame concatenated in its input, so a
+		// block shaped [valid frame, correct FCS][second frame declaring an
+		// arbitrary size] passes the check above and would decode under
+		// WithDecoderMaxMemory alone. RES-017 §5/§8 establishes that FPP
+		// and xLights write exactly one standalone zstd frame per block, so
+		// any block whose bytes are not consumed exactly by that one frame
+		// is rejected outright rather than partially trusted.
+		if n, err := zstdFrameByteLen(f.rawBuf); err != nil || n != len(f.rawBuf) {
+			return &ErrMalformed{Reason: fmt.Sprintf("block %d is not exactly one zstd frame (RES-017: exactly one zstd frame per block)", bi)}
 		}
 		decoded, err := f.dec.DecodeAll(f.rawBuf, f.cachedData[:0])
 		if err != nil {

@@ -28,6 +28,7 @@ type fixtureSpec struct {
 	declareExtraZeroBlocks int
 	varHeaderCode          string // optional, exercises "trust offset 4, don't walk headers"
 	varHeaderData          string
+	literalFrames          [][]byte // when set, used verbatim as each frame's already-sparse-packed bytes instead of synthFrameBytes/packFrame
 }
 
 func write3(b []byte, v uint32) {
@@ -74,10 +75,13 @@ func buildFixture(spec fixtureSpec) []byte {
 		}
 		var buf []byte
 		for fr := start; fr < end; fr++ {
-			if len(spec.sparse) > 0 {
+			switch {
+			case spec.literalFrames != nil:
+				buf = append(buf, spec.literalFrames[fr]...)
+			case len(spec.sparse) > 0:
 				full := synthFrameBytes(int(fr), maxChannelSpan(spec.sparse))
 				buf = append(buf, packFrame(full, spec.sparse)...)
-			} else {
+			default:
 				buf = append(buf, synthFrameBytes(int(fr), spec.channelCount)...)
 			}
 		}
@@ -238,13 +242,34 @@ func fixtureSparseOverlapBoundary(t *testing.T) *File {
 	t.Helper()
 	// Two ranges sharing one boundary channel — the shape measured in a
 	// real file pulled from an FPP host's own sequences/ directory
-	// (RES-017 addendum). Range 1 (table order) must win the shared
-	// channel, matching FPP's own overwrite-per-range reassembly.
+	// (RES-017 addendum): {10,20} and {29,15} both claim channel 29.
+	//
+	// The two ranges are packed here from DISTINCT literal bytes ("A"s for
+	// range 0, "B"s for range 1) rather than derived from one shared
+	// per-channel source buffer. A real xLights-written file always copies
+	// both a range's channel and its overlap partner's from the same
+	// source value (RES-017 addendum §13.1), so first-wins and last-wins
+	// resolution are indistinguishable on real data — which is exactly why
+	// a fixture built that way cannot tell the two resolution orders
+	// apart. This fixture deliberately makes them disagree at the shared
+	// channel so the test can assert which one this package implements:
+	// range 1 (table order) must win, matching FPP's own
+	// overwrite-per-range reassembly (UncompressedFrameData::readFrame).
 	ranges := []SparseRange{{Start: 10, Length: 20}, {Start: 29, Length: 15}}
+	frame1 := append(append([]byte{}, bytesOf('A', 20)...), bytesOf('B', 15)...)
 	return openFixture(t, fixtureSpec{
 		compression: 1, channelCount: sparseSum(ranges), frameCount: 3,
 		stepTimeMS: 25, sparse: ranges,
+		literalFrames: [][]byte{bytesOf('A', 35), frame1, bytesOf('A', 35)},
 	})
+}
+
+func bytesOf(b byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }
 
 func fixtureMultiblock(t *testing.T) *File {
