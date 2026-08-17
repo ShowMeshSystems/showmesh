@@ -178,6 +178,15 @@ Commands:
   render settings set                  write a new render.settings revision (write, full
                                         replacement, requires config:write)
   render settings revisions            list render.settings revision history, newest first
+  render status <nodeId>               show per-surface render evidence for one node (exits 22
+                                        if it has never published a render report at all)
+  render apply <nodeId> <surfaceId> <sequenceId>
+                                        dispatch render.surface.apply and confirm by evidence
+                                        (write, requires render:command)
+  render clear <nodeId> <surfaceId>    dispatch render.surface.clear and confirm by evidence
+                                        (write, requires render:command)
+  render restart <nodeId> <surfaceId>  dispatch render.pipeline.restart and confirm by evidence
+                                        (write, requires render:command)
   version                  show this CLI's and the coordinator's version and API negotiation
   help                     show this help
 
