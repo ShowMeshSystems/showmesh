@@ -12,8 +12,8 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-002](RES-002-fpp-multisync-compatibility.md) | FPP MultiSync compatibility | planned (bench; protocol L2, hardware/network L1) | critical | — |
 | [RES-003](RES-003-xlights-fpp-connect-compatibility.md) | xLights/FPP Connect compatibility | planned (compat surface L1 2026-08-13; integration L0) | high | RES-002 |
 | [RES-004](RES-004-virtual-matrix-renderer-performance.md) | Virtual-matrix renderer performance | planned (reference profile decided; bench L0) | critical | RES-002 |
-| [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | planned (transport roles decided; bench L0) | critical | RES-004, RES-006 |
-| [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | planned (distribution resolved at L1; sender bench pending) | high | — |
+| [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | testing (single-surface wired NDI soak L2 2026-08-16; alignment, multi-surface, HDMI, recovery L0) | critical | RES-004, RES-006 |
+| [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | testing (amd64 sender L2 2026-08-16; arm64 and Ubuntu open; plugin built from source) | high | — |
 | [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench, L0) | critical | RES-002 |
 | [RES-008](RES-008-configuration-model.md) | Configuration model | planned (constraint survey L1, re-run 2026-08-13 at schema v6; D1–D6 decided, D1/D2 shipped in Step 7; §4 macro decisions L0) | high | — |
 | [RES-009](RES-009-failure-mode-testing.md) | Failure-mode testing | planned | critical | whatever is integrated; the matrix fills in as tracks land |
@@ -35,7 +35,7 @@ RES-009 is not a terminal record: each failure row is exercised against the asse
 - **L3 — Integrated:** reproduced across the intended show path.
 - **L4 — Resilient:** survives soak, restart, recovery, and injected faults.
 
-The ladder measures confidence attained, not permission to proceed: building against an L0 or L1 claim is normal, and what must never happen is claiming verification that has not occurred. Only records explicitly named as blocking research gate build work, because their result decides an architecture question; RES-002 (MultiSync) and RES-006's Linux NDI question are the current examples. Show readiness needs L4.
+The ladder measures confidence attained, not permission to proceed: building against an L0 or L1 claim is normal, and what must never happen is claiming verification that has not occurred. Only records explicitly named as blocking research gate build work, because their result decides an architecture question. **RES-006's Linux NDI question was answered on 2026-08-16 and no longer gates anything**, which leaves RES-002 (MultiSync) as the only current example. Show readiness needs L4.
 
 ## Research workflow
 

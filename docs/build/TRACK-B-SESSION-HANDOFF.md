@@ -13,7 +13,7 @@ Of the three founding problems (FPP control, Resolume control, virtual-matrix ge
 
 ## What exists that the track doc predates
 
-- `bench/ndi-spike/run-spike.sh` is committed (with `docs/bench/TRACK-B-NDI-SPIKE.md`): the B0 spike harness is ready to run. **B0 is owner bench work and gates only B4's design, not B2 or B3.**
+- **B0 ran on 2026-08-16 and passed.** 982,100 frames at 1920x1080 UYVY, 0 dropped, 0 late, 0 errors, 40.00 fps for 6 h 49 min, Debian 13 OptiPlex Micro 7050 over wired Ethernet into Arena plus a second NDI receiver, sink `sync=true`. **B4's design is settled as NDI.** Evidence in RES-006, coverage limits in RES-005, caveats in the Track B doc's B0 entry. Note that the owner ran the harness pipelines by hand rather than through `run-spike.sh`, so there is no `bench/ndi-spike/results/` directory to go looking for; the numbers above are the record.
 - A local test stack is running on the development laptop: coordinator (:8080), UI (:8081), authenticated Mosquitto (:1883), the bench `fppd` (`host.docker.internal:8090`, configured as `bench-fpp`), and a native `dev-node-01` agent from `~/showmesh-dev-node/`. A Track B session can develop against this stack; `deploy/mosquitto/add-agent-credential.sh <node-id>` provisions additional agent credentials.
 - `pkg/multisync` remains the prebuilt hard half: wire codec, listener, and the FPP-remote timeline state machine on an injectable clock. This track is what it was written for. RES-002 is L2 for protocol semantics; clock drift and switch behavior stay open until the owner's physical bench run.
 
@@ -23,9 +23,9 @@ ADR-002 (capabilities, versioned and attributed), ADR-005/ADR-026 (surfaces not 
 
 ## Suggested seam structure
 
-1. **B2, pipeline supervision.** The agent builds, starts, watches, restarts a GStreamer pipeline (test pattern first), reports health as observations with provenance and freshness. Independent of B0's answer. Needs new allowlisted agent operations and new observation signals — request identifiers from the orchestrator before building.
+1. **B2, pipeline supervision.** The agent builds, starts, watches, restarts a GStreamer pipeline (test pattern first), reports health as observations with provenance and freshness. Independent of B0's answer. Needs new allowlisted agent operations and new observation signals — request identifiers from the orchestrator before building. **Two constraints from B0's measurement**: the NDI encode costs 86% of one core and the spike ran it single-threaded, so pipelines this seam constructs put a `queue` between the renderer and the NDI sink rather than inheriting the spike's shape, and sender/receiver restart recovery is unverified (spike run 5 unrun) so supervision must not assume either side comes back on its own.
 2. **B3 node-side, FSEQ extraction.** Read the surface assignment, extract the channel range from the node-local FSEQ at the timeline frame. The FSEQ format work should cite RES-008/the capture rather than re-deriving. MultiSync drives the frame clock; sync-loss behavior is a named owner decision (below).
-3. **B4, NDI output.** Blocked on B0's spike result for design (runtime distribution, Linux answer per RES-006). Build the adapter seam so a missing runtime degrades the node with a stated reason.
+3. **B4, NDI output.** **No longer blocked**: B0 answered it on 2026-08-16 and the answer is NDI. Build the adapter seam so a missing runtime degrades the node with a stated reason, and note that "missing" is a state this will genuinely meet, because the GStreamer NDI element is not packaged on Debian 13 and is a source build on the node.
 4. **B5, capability advertisement.** `render.surface` and per-transport capabilities, advertised independently (support for one transport is never evidence for the other).
 
 Two acceptance criteria in the track doc need real hardware or FPP playing a sequence (timeline-following, sync-loss behavior); everything else is provable against the bench `fppd` and the test stack. What cannot be proven locally goes to `docs/private/PUNCH-LIST.md`, not marked done.
@@ -33,8 +33,8 @@ Two acceptance criteria in the track doc need real hardware or FPP playing a seq
 ## Decisions to put to the owner early
 
 - **Sync-loss output behavior** (hold last frame / black / diagnostic): a product decision the track doc already flags. Queue it in `docs/private/DECISION-QUEUE.md` with the options if the owner is absent.
-- **Render-node OS** (Debian 13 recommended pending the spike's packaging check).
-- **B0 scheduling**: the spike and the RES-002 physical bench are both owner bench work; name what each result would change before asking for bench time.
+- ~~**Render-node OS** (Debian 13 recommended pending the spike's packaging check).~~ **Settled 2026-08-16: Debian 13**, benched successfully. The packaging check returned no, so the NDI plugin is compiled from `gst-plugins-rs` on the node; the owner accepted that for day-0 with a scripted build and owns node build mechanics outside the build sessions.
+- **B0 scheduling**: ~~the spike~~ **done 2026-08-16**; the RES-002 physical bench remains owner bench work. Name what a result would change before asking for bench time. **Spike run 5, recovery, is still unrun** and is on the punch list; B2's supervision design should treat sender/receiver restart recovery as unknown rather than assume it works.
 
 ## Parallel small seams available to any spare builder
 
