@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -15,9 +16,11 @@ import (
 
 // This file is Step 9 wave 3's own showmeshctl surface (STEP-9-SPEC.md
 // section 9): "macro list", "macro show <id>", and "macro run <id>",
-// against the show.macro configuration kind (GET only — writing a macro
-// definition is Track E's authoring surface, ADR-030, not this step's) and
-// the run submission route (STEP-9-SPEC.md section 6.6).
+// against the show.macro configuration kind and the run submission route
+// (STEP-9-SPEC.md section 6.6). "macro put" (Track G seam G-6) closes the
+// Class 2 gap this file's own help text used to describe: PUT
+// /config/show.macro/{id} shipped in Step 9 and the Operator UI has called
+// it since Track E merged, but this program refused it until now.
 //
 // "macro run" is deliberately asynchronous by default (ADR-031 decision 1,
 // section 2.1): it prints the accepted run's id and initial state and
@@ -42,6 +45,8 @@ func cmdMacro(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdMacroShow(rest, stdout, stderr, clock)
 	case "run":
 		return cmdMacroRun(rest, stdout, stderr, clock)
+	case "put":
+		return cmdMacroPut(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl macro: unknown subcommand %q\n\n", sub)
 		printMacroUsage(stderr)
@@ -61,10 +66,13 @@ Subcommands:
   list         enumerate macro objects (id, label, show, revision)
   show <id>    show one macro's full definition, including its steps
   run <id>     submit a run (write; accepted asynchronously, 202)
+  put <id>     write a new show.macro configuration revision (reads a
+               payload from --file, or from stdin if --file is not given)
 
-Writing a macro definition is not this program's job — see
-"showmeshctl action --help": the show-authoring surface owns PUT for both
-show.macro and show.action.
+"macro put" accepts a full show.macro JSON payload (show, label,
+description, steps). Validated before activation: an invalid payload, an
+unknown action reference, or a fallback-class mismatch is rejected and
+appends no revision (ADR-009).
 
 Run "showmeshctl macro <subcommand> --help" for flags specific to one
 subcommand.
@@ -155,6 +163,84 @@ func cmdMacroShow(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		return exitOK
 	}
 	printShowMacroDetail(stdout, resp)
+	return exitOK
+}
+
+// cmdMacroPut implements "showmeshctl macro put"
+// (PUT /api/v1/config/show.macro/{id}), following "action put"
+// (cmdActionPut, cmd_action.go) exactly: the payload is read from --file,
+// or from stdin when --file is not given (readConfigPayload,
+// cmd_config.go), and sent to the coordinator verbatim as
+// json.RawMessage — this command does not decode, re-encode, or
+// second-guess the operator's own payload. Validation (required keys,
+// unknown action references, the Resolume local-fallback rule) is
+// server-side (config.DecodeShowMacroPayload, showconfig.go); the one
+// thing checked here is that the payload is syntactically valid JSON at
+// all, so a malformed file fails fast with a clear message rather than an
+// opaque 400 from the server. An absent key, an explicit null, and an
+// explicit empty value are three different things on this write surface
+// (CLAUDE.md's own recurring lesson) and this command does not collapse
+// them — the server's decoder is where that distinction is enforced.
+func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl macro put", stderr)
+	var file string
+	fs.StringVar(&file, "file", "", "path to a JSON show.macro payload; reads stdin if not given")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl macro put [flags] <macro-id>")
+		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.macro configuration revision")
+		_, _ = fmt.Fprintln(stderr, "(PUT /api/v1/config/show.macro/{id}, requires config:write, admin only).")
+		_, _ = fmt.Fprintln(stderr, "The payload is a full show.macro object: show, label, description, and")
+		_, _ = fmt.Fprintln(stderr, "steps. Validated before activation: an invalid payload, an unknown action")
+		_, _ = fmt.Fprintln(stderr, "reference, or a fallback-class mismatch is rejected and appends no")
+		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "macro put", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "macro put", newCLIError(exitUsage, "%v", err))
+	}
+	if !json.Valid(raw) {
+		return reportError(stderr, "macro put", newCLIError(exitUsage, "payload must be valid JSON"))
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "macro put", err)
+	}
+	// A local SQLite write with no confirmation wait, exactly like
+	// "action put" — g.timeout unmodified, not effectiveMacroClientTimeout's
+	// floor, which exists for the run/follow surface's own different
+	// contract (no response held open on this route either).
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp showMacroConfigResponse
+	if err := c.putJSON(ctx, "/api/v1/config/show.macro/"+url.PathEscape(id), json.RawMessage(raw), &resp); err != nil {
+		return reportError(stderr, "macro put", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "macro put", err)
+		}
+		return exitOK
+	}
+	printShowMacroDetail(stdout, resp)
+	_, _ = fmt.Fprintf(stderr, "\nshowmeshctl macro put: revision %d is now active.\n", resp.Revision)
 	return exitOK
 }
 
