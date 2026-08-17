@@ -11,6 +11,11 @@ import (
 	"sync"
 )
 
+// ErrNoStdin is returned by [ProcessHandle.Stdin] when the process was
+// started without a usable stdin pipe. [startRealProcess] always requests
+// one, so this only fires if pipe creation itself failed before Start.
+var ErrNoStdin = errors.New("pipeline: process has no stdin pipe")
+
 // maxStderrTailBytes bounds the in-memory stderr ring buffer this package
 // keeps per process attempt. Matches [mqttproto]'s maxRenderStderrBytes so a
 // tail captured here never has to be truncated a second time at the wire
@@ -46,6 +51,14 @@ type ProcessHandle interface {
 
 	// Pid reports the OS process id, for logging only.
 	Pid() int
+
+	// Stdin returns the process's stdin pipe, for B3's frame writer to
+	// write raw frame buffers into (fed to gst-launch-1.0's fdsrc/stdin
+	// source stage — see spec.go's FSEQSourceSpec). Returns ErrNoStdin if
+	// none is available. The returned writer is only valid for the life of
+	// this ProcessHandle; a caller must re-fetch it (via the supervisor,
+	// never cached across a restart) after every process transition.
+	Stdin() (io.Writer, error)
 }
 
 // ExitResult is what Wait reports once a process has actually ended.
@@ -87,6 +100,10 @@ type ProcessStarter func(ctx context.Context, path string, args []string, onRunn
 func startRealProcess(ctx context.Context, path string, args []string, onRunningMarker func()) (ProcessHandle, error) {
 	cmd := exec.Command(path, args...)
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: stdin pipe: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: stdout pipe: %w", err)
@@ -100,7 +117,7 @@ func startRealProcess(ctx context.Context, path string, args []string, onRunning
 		return nil, fmt.Errorf("pipeline: starting %s: %w", path, err)
 	}
 
-	h := &realProcess{cmd: cmd, done: make(chan ExitResult, 1)}
+	h := &realProcess{cmd: cmd, stdin: stdin, done: make(chan ExitResult, 1)}
 
 	// os/exec's StdoutPipe/StderrPipe doc states this verbatim: Wait closes
 	// both pipes as soon as the process exits, so calling it before every
@@ -116,8 +133,9 @@ func startRealProcess(ctx context.Context, path string, args []string, onRunning
 
 // realProcess is the production [ProcessHandle].
 type realProcess struct {
-	cmd  *exec.Cmd
-	done chan ExitResult
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	done  chan ExitResult
 
 	mu               sync.Mutex
 	stderrTail       []byte
@@ -246,6 +264,18 @@ func (h *realProcess) Pid() int {
 		return 0
 	}
 	return h.cmd.Process.Pid
+}
+
+// Stdin returns the process's stdin pipe. A write to this pipe after the
+// process has exited returns an error (broken pipe) rather than blocking or
+// panicking; the frame writer treats that as a dropped frame and relies on
+// this package's own crash detection (via Wait) to notice the exit and
+// restart, never killing or restarting the process itself.
+func (h *realProcess) Stdin() (io.Writer, error) {
+	if h.stdin == nil {
+		return nil, ErrNoStdin
+	}
+	return h.stdin, nil
 }
 
 // truncateStderr bounds s to max bytes, appending suffix (visibly) when
