@@ -37,4 +37,14 @@ type RenderSettingsConfigResponse struct {
 	CreatedByPrincipalID   *string                     `json:"createdByPrincipalId"`
 	CreatedByPrincipalName *string                     `json:"createdByPrincipalName"`
 	Source                 string                      `json:"source"`
+
+	// IdleOutputEffectiveNote states, in every response (there is no
+	// config-push path to a node beyond render.surface.apply — build
+	// contract ruling 4), that this value takes effect at each surface's
+	// OWN next render.surface.apply dispatch: a surface already applied
+	// keeps drawing whatever idleOutput was resolved into ITS assignment at
+	// the time it was applied, unaffected by this write, until it is
+	// re-applied. Stated explicitly rather than left for an operator to
+	// discover by watching a surface not change.
+	IdleOutputEffectiveNote string `json:"idleOutputEffectiveNote"`
 }

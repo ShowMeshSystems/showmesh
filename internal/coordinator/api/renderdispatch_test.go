@@ -360,6 +360,97 @@ func TestRenderApplyDispatchesCompleteAssignmentAndConfirms(t *testing.T) {
 	}
 }
 
+// TestRenderApplyDefaultsIdleOutputToBlackWhenUnconfigured proves
+// resolveRenderApplyParams resolves render.settings.idleOutput to a
+// CONCRETE value even when nothing has ever been written for that kind —
+// the node is told black, the built-in default, and never has to know the
+// coordinator's own "nothing configured" posture.
+func TestRenderApplyDefaultsIdleOutputToBlackWhenUnconfigured(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	_, body := doRawRequest(t, api.Handler, req)
+
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1; body: %s", setup.pub.count(), body)
+	}
+	if got := setup.pub.payload[0].Payload.Params["idleOutput"]; got != config.RenderIdleOutputDefault {
+		t.Fatalf("dispatched params[idleOutput] = %v, want %q (the built-in default; render.settings was never written)", got, config.RenderIdleOutputDefault)
+	}
+}
+
+// TestRenderApplyResolvesIdleOutputFromRenderSettings proves the OTHER
+// half: once render.settings has been written, resolveRenderApplyParams
+// resolves and sends THAT value, not the built-in default.
+func TestRenderApplyResolvesIdleOutputFromRenderSettings(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	settingsPayload, err := config.EncodeRenderSettingsPayload(config.RenderSettingsPayload{
+		IdleOutput: config.RenderIdleOutputDiagnostic,
+		RestartPolicy: config.RenderRestartPolicy{
+			InitialDelaySeconds: 1, MaxDelaySeconds: 30, MaxConsecutiveFastFailures: 5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode render.settings payload: %v", err)
+	}
+	renderPutConfig(t, setup.st, config.RenderSettingsConfigKind, config.RenderSettingsConfigObjectID, settingsPayload)
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	_, body := doRawRequest(t, api.Handler, req)
+
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1; body: %s", setup.pub.count(), body)
+	}
+	if got := setup.pub.payload[0].Payload.Params["idleOutput"]; got != config.RenderIdleOutputDiagnostic {
+		t.Fatalf("dispatched params[idleOutput] = %v, want %q (the value written to render.settings)", got, config.RenderIdleOutputDiagnostic)
+	}
+
+	var result struct {
+		Command struct {
+			IdleOutput string `json:"idleOutput"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.IdleOutput != config.RenderIdleOutputDiagnostic {
+		t.Fatalf("response command.idleOutput = %q, want %q — the resolved value must also be surfaced to the caller", result.Command.IdleOutput, config.RenderIdleOutputDiagnostic)
+	}
+}
+
 // TestRenderDispatchReportsUnconfirmedWithoutEvidence proves the OTHER
 // half of ADR-003: no evidence ever arrives, so the deadline elapses and
 // this reports unconfirmed rather than assuming the publish succeeded.

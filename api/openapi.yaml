@@ -4318,7 +4318,8 @@ components:
         `surface.pipeline.state` evidence dated at or after dispatch.
       required:
         [commandId, idempotencyKey, action, nodeId, surfaceId, replay,
-         outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt]
+         outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt,
+         idleOutput]
       additionalProperties: false
       properties:
         commandId:
@@ -4364,6 +4365,14 @@ components:
         resolvedAt:
           type: [string, "null"]
           format: date-time
+        idleOutput:
+          type: string
+          enum: ["black", "hold", "diagnostic", ""]
+          description: >-
+            The render.settings.idleOutput value RESOLVED and sent to the
+            node as part of THIS render.surface.apply assignment. Empty for
+            render.surface.clear/render.pipeline.restart/render.transport.probe,
+            which carry no idleOutput.
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.
@@ -5821,7 +5830,8 @@ components:
         ResolumeRecoveryConfigResponse's identical posture.
       required:
         [serverTime, kind, revision, payload, updatedAt,
-         createdByPrincipalId, createdByPrincipalName, source]
+         createdByPrincipalId, createdByPrincipalName, source,
+         idleOutputEffectiveNote]
       properties:
         serverTime:
           type: string
@@ -5841,6 +5851,14 @@ components:
           type: [string, "null"]
         source:
           type: string
+        idleOutputEffectiveNote:
+          type: string
+          description: >-
+            States that idleOutput takes effect on each surface's own next
+            render.surface.apply dispatch, never on an already-applied
+            surface — there is no config-push path to a node beyond that
+            assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always
+            non-empty.
     Problem:
       type: object
       description: >-

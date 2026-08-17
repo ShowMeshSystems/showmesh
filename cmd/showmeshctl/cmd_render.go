@@ -41,6 +41,8 @@ type renderSettingsConfigResponse struct {
 	CreatedByPrincipalID   *string                     `json:"createdByPrincipalId"`
 	CreatedByPrincipalName *string                     `json:"createdByPrincipalName"`
 	Source                 string                      `json:"source"`
+
+	IdleOutputEffectiveNote string `json:"idleOutputEffectiveNote"`
 }
 
 // cmdRender implements "showmeshctl render". Currently only "settings"
@@ -545,4 +547,7 @@ func printRenderSettingsConfig(w io.Writer, resp renderSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  restartPolicy: initialDelaySeconds=%d maxDelaySeconds=%d maxConsecutiveFastFailures=%d\n",
 		resp.Payload.RestartPolicy.InitialDelaySeconds, resp.Payload.RestartPolicy.MaxDelaySeconds,
 		resp.Payload.RestartPolicy.MaxConsecutiveFastFailures)
+	if resp.IdleOutputEffectiveNote != "" {
+		_, _ = fmt.Fprintf(w, "  note: %s\n", resp.IdleOutputEffectiveNote)
+	}
 }

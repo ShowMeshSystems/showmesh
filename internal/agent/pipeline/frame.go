@@ -38,6 +38,35 @@ var idleContentStates = map[multisync.State]bool{
 	multisync.StateUnknown: true,
 }
 
+// The three values render.settings.idleOutput can carry (build contract
+// ruling 3), independently reproduced here rather than importing
+// internal/coordinator/config — the same each-side-of-a-wire-boundary-
+// decodes-independently convention renderApplyKnownKeys' own doc comment
+// (internal/agent/renderops.go) already applies for this exact payload.
+const (
+	IdleOutputBlack      = "black"
+	IdleOutputHold       = "hold"
+	IdleOutputDiagnostic = "diagnostic"
+)
+
+// diagnosticFillHigh and diagnosticFillLow are the two constant byte values
+// [FrameWriter] alternates between for [IdleOutputDiagnostic]. Both
+// non-zero (never equal to black) and distinct from each other, so the
+// output is visibly not the all-zero idle buffer and visibly changes over
+// time — the owner's ruling that a diagnostic output must be GENERATED and
+// never a frozen frame, satisfied by picking between two precomputed
+// buffers rather than freezing whatever content last played.
+const (
+	diagnosticFillHigh byte = 0xC0
+	diagnosticFillLow  byte = 0x30
+)
+
+// diagnosticBlinkPeriod is how long [FrameWriter] holds each of the two
+// diagnostic fill values before switching — long enough to read as
+// deliberate rather than flicker, short enough that a bystander watching
+// for more than a couple of seconds sees it change.
+const diagnosticBlinkPeriod = time.Second
+
 // FrameWriter extracts one surface's channel range from a local FSEQ file,
 // frame by frame, at the position [multisync.Timeline] reports, and writes
 // each frame's raw buffer to the supervised pipeline's stdin. One
@@ -68,20 +97,27 @@ type FrameWriter struct {
 
 	stepTime time.Duration
 
-	// idleOutput is which buffer to draw for [idleContentStates]. Always
-	// "black" today: render.settings' idleOutput field exists coordinator-
-	// side (ADR-039) but nothing distributes it to a node yet (build
-	// contract ruling 4 — there is no config-push path to a node beyond a
-	// render.surface.apply assignment), so "hold" and "diagnostic" are not
-	// implemented and this is hardcoded rather than pretending it is wired.
+	// idleOutput is which buffer to draw for [idleContentStates]: one of
+	// [IdleOutputBlack] (default), [IdleOutputHold], or
+	// [IdleOutputDiagnostic]. Carried from the coordinator on the
+	// render.surface.apply assignment (build contract ruling 4) — see
+	// internal/agent/renderops.go's parseIdleOutput.
 	idleOutput string
 
-	// buf and idleBuf are reused every frame (never reallocated on the hot
-	// path) — see build contract's "avoid an allocation per frame" rule.
-	// idleBuf is all-zero and never written to after construction; buf is
-	// overwritten by every successful ChannelRange call.
-	buf     []byte
-	idleBuf []byte
+	// buf, idleBuf, diagBufHigh, and diagBufLow are all reused every frame
+	// (never (re)allocated on the hot path) — see build contract's "avoid
+	// an allocation per frame" rule. idleBuf is all-zero and never written
+	// to after construction. buf is overwritten by every successful
+	// ChannelRange call and, deliberately, NOT overwritten while idle —
+	// which is what lets [IdleOutputHold] draw it directly as "the last
+	// successfully extracted content frame" with no separate hold buffer
+	// and no copy. diagBufHigh/diagBufLow are filled once at construction
+	// with distinct constant values and picked between by wall-clock time
+	// (see idleOutputFor) — a fill, never a render (ADR-040).
+	buf         []byte
+	idleBuf     []byte
+	diagBufHigh []byte
+	diagBufLow  []byte
 
 	// Atomic because Counts reads them from a caller's goroutine while
 	// writeOneFrame is incrementing them on the frame loop's.
@@ -116,7 +152,14 @@ type FrameWriter struct {
 // frames, this fails the assignment up front with the real error (build
 // contract: "refuse, with the numbers stated, when the surface's channel
 // range is not fully covered"). It does not start the writer; call Run.
-func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount int, logger Logger) (*FrameWriter, error) {
+//
+// idleOutput selects the surface's idle behaviour (build contract ruling
+// 3). Any value other than [IdleOutputHold] or [IdleOutputDiagnostic] —
+// including "" — is treated as [IdleOutputBlack], the safe default:
+// callers that resolve a concrete value (internal/agent/renderops.go)
+// already validate it against the known set before reaching here, so this
+// is defense in depth, never the place that rule is enforced.
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount int, idleOutput string, logger Logger) (*FrameWriter, error) {
 	probe := make([]byte, channelCount)
 	if source.FrameCount() > 0 {
 		if err := source.ChannelRange(0, channelStart, channelCount, probe); err != nil {
@@ -129,6 +172,17 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		stepTime = multisync.DefaultStepTime
 	}
 
+	if idleOutput != IdleOutputHold && idleOutput != IdleOutputDiagnostic {
+		idleOutput = IdleOutputBlack
+	}
+
+	diagHigh := make([]byte, channelCount)
+	diagLow := make([]byte, channelCount)
+	for i := range diagHigh {
+		diagHigh[i] = diagnosticFillHigh
+		diagLow[i] = diagnosticFillLow
+	}
+
 	fw := &FrameWriter{
 		surfaceID:    surfaceID,
 		sup:          sup,
@@ -138,9 +192,11 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		channelStart: channelStart,
 		channelCount: channelCount,
 		stepTime:     stepTime,
-		idleOutput:   "black",
+		idleOutput:   idleOutput,
 		buf:          make([]byte, channelCount),
 		idleBuf:      make([]byte, channelCount), // zero-valued: black for rgb/rgbw alike
+		diagBufHigh:  diagHigh,
+		diagBufLow:   diagLow,
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
 	}
@@ -192,7 +248,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 
 	var outBuf []byte
 	if idleContentStates[snap.State] {
-		outBuf = fw.idleBuf
+		outBuf = fw.idleOutputFor(tickTime)
 	} else {
 		frameIdx := fw.frameIndexFor(snap.PositionMS)
 		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {
@@ -243,6 +299,30 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 
 	fw.sampleRate(start, written)
 	fw.reportCounts()
+}
+
+// idleOutputFor selects which precomputed buffer to draw for one idle
+// tick, per fw.idleOutput — no allocation, no per-byte write, just a
+// buffer reference chosen from what NewFrameWriter already built.
+//
+//   - [IdleOutputBlack]: idleBuf, all-zero.
+//   - [IdleOutputHold]: buf, the last successfully extracted content frame
+//     (buf is never touched while idle — see the FrameWriter struct's own
+//     doc comment on buf).
+//   - [IdleOutputDiagnostic]: diagBufHigh or diagBufLow, alternated by
+//     wall-clock time so the output visibly changes rather than freezing.
+func (fw *FrameWriter) idleOutputFor(tick time.Time) []byte {
+	switch fw.idleOutput {
+	case IdleOutputHold:
+		return fw.buf
+	case IdleOutputDiagnostic:
+		if (tick.UnixNano()/int64(diagnosticBlinkPeriod))%2 == 0 {
+			return fw.diagBufHigh
+		}
+		return fw.diagBufLow
+	default:
+		return fw.idleBuf
+	}
 }
 
 // frameRateWindow bounds how long writeOneFrame accumulates successful

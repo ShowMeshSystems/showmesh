@@ -77,6 +77,7 @@ func (h *handlers) handleGetRenderSettingsConfig(w http.ResponseWriter, r *http.
 			ServerTime: formatTime(now), Kind: config.RenderSettingsConfigKind,
 			Revision: 0, Payload: mapRenderSettingsPayload(payload),
 			UpdatedAt: formatTime(now), Source: "default",
+			IdleOutputEffectiveNote: idleOutputEffectiveNote,
 		})
 		return
 	}
@@ -217,13 +218,22 @@ func mapRenderSettingsPayload(p config.RenderSettingsPayload) v1.ConfigRenderSet
 	}
 }
 
+// idleOutputEffectiveNote is [v1.RenderSettingsConfigResponse.
+// IdleOutputEffectiveNote]'s fixed text — see that field's own doc comment
+// for why a re-apply is required and why that has to be stated rather than
+// left silent.
+const idleOutputEffectiveNote = "idleOutput takes effect on each surface's own next render.surface.apply dispatch; " +
+	"a surface already applied keeps the idleOutput value resolved into its assignment when it was last applied " +
+	"until it is re-applied."
+
 func mapRenderSettingsConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, payload config.RenderSettingsPayload) v1.RenderSettingsConfigResponse {
 	return v1.RenderSettingsConfigResponse{
 		ServerTime: formatTime(now), Kind: config.RenderSettingsConfigKind, Revision: rev.Revision,
-		Payload:                mapRenderSettingsPayload(payload),
-		UpdatedAt:              formatTime(obj.UpdatedAt),
-		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
-		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
-		Source:                 rev.Source,
+		Payload:                 mapRenderSettingsPayload(payload),
+		UpdatedAt:               formatTime(obj.UpdatedAt),
+		CreatedByPrincipalID:    nonEmptyStrPtr(rev.CreatedByPrincipalID),
+		CreatedByPrincipalName:  nonEmptyStrPtr(rev.CreatedByPrincipalName),
+		Source:                  rev.Source,
+		IdleOutputEffectiveNote: idleOutputEffectiveNote,
 	}
 }

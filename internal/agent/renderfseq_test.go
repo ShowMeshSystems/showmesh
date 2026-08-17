@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -199,6 +200,132 @@ func TestApplySurfaceWithFSEQRefusesUncoveredChannelRange(t *testing.T) {
 	result := decodeResultFromCall(t, pub.snapshot()[0])
 	if result.Outcome != mqttproto.OutcomeFailed {
 		t.Fatalf("Outcome = %q, want failed for an uncovered channel range; reason = %q", result.Outcome, result.Reason)
+	}
+}
+
+// TestParseIdleOutputAbsentDefaultsToBlack proves an assignment persisted
+// before the idleOutput field existed (an older render.surface.apply body
+// resumed at boot per build contract ruling 4) still resumes, defaulting to
+// black rather than refusing the whole assignment.
+func TestParseIdleOutputAbsentDefaultsToBlack(t *testing.T) {
+	got, err := parseIdleOutput("render.surface.apply", map[string]any{"surfaceId": "surface-1"})
+	if err != nil {
+		t.Fatalf("parseIdleOutput with an absent key: %v, want no error", err)
+	}
+	if got != pipeline.IdleOutputBlack {
+		t.Fatalf("parseIdleOutput with an absent key = %q, want %q", got, pipeline.IdleOutputBlack)
+	}
+}
+
+// TestParseIdleOutputRejectsExplicitNull proves a JSON `"idleOutput": null`
+// is refused rather than silently defaulted — absent, null, and an invalid
+// value are three different things, and only absent (a genuinely older
+// assignment) gets the default.
+func TestParseIdleOutputRejectsExplicitNull(t *testing.T) {
+	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": nil}); err == nil {
+		t.Fatalf("parseIdleOutput with an explicit null: want error, got nil")
+	}
+}
+
+// TestParseIdleOutputRejectsEmptyString proves an explicitly empty string
+// is refused, not treated as "use the default" — the coordinator always
+// sends a concrete resolved value, so an empty one here means something
+// upstream is wrong.
+func TestParseIdleOutputRejectsEmptyString(t *testing.T) {
+	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": ""}); err == nil {
+		t.Fatalf("parseIdleOutput with an empty string: want error, got nil")
+	}
+}
+
+// TestParseIdleOutputRejectsUnrecognizedValue proves a value outside
+// black/hold/diagnostic is refused rather than silently coerced.
+func TestParseIdleOutputRejectsUnrecognizedValue(t *testing.T) {
+	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": "strobe"}); err == nil {
+		t.Fatalf("parseIdleOutput with an unrecognized value: want error, got nil")
+	}
+}
+
+// TestParseIdleOutputAcceptsEveryKnownValue proves every one of the three
+// permitted values round-trips unchanged.
+func TestParseIdleOutputAcceptsEveryKnownValue(t *testing.T) {
+	for _, v := range []string{pipeline.IdleOutputBlack, pipeline.IdleOutputHold, pipeline.IdleOutputDiagnostic} {
+		got, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": v})
+		if err != nil {
+			t.Fatalf("parseIdleOutput(%q): %v, want no error", v, err)
+		}
+		if got != v {
+			t.Fatalf("parseIdleOutput(%q) = %q, want %q unchanged", v, got, v)
+		}
+	}
+}
+
+// TestBuildFSEQAssignmentCarriesIdleOutput proves buildFSEQAssignment's
+// returned fseqAssignment carries idleOutput through (startFrameWriter
+// passes exactly this field to pipeline.NewFrameWriter) — the specific link
+// between parseIdleOutput's own validation and the value the frame writer
+// actually receives.
+func TestBuildFSEQAssignmentCarriesIdleOutput(t *testing.T) {
+	params := fseqApplyParams("surface-1", "surface-1.fseq", "sha256:whatever", 1, 12, 2, 2, "rgb", 40)
+	params["idleOutput"] = pipeline.IdleOutputHold
+
+	a, ok, err := buildFSEQAssignment("render.surface.apply", params)
+	if err != nil {
+		t.Fatalf("buildFSEQAssignment: %v", err)
+	}
+	if !ok {
+		t.Fatalf("buildFSEQAssignment ok = false, want true (fseqFilename was present)")
+	}
+	if a.idleOutput != pipeline.IdleOutputHold {
+		t.Fatalf("fseqAssignment.idleOutput = %q, want %q", a.idleOutput, pipeline.IdleOutputHold)
+	}
+}
+
+// TestApplySurfaceWithFSEQPersistsIdleOutputForResume proves build contract
+// ruling 4's own requirement end to end: a render.surface.apply carrying
+// idleOutput is persisted to disk VERBATIM (including idleOutput), so a
+// later boot's ResumeAssignment — reading only the on-disk file, with no
+// coordinator reachable — has everything it needs to rebuild the same
+// idle behaviour, not just the FSEQ/geometry fields B3 already covered.
+func TestApplySurfaceWithFSEQPersistsIdleOutputForResume(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSynthFSEQ(t, dir, "surface-1.fseq", 12, 100, 5)
+	hash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	params := fseqApplyParams("surface-1", "surface-1.fseq", hash, 1, 12, 2, 2, "rgb", 40)
+	params["idleOutput"] = pipeline.IdleOutputDiagnostic
+	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", params)
+	topic, payload := buildCmdMessage(t, clock, cmd)
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	result := decodeResultFromCall(t, pub.snapshot()[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want confirmed; reason = %q", result.Outcome, result.Reason)
+	}
+
+	assignments, err := store.Load()
+	if err != nil {
+		t.Fatalf("store.Load: %v", err)
+	}
+	if len(assignments) != 1 {
+		t.Fatalf("len(assignments) = %d, want 1", len(assignments))
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(assignments[0].RawParams, &persisted); err != nil {
+		t.Fatalf("decoding persisted RawParams: %v", err)
+	}
+	if got := persisted["idleOutput"]; got != string(pipeline.IdleOutputDiagnostic) {
+		t.Fatalf("persisted idleOutput = %v, want %q — a later boot's ResumeAssignment reads exactly this file", got, pipeline.IdleOutputDiagnostic)
 	}
 }
 

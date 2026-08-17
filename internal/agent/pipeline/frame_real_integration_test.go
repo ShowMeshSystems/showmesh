@@ -166,7 +166,7 @@ func TestFrameWriterAgainstRealFSEQRealMultiSyncRealGStreamer(t *testing.T) {
 		t.Fatalf("real gst-launch-1.0 pipeline never reached Running; last snapshot: %+v", snap)
 	}
 
-	fw, err := NewFrameWriter(sup, "surface-real-1", f, timeline, channelStart0, channelCount, testLogger{})
+	fw, err := NewFrameWriter(sup, "surface-real-1", f, timeline, channelStart0, channelCount, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter against real FSEQ: %v", err)
 	}
