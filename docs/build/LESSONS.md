@@ -538,3 +538,15 @@ The second was not a defect. The active-show-change test asserted `not_ready` im
 ## Removing a line from the working tree does not remove it from history
 
 **Step 0.** A third-party product name was removed from a working copy but remained in the initial commit, and therefore on the remote. History was rewritten, every reachable object re-scanned, and the result force-pushed. All commit hashes changed at that point.
+
+## A capability with zero surfaces is in perfect parity
+
+**Track G audit, 2026-08-17.** The owner tried to connect Resolume Arena to a running coordinator and could not, from any surface. No UI control, no `showmeshctl` verb, no API endpoint: the host is `SHOWMESH_RESOLUME_URL`, read once at startup, so connecting Arena meant editing a file in the deployment bundle and restarting the container. Resolume control is one of three founding problems, and its observability, action vocabulary, crash recovery and UI had all shipped.
+
+Every rule passed. CLAUDE.md requires every API capability to get CLI coverage in the step that adds it; ADR-030 requires API first, then CLI, then UI. Both are conditioned on an endpoint existing. Zero endpoints means zero obligations, so the subsystem shipped unconfigurable while fully compliant. The audit found the same shape in the FPP MQTT collector, the asset store settings, and identity administration, where seven subcommands live on a distroless coordinator image with no shell, making a token revocation require container exec access.
+
+The deeper cause is worse than an oversight. **FPP had already been rescued from this exact pattern**: `SHOWMESH_FPP_ENDPOINTS` was an environment variable until Step 7 promoted it to a store-backed kind with revisions, a migration, and eventually ADR-036's no-restart apply. Track D shipped *after* that migration completed and reproduced the pattern FPP had just been rescued from, because the promotion was recorded as work done to FPP and never as a rule about configuration.
+
+The audit also found `principal:write` declared, bundled into the admin role since Step 6, and checked by no handler. That is the fourth capability this project has shipped that nothing can reach.
+
+**Rule:** a rule that enforces consistency between surfaces cannot detect a capability that is missing from all of them, so state separately that the capability must exist. And when a defect is fixed in one subsystem, ask whether the fix is a rule; if it is, write it as one, because a correction recorded only as work done is a correction the next subsystem does not inherit. ADR-039 is that rule, and its two enforcement tests exist because this one had been honoured by discipline alone.

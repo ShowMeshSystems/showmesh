@@ -43,6 +43,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-036](ADR-036-dispatch-configuration-applies-without-a-restart.md) | Configuration that governs dispatch applies without a restart | Accepted |
 | [ADR-037](ADR-037-resolume-references-are-names-not-ids.md) | A Resolume reference is a name, not an object id | Accepted (owner, 2026-08-15; not yet implemented) |
 | [ADR-038](ADR-038-fpp-authorizes-night-sessions.md) | FPP authorizes night sessions; ShowMesh advances them | Accepted (owner, 2026-08-16; not yet implemented) |
+| [ADR-039](ADR-039-operator-configuration-is-store-backed.md) | Operator configuration is store-backed; the environment holds only what precedes it | Accepted (owner, 2026-08-17; extends ADR-030 and CLAUDE.md's CLI-parity constraint; implemented by Track G) |
 
 **There is no ADR-034, and that is deliberate.** ADR-035 and ADR-036 were issued on the `step-9-wave-3` branch as 033 and 034, colliding with show mode, which Track D issued on `main` the same day. They were renumbered when that branch merged on 2026-08-15; 034 was left unused rather than reassigned, so that the number in an older reference is never ambiguous.
 
