@@ -301,7 +301,27 @@ The local tree read in full is FPP **8.4.2**. The deployed fleet runs FPP **9.4*
 - **OI-3.** Decide whether the parser exposes "channel absent from this file" as a distinct state through to the API surface. §6 argues it must.
 - **OI-4.** RES-004 owns the decode-cost measurement. Nothing in this record licenses a frame-rate claim.
 
-## 13. Citations
+## 13. Addendum: findings from building `pkg/fseq` (Track B seam B3, 2026-08-17)
+
+Everything in this section was measured while implementing and testing the parser this record specifies. It corrects one inference in §6 and independently confirms this record's own numbers against the owner's known-good decode of a second real file. The record's own status line is left as the orchestrator's call; this section only states what was found.
+
+### 13.1 Adjacent sparse ranges can overlap by one channel in a real, deployed file — §6's "sorted and disjoint" inference does not hold
+
+Measured on two on-disk copies of `We Three Kings by Tommee Profitt & We The Kingdom [Lyric Video] [cwBBSL14UTs] v3.fseq`, pulled from two different FPP hosts' own `sequences/` directories (`.../Haloween Lighting/FPP-01/sequences/` and `.../Lightingn Base /FPP-01/sequences/`): the sparse table is `[{start:1, length:2187}, {start:2187, length:10503}]`. Range 0 covers absolute channels 1..2187 inclusive; range 1 starts at 2187. Channel 2187 is claimed by both ranges.
+
+Checked byte-for-byte across all 10,023 frames of the file: the two copies of channel 2187 (one reached via range 0's offset, one via range 1's) never disagreed — 2,400 non-zero frames, 0 mismatches. This is expected: xLights' writer copies each range from one shared source buffer (`write(&data[a.first], a.second)` per range, §9), so an overlapping channel is the same source value written twice, not conflicting data.
+
+This means §6's inference ("files from that path will be sorted and disjoint... FPP's `SetNewRanges` in xLights merges and coalesces before writing") is **not correct for this file**. Whatever xLights path wrote this particular render did not coalesce the boundary.
+
+**A correction to §6's stated resolution rule.** §6 paraphrases the read side as "the *first* range with `start <= C < start+length`" claims a channel. Re-reading the quoted `UncompressedFrameData::readFrame` loop: it is an unconditional `memcpy(&data[rng.first], ...)` per range **in table order**, so for two ranges that both claim one absolute channel, the **later** range in table order overwrites the earlier one's byte in the reassembled buffer — last-table-order-wins, not first. `pkg/fseq`'s `ChannelRange` was initially built the way §6 describes (accumulate every range's overlap, then reject if the union doesn't tile the request with no double-coverage), and this exact file caused it to wrongly refuse a request that should have succeeded — a real per-target render, the shape a render node will actually receive, being rejected by an over-strict reading of an L0 inference. It now resolves overlaps last-table-order-wins, matching the C++, and still refuses a genuine gap (a channel no range claims at all) exactly as before.
+
+### 13.2 Cross-check against a second real file, decoded independently by the owner (not with this package)
+
+The owner rendered and independently hand-decoded the header and sparse table of `~/showmesh-fseq-samples/kpop 2026 MH Test.fseq` (303 MB, a full/non-sparse render that nonetheless carries 13 sparse ranges) before `pkg/fseq` was pointed at it. Every reported value matched what `pkg/fseq.Open` computes: `channelDataOffset=27992`, `stdHeaderLen=27838` (closing exactly as `32 + 3466*8 + 13*6`, independently confirming the 8-byte block entry, 6-byte sparse entry, and 12-bit block-count split on a real file), `channelsPerFrame=698120` (matching the sum of the 13 sparse-range lengths exactly), `frames=13853`, `stepTime=25`, zstd, and all 13 `(start, length)` pairs and their derived frame-data offsets. The declared block count (3466) versus this package's used (non-zero-length) count (3464) reproduces the exact 3466/3464 pair §5 and §10.2 already cite as a measured example — on this same file.
+
+Two real xLights UI (1-based) surface start channels supplied by the owner — matrix 1 at 25410, matrix 2 at 505410 — converted to this package's 0-based space (25409, 505409) and resolved through `resolveSegments`, land at frame-data offsets 24923 and 504923 respectively, matching the owner's independently computed values exactly. This is also the file that exercises real, non-hypothetical gaps: channels 735..740, 855..866 and 891..896 are genuinely absent from this render (between its sparse ranges) and `pkg/fseq.ChannelRange` refuses each with `*ErrChannelRangeNotCovered` rather than returning zeros.
+
+## 14. Citations
 
 Every remote source accessed **2026-08-17**.
 
@@ -314,52 +334,19 @@ Every remote source accessed **2026-08-17**.
 - `github.com/klauspost/compress/zstd` v1.19.2 — <https://pkg.go.dev/github.com/klauspost/compress/zstd>. §8.
 - 198 `.fseq` artifacts under `~/Documents` and `~/Downloads` on the owner's machine, written by xLights 2025.08 / 2025.10.1 / 2025.11, parsed 2026-08-17 with a throwaway reader. §5, §9, §10. **These are the owner's real show files; they were read and never written.**
 
----
+### 13.3 What the real-file work did and did not settle about OI-1
 
-## Addendum, 2026-08-17: verification against an owner-supplied real show file
+**Settled:** the surface-to-file boundary. `show.surface.channelRange.startChannel`
+is validated `>= 1` and is the operator's xLights UI number, so it is **1-based**,
+while the file's range table is **0-based**. The conversion lives in exactly one
+place at the caller's boundary; `pkg/fseq` is 0-based throughout, matching the
+file. The owner's two real start channels resolving to the expected frame-data
+offsets is the evidence.
 
-Added by the Track B orchestration session, not by the research pass. The owner
-rendered a sequence from last season's show and supplied it with two known
-surface start channels. Header decoded independently by the orchestrator.
-
-**File:** `kpop 2026 MH Test.fseq`, 303,332,529 bytes, a **full (non-sparse)
-xLights render**. Kept outside the repository at `~/showmesh-fseq-samples/`;
-the repository is public and this is show content.
-
-| Field | Value |
-|---|---|
-| version | 2.2 |
-| channel data offset | 27,992 |
-| standard header length | 27,838 |
-| channels per frame | 698,120 |
-| frames | 13,853 |
-| step time | 25 ms (40.00 fps) |
-| compression type | 1 (zstd) |
-| compression blocks | 3,466 |
-| sparse ranges | 13 |
-
-**Three format claims confirmed by one identity.** `32 + 3466*8 + 13*6 = 27838`,
-exactly the declared standard header length. That validates the 8-byte block
-table entry, the 6-byte sparse range entry, and the 12-bit block count split
-across `h[20]` and `h[21]`, simultaneously, on a real file.
-
-**Sparse range lengths sum to 698,120**, exactly `channelsPerFrame`. This is L2
-evidence for the range table layout and for the accumulate-in-table-order
-mapping rule.
-
-**A full render still carried 13 sparse ranges.** This is worth recording
-because it contradicts the natural assumption: "non-sparse" describes how
-xLights was asked to render, not that the file has an empty range table. The
-file has real gaps in it — channels 735 to 740, 855 to 866, 891 to 896 and
-others are simply absent — so **the sparse code path is exercised by files
-nobody asked to be sparse**, and the absent-channel refusal is reachable
-without an FPP Connect per-target render.
-
-**Bearing on OI-1, which stays open.** The owner's two surface start channels,
-25410 and 505410, are xLights UI numbers and therefore **1-based**; the file's
-range table is 0-based, confirmed again here. Both land inside range 12
-(0-based 25393, length 673213) at frame-data offsets 24,923 and 504,923. This
-settles the **surface-to-file** boundary as a 1-based to 0-based conversion.
-It does **not** settle OI-1, which is about FPP's reported `channelRanges`
-string and needs a real FPP host's string compared against the file it
-produced.
+**Not settled: OI-1 itself.** That question is whether every *FPP-reported*
+`channelRanges` string is 0-based, and it is untouched by any of this, because
+no FPP-reported string was compared against the file it produced. It does not
+affect the parser. It blocks any equality check between an operator-typed
+surface range and a file's coverage, and a one-channel error there would render
+as a slight colour cast rather than a broken image. Until it is closed, build
+that check as **containment with the offset stated**, never as equality.
