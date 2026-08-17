@@ -510,6 +510,72 @@ func TestFPPSinkSkippedPollDeletesNothing(t *testing.T) {
 	}
 }
 
+// TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged is the regression guard
+// for fppSink's notify gate (see its own doc comment): a genuinely empty
+// delivery must never poke the hub, because it can never mutate s.st
+// either way — and a delivery that DOES prune existing rows (the exact
+// case an empty-batch gate would be wrong to skip, if ReplaceObservations
+// pruned that way) must still poke it. Reverting the len(observations) > 0
+// guard in RecordObservations to an unconditional s.notify() makes this
+// test fail on its first assertion (a spurious notify on the empty poll).
+func TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	var notifyCount int
+	sink := &fppSink{st: st, logger: testLogger(), notify: func() { notifyCount++ }}
+
+	// A real, non-empty delivery: must notify.
+	seed := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+		mustMeasured(t, "remote-01", "fpp.port.16.current_ma", float64(0)),
+	}
+	sink.RecordObservations(ctx, seed, true)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after a real delivery = %d, want 1", notifyCount)
+	}
+
+	// A genuinely empty, complete=true delivery: ReplaceObservations
+	// returns immediately on a zero-length batch (see
+	// TestReplaceObservationsEmptyBatchIsNoOp in internal/coordinator/store)
+	// — nothing is pruned, because there is no (resource, source) key in
+	// this call to scope a delete to — so this must not notify either.
+	sink.RecordObservations(ctx, nil, true)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after an empty complete=true delivery = %d, want unchanged 1 (nothing could have changed)", notifyCount)
+	}
+
+	// An empty, complete=false (backed-off) delivery: same reasoning, the
+	// per-observation upsert loop below never runs.
+	sink.RecordObservations(ctx, nil, false)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after an empty complete=false delivery = %d, want unchanged 1", notifyCount)
+	}
+
+	// A non-empty delivery that OMITS remote-01's port signal (still
+	// mentions fpp.reachable, so the resource's key IS present this time)
+	// drives a real prune via ReplaceObservations — see
+	// TestReplaceObservationsPrunesSignalsNotInDelivery in
+	// internal/coordinator/store for the store-level proof. This is the
+	// shape a wrongly-scoped "skip on anything empty-ish" gate could get
+	// wrong; a plain len(observations) > 0 gate gets it right because the
+	// delivery itself is non-empty.
+	pruning := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+	}
+	sink.RecordObservations(ctx, pruning, true)
+	if notifyCount != 2 {
+		t.Fatalf("notifyCount after a pruning delivery = %d, want 2 (a prune is a real store mutation)", notifyCount)
+	}
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-01"})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after the pruning delivery: %d observations remain, want 1 (fpp.port.16.current_ma must be pruned)", len(after))
+	}
+}
+
 // mustMeasured builds a StateCurrent [observation.Observation] with source
 // "fpp-rest", matching what fpp.Collector actually stamps (fpp.sourceName
 // is unexported, so this pins the literal the way
