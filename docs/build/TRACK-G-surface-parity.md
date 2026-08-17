@@ -243,8 +243,22 @@ Owner decision 2026-08-17: full treatment, API plus CLI plus UI.
   seam is its first caller. Mint `principal:read` for the list and read
   paths, and add it to the admin bundle.
 - **API**: list and create principals, change role, enable and disable,
-  reset password, list and issue and revoke tokens, invalidate all
-  sessions. Every one audited. A token is displayed exactly once at
+  reset password, and list, issue and revoke tokens. Every one audited.
+
+  **`invalidate-all-sessions` is deliberately NOT among them, correcting
+  this document's own first draft.** It was listed here as an API
+  capability, which contradicted this seam's own closing sentence two
+  bullets down and, more importantly, contradicted
+  [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md)
+  decision 9: lockout recovery "is a coordinator subcommand run against the
+  data volume on the host, requiring filesystem access, which is equivalent
+  to owning the deployment. It is **not reachable over the API at any
+  scope**." The operation exists for the case decision 5 describes, a
+  restore from a backup taken before a revocation, which rolls the
+  generation counter back along with everything else. An API path for it
+  would be an API path that undoes every session revocation, reachable
+  precisely when the API's own authority is what is in doubt. The G-5
+  builder caught this and refused to build it, which was correct. A token is displayed exactly once at
   creation, per ADR-024 decision 1, which the API shape must not quietly
   break by making it re-readable.
 - **A refusal that must be argued, not assumed.** Disabling the last

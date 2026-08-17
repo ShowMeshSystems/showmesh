@@ -2,7 +2,7 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#47-transport-adapters) · [Tracker](README.md) · [Transport comparison](RES-005-ndi-vs-hdmi-transport.md)
 
-Status: planned (distribution resolved; sender bench pending) · Risk: high · Verification: L1 — source verified 2026-08-10
+Status: testing (amd64 sender benched 2026-08-16; arm64 and Ubuntu open) · Risk: high · Verification: **L2 for the amd64 sender-to-Resolume path**; L1 for everything else
 
 ## Decision and validation scope
 
@@ -60,22 +60,60 @@ Desk research 2026-08-10 (official docs + open-source project experience; no SDK
 - Full-bandwidth encode (SpeedHQ) is CPU/SIMD-bound (AVX2/NEON); no GPU offload in the standard SDK; hardware H.264/HEVC is Advanced-SDK/HX territory (with separate codec patent responsibility). Submit UYVY to avoid conversion cost; Linux reliable-UDP send wants kernel ≥4.18 GSO ([performance](https://docs.ndi.video/all/developing-with-ndi/sdk/performance-and-implementation)). [doc]
 - Raspberry Pi class: workable but modest — ~5–6 concurrent 1080p30/60 UYVY connections reported on Pi 4-class hardware via [V4L2-to-NDI](https://github.com/lplassman/V4L2-to-NDI). [anec]
 
+### Bench: amd64 sender to Resolume, 2026-08-16 (L2)
+
+Open item 1 below is discharged. The [Track B spike](../bench/TRACK-B-NDI-SPIKE.md) ran on the owner's bench overnight 2026-08-16, and this is the first NDI evidence in the repository that is a measurement rather than an expectation.
+
+**Result: 982,100 frames rendered, 0 dropped, 0 late, 0 errors, sustained 40.00 fps over 6 h 49 min.** The sink ran `sync=true`, so QoS was active and a frame the pipeline could not deliver on the clock would have been counted; the zero is measured rather than structural. Two receivers were attached for the duration, Resolume Arena and NDI Video Monitor on a second machine, and neither reported a drop or an error either.
+
+| Parameter | Value |
+| --- | --- |
+| Renderer node | Dell OptiPlex Micro 7050, Core i7, 16 GB RAM, 256 GB M.2 |
+| OS | Debian 13, bare metal |
+| Canvas | 1920x1080, UYVY, 40 fps requested and achieved |
+| GStreamer NDI plugin | `gst-plugins-rs`, **compiled from source on the node** |
+| Network | Wired Ethernet to the core switch; UniFi fabric with NDI/mDNS enabled |
+| Receivers | Resolume Arena (attached, displaying) plus NDI Video Monitor on a second machine |
+| Duration | 6 h 49 min continuous (982,100 frames at 40 fps) |
+| Sink QoS | `sync=true` |
+| CPU | 86% of one core, single-threaded pipeline (generate, encode and send on one streaming thread); machine otherwise near idle, no thermal throttling |
+
+**What this establishes.** The NDI transport assumption in [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md) survives contact with reference-class hardware on the wired path, at the canvas dimensions intended for day-0, for longer than a show runs. [ADR-026](../decisions/ADR-026-renderer-surface-model-and-reference-transport.md)'s day-0 profile named "OptiPlex 7040-class" hardware and the bench ran a 7050, so the bar was cleared on newer silicon than the bar assumed; that is stated here so the result is never read as a floor.
+
+**What it does not establish, and the distinction is the whole point.** The frame source was `videotestsrc`, which costs almost nothing to produce. The real renderer has to generate every one of those frames out of FSEQ channel data first, and this run says nothing about whether the CPU budget left over after SpeedHQ encode is enough to do that. **ADR-026 decision 5's profile is renderer plus transport, and only the transport half now has evidence.** The renderer half is [RES-004](RES-004-virtual-matrix-renderer-performance.md) and remains L0. It also says nothing about `arm64`, Ubuntu, HDMI, two simultaneous surfaces, or recovery behaviour (spike run 5, not run).
+
+### Packaging check: the element is not in Debian 13, answered 2026-08-16
+
+The check this record asked for below was run and **the answer is no**. The GStreamer NDI element is not available as a Debian 13 package in a form the owner could locate, and the plugin was built from `gst-plugins-rs` on the node instead. The build was four steps.
+
+**This does not overturn the Debian recommendation, and it does remove one of that recommendation's three arguments.** The reasoning below preferred Debian over RHEL-family partly because "a Rocky node means building the NDI plugin from cargo and then owning that build." ShowMesh now owns that build on Debian too, so that argument is spent. The two structural arguments are untouched and are why Debian stands: FPP is Debian-based and Step 9's plugin targets that family, and Raspberry Pi OS is Debian, which keeps open item 2 a continuation rather than a second port.
+
+**Owner's decision, 2026-08-16: compile from source, script it, and ship it for day-0.** The downsides are understood and accepted: the node carries a cargo toolchain, the resulting `.so` has no distribution provenance, and a node rebuilt between seasons has to reproduce the build. The mitigation is a scripted build rather than a packaged dependency. Node build mechanics are owner work outside the build sessions.
+
+The reproducibility risk is real and is on the punch list rather than closed: the plugin version, the `gst-plugins-rs` revision built from, and the exact build commands are not yet recorded anywhere, and the bench node is currently the only artifact of them.
+
 ### Open items for bench (L2) verification
 
-1. Validate the dynamically loaded sender into the target Resolume version on `amd64`, recording the reference-profile parameters and frame-pacing results.
+1. ~~Validate the dynamically loaded sender into the target Resolume version on `amd64`, recording the reference-profile parameters and frame-pacing results.~~ **Done 2026-08-16, above.**
 2. Validate the same sender-to-Resolume path on `arm64` with a representative surface and recorded parameters.
+3. Validate the Ubuntu 24.04 release target, which the owner's 2026-08-13 decision makes a release gate rather than a day-0 gate. The Debian packaging answer above makes it likely Ubuntu needs the same source build, which is worth knowing before release rather than at it.
+4. Record the plugin build recipe: `gst-plugins-rs` revision, plugin version, and build commands, so the node is reproducible without the bench machine.
 
 The `arm64` item validates the NDI adapter and runtime path. It does not establish a Raspberry Pi / ARM renderer performance profile, which remains deferred in RES-004.
 
-### Node distribution: Debian 13 recommended, unverified (2026-08-13)
+### Node distribution: Debian 13 recommended 2026-08-13, benched 2026-08-16
 
-**Recommended and not yet checked**, which is the whole reason it is written here rather than asserted in the architecture. The reasoning is media-stack friction, since that is what threatens the day-0 schedule rather than stability or lifecycle.
+**The reasoning below is preserved as written, and one of its three arguments did not survive the packaging check above.** Read it with that section. Debian 13 stands as the node distribution and the bench ran on it successfully; what changed is that ShowMesh compiles the NDI plugin itself rather than installing it.
+
+The reasoning is media-stack friction, since that is what threatens the day-0 schedule rather than stability or lifecycle.
 
 RHEL-family distributions do not carry the GStreamer Rust plugin set in their own repositories, and EPEL does not fill the gap, so a Rocky node means building the NDI plugin from cargo and owning that build; the RHEL media stack is also deliberately conservative about codecs. Those are correct tradeoffs for a server and wrong ones for a show appliance rebuilt between seasons.
 
 Debian is preferred over Ubuntu on structural grounds rather than taste. **FPP is Debian-based**, so nodes match the platform this project already integrates with, and Step 9's plugin targets that same family. **Raspberry Pi OS is Debian**, so RES-004's deferred ARM profile becomes a continuation rather than a second port, which also makes open item 2 above cheaper. Ubuntu 24.04 LTS is the fallback if a packaging gap appears, and carries the densest community documentation for NDI on Linux because the OBS and DistroAV ecosystem lives there.
 
 **What must be verified before this is built on**, and it is ten minutes: that the NDI GStreamer element is actually present and loadable on the chosen distribution, confirmed from `apt-cache search` and `gst-inspect-1.0` rather than from recollection of packaging status. That check belongs to the [Track B spike](../bench/TRACK-B-NDI-SPIKE.md), and its result is recorded here. The recommendation above is reasoned from packaging behaviour **recalled rather than observed**, and this project's standing rule is that an external system's behaviour is named only from that system's own output.
+
+**That check ran on 2026-08-16 and returned no.** See the packaging section above. The recalled claim that Debian ships a usable NDI element was wrong, which is exactly the failure mode this paragraph was written to catch.
 
 The coordinator is unaffected: it ships distroless under [ADR-012](../decisions/ADR-012-docker-coordinator-deployment.md), so this is a node decision rather than a fleet decision.
 
