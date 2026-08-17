@@ -40,13 +40,18 @@ import (
 // The agent's render report ticker runs at
 // SHOWMESH_RENDER_REPORT_INTERVAL (harness_test.go's envRenderReportInterval
 // forwards whatever scripts/test-integration.sh exports, 100ms by default)
-// rather than the 15s production default, specifically so the supervisor's
-// transient "restarting" state — held for defaultRestartPolicy's
-// initialBackoff, 500ms — is structurally guaranteed to land in at least one
-// report: a 500ms window sampled every 100ms cannot be missed by an
-// unlucky phase alignment, so this is a bounded wait on a real condition,
-// never a race against a kernel or a scheduler (CLAUDE.md's own "a test can
-// be a coin flip" lesson).
+// rather than the 15s production default, so the supervisor's transient
+// "restarting" state — held for defaultRestartPolicy's initialBackoff,
+// 500ms — is observable at all: 100ms is a genuine 5x oversample of that
+// 500ms window, real margin against scheduler and network jitter rather
+// than a knife's-edge 1:1 sample. But that transient wait, below, is fast
+// feedback, not this test's verdict: pass/fail is decided by steady state
+// (restart_count >= 1, and the surface returning to "running" with evidence
+// dated after the kill), asserted further down regardless of whether
+// "restarting" was ever actually caught in between. Don't drop this
+// interval to 500ms to "tighten" the test: that removes the oversample
+// margin and turns the transient wait itself into the kind of scheduler
+// coin-flip CLAUDE.md warns about, for a signal the verdict doesn't need.
 
 // findAgentPipelinePid polls for exactly one gst-launch-1.0 process that is
 // a DIRECT child of agentPid, so it can only ever find the surface this
