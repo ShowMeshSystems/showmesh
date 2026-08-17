@@ -85,11 +85,10 @@ Track E's entire operator surface has no route in the UI:
 active show cannot be activated from a browser), `/assets` list, upload
 and fetch, `/assets/manifest`, `/nodes/{nodeId}/assets`, and `/audit`.
 
-Class 3 is **out of scope for this track** by owner decision on
-2026-08-17: it is building new UI rather than exposing existing capability,
-and Class 1 plus Class 2 close the "impossible to set up" failure mode
-completely. It stays recorded here so it is scheduled deliberately rather
-than rediscovered.
+Class 3 was scoped out on 2026-08-17 and **scoped back in the same day**,
+as seam G-8, when the owner said it should be resolved within this track.
+It ships as its own pull request so it can be declined independently of
+the rest of the track.
 
 ### A fourth finding, which is a known lesson recurring
 
@@ -276,6 +275,30 @@ Close the Class 2 inversion. Add macro definition writes to the CLI over
 the existing `PUT /api/v1/config/show.macro/{id}`, and delete the stale
 help text in `cmd/showmeshctl/cmd_macro.go` that defers to a track which
 has shipped.
+
+### G-8: the Operator UI for Track E
+
+Added 2026-08-17 by owner decision, reversing the same day's scope call.
+Closes the Class 3 findings above: routes and controls for `/config/show`,
+`/config/show.surface`, `/config/show.active`, the asset browser with
+upload and download, `/assets/manifest`, and `/audit`.
+
+Every endpoint and every CLI verb already exists, so this seam adds no API
+surface and no capability. It is the third client of work already shipped.
+
+Three rules bind it beyond the ordinary ones. **Activation is the sharp
+control**: making a show active changes what every node is expected to
+hold, so it states what it is about to do and what will change, and
+confirms. **Uploads state progress and failure rather than inferring them,
+a partial upload registers nothing, and target selection is mandatory**
+because the target is part of an asset's identity
+([ADR-030](../decisions/ADR-030-operator-ui-is-the-authoring-surface.md),
+[ADR-028](ADR-028-show-asset-store-and-identity.md)). And the manifest
+view must keep `not_ready` and `unknown` visually distinct, never collapsed
+into one "not ok" state: `showmeshctl` spends two separate exit codes (20
+and 21) keeping them apart, because a client that conflates "I checked and
+it is missing" with "I cannot tell" will either start a show it should not
+or block one it should not.
 
 ### G-7: the guards, so this does not recur
 
