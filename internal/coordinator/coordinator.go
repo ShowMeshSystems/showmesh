@@ -778,7 +778,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(7)
+	backgroundWG.Add(8)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -845,7 +845,7 @@ func Run() int {
 	// goroutine this block used to run: this loop is what notices a FIRST
 	// broker being configured (the zero-to-one transition ADR-039 decision
 	// 6 requires work with no restart). Counted in this function's own
-	// backgroundWG.Add(7) above.
+	// backgroundWG.Add(8) above.
 	go func() {
 		defer backgroundWG.Done()
 		fppMQTTMgr.Run(ctx)
@@ -865,7 +865,7 @@ func Run() int {
 	// before returning (resolumeManager.Run's own doc comment) — mirroring
 	// reconcileFPPCollectors' identical "always running, adds/removes as
 	// configuration changes" shape one field over. Counted in this
-	// function's own backgroundWG.Add(7) above, alongside hub.Run and
+	// function's own backgroundWG.Add(8) above, alongside hub.Run and
 	// fppRunner.Run, rather than a standalone conditional Add — it is
 	// unconditional, matching them.
 	go func() {
