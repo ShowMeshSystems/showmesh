@@ -416,12 +416,8 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		return v1.RenderCommandResult{}, nil, errors.New("no render command publisher is configured")
 	}
 
-	// canonicalParamsJSON (fppcommand_primitives.go), not a plain
-	// json.Marshal: sorted keys make two calls with the same logical
-	// params — one fresh, one re-read from a stored row — byte-comparable,
-	// which is what makes the conflict check below a correct test for
-	// "the same normalized params" rather than "the same bytes a client
-	// happened to send".
+	// canonicalParamsJSON (fppcommand_primitives.go): sorted keys, so a
+	// stored row and a fresh call are byte-comparable.
 	paramsJSON, err := canonicalParamsJSON(in.Params)
 	if err != nil {
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("encode params: %w", err)
@@ -438,7 +434,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	if err != nil {
 		var dup *store.DuplicateCommandError
 		if errors.As(err, &dup) {
-			return h.resolveRenderCommandReplay(dup.Existing, in.Action, in.NodeID, paramsJSON)
+			return h.resolveRenderCommandReplay(ctx, now, in, dup.Existing, paramsJSON)
 		}
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("insert command: %w", err)
 	}
@@ -834,11 +830,8 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
 }
 
-// renderCommandReplayConflictProblem mirrors
-// fppCommandReplayConflictProblem's identical reasoning (problem.go): an
-// idempotency key is scoped to the exact (action, node) it was first used
-// against, so reusing one against a different action or node is a
-// conflict, never a replay.
+// renderCommandReplayConflictProblem mirrors fppCommandReplayConflictProblem
+// (problem.go): a key reused against a different action or node.
 func renderCommandReplayConflictProblem(existingID, existingAction, existingNodeID, requestedAction, requestedNodeID string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
@@ -852,14 +845,9 @@ func renderCommandReplayConflictProblem(existingID, existingAction, existingNode
 }
 
 // renderCommandReplayParamsConflictProblem mirrors
-// fppCommandReplayParamsConflictProblem's identical reasoning
-// (problem.go): the SAME key against the SAME action and node, but
-// DIFFERENT normalized params, is also a conflict, never a replay — this
-// also catches a reused key naming a different surfaceId, since surfaceId
-// is itself one of the compared params keys (see dispatchRenderCommand).
-// existingParamsJSON/requestedParamsJSON are both canonical
-// ([canonicalParamsJSON]: defaults applied, sorted keys), so this can name
-// exactly which params differ.
+// fppCommandReplayParamsConflictProblem (problem.go): the same key and
+// action and node, but different canonical params — this also catches a
+// different surfaceId, since surfaceId is itself a params key.
 func renderCommandReplayParamsConflictProblem(existingID, action, nodeID, existingParamsJSON, requestedParamsJSON string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
@@ -874,18 +862,14 @@ func renderCommandReplayParamsConflictProblem(existingID, action, nodeID, existi
 }
 
 // resolveRenderCommandReplay answers a replayed idempotency key against
-// existing's own stored row: identical (action, node, canonical params)
-// replays existing's own result verbatim — nothing is dispatched a second
-// time (ADR-008's "executes exactly once"); anything else is refused as a
-// conflict rather than silently reporting a different command's outcome
-// under this request's own name. Mirrors resolveFPPCommandReplay's
-// identical three-way rule (fppcommand_dispatch.go), narrowed to render's
-// own (action, node) target shape — surfaceId lives inside params, so a
-// mismatched surfaceId is caught by the params comparison, not a separate
-// field check.
-func (h *handlers) resolveRenderCommandReplay(existing store.CommandRecord, requestedAction, requestedNodeID, requestedParamsJSON string) (v1.RenderCommandResult, *v1.Problem, error) {
-	if existing.Action != requestedAction || existing.TargetID != requestedNodeID {
-		p := renderCommandReplayConflictProblem(existing.ID, existing.Action, existing.TargetID, requestedAction, requestedNodeID)
+// existing's own stored row: an identical (action, node, params) replay
+// returns existing's own result verbatim; anything else is refused as a
+// conflict. Every exit writes an AuditReplay entry, matching
+// resolveFPPCommandReplay's entry shape (fppcommand_dispatch.go).
+func (h *handlers) resolveRenderCommandReplay(ctx context.Context, now time.Time, in renderDispatchInput, existing store.CommandRecord, requestedParamsJSON string) (v1.RenderCommandResult, *v1.Problem, error) {
+	if existing.Action != in.Action || existing.TargetID != in.NodeID {
+		p := renderCommandReplayConflictProblem(existing.ID, existing.Action, existing.TargetID, in.Action, in.NodeID)
+		h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
 		return v1.RenderCommandResult{}, &p, nil
 	}
 	existingParamsJSON := existing.ParamsJSON
@@ -894,8 +878,10 @@ func (h *handlers) resolveRenderCommandReplay(existing store.CommandRecord, requ
 	}
 	if existingParamsJSON != requestedParamsJSON {
 		p := renderCommandReplayParamsConflictProblem(existing.ID, existing.Action, existing.TargetID, existingParamsJSON, requestedParamsJSON)
+		h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
 		return v1.RenderCommandResult{}, &p, nil
 	}
+	h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
 	return renderCommandResultFromRecord(existing, true), nil, nil
 }
 

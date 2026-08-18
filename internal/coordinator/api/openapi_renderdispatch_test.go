@@ -137,12 +137,8 @@ func TestOpenAPIRenderTransportProbeResponseMatchesRealResponse(t *testing.T) {
 	assertMatchesSchema(t, c, "RenderCommandResponse", body)
 }
 
-// TestOpenAPIRenderReplayConflictMatchesProblemSchema proves a reused
-// idempotencyKey with different params — resolveRenderCommandReplay's
-// 409 (renderdispatch.go) — is a real Problem response conforming to
-// api/openapi.yaml's now-documented "409" for this operation, mirroring
-// this file's own TestOpenAPIRenderApplyRefusalMatchesProblemSchema for
-// the 400 case.
+// TestOpenAPIRenderReplayConflictMatchesProblemSchema proves the 409
+// resolveRenderCommandReplay returns matches the Problem schema.
 func TestOpenAPIRenderReplayConflictMatchesProblemSchema(t *testing.T) {
 	renderCommandConfirmDeadline = 50 * time.Millisecond
 	renderCommandPollInterval = 10 * time.Millisecond
