@@ -66,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdShow(rest, stdout, stderr, clock)
 	case "surface":
 		return cmdSurface(rest, stdout, stderr, clock)
+	case "night":
+		return cmdNight(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
@@ -164,6 +166,14 @@ Commands:
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)
   surface revisions <id>              list surface revision history, newest first
+  night list                          enumerate night.session objects
+  night get <id>                      show one night session's full definition
+  night set <id>                      write a new night.session revision (write, full replacement)
+  night revisions <id>                list night.session revision history, newest first
+  night revision <id> <n>             show one past revision's full payload
+  night active                        print the currently active night session (404 if none set)
+  night activate <id>                 make <id> the active night session (write, full replacement)
+  night deactivate                    clear the active night session back to unset (write)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports

@@ -3720,6 +3720,273 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/night.session:
+    get:
+      operationId: listNightSessions
+      summary: Enumerate night.session objects (Track F seam F1)
+      description: >-
+        Object ids with label, show (the parent show id), and current
+        revision number, NOT the full payloads. Same read posture as GET
+        /config/show/GET /config/show.macro (show:macro:run OR
+        config:write). `?node=` is not a supported filter for this kind.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/night.session/{id}:
+    get:
+      operationId: getNightSession
+      summary: One night.session object's active revision (Track F seam F1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putNightSession
+      summary: Write a new night.session revision (Track F seam F1)
+      description: >-
+        Requires `config:write` (admin only). FPP alone authorizes and
+        schedules a night session (ADR-038): a calendar field or a
+        hand-entered rest-duration field anywhere in the payload is
+        rejected. `siteControl`/`interlocks` are specified
+        (RESTING-MODE.md §10) but not implemented in this seam and are
+        rejected if present — the whole block's absence is valid and is
+        NOT degraded. showPlaylist.fppInstanceId and
+        resting.fppInstanceId must name configured FPP instances;
+        resting.timelineAsset and every backgroundAudio item must resolve
+        to a current asset (ADR-028); every cue's action must name an
+        existing show.action object in the same show. This is a FULL
+        REPLACEMENT: an omitted optional block (backgroundAudio) is left
+        unconfigured, never wiped by an absent key on top of a required
+        one.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigNightSessionWrite"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/night.session/{id}/revisions:
+    get:
+      operationId: listNightSessionRevisions
+      summary: night.session revision history, newest first (Track F seam F1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/night.session/{id}/revisions/{revision}:
+    get:
+      operationId: getNightSessionRevision
+      summary: One past night.session revision's full payload (Track F seam F1)
+      description: >-
+        Revisions are immutable (ADR-009); this may not be the currently
+        active one. No other config kind in this coordinator exposes this
+        route yet — a gap for a future seam to close on those kinds, not a
+        reason to withhold it here.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: revision
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/night.session.active:
+    get:
+      operationId: getNightSessionActive
+      summary: The active-night-session pointer (Track F seam F1, ADR-039)
+      description: >-
+        404 `resourceNotFoundProblem` when nothing has ever been
+        activated, matching what GET /config/show.active already answers
+        for "nothing configured yet".
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionActiveConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putNightSessionActive
+      summary: Activate a night session, or clear the pointer (Track F seam F1, ADR-039 rule 4)
+      description: >-
+        Requires `config:write` (admin only). `session` is a REQUIRED key
+        but may be the empty string, which explicitly clears the pointer
+        back to unset — the zero-to-one-and-back-to-zero transition
+        ADR-039 rule 4 requires. A non-empty value must name an existing
+        night.session object. This is a singleton: the underlying object
+        id is a fixed constant, never derived from `session`, so
+        activating a different session (or clearing it) accumulates as a
+        new revision of the SAME object rather than orphaning the
+        previous history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigNightSessionActive"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionActiveConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/night.session.active/revisions:
+    get:
+      operationId: listNightSessionActiveRevisions
+      summary: night.session.active revision history, newest first (Track F seam F1)
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets:
     get:
       operationId: listAssets
@@ -6296,7 +6563,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
         revisions:
           type: array
           items:
@@ -7344,6 +7611,12 @@ components:
             - https://showmesh.dev/problems/show-config-steps-too-many
             - https://showmesh.dev/problems/show-config-step-id-duplicate
             - https://showmesh.dev/problems/show-config-field-unknown-key
+            - https://showmesh.dev/problems/show-config-calendar-field-rejected
+            - https://showmesh.dev/problems/show-config-duplicate-rest-duration
+            - https://showmesh.dev/problems/show-config-not-implemented
+            - https://showmesh.dev/problems/show-config-background-audio-items-empty
+            - https://showmesh.dev/problems/show-config-item-id-duplicate
+            - https://showmesh.dev/problems/show-config-cue-name-duplicate
             - https://showmesh.dev/problems/macro-run-already-in-flight
             - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
@@ -7526,7 +7799,8 @@ components:
       type: object
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
-        /config/show, and GET /config/show.surface.
+        /config/show, GET /config/show.surface, and GET
+        /config/night.session.
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -7534,7 +7808,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface]
+          enum: [show.action, show.macro, show, show.surface, night.session]
         objects:
           type: array
           items:
@@ -8480,6 +8754,434 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigShowActive"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigNightSessionFPPPlaylist:
+      type: object
+      description: >-
+        Names an FPP-owned playlist: referenced, never created (Track F
+        seam F1, RESTING-MODE.md §6.1). fppInstanceId must name a
+        configured FPP instance (server-side; not expressible here).
+      required: [fppInstanceId, playlist]
+      properties:
+        fppInstanceId:
+          type: string
+          minLength: 1
+        playlist:
+          type: string
+          minLength: 1
+    ConfigNightSessionAssetRef:
+      type: object
+      description: >-
+        ADR-028's asset identity as a night.session needs to name one:
+        show, sequence, and target. target names the rendering/playout
+        target (a node id); the implied targetKind is always "node". Must
+        resolve to a current asset (server-side; not expressible here).
+      required: [show, sequence, target]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        sequence:
+          type: string
+          minLength: 1
+        target:
+          type: string
+          minLength: 1
+    ConfigNightSessionBackgroundAudioItem:
+      type: object
+      description: >-
+        One entry of resting.backgroundAudio.items. itemId is stable and
+        operator-visible (pinned against pkg/audio.PlaylistItem on Track
+        C's branch, Track F seam F1): unlike position in the array, it
+        survives a reorder. Must be unique within the list.
+      required: [itemId, show, sequence, target]
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        show:
+          type: string
+          minLength: 1
+        sequence:
+          type: string
+          minLength: 1
+        target:
+          type: string
+          minLength: 1
+    ConfigNightSessionBackgroundAudio:
+      type: object
+      description: >-
+        night.session.resting.backgroundAudio: a ShowMesh `background`
+        playback session (RESTING-MODE.md §8). Present only when the
+        deployment configures background audio at all; its absence is
+        valid and is not degraded. `resume` and `itemTransition` are
+        pinned against pkg/audio's vocabulary on Track C's branch
+        (track-c/audio-node). crossfadeMs is required when itemTransition
+        is "crossfade" and must be absent otherwise (server-side; not
+        expressible here). maxGainDb must be <= 0.
+      required: [items, repeat, resume, itemTransition, maxGainDb]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionBackgroundAudioItem"
+        repeat:
+          type: string
+          enum: [none, item, playlist]
+        resume:
+          type: string
+          enum: [resume, restart]
+        itemTransition:
+          type: string
+          enum: [sequential, gapless, crossfade]
+        crossfadeMs:
+          type: integer
+          minimum: 0
+        maxGainDb:
+          type: number
+          maximum: 0
+    ConfigNightSessionResting:
+      type: object
+      description: >-
+        night.session.resting (Track F seam F1, RESTING-MODE.md §6-8).
+        endOfNightPlaylist defaults to playlist when absent (server-side).
+      required: [fppInstanceId, playlist, endOfNightPlaylist, timelineAsset, endOfNightRepeat]
+      properties:
+        fppInstanceId:
+          type: string
+          minLength: 1
+        playlist:
+          type: string
+          minLength: 1
+        endOfNightPlaylist:
+          type: string
+          minLength: 1
+        timelineAsset:
+          $ref: "#/components/schemas/ConfigNightSessionAssetRef"
+        endOfNightRepeat:
+          type: boolean
+        backgroundAudio:
+          $ref: "#/components/schemas/ConfigNightSessionBackgroundAudio"
+    ConfigNightSessionCue:
+      type: object
+      description: >-
+        One entry of enterShow.cues or enterResting.cues
+        (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the
+        anchor — negative means before it. action must name an existing
+        show.action object in the same show (server-side; not expressible
+        here). onFailure defaults to "continue" (ADR-035) when absent.
+      required: [name, role, action, offsetMs, barrier, onFailure]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          enum: [lighting, projection, audio, announcement, other]
+        action:
+          type: string
+          minLength: 1
+        offsetMs:
+          type: integer
+        fadeDurationMs:
+          type: integer
+          minimum: 0
+        barrier:
+          type: boolean
+        onFailure:
+          type: string
+          enum: [continue, abort]
+    ConfigNightSessionEnterShow:
+      type: object
+      description: night.session.enterShow (RESTING-MODE.md §7.1).
+      required: [cues, blackoutHoldMs]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCue"
+        blackoutHoldMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionEnterResting:
+      type: object
+      description: night.session.enterResting (RESTING-MODE.md §7.2).
+      required: [cues, blackoutAfterShowMs]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCue"
+        blackoutAfterShowMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionCueWrite:
+      type: object
+      description: >-
+        The WRITE shape of one entry of enterShow.cues/enterResting.cues:
+        the body PUT /config/night.session/{id} accepts inside its cue
+        lists. Identical to ConfigNightSessionCue except that barrier and
+        onFailure are not required — an absent barrier takes its
+        documented default of false, and an absent onFailure takes its
+        documented default of "continue" (ADR-035). The response always
+        stores and returns the resolved ConfigNightSessionCue shape,
+        never this one.
+      required: [name, role, action, offsetMs]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          enum: [lighting, projection, audio, announcement, other]
+        action:
+          type: string
+          minLength: 1
+        offsetMs:
+          type: integer
+        fadeDurationMs:
+          type: integer
+          minimum: 0
+        barrier:
+          type: boolean
+        onFailure:
+          type: string
+          enum: [continue, abort]
+    ConfigNightSessionEnterShowWrite:
+      type: object
+      description: >-
+        The WRITE shape of night.session.enterShow: identical to
+        ConfigNightSessionEnterShow except that cues carries
+        ConfigNightSessionCueWrite entries (barrier/onFailure optional).
+      required: [cues, blackoutHoldMs]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCueWrite"
+        blackoutHoldMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionEnterRestingWrite:
+      type: object
+      description: >-
+        The WRITE shape of night.session.enterResting: identical to
+        ConfigNightSessionEnterResting except that cues carries
+        ConfigNightSessionCueWrite entries.
+      required: [cues, blackoutAfterShowMs]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionCueWrite"
+        blackoutAfterShowMs:
+          type: integer
+          minimum: 0
+    ConfigNightSessionBackgroundAudioWrite:
+      type: object
+      description: >-
+        The WRITE shape of resting.backgroundAudio: identical to
+        ConfigNightSessionBackgroundAudio except that repeat is not
+        required — an absent repeat takes its documented default of
+        "none". crossfadeMs is still required when itemTransition is
+        "crossfade" and must be absent otherwise (server-side; not
+        expressible here).
+      required: [items, resume, itemTransition, maxGainDb]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ConfigNightSessionBackgroundAudioItem"
+        repeat:
+          type: string
+          enum: [none, item, playlist]
+        resume:
+          type: string
+          enum: [resume, restart]
+        itemTransition:
+          type: string
+          enum: [sequential, gapless, crossfade]
+        crossfadeMs:
+          type: integer
+          minimum: 0
+        maxGainDb:
+          type: number
+          maximum: 0
+    ConfigNightSessionRestingWrite:
+      type: object
+      description: >-
+        The WRITE shape of night.session.resting: identical to
+        ConfigNightSessionResting except that endOfNightPlaylist and
+        endOfNightRepeat are not required. endOfNightPlaylist, when
+        present, must be non-empty (an explicit "" is refused, not
+        collapsed into "absent" — RESTING-MODE.md's absent/null/empty
+        distinction); when absent it defaults to `playlist`.
+        endOfNightRepeat defaults to false when absent. backgroundAudio
+        carries the ConfigNightSessionBackgroundAudioWrite shape.
+      required: [fppInstanceId, playlist, timelineAsset]
+      properties:
+        fppInstanceId:
+          type: string
+          minLength: 1
+        playlist:
+          type: string
+          minLength: 1
+        endOfNightPlaylist:
+          type: string
+          minLength: 1
+        timelineAsset:
+          $ref: "#/components/schemas/ConfigNightSessionAssetRef"
+        endOfNightRepeat:
+          type: boolean
+        backgroundAudio:
+          $ref: "#/components/schemas/ConfigNightSessionBackgroundAudioWrite"
+    ConfigNightSessionWrite:
+      type: object
+      description: >-
+        The WRITE shape of the "night.session" configuration kind's
+        payload: the body PUT /config/night.session/{id} accepts.
+        Identical to ConfigNightSession except that resting, enterShow,
+        and enterResting carry their own *Write shapes, whose only
+        difference is which of their own fields are optional-with-a-
+        documented-default rather than always required. The response to
+        a successful write stores and returns the resolved
+        ConfigNightSession shape, never this one — matching
+        ConfigShowWrite/ConfigShow's existing precedent one kind over.
+        Every validation rule ConfigNightSession's own description states
+        (the calendar/duration key ban, siteControl/interlocks refusal,
+        the same-show rule) applies identically here.
+      required: [show, label, showPlaylist, resting, enterShow, enterResting]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        showPlaylist:
+          $ref: "#/components/schemas/ConfigNightSessionFPPPlaylist"
+        resting:
+          $ref: "#/components/schemas/ConfigNightSessionRestingWrite"
+        enterShow:
+          $ref: "#/components/schemas/ConfigNightSessionEnterShowWrite"
+        enterResting:
+          $ref: "#/components/schemas/ConfigNightSessionEnterRestingWrite"
+    ConfigNightSession:
+      type: object
+      description: >-
+        The READ (fully resolved) shape of the "night.session"
+        configuration kind's decoded payload (Track F seam F1,
+        RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a
+        successful PUT /config/night.session/{id} — never the shape PUT
+        itself accepts; see ConfigNightSessionWrite for that. Every field
+        defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist,
+        endOfNightRepeat) is always the RESOLVED value here, never absent
+        standing in for "the default applies". A KEY named at, cron,
+        schedule, time, date, weekday, or timezone, or a KEY that
+        restates the resting FSEQ's own duration (restDuration,
+        restSeconds, ...), is rejected anywhere in this object
+        (server-side; not expressible in this schema) — this is a rule
+        about field NAMES, not values, so an operator-authored label or
+        action id that happens to contain a date or a time of day is an
+        ordinary string, not a violation. `siteControl` and `interlocks`
+        are specified (RESTING-MODE.md §10) but not implemented in this
+        seam and are rejected if present. Every cross-object reference
+        this object carries (cue actions, the resting timeline asset,
+        every backgroundAudio item) must belong to this session's own
+        `show` (ADR-027: a Show is a namespace).
+      required: [show, label, showPlaylist, resting, enterShow, enterResting]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        showPlaylist:
+          $ref: "#/components/schemas/ConfigNightSessionFPPPlaylist"
+        resting:
+          $ref: "#/components/schemas/ConfigNightSessionResting"
+        enterShow:
+          $ref: "#/components/schemas/ConfigNightSessionEnterShow"
+        enterResting:
+          $ref: "#/components/schemas/ConfigNightSessionEnterResting"
+    NightSessionConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/night.session/{id}, and of GET
+        /config/night.session/{id}/revisions/{revision} (one past,
+        immutable revision's full payload).
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [night.session]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigNightSession"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigNightSessionActive:
+      type: object
+      description: >-
+        The "night.session.active" singleton configuration kind's decoded
+        payload (Track F seam F1, ADR-039 rule 4): the body PUT
+        /config/night.session.active accepts, and the "payload" member of
+        GET /config/night.session.active's response. session is REQUIRED
+        as a key but may be the empty string, which explicitly clears the
+        pointer back to unset (the zero-to-one-and-back-to-zero
+        transition) — a non-empty value must name an existing
+        night.session object (server-side; not expressible here).
+      required: [session]
+      properties:
+        session:
+          type: string
+    NightSessionActiveConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/night.session.active.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [night.session.active]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigNightSessionActive"
         updatedAt:
           type: string
           format: date-time

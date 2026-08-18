@@ -1331,6 +1331,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/night.session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate night.session objects (Track F seam F1)
+         * @description Object ids with label, show (the parent show id), and current revision number, NOT the full payloads. Same read posture as GET /config/show/GET /config/show.macro (show:macro:run OR config:write). `?node=` is not a supported filter for this kind.
+         */
+        get: operations["listNightSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One night.session object's active revision (Track F seam F1) */
+        get: operations["getNightSession"];
+        /**
+         * Write a new night.session revision (Track F seam F1)
+         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present — the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one.
+         */
+        put: operations["putNightSession"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** night.session revision history, newest first (Track F seam F1) */
+        get: operations["listNightSessionRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One past night.session revision's full payload (Track F seam F1)
+         * @description Revisions are immutable (ADR-009); this may not be the currently active one. No other config kind in this coordinator exposes this route yet — a gap for a future seam to close on those kinds, not a reason to withhold it here.
+         */
+        get: operations["getNightSessionRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session.active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active-night-session pointer (Track F seam F1, ADR-039)
+         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/show.active already answers for "nothing configured yet".
+         */
+        get: operations["getNightSessionActive"];
+        /**
+         * Activate a night session, or clear the pointer (Track F seam F1, ADR-039 rule 4)
+         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset — the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         */
+        put: operations["putNightSessionActive"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session.active/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** night.session.active revision history, newest first (Track F seam F1) */
+        get: operations["listNightSessionActiveRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -2190,7 +2309,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -2580,7 +2699,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
             title: string;
             status: number;
             detail: string;
@@ -2653,12 +2772,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, and GET /config/show.surface. */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, and GET /config/night.session. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "night.session";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -3034,6 +3153,164 @@ export interface components {
             id: string;
             revision: number;
             payload: components["schemas"]["ConfigShowActive"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description Names an FPP-owned playlist: referenced, never created (Track F seam F1, RESTING-MODE.md §6.1). fppInstanceId must name a configured FPP instance (server-side; not expressible here). */
+        ConfigNightSessionFPPPlaylist: {
+            fppInstanceId: string;
+            playlist: string;
+        };
+        /** @description ADR-028's asset identity as a night.session needs to name one: show, sequence, and target. target names the rendering/playout target (a node id); the implied targetKind is always "node". Must resolve to a current asset (server-side; not expressible here). */
+        ConfigNightSessionAssetRef: {
+            show: string;
+            sequence: string;
+            target: string;
+        };
+        /** @description One entry of resting.backgroundAudio.items. itemId is stable and operator-visible (pinned against pkg/audio.PlaylistItem on Track C's branch, Track F seam F1): unlike position in the array, it survives a reorder. Must be unique within the list. */
+        ConfigNightSessionBackgroundAudioItem: {
+            itemId: string;
+            show: string;
+            sequence: string;
+            target: string;
+        };
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. */
+        ConfigNightSessionBackgroundAudio: {
+            items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
+            /** @enum {string} */
+            repeat: "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "sequential" | "gapless" | "crossfade";
+            crossfadeMs?: number;
+            maxGainDb: number;
+        };
+        /** @description night.session.resting (Track F seam F1, RESTING-MODE.md §6-8). endOfNightPlaylist defaults to playlist when absent (server-side). */
+        ConfigNightSessionResting: {
+            fppInstanceId: string;
+            playlist: string;
+            endOfNightPlaylist: string;
+            timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
+            endOfNightRepeat: boolean;
+            backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
+        };
+        /** @description One entry of enterShow.cues or enterResting.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor — negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
+        ConfigNightSessionCue: {
+            name: string;
+            /** @enum {string} */
+            role: "lighting" | "projection" | "audio" | "announcement" | "other";
+            action: string;
+            offsetMs: number;
+            fadeDurationMs?: number;
+            barrier: boolean;
+            /** @enum {string} */
+            onFailure: "continue" | "abort";
+        };
+        /** @description night.session.enterShow (RESTING-MODE.md §7.1). */
+        ConfigNightSessionEnterShow: {
+            cues: components["schemas"]["ConfigNightSessionCue"][];
+            blackoutHoldMs: number;
+        };
+        /** @description night.session.enterResting (RESTING-MODE.md §7.2). */
+        ConfigNightSessionEnterResting: {
+            cues: components["schemas"]["ConfigNightSessionCue"][];
+            blackoutAfterShowMs: number;
+        };
+        /** @description The WRITE shape of one entry of enterShow.cues/enterResting.cues: the body PUT /config/night.session/{id} accepts inside its cue lists. Identical to ConfigNightSessionCue except that barrier and onFailure are not required — an absent barrier takes its documented default of false, and an absent onFailure takes its documented default of "continue" (ADR-035). The response always stores and returns the resolved ConfigNightSessionCue shape, never this one. */
+        ConfigNightSessionCueWrite: {
+            name: string;
+            /** @enum {string} */
+            role: "lighting" | "projection" | "audio" | "announcement" | "other";
+            action: string;
+            offsetMs: number;
+            fadeDurationMs?: number;
+            barrier?: boolean;
+            /** @enum {string} */
+            onFailure?: "continue" | "abort";
+        };
+        /** @description The WRITE shape of night.session.enterShow: identical to ConfigNightSessionEnterShow except that cues carries ConfigNightSessionCueWrite entries (barrier/onFailure optional). */
+        ConfigNightSessionEnterShowWrite: {
+            cues: components["schemas"]["ConfigNightSessionCueWrite"][];
+            blackoutHoldMs: number;
+        };
+        /** @description The WRITE shape of night.session.enterResting: identical to ConfigNightSessionEnterResting except that cues carries ConfigNightSessionCueWrite entries. */
+        ConfigNightSessionEnterRestingWrite: {
+            cues: components["schemas"]["ConfigNightSessionCueWrite"][];
+            blackoutAfterShowMs: number;
+        };
+        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required — an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). */
+        ConfigNightSessionBackgroundAudioWrite: {
+            items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
+            /** @enum {string} */
+            repeat?: "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "sequential" | "gapless" | "crossfade";
+            crossfadeMs?: number;
+            maxGainDb: number;
+        };
+        /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" — RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
+        ConfigNightSessionRestingWrite: {
+            fppInstanceId: string;
+            playlist: string;
+            endOfNightPlaylist?: string;
+            timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
+            endOfNightRepeat?: boolean;
+            backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
+        };
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one — matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks refusal, the same-show rule) applies identically here. */
+        ConfigNightSessionWrite: {
+            show: string;
+            label: string;
+            showPlaylist: components["schemas"]["ConfigNightSessionFPPPlaylist"];
+            resting: components["schemas"]["ConfigNightSessionRestingWrite"];
+            enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
+            enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+        };
+        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seam F1, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present. Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
+        ConfigNightSession: {
+            show: string;
+            label: string;
+            showPlaylist: components["schemas"]["ConfigNightSessionFPPPlaylist"];
+            resting: components["schemas"]["ConfigNightSessionResting"];
+            enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
+            enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+        };
+        /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
+        NightSessionConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "night.session";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNightSession"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The "night.session.active" singleton configuration kind's decoded payload (Track F seam F1, ADR-039 rule 4): the body PUT /config/night.session.active accepts, and the "payload" member of GET /config/night.session.active's response. session is REQUIRED as a key but may be the empty string, which explicitly clears the pointer back to unset (the zero-to-one-and-back-to-zero transition) — a non-empty value must name an existing night.session object (server-side; not expressible here). */
+        ConfigNightSessionActive: {
+            session: string;
+        };
+        /** @description The body of GET and PUT /config/night.session.active. */
+        NightSessionActiveConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "night.session.active";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNightSessionActive"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -5787,6 +6064,229 @@ export interface operations {
         };
     };
     listShowActiveRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNightSessionWrite"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessionRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionActiveConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNightSessionActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNightSessionActive"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionActiveConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessionActiveRevisions: {
         parameters: {
             query?: never;
             header?: never;

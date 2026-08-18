@@ -50,6 +50,8 @@ func main() {
 		st := f.StepTimeMS()
 		durMS := fc * int(st)
 		fmt.Printf("%s: FrameCount=%d StepTimeMS=%d duration_ms=%d\n", p, fc, st, durMS)
-		f.Close()
+		if err := f.Close(); err != nil {
+			fmt.Printf("%s: Close error: %v\n", p, err)
+		}
 	}
 }

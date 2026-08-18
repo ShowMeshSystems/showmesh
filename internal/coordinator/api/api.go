@@ -1334,6 +1334,26 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
 	mux.HandleFunc("GET /api/v1/config/show.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActiveRevisions))
 
+	// --- Track F seam F1: night.session and its active-session pointer ---
+	//
+	// Same route shape as show/show.surface/show.active immediately above:
+	// reads use readAnyGuard(showConfigReadScopes, ...), writes use
+	// writeGuard(&scopeConfigWrite, ...). "night.session" is a collection
+	// (the usual four routes); "night.session.active" is a singleton (fixed
+	// id, no {id} path segment) with three. "night.session.active" is a
+	// distinct literal path segment from "night.session" for the identical
+	// net/http.ServeMux segment-matching reason TestShowActiveRouteIsNotSwallowedByShowIDRoute
+	// exists one kind over.
+	mux.HandleFunc("GET /api/v1/config/night.session", h.readAnyGuard(showConfigReadScopes, h.handleListNightSessions))
+	mux.HandleFunc("GET /api/v1/config/night.session/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSession))
+	mux.HandleFunc("PUT /api/v1/config/night.session/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutNightSession))
+	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevisions))
+	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions/{revision}", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevision))
+
+	mux.HandleFunc("GET /api/v1/config/night.session.active", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActive))
+	mux.HandleFunc("PUT /api/v1/config/night.session.active", h.writeGuard(&scopeConfigWrite, h.handlePutNightSessionActive))
+	mux.HandleFunc("GET /api/v1/config/night.session.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActiveRevisions))
+
 	// --- Track E: the asset store ---
 	//
 	// Seam E3/E4 (ADR-028). POST is a multipart upload behind asset:write
