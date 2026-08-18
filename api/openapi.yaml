@@ -3815,9 +3815,9 @@ paths:
       responses:
         "200":
           description: >-
-            OK. The registered asset — freshly ingested, the pre-existing
+            OK. The registered asset: freshly ingested, the pre-existing
             asset on an idempotent no-op, or the restored asset on a
-            rollback; see `rolledBack`.
+            rollback. See `rolledBack`.
           headers:
             ShowMesh-API-Version:
               $ref: "#/components/headers/ShowMesh-API-Version"

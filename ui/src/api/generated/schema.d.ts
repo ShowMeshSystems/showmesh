@@ -1348,7 +1348,7 @@ export interface paths {
          * Upload one asset's bytes and register its metadata (Track E seam E3/E4, ADR-028)
          * @description Requires `asset:write` (admin only). `multipart/form-data`: the `show`, `sequence`, `mediaType`, `targetKind`, and (for `targetKind: "node"`) `target` fields MUST arrive before the `file` part — a `file` part that arrives first is refused, naming that requirement, so every field is already known before this coordinator streams a single byte to its backend. The bytes are staged, hashed, and only THEN is the metadata row (plus its audit entry) written, in one transaction — an interrupted upload registers nothing (ADR-030).
          *     `targetKind` is required with no default; `targetKind: "node"` requires a non-empty `target` naming a DECLARED node (`400` `asset-target-required` when it is missing). `show` must name an existing `show` object; `sequence` uses the same slug rule every other Track E object id uses; `mediaType` is one of `fseq`, `audio`, `media`.
-         *     Re-uploading IDENTICAL bytes for an identity that already exists is idempotent: `200` with the existing asset, no new row. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction — a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
+         *     Re-uploading IDENTICAL bytes for an identity that is still CURRENT is idempotent: `200` with the existing asset, no new row, `rolledBack: false`. Re-uploading bytes matching a SUPERSEDED identity is a rollback (ADR-028 decision 10): that asset becomes current again, superseding whatever was current, in one transaction, and the response reports `rolledBack: true`. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction — `rolledBack: false` — a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
          */
         post: operations["uploadAsset"];
         delete?: never;
@@ -5857,7 +5857,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description OK. The registered (or, on an idempotent re-upload, the pre-existing) asset. */
+            /** @description OK. The registered asset: freshly ingested, the pre-existing asset on an idempotent no-op, or the restored asset on a rollback. See `rolledBack`. */
             200: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
