@@ -500,6 +500,33 @@ A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
 independently is the ADR-034 failure with data attached.
 
+**The stamped version is the maximum migration version, not the count, and
+that distinction is invisible except while a branch holds a gap** (Track C
+and Track F, 2026-08-18, agreed across both sessions). `migrate()` stamps
+`PRAGMA user_version` and skips any migration whose version is `<=` the
+stamp. Those two numbers were interchangeable for the whole life of this
+project because versions were contiguous, and they stopped being
+interchangeable the moment Track F took v10 while Track C's v9 was still
+unwritten: a fresh database on that branch applied nine migrations, the last
+of them v10, and a count-based stamp wrote `9`, which on the other branch
+means "has the audio tables". One number, two schemas, and the equality
+fast-path then skips whichever migration the other branch needs. The change
+to a maximum is a no-op for every database that has ever existed, which is
+why it landed mid-flight rather than at merge.
+
+**Once both branches merge the versions are contiguous again and the fix
+becomes invisible**, which is the reason it is written down here rather than
+left to the line itself.
+
+**A coordinator database created by a branch binary cannot survive a merge,
+in either direction**, and no stamp scheme fixes it: the apply loop's guard
+is `version <= current`, so a database stamped 10 skips v9 and one stamped 9
+skips v10. Per-version tracking (a migrations table rather than one integer)
+is the only thing that would, and that is a change to the store's contract
+rather than a merge-week edit. Discard and recreate branch dev databases.
+The deployed local dev stack is at v8 and is unaffected: a merged binary
+sees 8 and applies v9 then v10 in order.
+
 ## Change stream event kinds
 
 The `event:` field of an SSE frame, written by
