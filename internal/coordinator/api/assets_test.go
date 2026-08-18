@@ -1016,11 +1016,9 @@ func TestAssetSyncIsNudgedOnUploadAndOnActivation(t *testing.T) {
 
 // --- rollback (ADR-028 decision 10) ---
 
-// TestPostAssetUploadRollback proves the owner's ruling verbatim: uploading
-// A, then B (superseding A), then A again un-supersedes A and supersedes B
-// in one call, the response states rolledBack=true as its own field (not
-// inferred from `current`), a distinct audit action is recorded, the sync
-// nudger fires, and the manifest now expects A's content hash again.
+// TestPostAssetUploadRollback proves upload A, B, then A again reports
+// rolledBack=true as its own field, audits it, nudges sync, and the
+// manifest expects A again.
 func TestPostAssetUploadRollback(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)

@@ -161,10 +161,8 @@ func TestCreateAssetSupersedesPriorCurrentInSameTransaction(t *testing.T) {
 	}
 }
 
-// TestCreateAssetRollsBackSupersededIdentity is ADR-028 decision 10:
-// re-uploading bytes that match a SUPERSEDED row's identity un-supersedes
-// that row and supersedes whatever is current now, in one call, and reports
-// rolledBack=true. It must NOT insert a third row.
+// TestCreateAssetRollsBackSupersededIdentity proves the rollback path
+// (ADR-028 decision 10): rolledBack=true, no third row inserted.
 func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
@@ -223,12 +221,8 @@ func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {
 	}
 }
 
-// TestCreateAssetRollbackRollForwardRollbackCycleTerminates is the required
-// cycle test: rollback, then roll forward (re-uploading the OTHER superseded
-// identity, itself now a rollback), then rollback again. Every call must
-// resolve in O(1) — a single identity lookup plus two single-row UPDATEs —
-// never a walk of prior versions, so a cycle in the supersede history
-// cannot hang or mis-resolve.
+// TestCreateAssetRollbackRollForwardRollbackCycleTerminates proves a
+// rollback/roll-forward/rollback cycle stays at two rows, never a walk.
 func TestCreateAssetRollbackRollForwardRollbackCycleTerminates(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()

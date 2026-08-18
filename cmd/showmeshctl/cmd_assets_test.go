@@ -264,10 +264,8 @@ func TestCmdAssetsUploadHappyPath(t *testing.T) {
 	}
 }
 
-// TestCmdAssetsUploadRollbackLeadsOutputWithAnnouncement is the CLI half of
-// ADR-028 decision 10: when the coordinator reports rolledBack=true, the
-// operator must be told plainly, before the ordinary asset detail, not left
-// to infer it from a `current:` line among nine others.
+// TestCmdAssetsUploadRollbackLeadsOutputWithAnnouncement proves a ROLLBACK
+// line precedes the ordinary asset detail (ADR-028 decision 10).
 func TestCmdAssetsUploadRollbackLeadsOutputWithAnnouncement(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.fseq")

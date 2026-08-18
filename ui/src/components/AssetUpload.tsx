@@ -63,10 +63,8 @@ function formatBytes(bytes: number): string {
 
 export interface AssetUploadProps {
   /**
-   * Called with the registered (or idempotently pre-existing) asset once
-   * the coordinator confirms it — never optimistically before that.
-   * `rolledBack` is ADR-028 decision 10's own field: true only when this
-   * upload matched a SUPERSEDED identity and un-superseded it.
+   * Called once the coordinator confirms the upload — never optimistically
+   * before that. `rolledBack` is ADR-028 decision 10's own field.
    */
   onUploaded: (asset: Asset, rolledBack: boolean) => void
 }
@@ -127,11 +125,8 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           setUploadState({ kind: 'uploading', progress })
         },
       )
-      // The coordinator's own confirmed response is what registers this
-      // asset — never an optimistic guess rendered before this resolves
-      // (ADR-030: "a partial upload registers nothing"). A rollback is
-      // stated as its own state, not left for the operator to infer from
-      // the reloaded list (ADR-028 decision 10, ADR-030 decision 5).
+      // A rollback is stated as its own state, never inferred from the
+      // reloaded list (ADR-028 decision 10).
       setUploadState(resp.rolledBack ? { kind: 'rolledBack', assetId: resp.asset.id } : { kind: 'idle' })
       if (fileInputRef.current) fileInputRef.current.value = ''
       onUploaded(resp.asset, resp.rolledBack)

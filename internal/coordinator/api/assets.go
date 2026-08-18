@@ -345,10 +345,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 		created = rec
 		rolledBack = rb
 
-		// ADR-028 decision 10: a rollback is a distinct, auditable action —
-		// it un-supersedes rec and supersedes whatever was current, not a
-		// plain registration — so it gets its own Action rather than
-		// borrowing "asset.upload".
+		// A rollback (ADR-028 decision 10) gets its own audit Action.
 		action := "asset.upload"
 		if rb {
 			action = "asset.rollback"
@@ -371,14 +368,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	var existsErr *store.AssetIdentityExistsError
 	switch {
 	case errors.As(writeErr, &existsErr):
-		// Idempotent re-upload of identical bytes for an identity that is
-		// STILL CURRENT (TRACK-E-SESSION-SPEC.md section 3.3): 200 with the
-		// existing asset, no new row, no new audit entry, rolledBack false —
-		// nothing changed, so there is nothing to attribute. The staged blob
-		// above is an orphan under this outcome too (identical content
-		// already has a blob under the same content-addressed key —
-		// VolumeBackend.Put renamed over the existing file, per its own doc
-		// comment: "a same-content overwrite, not a conflict").
+		// Still-current identity match: idempotent no-op, no audit entry.
 		jsonWrite(w, mapAssetResponse(now, existsErr.Existing, false))
 		return
 	case writeErr != nil:

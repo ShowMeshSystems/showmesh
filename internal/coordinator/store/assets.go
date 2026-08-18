@@ -122,23 +122,11 @@ func getAssetByIdentity(ctx context.Context, q querier, showID, sequenceID, targ
 	return rec, nil
 }
 
-// createAsset is [Store.CreateAsset]/[Tx.CreateAsset]'s shared body. It
-// always runs inside a transaction — the caller guarantees that, exactly
-// like createMacroRun in macro_runs.go — because the identity check, the
-// supersede of any prior current row, and the insert (or, on rollback, the
-// un-supersede) must all observe (and, for the write, produce) one
-// consistent snapshot.
-//
-// Order: (1) identity lookup first. A hit that is still CURRENT is a
-// legitimate re-upload of identical bytes and returns the existing row
-// unchanged (see [AssetIdentityExistsError]). A hit that is SUPERSEDED is
-// ADR-028 decision 10's rollback: re-uploading bytes this identity already
-// saw and later moved away from un-supersedes that row and supersedes
-// whatever is current now, in this same transaction, so the store is never
-// observably in a state with zero or two current rows for the tuple. A miss
-// is the ordinary case: (2) supersede whatever row currently holds (ShowID,
-// SequenceID, TargetKind, TargetID), if any; (3) insert the new row as
-// current.
+// createAsset is [Store.CreateAsset]/[Tx.CreateAsset]'s shared body; the
+// caller guarantees it runs inside a transaction. A still-current identity
+// match is an idempotent no-op ([AssetIdentityExistsError]); a superseded
+// match rolls back ([rollbackAsset]); otherwise it supersedes any current
+// row for the tuple and inserts the new row as current.
 func createAsset(ctx context.Context, q querier, rec AssetRecord, now time.Time) (AssetRecord, bool, error) {
 	switch {
 	case rec.ID == "":
@@ -219,17 +207,9 @@ func supersedeCurrentAsset(ctx context.Context, q querier, showID, sequenceID, t
 	return err
 }
 
-// rollbackAsset is ADR-028 decision 10, owner-ruled 2026-08-17: re-uploading
-// bytes that match a SUPERSEDED row's identity un-supersedes that row and
-// supersedes whatever is current now, in one transaction — the caller
-// guarantees that, exactly like createAsset's ordinary path. existing is
-// never itself current (the caller only reaches here when
-// existing.SupersededAt != nil), so the row this supersedes is always a
-// DIFFERENT row than the one being restored: a rollback and a roll-forward
-// are the same operation run against two different targets of one
-// un-supersede, which is what keeps a rollback-forward-rollback cycle safe
-// — each call is one lookup and two single-row UPDATEs, never a walk of
-// prior versions.
+// rollbackAsset (ADR-028 decision 10) un-supersedes existing and supersedes
+// whatever is current now, in one transaction the caller guarantees.
+// existing is never itself current.
 func rollbackAsset(ctx context.Context, q querier, existing AssetRecord, now time.Time) (AssetRecord, bool, error) {
 	if err := supersedeCurrentAsset(ctx, q, existing.ShowID, existing.SequenceID, existing.TargetKind, existing.TargetID, now); err != nil {
 		return AssetRecord{}, false, fmt.Errorf("store: rollback asset %q: supersede current asset: %w", existing.ID, err)
@@ -243,14 +223,9 @@ func rollbackAsset(ctx context.Context, q querier, existing AssetRecord, now tim
 
 // CreateAsset registers a new asset, superseding any existing current
 // asset for the same (ShowID, SequenceID, TargetKind, TargetID) in the same
-// transaction. If an asset with identical identity AND content hash
-// already exists and is still current, no row is written and the call
-// returns [*AssetIdentityExistsError] carrying the existing row — see that
-// type's doc comment for the idempotent-upload contract this exists to
-// serve. If that identity's existing row was superseded, this instead
-// performs ADR-028 decision 10's rollback and returns (existing row,
-// rolledBack=true, nil): un-superseding it and superseding whatever is
-// current now, in the same transaction.
+// transaction. A still-current identity match returns
+// [*AssetIdentityExistsError] instead; a superseded match rolls back and
+// returns (existing row, rolledBack=true, nil).
 func (s *Store) CreateAsset(ctx context.Context, rec AssetRecord) (AssetRecord, bool, error) {
 	guardNotInTx(ctx, "Store.CreateAsset")
 	sqlTx, err := s.db.BeginTx(ctx, nil)
