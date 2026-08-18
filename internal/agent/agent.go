@@ -228,6 +228,17 @@ func Run() int {
 		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
+	// Track C seam C1a: audio discovery report, on its own cadence — see
+	// audioreport.go. No trigger channel: there is no session engine yet
+	// in this seam to signal an out-of-cadence publish from.
+	audioReportDone := make(chan struct{})
+	go func() {
+		defer close(audioReportDone)
+		ticker := time.NewTicker(cfg.AudioReportInterval)
+		defer ticker.Stop()
+		runAudioReport(sigCtx, conn, cfg.NodeID, time.Now, ticker.C, logger)
+	}()
+
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
@@ -238,13 +249,14 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat, asset inventory, render report, and MultiSync listener
-	// loops also select on sigCtx.Done() and exit on their own; wait for
-	// all four so none can race the final offline publish below with a
-	// publish still in flight.
+	// The heartbeat, asset inventory, render report, audio report, and
+	// MultiSync listener loops also select on sigCtx.Done() and exit on
+	// their own; wait for all five so none can race the final offline
+	// publish below with a publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
+	<-audioReportDone
 	<-multiSyncDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

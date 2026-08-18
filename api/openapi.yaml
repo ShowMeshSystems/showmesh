@@ -813,7 +813,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [node, fpp, coordinator, resolume, surface]
+            enum: [node, fpp, coordinator, resolume, surface, audio_session]
           description: Restrict to observations about resources of this kind.
         - name: resourceId
           in: query
@@ -2628,6 +2628,255 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/audio.settings:
+    get:
+      operationId: getAudioSettingsConfig
+      summary: The audio.settings engine-wide singleton (ADR-039)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/render.settings`'s
+        own always-sensitive, never-404 posture: the payload has a
+        well-defined default, so this always answers `200`, with `revision`
+        `0` and `source` `"default"` when nothing has ever been written.
+        `driftIgnoreThresholdMs`'s default has never been measured against
+        real playback and is a starting point, not a tuned value.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putAudioSettingsConfig
+      summary: Write a new audio.settings revision (ADR-039)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: every
+        field is required and non-null on every write — never merged
+        against the previous revision, so an absent key is refused by name
+        rather than silently defaulting or carrying the old value forward.
+        `defaultFadeCurve` must be a member of the audio engine's own
+        closed fade-curve vocabulary (only `"linear"` ships today). On
+        success, appends a new immutable revision and activates it in the
+        SAME transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule). A cookie-authenticated request additionally
+        requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigAudioSettingsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.settings/revisions:
+    get:
+      operationId: getAudioSettingsConfigRevisions
+      summary: audio.settings revision history, newest first
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/render.settings/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node:
+    get:
+      operationId: listAudioNodes
+      summary: Enumerate audio.node objects (ADR-018/ADR-039)
+      description: >-
+        Requires `config:write`. Object ids (the node id) with label (the
+        configured programRoute) and current revision number, NOT the full
+        payloads — `show` is always empty, since audio.node carries no
+        show reference.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node/{id}:
+    get:
+      operationId: getAudioNode
+      summary: One audio.node object's active revision
+      description: Requires `config:write`. `id` is the node id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioNodeConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putAudioNode
+      summary: Write a new audio.node revision (ADR-018)
+      description: >-
+        Requires `config:write` (admin only). `id` is the node id and must
+        pass the same syntax a node id must satisfy. This is a FULL
+        REPLACEMENT: every field is required on every write. `programRoute`
+        and `ltcRoute` are each cross-checked, LIVE, against this node's
+        OWN most recent capability advertisement (`audio.output.local` /
+        `audio.output.ltc`) — never accepted on the operator's claim
+        alone. A node that has never advertised any audio capability, or
+        whose advertisement does not include the named route, is refused
+        with `400` naming what evidence was missing (or, when the node has
+        advertised nothing at all, that no probe evidence exists for it).
+        `clockDomain` and `clockDomainProvenance` are operator-declared and
+        never inferred: no software call on this platform proves two
+        outputs share a hardware clock.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigAudioNode"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioNodeConfigResponse"
+        "400":
+          description: >-
+            Either an ordinary payload validation refusal, or the
+            placement refusal described above (the node's own advertised
+            capability evidence does not include the named route).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node/{id}/revisions:
+    get:
+      operationId: getAudioNodeConfigRevisions
+      summary: audio.node revision history, newest first
+      description: Requires `config:write`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -4381,7 +4630,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [node, fpp, coordinator, resolume, surface]
+          enum: [node, fpp, coordinator, resolume, surface, audio_session]
         id:
           type: string
     Capability:
@@ -4428,7 +4677,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render]
+         declaration, render, audio]
       properties:
         nodeId:
           type: string
@@ -4472,6 +4721,15 @@ components:
             surface a node supervises and attributing its status to a
             surface would report one fact once per surface as though each
             were independent.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+        audio:
+          type: array
+          description: >-
+            Whatever node.audio.* observations this coordinator currently
+            holds for this node, one entry per signal. Never omitted; an
+            empty array means this node has never published an audio
+            discovery report.
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
@@ -6281,14 +6539,16 @@ components:
         /config/resolume.recovery/revisions, GET
         /config/render.settings/revisions, GET
         /config/resolume.instances/revisions, GET
-        /config/fpp.mqtt/revisions, and GET
-        /config/assets.settings/revisions, newest first — one shape
+        /config/fpp.mqtt/revisions, GET
+        /config/assets.settings/revisions, GET
+        /config/audio.settings/revisions, and GET
+        /config/audio.node/{id}/revisions, newest first — one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained more
         callers; Track E added three more, Track D seam D-3a another,
-        Track B seam B2c another, and Track G seams G-2, G-3, and G-4
-        one each more).
+        Track B seam B2c another, Track G seams G-2, G-3, and G-4 one
+        each more, and audio.settings/audio.node two more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -6296,7 +6556,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
         revisions:
           type: array
           items:
@@ -7231,6 +7491,110 @@ components:
             surface — there is no config-push path to a node beyond that
             assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always
             non-empty.
+    ConfigAudioSettingsPayload:
+      type: object
+      description: >-
+        The "audio.settings" configuration kind's decoded payload (ADR-039): the
+        body PUT /config/audio.settings accepts (a
+        full replacement — every field required and non-null), and the
+        "payload" member of GET /config/audio.settings' response.
+        `driftIgnoreThresholdMs` has never been measured against real
+        playback; its default is a starting point, not a tuned value.
+        `defaultFadeCurve` must be a member of the audio engine's own
+        closed fade-curve vocabulary (only "linear" ships today).
+        `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0
+        is unity gain — applied as the default ceiling on a background bed.
+      required:
+        [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
+         defaultMaxBackgroundGain]
+      properties:
+        driftIgnoreThresholdMs:
+          type: integer
+        defaultFadeCurve:
+          type: string
+          enum: [linear]
+        defaultFadeDurationMs:
+          type: integer
+        defaultMaxBackgroundGain:
+          type: number
+    AudioSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/audio.settings. Never `404`s: the
+        payload has a well-defined default, reported with `revision` `0`
+        and `source` `"default"` when nothing has ever been written,
+        mirroring RenderSettingsConfigResponse's identical posture.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigAudioSettingsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigAudioNode:
+      type: object
+      description: >-
+        The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039):
+        the body PUT /config/audio.node/{id}
+        accepts (a full replacement — every field required, non-null, and
+        non-empty), and the "payload" member of GET
+        /config/audio.node/{id}'s response. `programRoute` and `ltcRoute`
+        name discovered output routes (device identities the node itself
+        reported); `clockDomain` and `clockDomainProvenance` are the
+        operator's own declaration of which hardware clock the two routes
+        share, never inferred.
+      required: [programRoute, ltcRoute, clockDomain, clockDomainProvenance]
+      properties:
+        programRoute:
+          type: string
+        ltcRoute:
+          type: string
+        clockDomain:
+          type: string
+        clockDomainProvenance:
+          type: string
+    AudioNodeConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/audio.node/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigAudioNode"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
     Problem:
       type: object
       description: >-
@@ -7526,7 +7890,10 @@ components:
       type: object
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
-        /config/show, and GET /config/show.surface.
+        /config/show, GET /config/show.surface, and GET /config/audio.node
+        (audio.node's own list summary reports its configured programRoute as
+        label and leaves show empty, since audio.node carries no show
+        reference).
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -7534,7 +7901,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface]
+          enum: [show.action, show.macro, show, show.surface, audio.node]
         objects:
           type: array
           items:

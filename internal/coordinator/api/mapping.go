@@ -382,10 +382,17 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // render evidence at all) renders as an empty array, never an omitted
 // field, matching every other "absent evidence is stated, never omitted"
 // collection on [v1.Node].
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs []observation.Observation) v1.Node {
+//
+// audioObs is [NodeAudioLister.NodeAudioObservations]'s identical
+// pass-through, one dependency over.
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs []observation.Observation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {
 		render = append(render, mapObservationEntry(o, now))
+	}
+	audio := make([]v1.ObservationEntry, 0, len(audioObs))
+	for _, o := range audioObs {
+		audio = append(audio, mapObservationEntry(o, now))
 	}
 
 	n := v1.Node{
@@ -401,6 +408,7 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 		},
 		Declaration: mapNodeDeclaration(decl, latestRun),
 		Render:      render,
+		Audio:       audio,
 	}
 
 	if nv.Hello != nil {

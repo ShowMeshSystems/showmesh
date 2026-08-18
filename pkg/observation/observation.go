@@ -80,6 +80,15 @@ const (
 	// currently drives, but the surface is the thing being observed. See
 	// internal/coordinator/collector/noderender.
 	ResourceSurface ResourceKind = "surface"
+
+	// ResourceAudioSession identifies one audio session (Track C). Unlike
+	// ResourceSurface, an audio node's engine, device, and its two logical
+	// buses attach to [ResourceNode] instead: one engine and one interface
+	// exist per node, so attributing them to a session would report one
+	// fact N times and imply N independent faults. This seam (C1a) mints
+	// the kind and registers it; it emits no audio_session.* signals yet.
+	// See internal/coordinator/collector/nodeaudio.
+	ResourceAudioSession ResourceKind = "audio_session"
 )
 
 // ResourceRef identifies the subject of an observation.

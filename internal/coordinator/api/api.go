@@ -44,6 +44,11 @@ type Dependencies struct {
 	// in this package that predates this field.
 	Render NodeRenderLister
 
+	// Audio is Track C seam C1a/C1b's dependency — see [NodeAudioLister].
+	// A nil field is replaced by [noNodeAudioLister], matching Render's
+	// identical no-op default posture.
+	Audio NodeAudioLister
+
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
 	// replaced by [noRenderPublisher], under which every render.* dispatch
@@ -443,6 +448,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Render == nil {
 		d.Render = noNodeRenderLister{}
 	}
+	if d.Audio == nil {
+		d.Audio = noNodeAudioLister{}
+	}
 	if d.RenderPublisher == nil {
 		d.RenderPublisher = noRenderPublisher{}
 	}
@@ -611,6 +619,12 @@ func (noNodeLister) Snapshot(context.Context, time.Time) ([]inventory.NodeView, 
 type noNodeRenderLister struct{}
 
 func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observation { return nil }
+
+// noNodeAudioLister is [Dependencies.Audio]'s nil-safe default, matching
+// [noNodeRenderLister]'s identical posture one dependency over.
+type noNodeAudioLister struct{}
+
+func (noNodeAudioLister) NodeAudioObservations(string) []observation.Observation { return nil }
 
 type noFPPLister struct{}
 
@@ -1386,6 +1400,25 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/render.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/render.settings", h.writeGuard(&scopeConfigWrite, h.handlePutRenderSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/render.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfigRevisions))
+
+	// GET/PUT /api/v1/config/audio.settings (Track C seam C1b, ADR-039):
+	// the engine-wide operator-settings singleton. Mirrors
+	// /config/render.settings' config:write-only posture exactly
+	// (audiosettings.go).
+	mux.HandleFunc("GET /api/v1/config/audio.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/audio.settings", h.writeGuard(&scopeConfigWrite, h.handlePutAudioSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/audio.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioSettingsConfigRevisions))
+
+	// GET/PUT /api/v1/config/audio.node/{id} (Track C seam C1b, ADR-039): a
+	// collection keyed by node id, mirroring show.surface's four-route
+	// shape (audionode.go). Gated by config:write only, matching
+	// render.settings/audio.settings rather than show.surface's open
+	// showConfigReadScopes posture: this is nearer principal/physical-
+	// interface management than show-programming state.
+	mux.HandleFunc("GET /api/v1/config/audio.node", h.requireScope(identity.ScopeConfigWrite, h.handleListAudioNodes))
+	mux.HandleFunc("GET /api/v1/config/audio.node/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNode))
+	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
+	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

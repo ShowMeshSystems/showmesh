@@ -38,6 +38,11 @@ const (
 	// [RenderPayload], published retained on
 	// showmesh/nodes/<node-id>/observed/render.
 	SchemaNodeRenderV1 = "showmesh.node.render/v1"
+
+	// SchemaNodeAudioV1 is the schema for
+	// [AudioPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/audio.
+	SchemaNodeAudioV1 = "showmesh.node.audio/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -819,6 +824,152 @@ func (p RenderPayload) Validate() error {
 	return nil
 }
 
+// maxAudioRoutes bounds [AudioPayload.Routes], the same "an advertisement
+// can't consume its own whole budget" cap [maxRenderSurfaces] enforces one
+// payload over.
+const maxAudioRoutes = 8
+
+// AudioRouteReport is one candidate ALSA device's real probe outcome,
+// inside [AudioPayload.Routes].
+type AudioRouteReport struct {
+	// Device is the ALSA PCM device name probed (e.g. "hw:CARD=PCH,DEV=0").
+	// Never "null" or "default" — see internal/agent/audio.CandidateDevices.
+	Device string `json:"device"`
+
+	// Available is true only when a real pipeline reached PLAYING against
+	// Device — never inferred from enumeration alone.
+	Available bool `json:"available"`
+
+	// Reason is required whenever Available is false.
+	Reason string `json:"reason"`
+
+	// Channels, Rate, and Format are what the pipeline actually negotiated,
+	// never what was requested. Channels is a graph-level property only:
+	// this cannot detect an interface that mirrors one physical pair from
+	// another downstream of anything ALSA exposes (RES-007).
+	Channels int64  `json:"channels"`
+	Rate     int64  `json:"rate"`
+	Format   string `json:"format"`
+}
+
+// AudioPayload is the payload of the showmesh.node.audio/v1 schema,
+// published RETAINED to a node's observed/audio topic ([ObservedTopic],
+// [ObservedDeliveryPolicy]): this node's audio discovery evidence.
+type AudioPayload struct {
+	// EngineAvailable is real evidence (a PLAYING transition against the
+	// always-present ALSA "null" device) that this node's GStreamer/ALSA
+	// element chain works, independent of whether real hardware is
+	// attached: false means "this node has no audio engine".
+	EngineAvailable bool `json:"engineAvailable"`
+
+	// EngineReason is required whenever EngineAvailable is false.
+	EngineReason string `json:"engineReason"`
+
+	// HardwareEnumerated is true only when this node's own device and
+	// hardware-card enumeration both completed without error. False makes
+	// DeviceAvailable/ProgramAvailable/LTCAvailable mean "we do not know
+	// yet", never "confirmed absent" — a shell-out failure (permissions,
+	// a missing aplay binary, a transient error) must never be reported
+	// the same way as a clean enumeration that genuinely found no card.
+	HardwareEnumerated bool `json:"hardwareEnumerated"`
+
+	// HardwareEnumeratedReason is required whenever HardwareEnumerated is
+	// false, carrying the actual enumeration error text.
+	HardwareEnumeratedReason string `json:"hardwareEnumeratedReason"`
+
+	// DeviceAvailable is true when at least one real hardware candidate
+	// (never "null"/"default") probed to PLAYING — the middle state: an
+	// engine with no usable output. Only meaningful when HardwareEnumerated
+	// is true.
+	DeviceAvailable bool `json:"deviceAvailable"`
+
+	// DeviceReason is required whenever DeviceAvailable is false.
+	DeviceReason string `json:"deviceReason"`
+
+	// OutputsCount is how many real hardware candidates probed to PLAYING.
+	OutputsCount int64 `json:"outputsCount"`
+
+	// ProgramAvailable is true when at least one real hardware route
+	// achieved 1 or more channels — the program bus (AUDIO-ENGINE
+	// section 6).
+	ProgramAvailable bool `json:"programAvailable"`
+
+	// ProgramReason is required whenever ProgramAvailable is false.
+	ProgramReason string `json:"programReason"`
+
+	// LTCAvailable is true when at least one real hardware route's
+	// SEPARATE, explicitly-constrained probe achieved 3 or more channels
+	// — evidence a discrete LTC channel (ADR-018) is physically reachable
+	// on this node, never a claim that any specific route has been
+	// assigned to carry it, and never inferred from an unconstrained
+	// probe's own achieved channel count alone.
+	LTCAvailable bool `json:"ltcAvailable"`
+
+	// LTCReason is required whenever LTCAvailable is false.
+	LTCReason string `json:"ltcReason"`
+
+	// Routes is every probed real-hardware candidate's outcome, bounded to
+	// maxAudioRoutes. Nil-unsafe like RenderPayload.Surfaces: this
+	// package's own encoder emits "routes":[] for a node with none, never
+	// omits or nulls the key.
+	Routes []AudioRouteReport `json:"routes"`
+
+	// Truncated is true when more real candidate devices were enumerated
+	// than fit within maxAudioRoutes — stated, never a silent drop.
+	Truncated bool `json:"truncated"`
+
+	// EnumeratedCount is the total number of PCM device names this node's
+	// enumerator reported, before virtual-name filtering or truncation.
+	EnumeratedCount int64 `json:"enumeratedCount"`
+
+	// ObservedAt is when this node actually ran its discovery probes, on
+	// the node's own clock — the evidence timestamp ADR-003 requires. nil
+	// means genuinely unknown, matching pkg/observation.Observation.
+	// ObservedAt's own nil-means-unknown convention (ADR-011: never
+	// defaulted to "now").
+	ObservedAt *time.Time `json:"observedAt"`
+}
+
+// Validate enforces: at most maxAudioRoutes entries, every route's Device
+// non-empty, ObservedAt present, and every Reason field required wherever
+// this payload's own doc comments say so — the same shape
+// RenderPayload.Validate enforces one type up.
+func (p AudioPayload) Validate() error {
+	if p.Routes == nil {
+		return fmt.Errorf("%w: routes (a node reports \"routes\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
+	if len(p.Routes) > maxAudioRoutes {
+		return fmt.Errorf("%w: %d routes, max %d", ErrPayloadTooLarge, len(p.Routes), maxAudioRoutes)
+	}
+	if p.ObservedAt == nil {
+		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)
+	}
+	if !p.EngineAvailable && p.EngineReason == "" {
+		return fmt.Errorf("%w: engineReason (required whenever engineAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.HardwareEnumerated && p.HardwareEnumeratedReason == "" {
+		return fmt.Errorf("%w: hardwareEnumeratedReason (required whenever hardwareEnumerated is false)", ErrPayloadMissingField)
+	}
+	if !p.DeviceAvailable && p.DeviceReason == "" {
+		return fmt.Errorf("%w: deviceReason (required whenever deviceAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.ProgramAvailable && p.ProgramReason == "" {
+		return fmt.Errorf("%w: programReason (required whenever programAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.LTCAvailable && p.LTCReason == "" {
+		return fmt.Errorf("%w: ltcReason (required whenever ltcAvailable is false)", ErrPayloadMissingField)
+	}
+	for i, r := range p.Routes {
+		if r.Device == "" {
+			return fmt.Errorf("%w: routes[%d].device", ErrPayloadMissingField, i)
+		}
+		if !r.Available && r.Reason == "" {
+			return fmt.Errorf("%w: routes[%d].reason (required whenever available is false)", ErrPayloadMissingField, i)
+		}
+	}
+	return nil
+}
+
 // ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
 // surface's Drawing is set but is not one of [RenderDrawingContent] or
 // [RenderDrawingIdle], matching [ErrPayloadInvalidOutcome]'s identical
@@ -1005,6 +1156,28 @@ func DecodeRenderPayload(env Envelope) (RenderPayload, error) {
 	return p, nil
 }
 
+// DecodeAudioPayload decodes env.Payload as an [AudioPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeAudioV1], an
+// error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
+// error wrapping [ErrPayloadMissingField] or [ErrPayloadTooLarge] (via
+// [AudioPayload.Validate]) if the payload is malformed.
+func DecodeAudioPayload(env Envelope) (AudioPayload, error) {
+	if env.Schema != SchemaNodeAudioV1 {
+		return AudioPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeAudioV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	var p AudioPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -1104,4 +1277,18 @@ func NewRenderEnvelope(now func() time.Time, nodeID string, payload RenderPayloa
 		return Envelope{}, fmt.Errorf("mqttproto: build render envelope: %w", err)
 	}
 	return newEnvelope(now, SchemaNodeRenderV1, nodeID, payload)
+}
+
+// NewAudioEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+//
+// Like [NewRenderEnvelope], this constructor calls payload.Validate()
+// itself before marshalling, so a caller-built payload
+// [DecodeAudioPayload] would refuse is never published as-is.
+func NewAudioEnvelope(now func() time.Time, nodeID string, payload AudioPayload) (Envelope, error) {
+	if err := payload.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("mqttproto: build audio envelope: %w", err)
+	}
+	return newEnvelope(now, SchemaNodeAudioV1, nodeID, payload)
 }
