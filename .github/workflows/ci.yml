@@ -45,8 +45,7 @@ jobs:
       # behavior and not a passing test, so the suite fails on timeouts.
       # ndisink is deliberately not installed: ADR-010 forbids shipping the
       # NDI runtime, so NDI transport stays a bench concern and only the
-      # fakesink/queue fallback runs here. rawvideoparse lives in
-      # plugins-bad.
+      # fakesink/queue fallback runs here.
       - name: Install GStreamer (renderer tests)
         run: |
           # tools + plugins-base is the whole requirement: fdsrc, queue and
