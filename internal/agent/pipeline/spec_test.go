@@ -124,24 +124,39 @@ func TestCapsFilterStagePinsPixelFormat(t *testing.T) {
 
 // TestFSEQSourceSpecUsesFdsrcAndRawvideoparse proves B3's real source stage
 // reads from this process's own stdin (fd=0) rather than generating content
-// itself (B2a's videotestsrc), and that geometry/format/frameRate reach
-// rawvideoparse's argv untouched.
+// itself (B2a's videotestsrc), that geometry/format/frameRate reach
+// rawvideoparse's argv untouched, and that fdsrcIsLive controls only
+// whether fdsrc's is-live property is emitted at all — GStreamer < 1.26
+// rejects the whole pipeline if it is ever present (see [ProbeFdsrcLive]'s
+// doc comment), so this input must be able to build both shapes with no
+// gst-launch-1.0 involved.
 func TestFSEQSourceSpecUsesFdsrcAndRawvideoparse(t *testing.T) {
-	spec, err := FSEQSourceSpec("surface-1", 64, 32, "rgb", 40)
-	if err != nil {
-		t.Fatalf("FSEQSourceSpec: %v", err)
+	cases := []struct {
+		name        string
+		fdsrcIsLive bool
+		want        string
+	}{
+		{"is-live supported", true, "fdsrc fd=0 is-live=true ! rawvideoparse width=64 height=32 format=RGB framerate=40/1"},
+		{"is-live not supported", false, "fdsrc fd=0 ! rawvideoparse width=64 height=32 format=RGB framerate=40/1"},
 	}
-	argv, err := spec.BuildArgv()
-	if err != nil {
-		t.Fatalf("BuildArgv: %v", err)
-	}
-	got := strings.Join(argv, " ")
-	want := "fdsrc fd=0 is-live=true ! rawvideoparse width=64 height=32 format=RGB framerate=40/1"
-	if !strings.HasPrefix(got, want) {
-		t.Fatalf("argv = %q, want prefix %q", got, want)
-	}
-	if spec.PixelFormat != "RGB" {
-		t.Fatalf("spec.PixelFormat = %q, want RGB", spec.PixelFormat)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec, err := FSEQSourceSpec("surface-1", 64, 32, "rgb", 40, c.fdsrcIsLive)
+			if err != nil {
+				t.Fatalf("FSEQSourceSpec: %v", err)
+			}
+			argv, err := spec.BuildArgv()
+			if err != nil {
+				t.Fatalf("BuildArgv: %v", err)
+			}
+			got := strings.Join(argv, " ")
+			if !strings.HasPrefix(got, c.want) {
+				t.Fatalf("argv = %q, want prefix %q", got, c.want)
+			}
+			if spec.PixelFormat != "RGB" {
+				t.Fatalf("spec.PixelFormat = %q, want RGB", spec.PixelFormat)
+			}
+		})
 	}
 }
 
@@ -150,7 +165,7 @@ func TestFSEQSourceSpecUsesFdsrcAndRawvideoparse(t *testing.T) {
 // must not lose the B0-amendment thread-boundary discipline just because it
 // replaced videotestsrc.
 func TestFSEQSourceSpecCarriesQueueBeforeSink(t *testing.T) {
-	spec, err := FSEQSourceSpec("surface-1", 64, 32, "rgb", 40)
+	spec, err := FSEQSourceSpec("surface-1", 64, 32, "rgb", 40, true)
 	if err != nil {
 		t.Fatalf("FSEQSourceSpec: %v", err)
 	}
@@ -173,7 +188,7 @@ func TestFSEQSourceSpecCarriesQueueBeforeSink(t *testing.T) {
 // doc comment) is refused rather than silently building an invalid or
 // guessed caps string.
 func TestFSEQSourceSpecRejectsUnknownPixelFormat(t *testing.T) {
-	if _, err := FSEQSourceSpec("surface-1", 64, 32, "rgbw", 40); err == nil {
+	if _, err := FSEQSourceSpec("surface-1", 64, 32, "rgbw", 40, true); err == nil {
 		t.Fatalf("FSEQSourceSpec with pixelFormat=rgbw: want error, got nil")
 	}
 }
@@ -194,7 +209,7 @@ func TestFSEQSourceSpecRejectsInvalidGeometry(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := FSEQSourceSpec("surface-1", c.width, c.height, "rgb", c.frameRate); err == nil {
+			if _, err := FSEQSourceSpec("surface-1", c.width, c.height, "rgb", c.frameRate, true); err == nil {
 				t.Fatalf("want error, got nil")
 			}
 		})

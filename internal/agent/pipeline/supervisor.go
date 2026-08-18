@@ -632,13 +632,13 @@ func (r *runner) loop() {
 					consecFails, oneLine(stderrTail))
 				r.setState(StateFailed, reason)
 				r.logger.Warn("pipeline entered failed lockout after repeated fast failures",
-					"surface_id", r.surfaceID, "consecutive_failures", consecFails)
+					"surface_id", r.surfaceID, "consecutive_failures", consecFails, "reason", reason)
 				continue
 			}
 
 			reason := fmt.Sprintf("pipeline exited unexpectedly; last stderr: %s", oneLine(stderrTail))
 			r.setState(StateRestarting, reason)
-			r.logger.Warn("pipeline crashed; scheduling restart", "surface_id", r.surfaceID, "backoff", backoff)
+			r.logger.Warn("pipeline crashed; scheduling restart", "surface_id", r.surfaceID, "backoff", backoff, "reason", reason)
 
 			backoffTimer = time.NewTimer(backoff)
 			backoff *= 2

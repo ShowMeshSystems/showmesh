@@ -145,8 +145,12 @@ func TestFrameWriterAgainstRealFSEQRealMultiSyncRealGStreamer(t *testing.T) {
 
 	// Real gst-launch-1.0 subprocess: FSEQSourceSpec's fdsrc/rawvideoparse
 	// source stage into the existing B2a placeholder fakesink (B4 replaces
-	// this with the real NDI sink stage).
-	spec, err := FSEQSourceSpec("surface-real-1", width, height, "rgb", 40)
+	// this with the real NDI sink stage). fdsrcIsLive is this machine's own
+	// real, probed answer (see FdsrcSupportsIsLive), not hardcoded true —
+	// on GStreamer < 1.26 fdsrc has no is-live property at all, and this is
+	// this package's one test against a real subprocess for both shapes.
+	fdsrcIsLive := FdsrcSupportsIsLive(nil)
+	spec, err := FSEQSourceSpec("surface-real-1", width, height, "rgb", 40, fdsrcIsLive)
 	if err != nil {
 		t.Fatalf("FSEQSourceSpec: %v", err)
 	}
@@ -159,19 +163,25 @@ func TestFrameWriterAgainstRealFSEQRealMultiSyncRealGStreamer(t *testing.T) {
 	if err := sup.Apply(spec); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer awaitCancel()
-	snap, ok := sup.AwaitState(awaitCtx, "surface-real-1", []State{StateRunning}, time.Time{}, -1, 20*time.Millisecond)
-	if !ok {
-		t.Fatalf("real gst-launch-1.0 pipeline never reached Running; last snapshot: %+v", snap)
-	}
 
+	// The frame writer starts BEFORE awaiting Running, matching production
+	// (internal/agent/renderops.go's applySurface): without fdsrcIsLive, a
+	// real fdsrc genuinely PREROLLs and needs a first buffer to ever reach
+	// PLAYING, so awaiting Running before anything feeds its stdin would
+	// deadlock this test on exactly the platforms this field exists for.
 	fw, err := NewFrameWriter(sup, "surface-real-1", f, timeline, channelStart0, channelCount, width, height, IdleOutputBlack, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter against real FSEQ: %v", err)
 	}
 	fwCtx, fwCancel := context.WithCancel(context.Background())
 	go fw.Run(fwCtx)
+
+	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer awaitCancel()
+	snap, ok := sup.AwaitState(awaitCtx, "surface-real-1", []State{StateRunning}, time.Time{}, -1, 20*time.Millisecond)
+	if !ok {
+		t.Fatalf("real gst-launch-1.0 pipeline never reached Running (fdsrcIsLive=%v); last snapshot: %+v", fdsrcIsLive, snap)
+	}
 
 	runStart := time.Now()
 	const runFor = 1 * time.Second

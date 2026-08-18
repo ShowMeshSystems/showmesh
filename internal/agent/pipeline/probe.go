@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -69,10 +70,64 @@ func ProbeVideoFormat(ctx context.Context, starter ProcessStarter, format string
 	return runProbe(ctx, starter, argv, genericUnavailableReason)
 }
 
+// ProbeFdsrcLive attempts a real NULL -> PLAYING transition of a throwaway
+// fdsrc(fd=0, is-live=true) -> fakesink pipeline, fd 0 left open and
+// unfed. fdsrc's is-live property was added upstream in GStreamer 1.26;
+// Available=false covers both an outright rejected pipeline (the property
+// does not exist, MEASURED: gst-launch-1.0 1.24.2 on Ubuntu 24.04 exits 1
+// with "no property \"is-live\" in element \"fdsrc\"" before any state
+// change is attempted) and any other probe failure, and both are treated
+// identically by [FSEQSourceSpec]'s caller: never emit the property.
+func ProbeFdsrcLive(ctx context.Context, starter ProcessStarter) ProbeResult {
+	argv := []string{
+		"fdsrc", "fd=0", "is-live=true", "!",
+		"fakesink", "sync=false",
+	}
+	return runProbe(ctx, starter, argv, genericUnavailableReason)
+}
+
+var (
+	fdsrcLiveOnce      sync.Once
+	fdsrcLiveSupported bool
+)
+
+// FdsrcSupportsIsLive reports whether this node's installed GStreamer
+// accepts fdsrc's is-live property, probed at most once per process (see
+// [ProbeFdsrcLive]) since the installed version cannot change while this
+// process runs. A probe failure (missing gst-launch-1.0, a probe timeout,
+// or the property genuinely not existing) caches false, the option that
+// can never get a pipeline rejected outright — [FSEQSourceSpec] still
+// reaches PLAYING with the property omitted, as long as its stdin is fed,
+// which every caller in this codebase guarantees (a fresh render.surface.
+// apply starts its [FrameWriter] immediately after [Supervisor.Apply]).
+func FdsrcSupportsIsLive(starter ProcessStarter) bool {
+	fdsrcLiveOnce.Do(func() {
+		fdsrcLiveSupported = ProbeFdsrcLive(context.Background(), starter).Available
+	})
+	return fdsrcLiveSupported
+}
+
+// resetFdsrcLiveProbeCache clears [FdsrcSupportsIsLive]'s cache. Test-only:
+// production never needs to re-probe within one process's life.
+func resetFdsrcLiveProbeCache() {
+	fdsrcLiveOnce = sync.Once{}
+	fdsrcLiveSupported = false
+}
+
 // runProbe is the shared mechanism behind every probe in this file: resolve
-// gst-launch-1.0, run argv to completion (or kill it at probeTimeout), and
-// report Available strictly from [ExitResult.SawRunningMarker] — never from
-// the element existing, never from the process merely starting.
+// gst-launch-1.0, run argv, and report Available strictly from real
+// evidence that PLAYING was reached — never from the element existing,
+// never from the process merely starting.
+//
+// It kills and returns as soon as that evidence exists (the onRunning
+// callback fires), rather than always waiting for the process to exit on
+// its own. ProbeNDISend and ProbeVideoFormat self-terminate quickly
+// (num-buffers), so this only shortens their wait; a probe pipeline with
+// nothing to make it self-terminate (a live source with no natural EOS)
+// would otherwise always run out the clock to probeTimeout and be
+// misreported unavailable despite having reached PLAYING — MEASURED: this
+// is exactly what a first version of [ProbeFdsrcLive] did on a real
+// gst-launch-1.0 that had genuinely gone PLAYING.
 func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reasonFor func(stderrTail string) string) ProbeResult {
 	if starter == nil {
 		starter = startRealProcess
@@ -83,7 +138,11 @@ func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reason
 		return ProbeResult{Available: false, Reason: reason}
 	}
 
-	proc, err := starter(ctx, path, argv, nil)
+	sawMarker := make(chan struct{})
+	var once sync.Once
+	onRunning := func() { once.Do(func() { close(sawMarker) }) }
+
+	proc, err := starter(ctx, path, argv, onRunning)
 	if err != nil {
 		return ProbeResult{Available: false, Reason: "starting gst-launch-1.0 for the probe: " + err.Error()}
 	}
@@ -100,6 +159,10 @@ func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reason
 			return ProbeResult{Available: true}
 		}
 		return ProbeResult{Available: false, Reason: reasonFor(res.StderrTail)}
+	case <-sawMarker:
+		_ = proc.Kill()
+		<-resultCh
+		return ProbeResult{Available: true}
 	case <-timer.C:
 		_ = proc.Kill()
 		<-resultCh

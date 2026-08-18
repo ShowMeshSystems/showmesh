@@ -488,7 +488,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: opening fseq asset %q: %w", action, a.fseqFilename, err)
 	}
 
-	spec, err := pipeline.FSEQSourceSpec(surfaceID, a.width, a.height, a.pixelFormat, a.frameRate)
+	spec, err := pipeline.FSEQSourceSpec(surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, pipeline.FdsrcSupportsIsLive(nil))
 	if err != nil {
 		_ = f.Close()
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, err)

@@ -179,6 +179,40 @@ func TestProbeTimeoutKillsAndReportsUnavailable(t *testing.T) {
 	}
 }
 
+// TestRunProbeReturnsAvailableAsSoonAsMarkerFiresEvenWithNoSelfExit
+// reproduces this seam's own captured defect: ProbeNDISend and
+// ProbeVideoFormat's pipelines self-terminate (num-buffers) well inside
+// probeTimeout, but a probe pipeline with nothing to make it exit on its
+// own — a live source with no natural EOS, [ProbeFdsrcLive]'s exact shape —
+// used to always run out the clock and report Available=false regardless
+// of the marker, MEASURED against a real gst-launch-1.0 that had genuinely
+// reached PLAYING. runProbe must return true, promptly, on the marker
+// alone.
+func TestRunProbeReturnsAvailableAsSoonAsMarkerFiresEvenWithNoSelfExit(t *testing.T) {
+	withResolvedGstLaunch(t)
+	prev := probeTimeout
+	probeTimeout = 2 * time.Second
+	t.Cleanup(func() { probeTimeout = prev })
+
+	fs := &fakeStarter{onStart: func(_ *fakeProcess, onRunningMarker func()) {
+		// Never exits on its own; only Kill() (from runProbe, once the
+		// marker fires) ends it — see fakeProcess.Kill's default Signaled
+		// exit.
+		go onRunningMarker()
+	}}
+
+	start := time.Now()
+	got := runProbe(context.Background(), fs.Start, []string{"fdsrc", "fd=0", "is-live=true", "!", "fakesink"}, genericUnavailableReason)
+	elapsed := time.Since(start)
+
+	if !got.Available {
+		t.Fatalf("Available = false, want true: PLAYING was reached even though the process never exited on its own; reason = %q", got.Reason)
+	}
+	if elapsed >= probeTimeout {
+		t.Fatalf("runProbe took %s, at or past probeTimeout (%s); it must return as soon as the marker fires, not wait out the clock", elapsed, probeTimeout)
+	}
+}
+
 func TestProbeVideoFormatBuildsCapsFilterForRequestedFormat(t *testing.T) {
 	withResolvedGstLaunch(t)
 	fs := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
@@ -286,6 +320,104 @@ func TestProbeNDISendRealMachine(t *testing.T) {
 	}
 	if !strings.Contains(got.Reason, "install the NDI SDK runtime") {
 		t.Errorf("Reason = %q, want the actionable NDI install pointer (ndiUnavailableReason's non-generic branch)", got.Reason)
+	}
+}
+
+// TestProbeFdsrcLiveBuildsExpectedArgv proves the probe pipeline shape:
+// fdsrc fd=0 is-live=true, exactly what FSEQSourceSpec would build with
+// fdsrcIsLive=true, so a positive result is real evidence about that same
+// argv shape.
+func TestProbeFdsrcLiveBuildsExpectedArgv(t *testing.T) {
+	withResolvedGstLaunch(t)
+	fs := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
+		p.exitNow(ExitResult{SawRunningMarker: true, ExitCode: intPtr(0)})
+	}}
+
+	got := ProbeFdsrcLive(context.Background(), fs.Start)
+	if !got.Available {
+		t.Fatalf("Available = false, want true; reason = %q", got.Reason)
+	}
+	argv := fs.calls[0].argv
+	if !containsArg(argv, "fdsrc") || !containsArg(argv, "is-live=true") {
+		t.Errorf("argv = %v, want fdsrc with is-live=true", argv)
+	}
+}
+
+// TestProbeFdsrcLiveUnavailableOnRejectedPipeline reproduces this seam's
+// own captured evidence: GStreamer 1.24.2 rejects the whole pipeline at
+// construction (never reaching PLAYING) when fdsrc's is-live property does
+// not exist, exiting with "no property \"is-live\" in element \"fdsrc\""
+// on stderr and no SawRunningMarker.
+func TestProbeFdsrcLiveUnavailableOnRejectedPipeline(t *testing.T) {
+	withResolvedGstLaunch(t)
+	fs := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
+		code := 1
+		p.exitNow(ExitResult{
+			SawRunningMarker: false,
+			ExitCode:         &code,
+			StderrTail:       "WARNING: erroneous pipeline: no property \"is-live\" in element \"fdsrc\"\n",
+		})
+	}}
+
+	got := ProbeFdsrcLive(context.Background(), fs.Start)
+	if got.Available {
+		t.Fatalf("Available = true, want false: the pipeline was rejected, never reached PLAYING")
+	}
+	if !strings.Contains(got.Reason, "is-live") {
+		t.Errorf("Reason = %q, want the captured rejection text", got.Reason)
+	}
+}
+
+// TestFdsrcSupportsIsLiveProbesOnceAndCaches proves the cache: a second
+// call must not invoke the starter again, and must keep returning the
+// first call's answer even if a later call would pass a starter that would
+// answer differently.
+func TestFdsrcSupportsIsLiveProbesOnceAndCaches(t *testing.T) {
+	withResolvedGstLaunch(t)
+	resetFdsrcLiveProbeCache()
+	t.Cleanup(resetFdsrcLiveProbeCache)
+
+	fs := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
+		p.exitNow(ExitResult{SawRunningMarker: true, ExitCode: intPtr(0)})
+	}}
+
+	if got := FdsrcSupportsIsLive(fs.Start); !got {
+		t.Fatalf("FdsrcSupportsIsLive = false, want true on first call")
+	}
+	if fs.callCount() != 1 {
+		t.Fatalf("callCount = %d, want 1", fs.callCount())
+	}
+
+	fsUnavailable := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
+		p.exitNow(ExitResult{SawRunningMarker: false, ExitCode: intPtr(1)})
+	}}
+	if got := FdsrcSupportsIsLive(fsUnavailable.Start); !got {
+		t.Fatalf("FdsrcSupportsIsLive on a second call = %v, want the CACHED true answer, never re-probed", got)
+	}
+	if fsUnavailable.callCount() != 0 {
+		t.Fatalf("a second FdsrcSupportsIsLive call invoked the starter (callCount=%d); the probe must run at most once per process",
+			fsUnavailable.callCount())
+	}
+}
+
+// TestProbeFdsrcLiveRealMachine runs ProbeFdsrcLive against the REAL
+// gst-launch-1.0 on whatever machine this test executes on, matching
+// TestProbeNDISendRealMachine's own real-process shape. It asserts only
+// this package's cross-version invariant (Available implies no reason
+// needed; !Available implies a real, non-empty reason) and logs the actual
+// outcome, since the right answer depends on which GStreamer this machine
+// has installed.
+func TestProbeFdsrcLiveRealMachine(t *testing.T) {
+	requireGstLaunch(t)
+
+	got := ProbeFdsrcLive(context.Background(), nil)
+	t.Logf("ProbeFdsrcLive on this machine (gst-launch-1.0): Available=%v Reason=%q", got.Available, got.Reason)
+
+	if got.Available && got.Reason != "" {
+		t.Errorf("Available=true but Reason=%q, want empty", got.Reason)
+	}
+	if !got.Available && got.Reason == "" {
+		t.Errorf("Available=false but Reason is empty, want a non-empty reason")
 	}
 }
 

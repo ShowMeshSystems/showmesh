@@ -211,7 +211,12 @@ func GstVideoFormatForPixelFormat(pixelFormat string) (format string, ok bool) {
 // Returns an error for a pixel format this package cannot express as a
 // GStreamer raw-video format (see [GstVideoFormatForPixelFormat]) — rgbw,
 // today — rather than silently guessing one.
-func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, frameRate int) (Spec, error) {
+//
+// fdsrcIsLive is the caller's own evidence (see [FdsrcSupportsIsLive]) for
+// whether this node's GStreamer accepts fdsrc's is-live property; this
+// function never probes for it itself, so a unit test can exercise both
+// argv shapes with no gst-launch-1.0 involved.
+func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, frameRate int, fdsrcIsLive bool) (Spec, error) {
 	gstFormat, ok := GstVideoFormatForPixelFormat(pixelFormat)
 	if !ok {
 		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known GStreamer raw-video mapping", surfaceID, pixelFormat)
@@ -221,6 +226,11 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 	}
 	if frameRate < 1 {
 		return Spec{}, fmt.Errorf("pipeline: surface %q: frameRate %d is invalid", surfaceID, frameRate)
+	}
+
+	fdsrcProps := []Property{{Key: "fd", Value: "0"}}
+	if fdsrcIsLive {
+		fdsrcProps = append(fdsrcProps, Property{Key: "is-live", Value: "true"})
 	}
 
 	return Spec{
@@ -236,22 +246,19 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 						// (build contract ruling 1 — a supervised
 						// subprocess, no in-process GStreamer binding).
 						//
-						// is-live=true matters beyond description: a
-						// non-live source must PREROLL (block the
-						// READY->PAUSED transition until one buffer reaches
-						// the sink) before gst-launch ever reports PLAYING,
-						// which measured real: a fresh gst-launch-1.0
-						// process fed no bytes yet never left "starting."
-						// is-live=true skips preroll (PAUSED needs no
-						// buffer for a live source), matching the real
-						// shape of this source — frames arrive in real
-						// time from the MultiSync-driven writer, never
-						// from a seekable, already-complete file.
-						Factory: "fdsrc",
-						Properties: []Property{
-							{Key: "fd", Value: "0"},
-							{Key: "is-live", Value: "true"},
-						},
+						// fdsrc's is-live property does not exist before
+						// GStreamer 1.26 (MEASURED: gst-launch-1.0 1.24.2
+						// rejects the whole pipeline at construction, never
+						// a state-change failure) — see fdsrcIsLive's doc
+						// comment. Without it, fdsrc genuinely PREROLLs
+						// (blocks PAUSED until one buffer reaches the
+						// sink), which completes as soon as the writer's
+						// first frame arrives; every caller in this
+						// codebase starts that writer immediately after
+						// applying this spec, so the wait is one frame
+						// period, not indefinite.
+						Factory:    "fdsrc",
+						Properties: fdsrcProps,
 					},
 					{
 						// rawvideoparse turns the undelimited byte stream
