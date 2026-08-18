@@ -29,9 +29,13 @@ you write from evidence, so these rules are absolute:
 6. **Link, don't restate.** The build log points at ADRs, specs, and research records
    rather than retelling them. Rationale and history live there, never in code comments.
 7. **Owner-only decisions and hardware-only verification are not yours to resolve.**
-   Decisions go to `docs/private/DECISION-QUEUE.md` with options and what each unblocks;
-   hardware verification goes to `docs/private/PUNCH-LIST.md`. Nothing in `docs/private/`
-   is ever moved into tracked documentation by you.
+   They are tracked in Linear, not in a parallel Markdown queue. Read a named `SM-*`
+   issue and its comments/relations before documenting it. When the evidence exposes new
+   durable work, return an issue-ready title, evidence, acceptance criteria, labels, and
+   relationships to the orchestrator; the orchestrator owns creating or updating Linear.
+   Use the `Punch List` label only for owner- or real-hardware-dependent verification.
+   `docs/private/DECISION-QUEUE.md` and `docs/private/PUNCH-LIST.md` are legacy context,
+   not active trackers; do not add items to them or infer current status from them.
 8. The repository is public. Nothing from `docs/private/`, no secret, no credential, and
    no third-party product name from the private notes enters a tracked file.
 

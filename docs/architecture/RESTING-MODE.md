@@ -119,8 +119,8 @@ Times below document the reference installation's shape. They are examples confi
 | 4:15 PM | `run-readiness` | Begin verification as devices become observable. |
 | 4:30 PM | `start-preshow` | Start projections, background music, countdowns, and configured resting presentation. |
 | 5:00 PM | `start-night` | Begin the first transition and then launch the first show playlist. |
-| 10:00 PM | Direct FPP brightness command | Observe the new ceiling where available; do not overwrite it. |
-| 11:00 PM | Direct FPP brightness command | Observe the lower ceiling where available; do not overwrite it. |
+| 10:00 PM | FPP schedule invokes `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` | Preserve the target and fade duration from the existing `fpp-brightness` entry; observe the interpolated ceiling and do not overwrite it with transition gain. |
+| 11:00 PM | FPP schedule invokes `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` | Preserve the lower target and fade duration from the existing `fpp-brightness` entry; observe the interpolated ceiling and do not overwrite it with transition gain. |
 | 11:30 PM | `request-final-show` | Finish the current show or allow the next normally timed show, then close admission. |
 | After final show | Event-driven | Enter end-of-night resting; background music and projections return and the resting FSEQ repeats. |
 | Christmas 12:00 AM; Halloween 1:00 AM | `fade-out-night` | Fade presentation elements to stopped. |
@@ -204,6 +204,8 @@ The default order is:
 The ordering of steps 2–5 is configurable through relative cues, but show completion remains the authoritative anchor.
 
 ### 7.3 Brightness composition
+
+**Selected design, not yet implemented.** [RES-018](../research/RES-018-fpp-brightness-control.md) records the owner-approved two-value FPP component and the FPP 9/10 build plan. Stock FPP and the upstream `fpp-brightness` plugin do not expose this composition. Until the ShowMesh component passes its real-host acceptance matrix, readiness rejects a configuration that requires this seam.
 
 FPP may change the installation brightness ceiling on its own schedule. ShowMesh transition fades are a multiplier, not a replacement:
 
