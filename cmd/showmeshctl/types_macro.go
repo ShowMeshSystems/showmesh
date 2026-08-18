@@ -266,8 +266,8 @@ type createMacroRunRequest struct {
 	Trigger string `json:"trigger"`
 }
 
-// actionBinding mirrors v1.ActionBinding (Track E seam E7-2): state is
-// "ok", "broken", or "unknown", reason always non-empty.
+// actionBinding mirrors v1.ActionBinding: state is "ok", "broken", or
+// "unknown", reason always non-empty.
 type actionBinding struct {
 	ActionID string `json:"actionId"`
 	Label    string `json:"label"`
@@ -288,8 +288,7 @@ type actionBindingsResponse struct {
 	Bindings   []actionBinding `json:"bindings"`
 }
 
-// actionInvocationRequest is the body of POST /actions/{id}/invocations
-// (Track E seam E7-1).
+// actionInvocationRequest is the body of POST /actions/{id}/invocations.
 type actionInvocationRequest struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 }

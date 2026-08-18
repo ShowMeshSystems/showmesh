@@ -328,9 +328,9 @@ export function getShowActionRevisions(id: string): Promise<ConfigRevisionsRespo
   return store.getShowActionRevisions(id)
 }
 
-// Track E seam E7-1/E7-2 (ADR-029): the pre-show binding check and one
-// action invocation, outside of any macro run. Same thin pass-through
-// pattern as every method above.
+// The pre-show binding check and one action invocation, outside of any
+// macro run (ADR-029). Same thin pass-through pattern as every method
+// above.
 
 export function getActionBinding(id: string): Promise<ActionBinding> {
   return store.getActionBinding(id)

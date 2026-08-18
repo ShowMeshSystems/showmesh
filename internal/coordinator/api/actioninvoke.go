@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,6 +128,24 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string}`))
 			return
 		}
+	}
+	// Unknown-key sweep, matching decodeFPPCommandParams'/decodeResolumeActionParams'
+	// own precedent: this is the one endpoint ADR-029 decision 3's raw
+	// hatch must never leak through, so a caller trying to smuggle a
+	// protocol parameter (e.g. "params":{"topic":"..."}) is told no,
+	// never silently ignored.
+	var unknownKeys []string
+	for k := range top {
+		if k != "idempotencyKey" {
+			unknownKeys = append(unknownKeys, k)
+		}
+	}
+	if len(unknownKeys) > 0 {
+		sort.Strings(unknownKeys)
+		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
+			`request body contains unrecognized key(s): %s (this endpoint accepts only "idempotencyKey" — the `+
+				`action's own stored target supplies every parameter)`, strings.Join(unknownKeys, ", "))))
+		return
 	}
 	var idempotencyKey string
 	if idemRaw, hasIdem := top["idempotencyKey"]; hasIdem {
@@ -332,11 +352,17 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		return mapResolumeOutcomeWord(result.Outcome), result.Reason, result.DispatchedAt, resolvedAt
 
 	case config.ShowActionIntegrationMQTT:
+		// Stamped BEFORE DispatchMQTTAction runs, mirroring
+		// macro/step_mqtt.go's identical ordering: dispatchedAt is the
+		// anchor ADR-003's "evidence post-dates dispatch" is measured
+		// against, so it must be the instant the publish was attempted,
+		// never the instant the wait resolved — an mqtt action can wait
+		// up to expect.deadlineSeconds (120s max) between the two.
+		dispatchAttemptedAt := h.now()
 		res := DispatchMQTTAction(ctx, h.deps.MQTTBrokers, target, h.now)
 		var dispatched *time.Time
 		if res.PublishAttempted {
-			t := res.ResolvedAt
-			dispatched = &t
+			dispatched = &dispatchAttemptedAt
 		}
 		return res.Outcome, res.OutcomeReason, dispatched, res.ResolvedAt
 

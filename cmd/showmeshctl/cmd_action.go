@@ -254,8 +254,8 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	return exitOK
 }
 
-// cmdActionCheck implements "showmeshctl action check [<id>] [--show <id>]"
-// (Track E seam E7-2): GET /api/v1/actions/{id}/binding with one id, or
+// cmdActionCheck implements "showmeshctl action check [<id>] [--show <id>]":
+// GET /api/v1/actions/{id}/binding with one id, or
 // GET /api/v1/actions/bindings otherwise. Exits exitActionBindingBroken
 // (29) when any checked binding is "broken"; "unknown" never exits 29 —
 // it means the check could not be performed, not that anything is

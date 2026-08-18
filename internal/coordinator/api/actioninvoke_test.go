@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -20,6 +21,10 @@ type fakeMQTTBrokerRegistry struct {
 	publishes int
 	msg       broker.Message
 	err       error
+	// delay, when set, is slept inside AwaitResponse before returning —
+	// used to prove dispatchedAt is stamped BEFORE the wait, not derived
+	// from whatever instant the wait resolved at.
+	delay time.Duration
 }
 
 func (f *fakeMQTTBrokerRegistry) Publish(context.Context, string, string, byte, bool, []byte) error {
@@ -30,6 +35,9 @@ func (f *fakeMQTTBrokerRegistry) Publish(context.Context, string, string, byte, 
 }
 
 func (f *fakeMQTTBrokerRegistry) AwaitResponse(context.Context, string, broker.ResponseRequest) (broker.Message, error) {
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.publishes++
@@ -55,6 +63,42 @@ func invokeActionRequest(id, idempotencyKey, bearerToken string) *http.Request {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	return req
+}
+
+// TestInvokeActionRejectsUnrecognizedRequestBodyKeys is A3: this is the
+// one endpoint ADR-029 decision 3's raw hatch must never leak through, so
+// a caller trying to smuggle a protocol parameter alongside
+// idempotencyKey is refused by name, never silently ignored and
+// dispatched with the caller's own parameters discarded.
+func TestInvokeActionRejectsUnrecognizedRequestBodyKeys(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	deps.ResolumeActions = dispatcher
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions/blackout-now/invocations",
+		strings.NewReader(`{"idempotencyKey":"key-1","params":{"topic":"falcon/player/bench-fpp/command/run"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	detail, _ := m["detail"].(string)
+	if !strings.Contains(detail, "params") {
+		t.Errorf("problem detail = %q, want it to name the unrecognized key", detail)
+	}
+	if dispatcher.callCount() != 0 {
+		t.Errorf("resolume dispatch calls = %d, want 0 (a refused request must never dispatch)", dispatcher.callCount())
+	}
 }
 
 // TestInvokeActionRequiresShowActionInvokeScope proves the scope gate: a
@@ -211,6 +255,52 @@ func TestInvokeActionMQTTConfirmedAndUnconfirmable(t *testing.T) {
 	}
 }
 
+// TestInvokeActionMQTTDispatchedAtPredatesResolvedAt is a review finding:
+// dispatchedAt is ADR-003's own anchor for "evidence post-dates dispatch"
+// and must be stamped when the publish is attempted, not derived from
+// whatever instant the wait resolved at — an mqtt action can legitimately
+// wait up to 120s between the two. Proved against a real clock and a fake
+// broker that sleeps inside AwaitResponse, so a dispatchedAt collapsed to
+// resolvedAt (the defect this test was added to catch) reports a gap far
+// smaller than the sleep.
+func TestInvokeActionMQTTDispatchedAtPredatesResolvedAt(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, time.Now)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	const wait = 80 * time.Millisecond
+	brokers := &fakeMQTTBrokerRegistry{msg: broker.Message{Payload: []byte("true")}, delay: wait}
+	deps.MQTTBrokers = brokers
+	api := New(deps, Options{Clock: time.Now, Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "relay-check", validShowActionMQTTBooleanBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("relay-check", "mqtt-timing-key", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	dispatchedAtStr, _ := result["dispatchedAt"].(string)
+	resolvedAtStr, _ := result["resolvedAt"].(string)
+	if dispatchedAtStr == "" || resolvedAtStr == "" {
+		t.Fatalf("expected both dispatchedAt and resolvedAt to be set; body: %s", body)
+	}
+	dispatchedAt, err := time.Parse(time.RFC3339Nano, dispatchedAtStr)
+	if err != nil {
+		t.Fatalf("parse dispatchedAt: %v", err)
+	}
+	resolvedAt, err := time.Parse(time.RFC3339Nano, resolvedAtStr)
+	if err != nil {
+		t.Fatalf("parse resolvedAt: %v", err)
+	}
+	gap := resolvedAt.Sub(dispatchedAt)
+	if gap < wait/2 {
+		t.Fatalf("resolvedAt - dispatchedAt = %s, want at least ~%s (dispatchedAt must predate the mqtt wait, not be "+
+			"derived from when it resolved)", gap, wait)
+	}
+}
+
 // TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches proves
 // ADR-024 decision 11's boundary read straight off the stored action's
 // own safetyClass: a "stop"-classed FPP action still dispatches when the
@@ -300,6 +390,18 @@ const validShowActionMQTTNoneBody = `{
 	}
 }`
 
+const validShowActionMQTTBooleanBody = `{
+	"show": "halloween-2026",
+	"label": "Check the relay",
+	"safetyClass": "none",
+	"target": {
+		"integration": "mqtt",
+		"broker": "home-automation",
+		"publish": {"topic": "relay/check", "payload": "1", "qos": 1, "retain": false},
+		"expect": {"kind": "boolean", "topic": "relay/state", "deadlineSeconds": 5}
+	}
+}`
+
 const validShowActionFPPStartOnBenchBody = `{
 	"show": "halloween-2026",
 	"label": "Start the main show",
@@ -323,3 +425,25 @@ const validShowActionFPPStopBody = `{
 		"params": {}
 	}
 }`
+
+// TestActionInvokeHTTPWriteDeadlineExceedsMQTTMaxDeadline is the
+// reconciliation actionInvokeHTTPWriteDeadline's own doc comment claims:
+// an mqtt action's expect.deadlineSeconds can legitimately reach
+// broker.MaxResponseDeadline, and this endpoint's own write deadline must
+// stay ahead of that with real margin, or a slow-but-healthy mqtt
+// confirmation would abort with a false transport failure before the
+// coordinator ever answers. cmd/showmeshctl's own
+// minActionInvokeClientTimeout (cmd_action.go) is reconciled against THIS
+// value by TestMinActionInvokeClientTimeoutExceedsServerDeadline there —
+// two independently chosen literals, since that program cannot import
+// this package.
+func TestActionInvokeHTTPWriteDeadlineExceedsMQTTMaxDeadline(t *testing.T) {
+	const margin = 20 * time.Second
+	need := broker.MaxResponseDeadline + margin
+	if actionInvokeHTTPWriteDeadline < need {
+		t.Fatalf("actionInvokeHTTPWriteDeadline (%s) is below broker.MaxResponseDeadline (%s) plus a %s margin — "+
+			"an mqtt action whose expect.deadlineSeconds is set to the maximum could have its own write deadline "+
+			"expire first, aborting a healthy, still-working conversation.",
+			actionInvokeHTTPWriteDeadline, broker.MaxResponseDeadline, margin)
+	}
+}

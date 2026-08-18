@@ -164,49 +164,34 @@ func checkMQTTActionBinding(target config.ShowActionTarget, brokers []config.Int
 	return v1.ActionBindingStateBroken, fmt.Sprintf("broker %q is not a declared integration broker", target.Broker)
 }
 
-// checkResolumeActionBinding runs target's stored reference through the
-// same [config.ResolumeReferenceResolver] write-time validation uses.
-// [config.ErrResolumeCompositionNotUploaded] is "unknown", never
-// "broken" (ADR-011): this coordinator cannot tell whether the reference
-// resolves with nothing to resolve it against. Every other resolver
-// error already names the reference or every candidate (ADR-037
-// decisions 5/6); its Error() text is reported unchanged.
+// checkResolumeActionBinding runs target's stored reference through
+// [config.ResolveResolumeRef] — the same dispatch write-time validation
+// uses, not a second hand-copied switch (a review finding: an earlier
+// version of this function forked that switch, and its own default case
+// disagreed with config's — "broken" for an action config's vocabulary
+// had moved on from, which is "broken for a check that could not run",
+// the absence-of-evidence mistake ADR-011 exists to name). blackout
+// resolves nothing and is reported "ok" without claiming a resolution
+// happened. [config.ErrResolumeCompositionNotUploaded] and
+// [config.ErrResolumeActionResolutionUnrecognized] are both "unknown",
+// never "broken": this coordinator cannot tell whether the reference
+// resolves with nothing to resolve it against, and an action name this
+// build's own switch does not recognize is a version-skew condition, not
+// a broken reference. Every other resolver error already names the
+// reference or every candidate (ADR-037 decisions 5/6); its Error() text
+// is reported unchanged.
 func (h *handlers) checkResolumeActionBinding(target config.ShowActionTarget) (state, reason string) {
-	err := resolveStoredResolumeRef(target.Action, target.Ref, h.deps.ResolumeReferences)
+	err := config.ResolveResolumeRef(target.Action, target.Ref, h.deps.ResolumeReferences)
 	switch {
+	case err == nil && target.Action == config.ShowActionResolumeBlackout:
+		return v1.ActionBindingStateOK, "this resolume action carries no reference to resolve"
 	case err == nil:
 		return v1.ActionBindingStateOK, "the resolume reference resolves unambiguously against the currently stored composition"
 	case errors.Is(err, config.ErrResolumeCompositionNotUploaded):
 		return v1.ActionBindingStateUnknown, "no resolume composition has ever been uploaded to this coordinator; the binding cannot be checked"
+	case errors.Is(err, config.ErrResolumeActionResolutionUnrecognized):
+		return v1.ActionBindingStateUnknown, err.Error()
 	default:
 		return v1.ActionBindingStateBroken, err.Error()
-	}
-}
-
-// resolveStoredResolumeRef re-dispatches an already-decoded stored ref
-// onto the same four [config.ResolumeReferenceResolver] methods
-// config.resolveResolumeRef dispatches at write time.
-func resolveStoredResolumeRef(action string, ref map[string]any, resolver config.ResolumeReferenceResolver) error {
-	switch action {
-	case config.ShowActionResolumeBlackout:
-		return nil
-	case config.ShowActionResolumeLaunchClip:
-		clip, _ := ref["clip"].(string)
-		deck, _ := ref["deck"].(string)
-		layer, _ := ref["layer"].(string)
-		persistent, _ := ref["persistent"].(bool)
-		return resolver.ResolveClip(config.ResolumeClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
-	case config.ShowActionResolumeClearLayer, config.ShowActionResolumeSetLayerBypass, config.ShowActionResolumeSetLayerMaster:
-		layer, _ := ref["layer"].(string)
-		return resolver.ResolveLayer(layer)
-	case config.ShowActionResolumeLaunchColumn:
-		deck, _ := ref["deck"].(string)
-		column, _ := ref["column"].(string)
-		return resolver.ResolveColumn(deck, column)
-	case config.ShowActionResolumeSelectDeck:
-		deck, _ := ref["deck"].(string)
-		return resolver.ResolveDeck(deck)
-	default:
-		return fmt.Errorf("no resolution rule for resolume action %q", action)
 	}
 }

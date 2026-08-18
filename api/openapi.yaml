@@ -3285,7 +3285,9 @@ paths:
         parameter, so a caller cannot pass a protocol address, topic, or
         path here (that raw hatch is ADR-029 decision 3's own, separately
         queued, deliberately inconvenient escape valve, not this
-        endpoint). Dispatches through the exact same in-process seams
+        endpoint) — a body naming any key other than `idempotencyKey` is
+        refused (`400`), never silently ignored. Dispatches through the
+        exact same in-process seams
         `internal/coordinator/macro`'s own step dispatch uses. A cookie-
         authenticated request additionally requires
         `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-

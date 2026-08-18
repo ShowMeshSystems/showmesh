@@ -171,8 +171,8 @@ export const MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS =
   SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
- * Track E seam E7-1's own request budget for
- * `POST /actions/{id}/invocations` — the coordinator's own write deadline
+ * The request budget for `POST /actions/{id}/invocations` — the
+ * coordinator's own write deadline
  * (`actionInvokeHTTPWriteDeadline`, internal/coordinator/api/actioninvoke.go
  * — 150s, dominated by mqtt's 120s `expect.deadlineSeconds` cap) plus
  * margin. Duplicated by value against `cmd/showmeshctl`'s own

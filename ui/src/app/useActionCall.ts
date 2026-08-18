@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { describeApiError } from './session'
 import type { ActionInvocationResult } from './types'
 
-// Track E seam E7-1's own call state machine, mirroring
-// useResolumeActionCall's identical shape: a call in flight, and every
-// one of the five outcome words, must all be VISIBLE states — a resolved
-// network call is never rendered as unqualified success (ADR-003).
+// Mirrors useResolumeActionCall's identical shape: a call in flight, and
+// every one of the five outcome words, must all be VISIBLE states — a
+// resolved network call is never rendered as unqualified success
+// (ADR-003).
 export type ActionCallState =
   | { kind: 'idle' }
   | { kind: 'submitting' }

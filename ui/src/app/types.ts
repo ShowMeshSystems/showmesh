@@ -47,8 +47,8 @@ export type {
   ResolumeActionParam,
   ResolumeAction,
   ResolumeActionResult,
-  // Track E seam E7-1/E7-2 (ADR-029): the pre-show binding check and one
-  // action invocation, outside of any macro run.
+  // The pre-show binding check and one action invocation, outside of any
+  // macro run (ADR-029).
   ActionBinding,
   ActionInvocationResult,
   ResolumeCompositionResponse,

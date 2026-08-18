@@ -91,3 +91,25 @@ func TestDispatchMQTTActionRetainedDeliveryIsUnconfirmedNotConfirmed(t *testing.
 		t.Fatalf("Outcome = %q, want unconfirmed (defense in depth against a retained delivery)", res.Outcome)
 	}
 }
+
+// TestDispatchMQTTActionUnwiredRegistryIsFailedAndNeverAttempted proves
+// the unwired-dependency branch matches macro/step_mqtt.go's identical
+// e.brokers == nil check: noMQTTBrokerRegistry (the real
+// Dependencies.MQTTBrokers default) must report failed with
+// PublishAttempted false, never true — a review finding: this endpoint
+// previously fell through to the generic transport-error classifier,
+// which does not exclude this sentinel and reported PublishAttempted:
+// true (and therefore a non-nil dispatchedAt) for a dispatch that never
+// left the process.
+func TestDispatchMQTTActionUnwiredRegistryIsFailedAndNeverAttempted(t *testing.T) {
+	res := DispatchMQTTAction(context.Background(), noMQTTBrokerRegistry{}, mqttTarget(config.MQTTExpectKindText, nil), func() time.Time { return testNow })
+	if res.Outcome != outcomeWordFailed {
+		t.Fatalf("Outcome = %q, want failed", res.Outcome)
+	}
+	if res.PublishAttempted {
+		t.Fatalf("PublishAttempted = true, want false (an unwired registry never puts anything on the wire)")
+	}
+	if res.OutcomeReason == "" {
+		t.Fatalf("OutcomeReason is empty, want a diagnostic reason")
+	}
+}

@@ -10,6 +10,12 @@ export interface ActionInvocationOutcomeProps {
   result: ActionInvocationResult
 }
 
+// The complete wire vocabulary this component renders explicitly — any
+// other value falls through to the fallback branch below rather than
+// rendering nothing, since a blank reads as fine (CLAUDE.md's own
+// standing rule) and a future sixth outcome word must never go silent.
+const KNOWN_OUTCOMES = new Set(['confirmed', 'unconfirmed', 'unconfirmable', 'refused', 'failed', ''])
+
 export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps) {
   return (
     <div role="status" className="action-invocation-outcome">
@@ -44,6 +50,11 @@ export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps
       )}
       {result.outcome === '' && (
         <p className="text-muted">Pending: this invocation has not yet resolved.</p>
+      )}
+      {!KNOWN_OUTCOMES.has(result.outcome) && (
+        <p role="alert" className="action-invocation-outcome__unrecognized">
+          Unrecognized outcome {JSON.stringify(result.outcome)}: {result.outcomeReason || '(no reason given)'}
+        </p>
       )}
       {result.attributionDegraded && (
         <p className="text-muted">

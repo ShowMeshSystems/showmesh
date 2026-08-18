@@ -161,9 +161,9 @@ export function DeclarationBadge({ declared, discoveryState }: { declared: boole
   return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }
 
-// One show.action's pre-show binding check (Track E seam E7-2, ADR-029).
-// "unknown" is never a soft "ok" — the check could not be performed at
-// all, distinct in tone from both "ok" and "broken".
+// One show.action's pre-show binding check (ADR-029). "unknown" is never
+// a soft "ok" — the check could not be performed at all, distinct in tone
+// from both "ok" and "broken".
 const ACTION_BINDING_STATE: Record<ActionBindingState, { tone: StatusTone; icon: string; label: string }> = {
   ok: { tone: 'good', icon: '●', label: 'ok' },
   broken: { tone: 'bad', icon: '✕', label: 'broken' },

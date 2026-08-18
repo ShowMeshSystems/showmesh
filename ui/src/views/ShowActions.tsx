@@ -30,10 +30,10 @@ export function ShowActions() {
   const showFilter = searchParams.get('show') ?? ''
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
-  // Binding-check results (Track E seam E7-2), keyed by action id. A
-  // SEPARATE fetch from the list above: the binding sweep requires no
-  // credential at all (ADR-024 constraint 23), so it must not be gated on
-  // readGate, and a failure to fetch it must not blank the list itself —
+  // Binding-check results, keyed by action id. A SEPARATE fetch from the
+  // list above: the binding sweep requires no credential at all (ADR-024
+  // constraint 23), so it must not be gated on readGate, and a failure to
+  // fetch it must not blank the list itself —
   // an action row with no binding entry yet renders with no badge, never
   // an error for the whole table.
   const [bindings, setBindings] = useState<Map<string, ActionBinding>>(new Map())

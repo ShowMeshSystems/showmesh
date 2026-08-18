@@ -359,7 +359,7 @@ type Dependencies struct {
 	// dependency is not this API failing" posture.
 	ResolumeReferences config.ResolumeReferenceResolver
 
-	// MQTTBrokers is Track E seam E7-1's own dispatch dependency: the
+	// MQTTBrokers is the mqtt action-invocation dispatch dependency: the
 	// deployment's live integration broker registry, reached only through
 	// [MQTTBrokerRegistry] (mqttactiondispatch.go). The real value is the
 	// SAME *broker.Registry internal/coordinator/macro's own executor
@@ -1266,19 +1266,19 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
 
-	// Track E seam E7-2 (ADR-029's own Consequences section): a pre-show
-	// binding check, re-resolving a stored show.action's target against
-	// current integration state. Never gated by any scope — this is a
-	// read, dispatches nothing, and must be reachable with no credential
+	// A pre-show binding check (ADR-029's own Consequences section),
+	// re-resolving a stored show.action's target against current
+	// integration state. Never gated by any scope — this is a read,
+	// dispatches nothing, and must be reachable with no credential
 	// (ADR-024 constraint 23) — see actionbinding.go.
 	mux.HandleFunc("GET /api/v1/actions/{id}/binding", h.handleGetActionBinding)
 	mux.HandleFunc("GET /api/v1/actions/bindings", h.handleListActionBindings)
 
-	// Track E seam E7-1: invoke one stored show.action by id, outside of
-	// a macro run (ADR-037 decision 8's controller surface). Gated on
-	// show:action:invoke specifically — the per-integration dispatch
-	// underneath still checks whatever scope it already checks. No state
-	// change here is reachable by GET — see actioninvoke.go.
+	// Invoke one stored show.action by id, outside of a macro run
+	// (ADR-037 decision 8's controller surface). show:action:invoke is
+	// the only scope check on this route — see that scope's own doc
+	// comment (identity/types.go) for why. No state change here is
+	// reachable by GET — see actioninvoke.go.
 	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is

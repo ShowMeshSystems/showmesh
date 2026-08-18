@@ -75,7 +75,7 @@ describe('ShowActions', () => {
     await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026'))
   })
 
-  // Track E seam E7-2: the pre-show binding check renders per row.
+  // The pre-show binding check renders per row.
   it('renders a broken-binding badge for an action whose target no longer resolves', async () => {
     listConfigObjects.mockResolvedValue(listResponse)
     listActionBindings.mockResolvedValue([

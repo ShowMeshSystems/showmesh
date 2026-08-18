@@ -13,12 +13,14 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 )
 
-// DispatchMQTTAction is Track E seam E7-1's own MQTT dispatch core,
+// DispatchMQTTAction is the mqtt action-invocation dispatch core,
 // deliberately parallel to (not shared with) macro/step_mqtt.go's
-// publishAndAwait/resolveMQTTPayload/mqttPublishErrorResult — see this
-// seam's own report for why extraction across the macro/api boundary was
-// not taken. The shared primitive both call, unchanged, is
-// [broker.Registry] itself.
+// publishAndAwait/resolveMQTTPayload/mqttPublishErrorResult — cross-
+// package extraction was not taken because macro imports api, not the
+// reverse. The shared primitive both call, unchanged, is
+// [broker.Registry] itself; TestMQTTDispatchParityBetweenMacroAndAPI
+// (internal/coordinator/macro) guards the two implementations against
+// drifting apart.
 
 // MQTTBrokerRegistry mirrors internal/coordinator/macro's identical
 // mqttRegistry interface one package over. *broker.Registry satisfies
@@ -50,13 +52,27 @@ type MQTTActionResult struct {
 // DispatchMQTTAction publishes target's declared message and, for every
 // expect.kind except "none", waits for a live matching response —
 // STEP-9-SPEC.md section 7's own contract, applied here to one ad hoc
-// invocation rather than one macro step. brokers is nil-checked by the
-// caller (h.deps.MQTTBrokers defaults to a no-op — see api.go).
+// invocation rather than one macro step. An unwired brokers
+// (h.deps.MQTTBrokers defaults to noMQTTBrokerRegistry — see api.go) is
+// detected below, before either Publish or AwaitResponse is ever called.
 func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target config.ShowActionTarget, now func() time.Time) MQTTActionResult {
 	if target.Publish == nil || target.Expect == nil {
 		// Unreachable given write-time validation; answered rather than
 		// panicking on a nil pointer.
 		return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: "this mqtt action is missing its publish or expect definition", ResolvedAt: now()}
+	}
+
+	// Mirrors macro/step_mqtt.go's publishAndAwait's identical
+	// e.brokers == nil check: an unwired registry never puts anything on
+	// the wire, so this returns before calling Publish/AwaitResponse at
+	// all, exactly like that branch does — never PublishAttempted: true
+	// for a dispatch that never happened.
+	if _, unwired := brokers.(noMQTTBrokerRegistry); unwired {
+		return MQTTActionResult{
+			Outcome:       outcomeWordFailed,
+			OutcomeReason: fmt.Sprintf("no integration broker is configured for this deployment; action names broker %q", target.Broker),
+			ResolvedAt:    now(),
+		}
 	}
 
 	qos := byte(target.Publish.QoS)
@@ -87,7 +103,7 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 		// that contract is ever violated one layer down.
 		return MQTTActionResult{
 			Outcome: outcomeWordUnconfirmed,
-			OutcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm this action",
+			OutcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm this dispatch",
 				target.Expect.Topic),
 			PublishAttempted: true, ResolvedAt: now(),
 		}

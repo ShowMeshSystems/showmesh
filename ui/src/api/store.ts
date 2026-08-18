@@ -149,7 +149,6 @@ type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsRespo
 type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
 type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
 type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
-// Track E seam E7-1/E7-2.
 type SchemaActionBinding = components['schemas']['ActionBinding']
 type SchemaActionBindingResponse = components['schemas']['ActionBindingResponse']
 type SchemaActionBindingsResponse = components['schemas']['ActionBindingsResponse']
@@ -1334,9 +1333,9 @@ export class ApiStore {
   }
 
   /**
-   * `GET /api/v1/actions/{id}/binding` (Track E seam E7-2, ADR-029). Never
-   * gated by any scope and never dispatches anything — a read, re-resolving
-   * this action's stored target against current integration state.
+   * `GET /api/v1/actions/{id}/binding` (ADR-029). Never gated by any
+   * scope and never dispatches anything — a read, re-resolving this
+   * action's stored target against current integration state.
    */
   async getActionBinding(id: string): Promise<SchemaActionBinding> {
     const controller = this.beginSideCall()
@@ -1352,10 +1351,9 @@ export class ApiStore {
   }
 
   /**
-   * `GET /api/v1/actions/bindings` (Track E seam E7-2): the pre-show
-   * sweep, every action's own binding check in one request. `show`
-   * narrows the result to that show; unmatched returns an empty list,
-   * never a refusal.
+   * `GET /api/v1/actions/bindings`: the pre-show sweep, every action's
+   * own binding check in one request. `show` narrows the result to that
+   * show; unmatched returns an empty list, never a refusal.
    */
   async listActionBindings(show?: string): Promise<SchemaActionBinding[]> {
     const controller = this.beginSideCall()
@@ -1369,8 +1367,8 @@ export class ApiStore {
   }
 
   /**
-   * `POST /api/v1/actions/{id}/invocations` (Track E seam E7-1,
-   * ADR-037 decision 8). Mints its own idempotency key; uses
+   * `POST /api/v1/actions/{id}/invocations` (ADR-037 decision 8). Mints
+   * its own idempotency key; uses
    * ACTION_INVOKE_REQUEST_TIMEOUT_MS, not the instance-wide default.
    * Returns `result.outcome` as-is, never inferred from this call's HTTP
    * success (ADR-029) — the action's own stored target supplies every

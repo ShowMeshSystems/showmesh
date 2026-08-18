@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // TestActionBindingFPPOKAndBroken proves the fpp branch of the binding
@@ -169,5 +171,87 @@ func TestActionBindingsListFiltersByShow(t *testing.T) {
 	m2 := decodeMap(t, emptyBody)
 	if bindings, _ := m2["bindings"].([]any); len(bindings) != 0 {
 		t.Fatalf("bindings = %v, want empty for an unmatched show, not a refusal", bindings)
+	}
+}
+
+// TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution is A8:
+// blackout resolves nothing (it addresses every tracked layer, not a
+// named one), so its "ok" reason must not say a reference resolved — even
+// with no composition ever uploaded, since blackout has no reference to
+// need one for.
+func TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	resolver := newFakeAPIResolumeResolver()
+	resolver.uploaded = false // no composition uploaded at all
+	deps.ResolumeReferences = resolver
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/blackout-now", validShowActionResolumeBlackoutBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	_, body := doRequest(t, api.Handler, "GET", "/api/v1/actions/blackout-now/binding", nil)
+	m := decodeMap(t, body)
+	binding := m["binding"].(map[string]any)
+	if binding["state"] != "ok" {
+		t.Fatalf("state = %v, want ok; body: %s", binding["state"], body)
+	}
+	reason, _ := binding["reason"].(string)
+	if strings.Contains(reason, "resolves unambiguously against the currently stored composition") {
+		t.Errorf("reason = %q, want it to not claim a reference resolved (blackout resolves nothing, and no "+
+			"composition was even uploaded)", reason)
+	}
+}
+
+// TestActionBindingResolumeUnrecognizedActionIsUnknownNotBroken is A9: a
+// stored action naming a resolume action this build's own resolution
+// switch does not recognize (a version-skew condition — the vocabulary
+// moved on after this row was written) is "unknown", never "broken":
+// broken would tell an operator their binding is broken when this
+// coordinator genuinely cannot check it, ADR-011's exact mistake.
+// Simulated by writing the revision directly into the store, bypassing
+// DecodeShowActionPayload's own membership check the way a pre-existing
+// or hand-edited row could.
+func TestActionBindingResolumeUnrecognizedActionIsUnknownNotBroken(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	deps := showConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	staleAction := config.ShowActionPayload{
+		Show: "halloween-2026", Label: "Some future action", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{Integration: config.ShowActionIntegrationResolume, Action: "someFutureAction"},
+	}
+	payloadJSON, err := config.EncodeShowActionPayload(staleAction)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := st.CreateConfigObject(t.Context(), config.ShowActionConfigKind, "future-action"); err != nil {
+		t.Fatalf("CreateConfigObject: %v", err)
+	}
+	rev, err := st.CreateConfigRevision(t.Context(), store.ConfigRevisionRecord{
+		Kind: config.ShowActionConfigKind, ObjectID: "future-action", Revision: 1,
+		PayloadJSON: payloadJSON, Source: "api",
+	})
+	if err != nil {
+		t.Fatalf("CreateConfigRevision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(t.Context(), config.ShowActionConfigKind, "future-action", rev.Revision); err != nil {
+		t.Fatalf("ActivateConfigRevision: %v", err)
+	}
+
+	_, body := doRequest(t, api.Handler, "GET", "/api/v1/actions/future-action/binding", nil)
+	m := decodeMap(t, body)
+	binding := m["binding"].(map[string]any)
+	if binding["state"] != "unknown" {
+		t.Fatalf("state = %v, want unknown; body: %s", binding["state"], body)
+	}
+	if reason, _ := binding["reason"].(string); reason == "" {
+		t.Errorf("reason is empty, want a stated reason")
 	}
 }

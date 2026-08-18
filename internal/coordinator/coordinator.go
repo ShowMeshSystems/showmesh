@@ -654,11 +654,11 @@ func Run() int {
 		// never disagree about which identifiers exist, because both
 		// read the identical field.
 		IntegrationBrokers: cfg.IntegrationBrokers,
-		// Track E seam E7-1: the SAME *broker.Registry macro.Dependencies.Brokers
-		// (below) dispatches an mqtt-integration show.macro step through —
-		// see [api.Dependencies.MQTTBrokers]'s own doc comment for why
-		// wiring one registry into two independently-constructed
-		// Dependencies values is safe.
+		// The SAME *broker.Registry macro.Dependencies.Brokers (below)
+		// dispatches an mqtt-integration show.macro step through — see
+		// [api.Dependencies.MQTTBrokers]'s own doc comment for why wiring
+		// one registry into two independently-constructed Dependencies
+		// values is safe.
 		MQTTBrokers: integrationBrokers,
 	}
 
@@ -764,6 +764,16 @@ func Run() int {
 		logger.Warn("failed to reconcile stranded resolume actions at startup", "error", rerr)
 	} else if n > 0 {
 		logger.Warn("resolved resolume actions left stranded by a prior process", "count", n)
+	}
+
+	// The action-invocation sibling of the two sweeps immediately above,
+	// closing the identical gap for a third command family — see
+	// api.ReconcileStrandedActionInvocations' own doc comment
+	// (actioninvoke_reconcile.go).
+	if n, rerr := api.ReconcileStrandedActionInvocations(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile stranded action invocations at startup", "error", rerr)
+	} else if n > 0 {
+		logger.Warn("resolved action invocations left stranded by a prior process", "count", n)
 	}
 
 	// fppHTTPClient and fppRunner were already constructed above (before

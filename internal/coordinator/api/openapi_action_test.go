@@ -8,8 +8,8 @@ import (
 )
 
 // TestOpenAPIActionDocumentIsWellFormed extends
-// TestOpenAPIDocumentIsWellFormed with every schema Track E seam E7-1/E7-2
-// added.
+// TestOpenAPIDocumentIsWellFormed with the action-binding and
+// action-invocation schemas.
 func TestOpenAPIActionDocumentIsWellFormed(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	for _, name := range []string{

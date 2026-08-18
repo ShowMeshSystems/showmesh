@@ -249,7 +249,7 @@ func TestCmdActionListWithoutShowSendsNoQuery(t *testing.T) {
 	}
 }
 
-// --- Track E seam E7-2: "action check" ---
+// --- "action check" ---
 
 func TestCmdActionCheckOneIDExitsOKWhenOK(t *testing.T) {
 	var gotPath string
@@ -337,7 +337,7 @@ func TestCmdActionCheckWithNoIDListsWithShowFilter(t *testing.T) {
 	}
 }
 
-// --- Track E seam E7-1: "action invoke" ---
+// --- "action invoke" ---
 
 func TestCmdActionInvokeConfirmedExitsOK(t *testing.T) {
 	var gotPath string
@@ -414,4 +414,40 @@ func decodeJSONBody(t *testing.T, r *http.Request, v any) error {
 		t.Fatalf("read request body: %v", err)
 	}
 	return json.Unmarshal(raw, v)
+}
+
+// TestMinActionInvokeClientTimeoutExceedsServerDeadline is the CLI-side
+// half of the client-timeout-derived-from-server-deadline reconciliation
+// CLAUDE.md requires: this program cannot import internal/coordinator/api
+// (importgraph_test.go), so actionInvokeHTTPWriteDeadline (150s) and a
+// round-trip margin are independently chosen literals here, mirrored by
+// TestActionInvokeHTTPWriteDeadlineExceedsMQTTMaxDeadline in
+// internal/coordinator/api/actioninvoke_test.go, which hardcodes this
+// program's own minActionInvokeClientTimeout (170s). Both tests fail if
+// either side is changed without updating the other — mirrors
+// TestMinResolumeActionClientTimeoutExceedsServerDefault's identical
+// shape one file over.
+func TestMinActionInvokeClientTimeoutExceedsServerDeadline(t *testing.T) {
+	// This MUST match actionInvokeHTTPWriteDeadline
+	// (internal/coordinator/api/actioninvoke.go) exactly.
+	const serverWriteDeadline = 150 * time.Second
+	const roundTripMargin = 15 * time.Second
+	// slack is real headroom over the computed floor, matching the
+	// reciprocal server-side test's own slack requirement — not a
+	// boundary equality, which cannot distinguish "correct" from "wrong
+	// by a coincidence."
+	const slack = 5 * time.Second
+
+	need := serverWriteDeadline + roundTripMargin
+	if minActionInvokeClientTimeout < need {
+		t.Fatalf("minActionInvokeClientTimeout (%s) is below actionInvokeHTTPWriteDeadline (%s) plus a %s "+
+			"round-trip margin — this program could abort an invocation before the coordinator's own write "+
+			"deadline elapses, producing a false transport-timeout failure for a healthy, still-working "+
+			"conversation. Raise minActionInvokeClientTimeout to match.",
+			minActionInvokeClientTimeout, serverWriteDeadline, roundTripMargin)
+	}
+	if got := minActionInvokeClientTimeout - need; got < slack {
+		t.Fatalf("minActionInvokeClientTimeout (%s) leaves only %s of slack over the computed floor (%s), want at least %s",
+			minActionInvokeClientTimeout, got, need, slack)
+	}
 }
