@@ -2,7 +2,7 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#45-audio-engine) · [Audio Engine specification](../architecture/AUDIO-ENGINE.md) · [Tracker](README.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [Resolume SMPTE research](RES-001-resolume-smpte-behavior.md)
 
-Status: planned (bench) · Risk: critical · Verification: L0 — assumption
+Status: planned (bench) · Risk: critical · Verification: **split — L2 for GStreamer graph/pipeline behaviour in a container (C0a-1, 2026-08-18); L0 for everything hardware- or device-dependent**
 
 ## Decision to make
 
@@ -78,7 +78,25 @@ The bench has two stages and the first begins without the final interface.
 
 ## Evidence and findings
 
-No evidence collected. This section is a work queue, not a conclusion.
+### C0a-1: the device-independent GStreamer bench, run 2026-08-18 (L2 for graph behaviour)
+
+Full capture record: [docs/bench/TRACK-C-AUDIO-BENCH.md](../bench/TRACK-C-AUDIO-BENCH.md). Seven runs, real GStreamer 1.26.2 on Debian 13.6 in a container on an arm64 Docker VM on a macOS laptop, against a userspace null ALSA PCM device (no `/dev/snd`, no kernel sound module, no real driver). Every number below came from a captured WAV analyzed by `bench/audio-node/runs/analyze.py` or a captured log line, never from listening or from an element's own claim of success.
+
+**This moves the rendering questions this record's own §"Rendering" asks — pipeline construction, graph-level program/LTC separation, alignment across restart/track-change/seek, click-free ducking, item transition, and a real ALSA sink path — to L2: safe to keep building against, not trustworthy in a live show.** It does **not** move any hardware- or device-dependent question off L0: physical channel independence (the mirror problem), real-device alignment, drift over a real show, hot-plug, sample-rate change, device-loss detection latency, or PipeWire versus ALSA on real hardware are all untouched by this run and stay L0 pending C0b (per-device commissioning) and later Track C seams (C5–C7) run against a real interface.
+
+**Channel separation (R1) is a graph property and is explicitly not evidence about the mirror problem.** `interleave` produced exact-zero RMS/peak crosstalk on the program pair with a live tone on the LTC channel — a fact about the GStreamer graph having no coefficient matrix in the path, not a fact about whether a physical interface's own driver exposes a mirrored second output pair downstream of anything ALSA can observe. That question is unreachable by this bench by construction and remains a C0b commissioning check.
+
+**Program/LTC alignment (R2), measured in samples at 48 kHz:** baseline start offset 1 sample (~0.02 ms); three independent process restarts each reproduced the identical 1-sample offset; a mid-timeline track change landed onset 2 samples after the arithmetic expectation; a flushing+accurate seek landed exactly on the requested sample (0 samples of error) across three targets.
+
+**R3 answers the record's own "can LTC be generated within the same pipeline" question, and the answer is substantive: no installed GStreamer plugin (base/good/bad, 1.26.2) generates LTC audio.** `timecodestamper`/`avwait` operate on video-buffer timecode metadata and never touch an audio sample. The working approach is a pre-rendered LTC file produced by an external generator (`bench/audio-node/ltcgen.c`, built against Debian 13's real `libltc11`/`libltc-dev`, upstream x42/libltc) played back as an ordinary file source in the same pipeline as program — never a native pipeline element and never sample generation inside Go. Every R2 alignment number above is measured through this candidate. The timecode midnight wrap (`23:59:58`→`00:00:00`) showed no dropout or discontinuity.
+
+**Click-free ducking (R4):** a raw sample-to-sample delta does not distinguish a 200 ms linear fade from an abrupt step at all (both measured `max_delta: 3421`) — the periodic test tone's own per-sample slope dominates either transition. The windowed-envelope metric does distinguish them: ramped 158, abrupt 20978, about 133x. Also found: `GstController.DirectControlBinding.new()` maps a 0..1 control value onto a property's *full range* rather than 0..1 directly — on `volume`'s 0..10 range this turned a requested gain of 1.0 into a 10x boost that clipped into a square wave; `new_absolute()` is the correct binding for a controller driving a gain-like property.
+
+**Item transition (R5):** `concat` splices with exactly zero inserted/dropped samples. Ordinary sequential playback (two independent processes) showed no sample-domain gap either, but that is not evidence real sequential playback is gapless, since neither pipeline is a live wall-clock-paced source; the real, measured cost of starting a second independent process on this host is ~9.4 ms wall-clock, which never appears in the sample domain.
+
+**R6/R7:** a real `alsasink` reached PLAYING and EOS against the null device with no hardware present (exit 0). `gst-device-monitor-1.0` is **not** in this Debian 13 package set (`gstreamer1.0-tools` ships `gst-inspect`/`gst-launch`/`gst-stats`/`gst-tester`/`gst-typefind` only) — a fact for whoever builds C1's capability discovery, not an assumption. Free negotiation against the null sink settled on 44100 Hz/F64LE/stereo, a fact about this container's virtual stack only.
+
+**Not reached by this run, and still open:** every physical-interface question in this record's §"Clock domains" and §"Drift" (channel count/addressing on a real driver, PipeWire vs. ALSA, hot-plug, sample-rate change, actual drift over 30–60 minutes, device-loss detection latency, whether anything reaches an FM transmitter unintended). Interface selection itself remains open per the 2026-08-14 note below.
 
 ### Interface selection is reopened, and is no longer a prerequisite (2026-08-14)
 
