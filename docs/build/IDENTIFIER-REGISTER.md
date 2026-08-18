@@ -61,7 +61,10 @@ taken silently.
 | 23 | `exitRenderPipelineDown` | shipped (Track B seam B2) |
 | 24 | `exitAudioDeviceUnavailable` | reserved (Track C seam C1) |
 | 25 | `exitAudioSessionFailed` | reserved (Track C seam C3) |
-| 26+ | unallocated | free |
+| 26 | `exitNightNotReady` | reserved (Track F seam F2) |
+| 27 | `exitNightStateRejected` | reserved (Track F seam F2) |
+| 28 | `exitNightAmbiguous` | reserved (Track F seam F2) |
+| 29+ | unallocated | free |
 
 **16 to 19 are deliberately free.** The asset codes were placed at 20 to
 leave room below them; do not close that gap without a reason.
@@ -87,6 +90,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `render.settings` | `default` singleton | shipped | Track B seam B2 |
 | `audio.settings` | `default` singleton | reserved | Track C seam C1 |
 | `audio.node` | operator-chosen (the node id) | reserved | Track C seam C1 |
+| `night.session` | operator-chosen | reserved | Track F seam F1 |
+| `night.session.active` | `default` singleton | reserved | Track F seam F1 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -112,6 +117,20 @@ surface. **Track C mints no audio-playlist configuration kind**: Track F's
 Night Session configuration embeds the ordered audio slots (TRACK-F F1), and
 a second authoring path for the same list is the collision this register
 exists to prevent.
+
+**Track F mints two kinds and no audio-playlist kind.** `night.session` is
+operator-chosen because a deployment holds more than one (the Christmas and
+the Halloween definition differ in content and in FPP playlist references
+while sharing a shape), and `night.session.active` is the singleton pointer
+saying which one a session activation pins, on the `show`/`show.active`
+precedent. The ordered background-audio slots live inside `night.session`
+per TRACK-F F1; Track C deliberately mints no audio-playlist kind, so a
+second authoring path for the same list cannot appear. **`night.session`
+carries no calendar field of any kind** (ADR-038 decision 1), and F1's
+validation rejecting one is part of the kind rather than a later check.
+`night.session.active` may be released back to `free` if the active-show
+reference turns out to be sufficient to resolve the session; it is reserved
+now because releasing an unused reservation is free and colliding is not.
 
 Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
@@ -139,6 +158,17 @@ bundles of these (ADR-024).
 | `principal:write` | shipped | the nine principal/token administration writes (Track G seam G-5) |
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 | `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
+| `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
+| `night:override` | reserved | Track F seam F6: interlock override where a rule declares `authorized-operator` |
+
+**`night:override` is separate from `night:command` deliberately.** RESTING-MODE
+§10.1 accepts an override only when the rule itself declares
+`authorized-operator` *and* the caller holds the required permission; folding
+that into `night:command` would mean every principal that can start a night
+can also bypass a blocking interlock, which is the opposite of what a
+blocking interlock is for. Night-session **reads** stay open per ADR-024
+constraint 23; a credential problem never costs the operator visibility of
+the lifecycle state.
 
 `principal:write` sat in the admin bundle unchecked from Step 6 until Track
 G seam G-5 landed its first callers (merged 2026-08-17).
@@ -219,6 +249,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `surface` | `surface.*` | shipped | Track B seam B2 |
 | `node` | `node.audio.*` | reserved | Track C seam C6 (engine, device, buses) |
 | `audio_session` | `audio_session.*` | reserved | Track C seam C6 |
+| `night_session` | `night_session.*` | reserved | Track F seam F2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -237,6 +268,14 @@ lifecycle, exactly as a surface is, so it gets its own kind and its resource
 id is the session id. The namespace carries no dynamic segment: the two buses
 are `node.audio.program.*` and `node.audio.ltc.*` by name, never
 `node.audio.output.<id>.*`.
+
+**Track F's `night_session` kind is reserved with its namespace and without
+its individual signal rows.** The rows are written from the code when seam F2
+lands, following this file's own correction below: four of ten `surface.*`
+rows were wrong because they were written from a plan. The resource id is the
+night-session identity, not the `night.session` configuration object id,
+because one definition is activated many times and a signal keyed on the
+definition could not distinguish tonight's session from last night's.
 
 Adding a resource kind is not only a constant: `internal/coordinator/api/
 handlers.go:301` switches over the allowed kinds and silently rejects any
@@ -382,7 +421,8 @@ The store schema version, bumped by migrations in
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
 | v9 | reserved | Track C (audio session desired state) |
-| v10+ | unallocated | free |
+| v10 | reserved | Track F (night-session lifecycle, cue outbox) |
+| v11+ | unallocated | free |
 
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
@@ -391,6 +431,31 @@ was released and went to Step 9.
 A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
 independently is the ADR-034 failure with data attached.
+
+## Change stream event kinds
+
+The `event:` field of an SSE frame, written by
+`internal/coordinator/api/stream.go`. ADR-020 makes the stream
+additive-only within a major version, so a client ignores a kind it does not
+know — which is exactly why two tracks can mint the same name without
+anything failing loudly.
+
+| Event kind | Status | Owner |
+|---|---|---|
+| `node.changed` | shipped | Step 3 |
+| `fpp.changed` | shipped | Step 3 |
+| `fpp.observations.changed` | shipped | Step 3 |
+| `event.recorded` | shipped | Step 3 |
+| `macroRun.changed` | shipped | Step 9 |
+| `resolume.changed` | shipped | Track D |
+| `resolumeRecovery.changed` | shipped | Track D seam D-3a |
+| `nightSession.changed` | reserved | Track F seam F2 |
+
+**Track F mints one kind, not one per lifecycle transition.** ADR-020 makes
+the stream non-resumable, so a client that misses frames re-fetches the
+authoritative session state rather than reconstructing it from a sequence of
+transition events; a per-transition kind would invite exactly the
+reconstruction the non-resumable rule forbids.
 
 ## API paths
 
