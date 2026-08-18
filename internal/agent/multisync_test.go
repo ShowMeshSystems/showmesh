@@ -34,7 +34,7 @@ func TestRunMultiSyncListenerBindFailureSetsStatus(t *testing.T) {
 
 	// Bind failure returns synchronously, before runMultiSyncListener ever
 	// reaches its blocking Run call, so no goroutine is needed here.
-	runMultiSyncListener(ctx, addr, "", timeline, status, discardLogger())
+	runMultiSyncListener(ctx, "test-node", addr, "", timeline, status, discardLogger())
 
 	// afterCall is captured AFTER runMultiSyncListener already returned, so
 	// a correctly-stamped observedAt (set DURING that call) must be at or
@@ -79,7 +79,7 @@ func TestRunMultiSyncListenerSuccessSetsStatusListening(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runMultiSyncListener(ctx, "127.0.0.1:0", "", timeline, status, discardLogger())
+		runMultiSyncListener(ctx, "test-node", "127.0.0.1:0", "", timeline, status, discardLogger())
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
