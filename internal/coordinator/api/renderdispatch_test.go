@@ -632,6 +632,100 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 	}
 }
 
+// TestRenderDispatchReplayDifferentNodeIsConflict proves the fppcommand-
+// shaped conflict rule: the same idempotencyKey reused against a
+// DIFFERENT node is refused as a 409, never silently answered with the
+// first dispatch's own result under a target this request never named.
+func TestRenderDispatchReplayDifferentNodeIsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"conflict-key-node"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-02/render/surfaces/wall-1/clear", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different node) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "media-01") || !strings.Contains(p.Detail, "media-02") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested node", p.Detail)
+	}
+}
+
+// TestRenderDispatchReplayDifferentSurfaceIsParamsConflict proves the
+// params-conflict half of the same rule: surfaceId lives inside params
+// (not a separate stored column), so a reused key naming a DIFFERENT
+// surface on the SAME node must be caught by the params comparison.
+func TestRenderDispatchReplayDifferentSurfaceIsParamsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"conflict-key-surface"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-2/clear", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different surface) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "wall-1") || !strings.Contains(p.Detail, "wall-2") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested params", p.Detail)
+	}
+}
+
 // TestRenderNodeSourceForMatchesNodeRenderPackage pins renderNodeSourceFor's
 // duplicated format against noderender.SourceFor's real one: this package
 // cannot import that collector package (TestPackageNeverImportsACollector),

@@ -137,6 +137,40 @@ func TestOpenAPIRenderTransportProbeResponseMatchesRealResponse(t *testing.T) {
 	assertMatchesSchema(t, c, "RenderCommandResponse", body)
 }
 
+// TestOpenAPIRenderReplayConflictMatchesProblemSchema proves a reused
+// idempotencyKey with different params — resolveRenderCommandReplay's
+// 409 (renderdispatch.go) — is a real Problem response conforming to
+// api/openapi.yaml's now-documented "409" for this operation, mirroring
+// this file's own TestOpenAPIRenderApplyRefusalMatchesProblemSchema for
+// the 400 case.
+func TestOpenAPIRenderReplayConflictMatchesProblemSchema(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	c := newOpenAPICompiler(t)
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"openapi-conflict-key"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	if resp, b := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-2/clear", body, token)
+	resp, respBody := doRawRequest(t, api.Handler, req2)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch status = %d, want 409; body: %s", resp.StatusCode, respBody)
+	}
+	assertMatchesSchema(t, c, "Problem", respBody)
+}
+
 // TestOpenAPIRenderApplyRefusalMatchesProblemSchema proves the asset-
 // unresolved refusal is a real Problem response, not just a raw string.
 func TestOpenAPIRenderApplyRefusalMatchesProblemSchema(t *testing.T) {
