@@ -140,6 +140,7 @@ func TestPutShowActionAndGetRoundTrip(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -210,6 +211,7 @@ func TestPutShowActionGetThenPutRoundTrips(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	roundTrip := func(t *testing.T, resource, initialBody string) {
 		t.Helper()
@@ -337,6 +339,7 @@ func TestPutShowActionSafetyClassMismatchRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	body := `{"show":"halloween-2026","label":"x","safetyClass":"powerOff","target":{"integration":"fpp","instanceId":"player-01","primitive":"startPlaylist","params":{"playlist":"X","ifBusy":"refuse"}}}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/mismatched", body, map[string]string{"Authorization": "Bearer " + token})
@@ -359,6 +362,7 @@ func TestPutShowActionUnconfiguredInstanceRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"fpp","instanceId":"no-such-host","primitive":"startPlaylist","params":{"playlist":"X","ifBusy":"refuse"}}}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/bad-instance", body, map[string]string{"Authorization": "Bearer " + token})
@@ -375,6 +379,7 @@ func TestPutShowActionUndeclaredBrokerRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"mqtt","broker":"no-such-broker",
 		"publish":{"topic":"home/projectors/set","payload":"ON","qos":1},
@@ -409,6 +414,7 @@ func TestPutShowMacroAbsentStepsIsRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	body := `{"show":"halloween-2026","label":"Begin set"}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/no-steps", body, map[string]string{"Authorization": "Bearer " + token})
@@ -430,6 +436,7 @@ func TestPutShowMacroNullStepsIsRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	body := `{"show":"halloween-2026","label":"Begin set","steps":null}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/null-steps", body, map[string]string{"Authorization": "Bearer " + token})
@@ -447,6 +454,7 @@ func TestPutShowMacroReferencingMissingActionIsRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/dangling", validShowMacroBody("does-not-exist"),
 		map[string]string{"Authorization": "Bearer " + token})
@@ -463,6 +471,7 @@ func TestPutShowMacroReducedLocalFallbackIsRejected(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	putActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -494,6 +503,7 @@ func TestPutShowMacroPersistsResolvedPolicyDefaults(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	putActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -594,5 +604,205 @@ func TestShowConfigValidationCodeUnrecognizedFallsBackToGeneric(t *testing.T) {
 	}
 	if problem.Status != http.StatusBadRequest {
 		t.Errorf("problem.Status = %d, want 400", problem.Status)
+	}
+}
+
+// TestListShowActionsFiltersByShow and TestListShowMacrosFiltersByShow are
+// E7-3 deliverable 3's own filter proof, matching
+// TestListShowSurfacesFiltersByShow's shape one file over.
+func TestListShowActionsFiltersByShow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"christmas-2026"}`)
+
+	christmasBody := `{"show":"christmas-2026","label":"x","safetyClass":"stop","target":{"integration":"fpp","instanceId":"player-01","primitive":"stopPlaylist"}}`
+	for id, body := range map[string]string{"halloween-action": validShowActionFPPBody, "christmas-action": christmasBody} {
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/"+id, body, map[string]string{"Authorization": "Bearer " + token})
+		if resp, respBody := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT show.action/%s: status = %d, want 200; body: %s", id, resp.StatusCode, respBody)
+		}
+	}
+
+	_, filtered := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action?show=christmas-2026", map[string]string{"Authorization": "Bearer " + token})
+	if !containsSubstring(string(filtered), `"christmas-action"`) {
+		t.Fatalf("expected christmas-action in the christmas-2026 filtered list; body: %s", filtered)
+	}
+	if containsSubstring(string(filtered), `"halloween-action"`) {
+		t.Fatalf("halloween-action leaked into a christmas-2026 filtered list; body: %s", filtered)
+	}
+}
+
+func TestListShowMacrosFiltersByShow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"christmas-2026"}`)
+
+	actionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, actionReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+	christmasActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/christmas-action",
+		`{"show":"christmas-2026","label":"x","safetyClass":"stop","target":{"integration":"fpp","instanceId":"player-01","primitive":"stopPlaylist"}}`,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, christmasActionReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT christmas show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	macroReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/begin-set", validShowMacroBody("start-main-show"),
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, macroReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.macro: status = %d; body: %s", resp.StatusCode, body)
+	}
+	christmasMacroBody := `{"show":"christmas-2026","label":"x","steps":[{"id":"s","action":"christmas-action","localFallback":{"class":"none","reason":"x"}}]}`
+	christmasMacroReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/christmas-macro", christmasMacroBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, christmasMacroReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT christmas show.macro: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	_, filtered := doRequest(t, api.Handler, "GET", "/api/v1/config/show.macro?show=christmas-2026", map[string]string{"Authorization": "Bearer " + token})
+	if !containsSubstring(string(filtered), `"christmas-macro"`) {
+		t.Fatalf("expected christmas-macro in the christmas-2026 filtered list; body: %s", filtered)
+	}
+	if containsSubstring(string(filtered), `"begin-set"`) {
+		t.Fatalf("begin-set leaked into a christmas-2026 filtered list; body: %s", filtered)
+	}
+}
+
+// TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal is E7-3's own
+// named trap: a show id that once existed and was deleted, or was simply
+// mistyped, is a legitimate filter value. The correct answer is an empty
+// list, never a 400 — only "?node=" on these two kinds is refused.
+func TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action?show=never-existed", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an unknown show filter is an empty answer, not a refusal); body: %s", resp.StatusCode, body)
+	}
+	list := decodeMap(t, body)
+	if objs := list["objects"].([]any); len(objs) != 0 {
+		t.Fatalf("expected zero objects for an unknown show filter, got %d; body: %s", len(objs), body)
+	}
+}
+
+// TestPutShowActionRefusesUnknownShow and
+// TestPutShowMacroRefusesUnknownShow are E7-3's zero-shows-defined trap:
+// with no shows configured, writing the very first action or macro must
+// fail with a refusal naming the missing show, not a bare 400 and not
+// silent acceptance.
+func TestPutShowActionRefusesUnknownShow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (zero shows defined; the write must refuse); body: %s", resp.StatusCode, body)
+	}
+	problem := decodeMap(t, body)
+	if detail, _ := problem["detail"].(string); !containsSubstring(detail, "halloween-2026") {
+		t.Fatalf("problem.detail must name the missing show %q, got %v", "halloween-2026", problem["detail"])
+	}
+
+	// The other half of the transition: create the show, and the identical
+	// write now succeeds.
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	req2 := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after creating the show; body: %s", resp2.StatusCode, body2)
+	}
+}
+
+func TestPutShowMacroRefusesUnknownShow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	actionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, actionReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	body := `{"show":"never-created","label":"x","steps":[{"id":"s","action":"start-main-show","localFallback":{"class":"coordinator-required","reason":"x"}}]}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/begin-set", body, map[string]string{"Authorization": "Bearer " + token})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
+	}
+	problem := decodeMap(t, respBody)
+	if detail, _ := problem["detail"].(string); !containsSubstring(detail, "never-created") {
+		t.Fatalf("problem.detail must name the missing show %q, got %v", "never-created", problem["detail"])
+	}
+}
+
+// TestShowActionStaleShowReferenceStillReadsListsAndRuns is E7-3's
+// ADR-009 half: a show.action written before this existence check shipped
+// (or whose show was later deleted) must keep reading, listing, and
+// running — validation is a write-time gate only, never re-run on read.
+// Simulated here by writing the object's revision directly into the store,
+// bypassing DecodeShowActionPayload exactly as a pre-seam revision would
+// have been written under the old, more permissive decoder.
+func TestShowActionStaleShowReferenceStillReadsListsAndRuns(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	staleAction := config.ShowActionPayload{
+		Show: "long-deleted-show", Label: "Stop the show", SafetyClass: config.ShowSafetyClassStop,
+		Target: config.ShowActionTarget{Integration: config.ShowActionIntegrationFPP, InstanceID: "player-01", Primitive: "stopPlaylist"},
+	}
+	payloadJSON, err := config.EncodeShowActionPayload(staleAction)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := st.CreateConfigObject(t.Context(), config.ShowActionConfigKind, "stale-action"); err != nil {
+		t.Fatalf("CreateConfigObject: %v", err)
+	}
+	rev, err := st.CreateConfigRevision(t.Context(), store.ConfigRevisionRecord{
+		Kind: config.ShowActionConfigKind, ObjectID: "stale-action", Revision: 1,
+		PayloadJSON: payloadJSON, Source: "api",
+	})
+	if err != nil {
+		t.Fatalf("CreateConfigRevision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(t.Context(), config.ShowActionConfigKind, "stale-action", rev.Revision); err != nil {
+		t.Fatalf("ActivateConfigRevision: %v", err)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action/stale-action", map[string]string{"Authorization": "Bearer " + token})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET stale action: status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+
+	listResp, listBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action", map[string]string{"Authorization": "Bearer " + token})
+	if listResp.StatusCode != http.StatusOK || !containsSubstring(string(listBody), `"stale-action"`) {
+		t.Fatalf("LIST must still include the stale action: status=%d body=%s", listResp.StatusCode, listBody)
 	}
 }

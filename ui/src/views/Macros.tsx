@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
@@ -56,6 +56,10 @@ export function Macros() {
   // by every row's Status cell, rather than each row re-deriving it —
   // see runningRunFor's own comment.
   const runGate = evaluateScope(model.session, model.sessionFetchFailed, RUN_SCOPE)
+  // ?show=<id>, mirroring ShowSurfaces.tsx/ShowActions.tsx's own filter
+  // (E7-3, api/openapi.yaml's `GET /config/show.macro` parameter).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const showFilter = searchParams.get('show') ?? ''
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
@@ -63,7 +67,7 @@ export function Macros() {
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    listConfigObjects('show.macro')
+    listConfigObjects('show.macro', showFilter === '' ? undefined : showFilter)
       .then((resp) => {
         if (cancelled) return
         setState({ kind: 'loaded', objects: resp.objects })
@@ -75,7 +79,7 @@ export function Macros() {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed])
+  }, [readGate.allowed, showFilter])
 
   const runningRuns = model.macroRuns.filter((r) => r.state === 'running')
 
@@ -111,6 +115,19 @@ export function Macros() {
           </span>
         )}
       </div>
+
+      <label className="form-field" style={{ maxWidth: '20rem' }}>
+        Narrow by show
+        <input
+          type="text"
+          placeholder="show id — leave blank for every show"
+          value={showFilter}
+          onChange={(e) => {
+            const value = e.target.value
+            setSearchParams(value === '' ? {} : { show: value })
+          }}
+        />
+      </label>
 
       {!readGate.allowed && (
         <p className="panel panel--error" role="status">

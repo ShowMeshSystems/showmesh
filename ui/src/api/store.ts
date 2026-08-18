@@ -1224,9 +1224,10 @@ export class ApiStore {
    * `GET /api/v1/config/show`, or `GET /api/v1/config/show.surface` —
    * object ids, labels, and current revision only, never the full
    * payloads (STEP-9-SPEC.md section 5.5; Track G seam G-8 extends this
-   * to `show`/`show.surface`, same shape, same read posture). `show`
-   * narrows `show.surface` to one show's surfaces (`?show=`, ignored by
-   * every other kind, which the API does not accept it on).
+   * to `show`/`show.surface`, same shape, same read posture; E7-3 adds
+   * `?show=` to `show.action`/`show.macro` too). `show` narrows the list
+   * to that show's objects (`?show=`) — `show` itself is a namespace and
+   * does not accept it on itself.
    */
   async listConfigObjects(
     kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
@@ -1234,7 +1235,7 @@ export class ApiStore {
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
     try {
-      const query = kind === 'show.surface' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
+      const query = kind !== 'show' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
       return await this.client.getJson<SchemaConfigObjectsListResponse>(
         `/config/${kind}${query}`,
         controller.signal,

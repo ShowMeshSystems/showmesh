@@ -1007,7 +1007,7 @@ export interface paths {
         };
         /**
          * Enumerate show.action objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` — never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`). show.action objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` — never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`). Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.action objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
          */
         get: operations["listShowActions"];
         put?: never;
@@ -1029,7 +1029,7 @@ export interface paths {
         get: operations["getShowAction"];
         /**
          * Write a new show.action revision (Step 9)
-         * @description Requires `config:write` (admin only). `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) — the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11).
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only — an existing revision written before this check shipped, or whose show was deleted afterward, still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) — the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11).
          */
         put: operations["putShowAction"];
         post?: never;
@@ -1065,7 +1065,7 @@ export interface paths {
         };
         /**
          * Enumerate show.macro objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action. show.macro objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action. Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.macro objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
          */
         get: operations["listShowMacros"];
         put?: never;
@@ -1087,7 +1087,7 @@ export interface paths {
         get: operations["getShowMacro"];
         /**
          * Write a new show.macro revision (Step 9)
-         * @description Requires `config:write` (admin only). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload — including description and onFailure/onUnconfirmed resolved to their defaults — never the raw request body.
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object, refused naming the missing id otherwise (write-time only; an existing revision keeps reading, listing, and running unchanged). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object **in this macro's own show** — a step naming an action belonging to a different show is refused, naming both shows. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload — including description and onFailure/onUnconfirmed resolved to their defaults — never the raw request body.
          */
         put: operations["putShowMacro"];
         post?: never;
@@ -5174,7 +5174,10 @@ export interface operations {
     };
     listShowActions: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Narrow the list to show.action objects belonging to this show id. */
+                show?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5287,7 +5290,10 @@ export interface operations {
     };
     listShowMacros: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Narrow the list to show.macro objects belonging to this show id. */
+                show?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

@@ -198,3 +198,52 @@ func TestCmdActionPutRequiresExactlyOneArg(t *testing.T) {
 		t.Errorf("exit code = %d, want exitUsage", code)
 	}
 }
+
+// TestCmdActionListPassesShowFilter is E7-3 deliverable 4's CLI half,
+// matching TestCmdSurfaceListPassesShowFilter's shape one file over.
+func TestCmdActionListPassesShowFilter(t *testing.T) {
+	var gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","kind":"show.action","objects":[
+			{"id":"projectors-on","label":"Projectors on","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-18T20:00:00Z"}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"list", "--server", ts.URL, "--show", "halloween-2026"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/config/show.action" {
+		t.Errorf("path = %q, want /api/v1/config/show.action", gotPath)
+	}
+	if gotQuery != "show=halloween-2026" {
+		t.Errorf("query = %q, want show=halloween-2026", gotQuery)
+	}
+}
+
+// TestCmdActionListWithoutShowSendsNoQuery proves the flag's absence sends
+// no query string at all, never an empty "show=" value.
+func TestCmdActionListWithoutShowSendsNoQuery(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","kind":"show.action","objects":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"list", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotQuery != "" {
+		t.Errorf("query = %q, want empty", gotQuery)
+	}
+}

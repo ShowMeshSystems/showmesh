@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
@@ -23,6 +23,10 @@ export function ShowActions() {
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
+  // ?show=<id>, mirroring ShowSurfaces.tsx's own filter (E7-3,
+  // api/openapi.yaml's `GET /config/show.action` parameter).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const showFilter = searchParams.get('show') ?? ''
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
@@ -30,7 +34,7 @@ export function ShowActions() {
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    listConfigObjects('show.action')
+    listConfigObjects('show.action', showFilter === '' ? undefined : showFilter)
       .then((resp) => {
         if (cancelled) return
         setState({ kind: 'loaded', objects: resp.objects })
@@ -42,7 +46,7 @@ export function ShowActions() {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed])
+  }, [readGate.allowed, showFilter])
 
   return (
     <div>
@@ -73,6 +77,19 @@ export function ShowActions() {
         MQTT command. Macros compose actions; actions never appear on their own in a running
         show.
       </p>
+
+      <label className="form-field" style={{ maxWidth: '20rem' }}>
+        Narrow by show
+        <input
+          type="text"
+          placeholder="show id — leave blank for every show"
+          value={showFilter}
+          onChange={(e) => {
+            const value = e.target.value
+            setSearchParams(value === '' ? {} : { show: value })
+          }}
+        />
+      </label>
 
       {!readGate.allowed && (
         <p className="panel panel--error" role="status">

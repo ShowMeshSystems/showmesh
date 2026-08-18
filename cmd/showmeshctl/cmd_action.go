@@ -55,7 +55,9 @@ launch) that a show.macro's steps reference. Reads require show:macro:run
 OR config:write; put requires config:write (admin only).
 
 Subcommands:
-  list          enumerate action objects (id, label, show, revision)
+  list [--show <id>]
+                enumerate action objects (id, label, show, revision),
+                optionally narrowed to one show
   show <id>     show one action's full definition, including its target
   put <id>      write a new show.action configuration revision (reads a
                 payload from --file, or from stdin if --file is not given)
@@ -78,6 +80,8 @@ subcommand.
 
 func cmdActionList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl action list", stderr)
+	var show string
+	fs.StringVar(&show, "show", "", "narrow the list to actions belonging to this show id")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action list [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nEnumerate show.action objects (GET /api/v1/config/show.action).")
@@ -101,8 +105,13 @@ func cmdActionList(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
+	var query url.Values
+	if show != "" {
+		query = url.Values{"show": {show}}
+	}
+
 	var resp showConfigObjectsListResponse
-	if err := c.getJSON(ctx, "/api/v1/config/show.action", nil, &resp); err != nil {
+	if err := c.getJSON(ctx, "/api/v1/config/show.action", query, &resp); err != nil {
 		return reportError(stderr, "action list", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

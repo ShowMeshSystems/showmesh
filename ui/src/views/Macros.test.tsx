@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Macros } from './Macros'
@@ -60,7 +61,7 @@ describe('Macros', () => {
     renderMacros(makeModel({ session: operatorSession }))
 
     await waitFor(() => expect(screen.getByText('Begin set')).toBeVisible())
-    expect(listConfigObjects).toHaveBeenCalledWith('show.macro')
+    expect(listConfigObjects).toHaveBeenCalledWith('show.macro', undefined)
     // This task's finding 9: "New macro" (config:write-gated) is now
     // rendered DISABLED with a stated reason for the operator role,
     // never hidden — the standing rule (OPERATOR-UI section 14) this
@@ -90,6 +91,16 @@ describe('Macros', () => {
     )
     expect(listConfigObjects).not.toHaveBeenCalled()
     expect(screen.getByRole('status').textContent).toMatch(/does not include/)
+  })
+
+  it('narrows the list by show when the operator types into the show filter (E7-3)', async () => {
+    listConfigObjects.mockResolvedValue(listResponse)
+    const user = userEvent.setup()
+    renderMacros(makeModel({ session: operatorSession }))
+
+    await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.macro', undefined))
+    await user.type(screen.getByLabelText('Narrow by show'), 'halloween-2026')
+    await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.macro', 'halloween-2026'))
   })
 
   it('states plainly when no macros are configured yet, rather than rendering an empty table', async () => {

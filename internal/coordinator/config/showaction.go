@@ -536,11 +536,11 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 // or the store-authoritative equivalent); brokers is the caller's declared
 // integration broker set (see integrationbrokers.go); registry resolves
 // and validates an FPP primitive's own parameter vocabulary and safety
-// class; resolver resolves
-// a resolume target's seam B reference against the currently stored
-// composition. None of the four is fetched by this package — see this
-// file's own top doc comment.
-func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver) (ShowActionPayload, *ValidationError) {
+// class; resolver resolves a resolume target's seam B reference against
+// the currently stored composition; showExists reports whether "show"
+// names an existing show config object. None of the five is fetched by
+// this package — see this file's own top doc comment.
+func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver, showExists func(string) bool) (ShowActionPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowActionPayload{}, verr
@@ -555,6 +555,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 	}
 	if verr := validateShowRef(show); verr != nil {
 		return ShowActionPayload{}, verr
+	}
+	if !showExists(show) {
+		return ShowActionPayload{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "show",
+			Detail: fmt.Sprintf("show %q is not a configured show; create it first", show),
+		}
 	}
 
 	label, verr := decodeRequiredString(top, "label", "label")
@@ -1129,13 +1135,13 @@ func stringInSlice(s string, list []string) bool {
 	return false
 }
 
-// validateShowRef format-validates (never existence-validates — the Show
-// object is Track E's and does not exist yet, STEP-9-SPEC.md section 5.2)
-// a "show" reference. Reuses [mqttproto.ValidateNodeID] rather than
-// inventing a second identifier grammar: this builder's own judgment call,
-// since neither the shared contract nor STEP-9-SPEC.md states an exact
-// format — see this builder's report. It happens to accept every example
-// in STEP-9-SPEC.md ("halloween-2026").
+// validateShowRef format-validates only; existence is the caller's
+// showExists check (DecodeShowActionPayload, DecodeShowMacroPayload).
+// Reuses [mqttproto.ValidateNodeID] rather than inventing a second
+// identifier grammar: this builder's own judgment call, since neither the
+// shared contract nor STEP-9-SPEC.md states an exact format — see this
+// builder's report. It happens to accept every example in STEP-9-SPEC.md
+// ("halloween-2026").
 func validateShowRef(show string) *ValidationError {
 	if err := mqttproto.ValidateNodeID(show); err != nil {
 		return &ValidationError{
