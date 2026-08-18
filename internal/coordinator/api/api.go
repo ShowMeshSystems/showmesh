@@ -406,6 +406,14 @@ type Dependencies struct {
 	// (false) is the same "nothing told this API otherwise" posture as
 	// every other unwired dependency here.
 	FPPMQTTMigrationDeferred bool
+
+	// NightSessions is Track F seam F2's own store dependency — see
+	// [NightSessionStore]. A nil field is replaced by
+	// [noNightSessionStore], under which every night-session read reports
+	// "no session" and every command refuses with an internal error,
+	// matching this struct's standing "an unwired dependency is not this
+	// API failing" posture.
+	NightSessions NightSessionStore
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -494,7 +502,48 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.FPPMQTTSecret == nil {
 		d.FPPMQTTSecret = noFPPMQTTSecretStore{}
 	}
+	if d.NightSessions == nil {
+		d.NightSessions = noNightSessionStore{}
+	}
 	return d
+}
+
+// noNightSessionStore is [Dependencies.NightSessions]'s nil-safe default:
+// every read reports "no session has ever been created" and every write
+// refuses with an internal error, matching this package's standing
+// "an unwired dependency is not this API failing" posture.
+type noNightSessionStore struct{}
+
+func (noNightSessionStore) CreateNightSession(context.Context, store.NightSessionRecord, time.Time) error {
+	return fmt.Errorf("api: night session store not wired in")
+}
+
+func (noNightSessionStore) GetNightSession(context.Context, string) (store.NightSessionRecord, error) {
+	return store.NightSessionRecord{}, store.ErrNightSessionNotFound
+}
+
+func (noNightSessionStore) GetCurrentNightSession(context.Context) (store.NightSessionRecord, bool, error) {
+	return store.NightSessionRecord{}, false, nil
+}
+
+func (noNightSessionStore) UpdateNightSession(context.Context, store.NightSessionRecord, time.Time) error {
+	return fmt.Errorf("api: night session store not wired in")
+}
+
+func (noNightSessionStore) CreateNightReadiness(context.Context, store.NightReadinessRecord) error {
+	return fmt.Errorf("api: night session store not wired in")
+}
+
+func (noNightSessionStore) GetLatestNightReadiness(context.Context, string) (store.NightReadinessRecord, error) {
+	return store.NightReadinessRecord{}, store.ErrNightReadinessNotFound
+}
+
+func (noNightSessionStore) GetNightSessionByIdempotencyKey(context.Context, string) (store.NightSessionRecord, error) {
+	return store.NightSessionRecord{}, store.ErrNightSessionNotFound
+}
+
+func (noNightSessionStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
+	return fmt.Errorf("api: night session store not wired in")
 }
 
 // noFPPMQTTHostLister is [Dependencies.FPPMQTT]'s nil-safe default:
@@ -955,6 +1004,20 @@ type Options struct {
 	// actually changes, without hammering [ObservationLister] pointlessly
 	// often. Defaults to 500 milliseconds.
 	FPPCommandPollInterval time.Duration
+
+	// NightReadinessMaxAge is invariant 2's own "configured maximum age":
+	// how old a completed run-readiness result for the CURRENT preparation
+	// epoch may be and still satisfy start-night. Not a night.session
+	// config field (ADR-039: this is an operational tuning knob, not
+	// something an operator must set for the subsystem to function — the
+	// night.session kind stays silent on it, matching
+	// FPPCommandConfirmDeadline's identical posture one field up). A
+	// SHOWMESH HYPOTHESIS, not a measured value: long enough that an
+	// operator running readiness at 4:15 PM for a 5:00 PM start-night is
+	// not forced to rerun it, short enough that a readiness result from
+	// hours earlier is not silently treated as still current. Defaults to
+	// 30 minutes.
+	NightReadinessMaxAge time.Duration
 }
 
 const (
@@ -976,6 +1039,10 @@ const (
 	// See those fields' doc comments — both are SHOWMESH HYPOTHESES.
 	defaultFPPCommandConfirmDeadline = 20 * time.Second
 	defaultFPPCommandPollInterval    = 500 * time.Millisecond
+
+	// defaultNightReadinessMaxAge backs [Options.NightReadinessMaxAge].
+	// See that field's doc comment — a SHOWMESH HYPOTHESIS.
+	defaultNightReadinessMaxAge = 30 * time.Minute
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -1053,6 +1120,9 @@ func (o Options) withDefaults() Options {
 	if o.FPPCommandPollInterval <= 0 {
 		o.FPPCommandPollInterval = defaultFPPCommandPollInterval
 	}
+	if o.NightReadinessMaxAge <= 0 {
+		o.NightReadinessMaxAge = defaultNightReadinessMaxAge
+	}
 	return o
 }
 
@@ -1086,6 +1156,7 @@ func New(deps Dependencies, opts Options) *API {
 		loginLimiter:              newLoginLimiter(opts.LoginConcurrency, opts.LoginQueueWait, opts.LoginPerSourceDelay, opts.LoginMaxDelay, opts.Clock),
 		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
+		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
 	}
 	hub := newHub(deps, opts, opts.Logger)
 
@@ -1353,6 +1424,31 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/night.session.active", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActive))
 	mux.HandleFunc("PUT /api/v1/config/night.session.active", h.writeGuard(&scopeConfigWrite, h.handlePutNightSessionActive))
 	mux.HandleFunc("GET /api/v1/config/night.session.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActiveRevisions))
+
+	// --- Track F seam F2: the night-session lifecycle controller ---
+	// (RESTING-MODE.md, ADR-038). Reads stay open by default (ADR-024
+	// constraint 23: a credential problem must never cost the operator
+	// sight of the lifecycle state) — night:command guards only the write.
+	//
+	// The two GETs below deliberately reuse [identity.ScopeObservationRead]
+	// rather than minting a new night-session read scope. This is a
+	// considered choice, not a shortcut: ScopeObservationRead is already
+	// how [readScopes] and every [identity.RoleViewer] principal sees
+	// coordinator-observed state with no write authority attached, and
+	// night-session lifecycle state is exactly that shape for a read
+	// credential — a viewer who can see FPP/node observations must also be
+	// able to see whether the show is live, resting, or degraded, for the
+	// identical "never cost the operator sight of the show" reason. A
+	// dedicated read scope would only let a future role bundle grant
+	// observation:read without night visibility or vice versa, a split
+	// this architecture has no use case for: nothing here is ever gated
+	// behind h.closeReads without also wanting this. resolume/instances
+	// (below) reuses the same scope for the identical reason one section
+	// down.
+	scopeNightCommand := identity.ScopeNightCommand
+	mux.HandleFunc("GET /api/v1/night/session", h.readGuard(identity.ScopeObservationRead, h.handleGetNightLifecycle))
+	mux.HandleFunc("GET /api/v1/night/sessions/{id}", h.readGuard(identity.ScopeObservationRead, h.handleGetNightLifecycleByID))
+	mux.HandleFunc("POST /api/v1/night/commands/{command}", h.writeGuard(&scopeNightCommand, h.handleNightCommand))
 
 	// --- Track E: the asset store ---
 	//

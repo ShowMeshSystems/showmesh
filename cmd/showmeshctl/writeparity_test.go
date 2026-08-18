@@ -105,6 +105,10 @@ var dynamicWritePathCoverage = map[string]string{
 	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe": "cmd_render_command.go dispatchRenderCommand " +
 		"builds /api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=transport-probe " +
 		"(showmeshctl render probe)",
+	"POST /night/commands/{command}": "cmd_night_lifecycle.go nightLifecycleCommand builds " +
+		"/api/v1/night/commands/<command> with command a literal passed through " +
+		"runSimpleNightLifecycleCommand from each of the eight cmdNight* wrappers in the same file " +
+		"(showmeshctl night prepare-site|readiness|preshow|start|final-show|fade-out|power-down)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

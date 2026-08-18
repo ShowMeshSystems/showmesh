@@ -390,6 +390,20 @@ Exit codes:
      pipeline is in its "failed" state — distinct from exit 9, which
      covers every other unconfirmed case, including a deadline that
      simply elapsed with no evidence either way)
+  26 night session not ready (a "night <verb>" lifecycle command only: a
+     precondition it needs is not yet met — no open preparation epoch, or
+     no fresh readiness result from the CURRENT epoch; see stderr for the
+     specific missing prerequisite)
+  27 night command rejected by current state (a "night <verb>" lifecycle
+     command only: the command's own closed state table refuses it from
+     the session's current lifecycle state, not merely because it is
+     early — e.g. start-night after the session has already reached
+     end-of-night-resting)
+  28 night session degraded (every "night <verb>" lifecycle command except
+     fade-out, power-down, request-final-show, and end-session: the
+     session is degraded after an ambiguous restart and requires
+     "showmeshctl night end-session" followed by "prepare-site" before any
+     further command can proceed)
 `)
 }
 

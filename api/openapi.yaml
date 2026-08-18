@@ -3987,6 +3987,172 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /night/session:
+    get:
+      operationId: getCurrentNightSession
+      summary: The current night-session lifecycle state (Track F seam F2, RESTING-MODE.md, ADR-038)
+      description: >-
+        Never gated by any scope — reads stay open by default (ADR-024
+        constraint 23): a credential problem must never cost the operator
+        sight of the lifecycle state. Distinct from
+        `/config/night.session/{id}` (the AUTHORED definition a session
+        pins): this is the RUNNING controller's own persisted state, a
+        dedicated closed state machine, never observed evidence and never
+        a general workflow.
+
+
+        If no session has ever been created (the coordinator has never
+        seen `prepare-site`), this still answers `200` with
+        `session.state` = `"inactive"` and every identity field empty,
+        rather than `404` — "no session yet" is itself a real, renderable
+        state.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /night/sessions/{id}:
+    get:
+      operationId: getNightSessionByID
+      summary: One specific night session by its own id (Track F seam F2)
+      description: >-
+        Same open-read posture as `/night/session`. Every session that has
+        ever been created remains reachable by id (a new `prepare-site`
+        after `stopped` creates a NEW session/epoch; this is how a prior
+        night's own record stays inspectable).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /night/commands/{command}:
+    post:
+      operationId: dispatchNightCommand
+      summary: Dispatch a night-session lifecycle command (Track F seam F2, ADR-038)
+      description: >-
+        Behind `night:command`. The seven ADR-038 commands
+        (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`,
+        `request-final-show`, `fade-out-night`, `power-down-presentation`)
+        plus `end-session`, a PROVISIONAL operator-recovery action not yet
+        part of ADR-038's own closed vocabulary (owner decision pending).
+        Answers `202`, never `200`: accepted and applied, or recognized as
+        an idempotent duplicate — this layer holds no downstream
+        confirmation loop.
+
+
+        `fade-out-night`, `power-down-presentation`, `request-final-show`,
+        and `end-session` are exempt from the degraded-session gate and
+        never refused for want of an audit write (ADR-024 decision 11):
+        all four are direction-safe. The other four fail closed on an
+        unwritable audit store (`503`, see below) and refuse while the
+        session is degraded and non-terminal.
+
+
+        `idempotencyKey` (optional request body field) is honored only by
+        `prepare-site`, the one command that creates something new; a
+        repeat with the same key returns the original session. The other
+        six commands are already idempotent by lifecycle state and ignore
+        the field.
+      parameters:
+        - name: command
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - prepare-site
+              - run-readiness
+              - start-preshow
+              - start-night
+              - request-final-show
+              - fade-out-night
+              - power-down-presentation
+              - end-session
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NightCommandRequest"
+      responses:
+        "202":
+          description: Accepted
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NightCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Three distinct causes, three distinct `type` values:
+            `night-not-ready` (a precondition is not yet met),
+            `night-state-rejected` (refused by the command's own closed
+            state table for the session's current state), or
+            `night-ambiguous` (the session is degraded; run `end-session`
+            then `prepare-site` to recover).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: >-
+            `prepare-site`, `run-readiness`, `start-preshow`, or
+            `start-night` only: its audit entry could not be written, so
+            the whole command was refused rather than applied without one
+            (`night-command-refused-audit-unavailable`). Nothing was
+            dispatched and nothing was recorded.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets:
     get:
       operationId: listAssets
@@ -7624,6 +7790,10 @@ components:
             - https://showmesh.dev/problems/resolume-action-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
+            - https://showmesh.dev/problems/night-not-ready
+            - https://showmesh.dev/problems/night-state-rejected
+            - https://showmesh.dev/problems/night-ambiguous
+            - https://showmesh.dev/problems/night-command-refused-audit-unavailable
         title:
           type: string
         status:
@@ -9192,6 +9362,198 @@ components:
         source:
           type: string
           enum: [api]
+    NightReadinessCheck:
+      type: object
+      description: >-
+        One named signal run-readiness evaluated. This build checks ONLY
+        `fpp.reachable` for the session's referenced FPP instances —
+        `name` is always `fpp:<instanceId>:reachable`; a healthy result
+        here is not evidence anything else was checked.
+      required: [name, state, reason]
+      properties:
+        name:
+          type: string
+        state:
+          type: string
+          description: pkg/observation's Health vocabulary. Missing evidence is always "unknown".
+          enum: [healthy, degraded, failed, unknown]
+        reason:
+          type: string
+    NightReadiness:
+      type: object
+      description: >-
+        The current session's most recent run-readiness result, or its
+        explicit absence, stated with a state and a reason rather than
+        omitted (ADR-020). No precomputed age field (ADR-020 decision 6):
+        compare `completedAt` against the envelope's own `serverTime`.
+        `outcome`/`epochId`/`completedAt` are present only when `state` is
+        `"recorded"`. `outcome` never withholds `start-night` by itself in
+        this build; only the epoch/freshness gate does.
+      required: [state, reason, sameEpoch, fresh, checks]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown, not_configured, not_available]
+        reason:
+          type: string
+          description: >-
+            Distinguishes "no result recorded yet" from "the store could
+            not be read" from "the result exists but its checks payload
+            failed to decode" — never a single collapsed reason for all
+            three.
+        outcome:
+          type: string
+          enum: [ready, not_ready, unknown]
+        epochId:
+          type: string
+        completedAt:
+          type: string
+          format: date-time
+        sameEpoch:
+          type: boolean
+        fresh:
+          type: boolean
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/NightReadinessCheck"
+    NightPhaseEvidence:
+      type: object
+      description: >-
+        One optional or not-yet-implemented section, stated with a state
+        and a reason rather than omitted.
+      required: [state, reason]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown, not_configured, not_available]
+        reason:
+          type: string
+    NightSessionState:
+      type: object
+      description: >-
+        The night-session lifecycle controller's own persisted state — a
+        dedicated closed state machine, never observed evidence. `id` is
+        "" and `state` is "inactive" when no session has ever been
+        created.
+      required:
+        [id, configObjectId, configRevision, state, stateEnteredAt, cycle,
+         finalShowRequested, finalShowRequestedAt, admissionClosed,
+         admissionClosedAt, shutdownIntent, armedShowId, showCommitted,
+         readiness, powerPhase, transition, degraded, attributionDegraded,
+         updatedAt]
+      properties:
+        id:
+          type: string
+        configObjectId:
+          type: string
+        configRevision:
+          type: integer
+        state:
+          type: string
+          description: RESTING-MODE.md §3's ten states, exactly.
+          enum:
+            - inactive
+            - preparing
+            - preshow
+            - transition-to-show
+            - live
+            - transition-to-resting
+            - resting-intershow
+            - end-of-night-resting
+            - fading-out
+            - stopped
+        stateEnteredAt:
+          type: string
+          format: date-time
+        cycle:
+          type: integer
+        finalShowRequested:
+          type: boolean
+        finalShowRequestedAt:
+          type: [string, "null"]
+          format: date-time
+        admissionClosed:
+          type: boolean
+        admissionClosedAt:
+          type: [string, "null"]
+          format: date-time
+        shutdownIntent:
+          type: string
+          enum: ["", fade-out, power-down]
+        armedShowId:
+          type: string
+        showCommitted:
+          type: boolean
+        readiness:
+          $ref: "#/components/schemas/NightReadiness"
+        powerPhase:
+          $ref: "#/components/schemas/NightPhaseEvidence"
+        transition:
+          $ref: "#/components/schemas/NightPhaseEvidence"
+        degraded:
+          type: boolean
+        degradedReason:
+          type: string
+        attributionDegraded:
+          type: boolean
+          description: >-
+            True when this session's most recent command applied despite
+            its audit entry failing to write (ADR-024 decision 11). Never
+            cleared once true.
+        updatedAt:
+          type: string
+          format: date-time
+    NightSessionResponse:
+      type: object
+      description: The body of GET /night/session and GET /night/sessions/{id}.
+      required: [serverTime, session]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        session:
+          $ref: "#/components/schemas/NightSessionState"
+    NightCommandRequest:
+      type: object
+      description: >-
+        The optional body of POST /night/commands/{command}.
+        `idempotencyKey` is honored only by `prepare-site`; every other
+        command is already idempotent by lifecycle state and ignores it.
+      properties:
+        idempotencyKey:
+          type: string
+    NightCommandResult:
+      type: object
+      description: >-
+        What POST /night/commands/{command} accepted, and how —
+        `idempotent_no_op` is a real, distinct outcome from `applied`.
+      required: [command, outcome, attributionDegraded]
+      properties:
+        command:
+          type: string
+        outcome:
+          type: string
+          enum: [applied, idempotent_no_op]
+        reason:
+          type: string
+        attributionDegraded:
+          type: boolean
+    NightCommandResponse:
+      type: object
+      description: >-
+        The 202 body of POST /night/commands/{command}: acceptance plus
+        the resulting session state, never a held connection waiting on a
+        downstream outcome.
+      required: [serverTime, command, session]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/NightCommandResult"
+        session:
+          $ref: "#/components/schemas/NightSessionState"
     Asset:
       type: object
       description: >-

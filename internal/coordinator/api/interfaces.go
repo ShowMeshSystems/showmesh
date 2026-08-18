@@ -359,6 +359,30 @@ type CommandStore interface {
 	GetCommand(ctx context.Context, id string) (store.CommandRecord, error)
 }
 
+// NightSessionStore is Track F seam F2's own store dependency: the
+// night_sessions / night_readiness_results rows underneath the lifecycle
+// controller (nightsessioncontrol.go). Declared directly in terms of
+// internal/coordinator/store's own record types, matching [CommandStore]'s
+// identical departure from this file's shadow-type convention and for the
+// identical reason: schemaV10 is fixed by this same seam, not by an
+// independent parallel effort. *store.Store already satisfies this with
+// no adapter needed.
+type NightSessionStore interface {
+	CreateNightSession(ctx context.Context, rec store.NightSessionRecord, now time.Time) error
+	GetNightSession(ctx context.Context, id string) (store.NightSessionRecord, error)
+	GetCurrentNightSession(ctx context.Context) (store.NightSessionRecord, bool, error)
+	GetNightSessionByIdempotencyKey(ctx context.Context, key string) (store.NightSessionRecord, error)
+	UpdateNightSession(ctx context.Context, rec store.NightSessionRecord, now time.Time) error
+
+	CreateNightReadiness(ctx context.Context, rec store.NightReadinessRecord) error
+	GetLatestNightReadiness(ctx context.Context, sessionID string) (store.NightReadinessRecord, error)
+
+	// InTx runs fn inside one BEGIN IMMEDIATE transaction, so a lifecycle
+	// command's read, decision, and write share one atomic unit. *store.
+	// Store already satisfies this with no adapter.
+	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
+}
+
 // FPPPollNudger requests an out-of-band poll of one FPP instance's
 // collector, ASAP rather than waiting out its own cadence — the owner's
 // 2026-08-13 fix for the FPP REST collector's DefaultPollInterval (15s)

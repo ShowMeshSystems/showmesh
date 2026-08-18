@@ -1450,6 +1450,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/night/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The current night-session lifecycle state (Track F seam F2, RESTING-MODE.md, ADR-038)
+         * @description Never gated by any scope — reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
+         *
+         *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` — "no session yet" is itself a real, renderable state.
+         */
+        get: operations["getCurrentNightSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/night/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One specific night session by its own id (Track F seam F2)
+         * @description Same open-read posture as `/night/session`. Every session that has ever been created remains reachable by id (a new `prepare-site` after `stopped` creates a NEW session/epoch; this is how a prior night's own record stays inspectable).
+         */
+        get: operations["getNightSessionByID"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/night/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch a night-session lifecycle command (Track F seam F2, ADR-038)
+         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending). Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate — this layer holds no downstream confirmation loop.
+         *
+         *     `fade-out-night`, `power-down-presentation`, `request-final-show`, and `end-session` are exempt from the degraded-session gate and never refused for want of an audit write (ADR-024 decision 11): all four are direction-safe. The other four fail closed on an unwritable audit store (`503`, see below) and refuse while the session is degraded and non-terminal.
+         *
+         *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
+         */
+        post: operations["dispatchNightCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -2699,7 +2765,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable";
             title: string;
             status: number;
             detail: string;
@@ -3317,6 +3383,95 @@ export interface components {
             createdByPrincipalName: string | null;
             /** @enum {string} */
             source: "api";
+        };
+        /** @description One named signal run-readiness evaluated. This build checks ONLY `fpp.reachable` for the session's referenced FPP instances — `name` is always `fpp:<instanceId>:reachable`; a healthy result here is not evidence anything else was checked. */
+        NightReadinessCheck: {
+            name: string;
+            /**
+             * @description pkg/observation's Health vocabulary. Missing evidence is always "unknown".
+             * @enum {string}
+             */
+            state: "healthy" | "degraded" | "failed" | "unknown";
+            reason: string;
+        };
+        /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. */
+        NightReadiness: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            /** @description Distinguishes "no result recorded yet" from "the store could not be read" from "the result exists but its checks payload failed to decode" — never a single collapsed reason for all three. */
+            reason: string;
+            /** @enum {string} */
+            outcome?: "ready" | "not_ready" | "unknown";
+            epochId?: string;
+            /** Format: date-time */
+            completedAt?: string;
+            sameEpoch: boolean;
+            fresh: boolean;
+            checks: components["schemas"]["NightReadinessCheck"][];
+        };
+        /** @description One optional or not-yet-implemented section, stated with a state and a reason rather than omitted. */
+        NightPhaseEvidence: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            reason: string;
+        };
+        /** @description The night-session lifecycle controller's own persisted state — a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
+        NightSessionState: {
+            id: string;
+            configObjectId: string;
+            configRevision: number;
+            /**
+             * @description RESTING-MODE.md §3's ten states, exactly.
+             * @enum {string}
+             */
+            state: "inactive" | "preparing" | "preshow" | "transition-to-show" | "live" | "transition-to-resting" | "resting-intershow" | "end-of-night-resting" | "fading-out" | "stopped";
+            /** Format: date-time */
+            stateEnteredAt: string;
+            cycle: number;
+            finalShowRequested: boolean;
+            /** Format: date-time */
+            finalShowRequestedAt: string | null;
+            admissionClosed: boolean;
+            /** Format: date-time */
+            admissionClosedAt: string | null;
+            /** @enum {string} */
+            shutdownIntent: "" | "fade-out" | "power-down";
+            armedShowId: string;
+            showCommitted: boolean;
+            readiness: components["schemas"]["NightReadiness"];
+            powerPhase: components["schemas"]["NightPhaseEvidence"];
+            transition: components["schemas"]["NightPhaseEvidence"];
+            degraded: boolean;
+            degradedReason?: string;
+            /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11). Never cleared once true. */
+            attributionDegraded: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description The body of GET /night/session and GET /night/sessions/{id}. */
+        NightSessionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            session: components["schemas"]["NightSessionState"];
+        };
+        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. */
+        NightCommandRequest: {
+            idempotencyKey?: string;
+        };
+        /** @description What POST /night/commands/{command} accepted, and how — `idempotent_no_op` is a real, distinct outcome from `applied`. */
+        NightCommandResult: {
+            command: string;
+            /** @enum {string} */
+            outcome: "applied" | "idempotent_no_op";
+            reason?: string;
+            attributionDegraded: boolean;
+        };
+        /** @description The 202 body of POST /night/commands/{command}: acceptance plus the resulting session state, never a held connection waiting on a downstream outcome. */
+        NightCommandResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["NightCommandResult"];
+            session: components["schemas"]["NightSessionState"];
         };
         /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID — empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 — a filename is not an asset identity). */
         Asset: {
@@ -6309,6 +6464,109 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    getCurrentNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionByID: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchNightCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                command: "prepare-site" | "run-readiness" | "start-preshow" | "start-night" | "request-final-show" | "fade-out-night" | "power-down-presentation" | "end-session";
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["NightCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /** @description `prepare-site`, `run-readiness`, `start-preshow`, or `start-night` only: its audit entry could not be written, so the whole command was refused rather than applied without one (`night-command-refused-audit-unavailable`). Nothing was dispatched and nothing was recorded. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listAssets: {

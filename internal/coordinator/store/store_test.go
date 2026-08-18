@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -121,8 +122,8 @@ func TestOpenAppliesMigrationsFromEmpty(t *testing.T) {
 	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d (maxMigrationVersion())", version, maxMigrationVersion())
 	}
 
 	// Every table schemaV1 creates must exist.
@@ -133,6 +134,78 @@ func TestOpenAppliesMigrationsFromEmpty(t *testing.T) {
 		if err != nil {
 			t.Errorf("table %q: %v", table, err)
 		}
+	}
+}
+
+// TestFreshDatabaseStampsMaximumMigrationVersionNotCount is a literal,
+// hardcoded companion to TestOpenAppliesMigrationsFromEmpty's own
+// maxMigrationVersion()-derived assertion, added at the owner's explicit
+// request (Track F seam F2 gap-numbering review): on THIS branch,
+// [migrations] holds nine entries (versions 1..8, then 10 — schemaV10's
+// own doc comment explains the deliberate gap at 9, reserved to a
+// different, not-yet-merged branch) so a count and a maximum disagree
+// here, 9 versus 10, and only the maximum may ever be stamped. This test
+// pins the literal 10, not a value re-derived from the same function
+// [migrate] itself calls, specifically so a hypothetical future bug that
+// changed maxMigrationVersion() and migrate() identically (in the same
+// wrong direction) would still be caught by the version count staying
+// fixed at nine known entries.
+//
+// Verified by reverting [migrate]'s target computation back to
+// len(migrations): with that reversion this test fails with
+// "user_version = 9, want 10" — see this task's report.
+func TestFreshDatabaseStampsMaximumMigrationVersionNotCount(t *testing.T) {
+	if len(migrations) != 9 {
+		t.Fatalf("len(migrations) = %d, want 9 (this test's own literal 10 assumes the current v1..v8,v10 shape; update both together if that changes)", len(migrations))
+	}
+	if maxMigrationVersion() != 10 {
+		t.Fatalf("maxMigrationVersion() = %d, want 10", maxMigrationVersion())
+	}
+
+	dir := t.TempDir()
+	st, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	var version int
+	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 10 {
+		t.Fatalf("user_version = %d, want 10 (the maximum migration version, not the count of 9 entries)", version)
+	}
+}
+
+// TestMigrateRefusesSchemaOneAboveTheMaximumVersion is
+// TestMigrateRefusesNewerSchemaVersion's own tighter sibling: that test
+// uses an arbitrary, far-above-everything value (999); this one uses
+// EXACTLY maxMigrationVersion()+1, the closest possible "too new" boundary,
+// so ErrSchemaTooNew is proven to trigger at the true edge, not merely
+// somewhere comfortably past it.
+func TestMigrateRefusesSchemaOneAboveTheMaximumVersion(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, dbFileName)
+
+	st, err := open(context.Background(), dir, nil, time.Now)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	tooNew := maxMigrationVersion() + 1
+	if _, err := st.db.ExecContext(context.Background(), fmt.Sprintf(`PRAGMA user_version = %d`, tooNew)); err != nil {
+		t.Fatalf("bump user_version: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	_, err = open(context.Background(), filepath.Dir(dbPath), nil, time.Now)
+	if err == nil {
+		t.Fatalf("open with schema version %d (one above the maximum) succeeded, want an error", tooNew)
+	}
+	if !errors.Is(err, ErrSchemaTooNew) {
+		t.Fatalf("error = %v, want it to wrap ErrSchemaTooNew", err)
 	}
 }
 
@@ -221,8 +294,8 @@ func TestMigrationV2MakesLWTObservedAtNullableAndPreservesData(t *testing.T) {
 	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d (maxMigrationVersion())", version, maxMigrationVersion())
 	}
 
 	rec, err := st.GetNode(context.Background(), "node-v1")
@@ -310,8 +383,8 @@ func TestMigrationV4WidensObservationsPrimaryKeyAndPreservesData(t *testing.T) {
 	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d (maxMigrationVersion())", version, maxMigrationVersion())
 	}
 
 	got, err := st.ListObservations(context.Background(), ObservationFilter{})
@@ -384,7 +457,7 @@ func TestMigrateRefusesNewerSchemaVersion(t *testing.T) {
 // A previous version of this test built its "v5 database" by opening it
 // through the normal [open] path and writing one principal through it —
 // which does not test a migration at all: [open] always brings a database
-// to len(migrations), so that "v5" database was already at v6 before the
+// to maxMigrationVersion(), so that "v5" database was already at v6 before the
 // principal row was ever written, and the "reopen" this test performed was
 // a v6-to-v6 no-op. Confirmed by mutation, not by reading: appending
 // `DELETE FROM principals; DELETE FROM audit_log;` to schemaV6 left the
@@ -518,8 +591,8 @@ func TestMigrationV6AddsSixTablesAndPreservesEveryV5Row(t *testing.T) {
 	if err := st.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d (maxMigrationVersion())", version, maxMigrationVersion())
 	}
 
 	nodeRec, err := st.GetNode(ctx, "node-v5")
@@ -633,8 +706,8 @@ func TestMigrationV6IsNoOpOnSecondOpen(t *testing.T) {
 	if err := st2.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d unchanged", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d unchanged", version, maxMigrationVersion())
 	}
 
 	rev, err := st2.GetConfigRevision(context.Background(), "fpp_endpoints", "default", 1)

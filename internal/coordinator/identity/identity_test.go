@@ -77,9 +77,9 @@ func TestRoleScopes(t *testing.T) {
 		want []Scope
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
-		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead}},
-		{RoleScheduler, []Scope{ScopeShowMacroRun}},
+		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeNightCommand}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead}},
+		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand}},
 	}
 	for _, tc := range cases {
 		got := tc.role.Scopes()
@@ -117,7 +117,10 @@ func TestRoleHas(t *testing.T) {
 		t.Errorf("RoleViewer.Has(principal:write) = true, want false")
 	}
 	if RoleScheduler.Has(ScopeNodeRead) {
-		t.Errorf("RoleScheduler.Has(node:read) = true, want false — scheduler holds only show:macro:run")
+		t.Errorf("RoleScheduler.Has(node:read) = true, want false — scheduler holds only show:macro:run and night:command")
+	}
+	if !RoleScheduler.Has(ScopeNightCommand) {
+		t.Errorf("RoleScheduler.Has(night:command) = false, want true (ADR-038 decision 1: FPP is the scheduler credential)")
 	}
 }
 

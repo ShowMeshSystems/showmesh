@@ -48,6 +48,24 @@ func cmdNight(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdNightActivate(rest, stdout, stderr, clock)
 	case "deactivate":
 		return cmdNightDeactivate(rest, stdout, stderr, clock)
+	case "status":
+		return cmdNightLifecycleStatus(rest, stdout, stderr, clock)
+	case "prepare-site":
+		return cmdNightPrepareSite(rest, stdout, stderr, clock)
+	case "readiness":
+		return cmdNightReadiness(rest, stdout, stderr, clock)
+	case "preshow":
+		return cmdNightPreshow(rest, stdout, stderr, clock)
+	case "start":
+		return cmdNightStart(rest, stdout, stderr, clock)
+	case "final-show":
+		return cmdNightFinalShow(rest, stdout, stderr, clock)
+	case "fade-out":
+		return cmdNightFadeOut(rest, stdout, stderr, clock)
+	case "power-down":
+		return cmdNightPowerDown(rest, stdout, stderr, clock)
+	case "end-session":
+		return cmdNightEndSession(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl night: unknown subcommand %q\n\n", sub)
 		printNightUsage(stderr)
@@ -83,6 +101,20 @@ Subcommands:
   deactivate        clear the active night session back to unset (write;
                      the zero-to-one-and-back-to-zero transition ADR-039
                      rule 4 requires)
+
+Lifecycle (RESTING-MODE.md, ADR-038 — the closed state machine and its
+seven commands; reads open, writes require night:command):
+  status            print the current night session's lifecycle state
+  prepare-site      open a new preparation epoch
+  readiness         run readiness for the current preparation epoch
+  preshow           enter the configured pre-show presentation
+  start             authorize the night and begin the first transition
+  final-show        close admission after one final complete show
+  fade-out          fade the active non-live presentation to stopped
+  power-down        close the session after playback and the fade stop
+  end-session       PROVISIONAL operator recovery: abandon the current
+                     session, reach stopped, launch nothing (the only
+                     command that runs against a degraded session)
 
 Run "showmeshctl night <subcommand> --help" for flags specific to one
 subcommand.

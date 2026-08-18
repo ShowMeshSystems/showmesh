@@ -631,6 +631,13 @@ func Run() int {
 		// other than always answer a "not configured" internal error
 		// against api.noDeclarationStore's no-op default.
 		Discovery: st,
+		// NightSessions is Track F seam F2's own dependency: *store.Store
+		// already satisfies api.NightSessionStore with no adapter — wiring
+		// it in is what makes GET /api/v1/night/session and
+		// POST /api/v1/night/commands/{command} do anything other than
+		// always report "no session" against api.noNightSessionStore's
+		// no-op default.
+		NightSessions: st,
 		// Nudger is the post-dispatch poll nudge's dependency (owner
 		// decision, 2026-08-13; api.FPPPollNudger's own doc comment has
 		// the full contract): fppRunnerNudger wraps the SAME
@@ -758,6 +765,14 @@ func Run() int {
 		logger.Warn("failed to reconcile stranded resolume actions at startup", "error", rerr)
 	} else if n > 0 {
 		logger.Warn("resolved resolume actions left stranded by a prior process", "count", n)
+	}
+
+	// Track F seam F2 invariant 4: an ambiguous restart never launches a
+	// show by guess — see api.ReconcileNightSessionOnStartup's own doc
+	// comment. Same synchronous, non-fatal, before-ListenAndServe shape as
+	// the three sweeps immediately above and for the identical reason.
+	if rerr := api.ReconcileNightSessionOnStartup(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile night session at startup", "error", rerr)
 	}
 
 	// fppHTTPClient and fppRunner were already constructed above (before

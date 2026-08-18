@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -523,15 +524,36 @@ func TestRetainedEvidenceRendersNullObservedAtAndUnknownAge(t *testing.T) {
 // render as a precomputed age) for a set of key-name substrings that would
 // indicate one snuck in.
 func TestNoPrecomputedAgeField(t *testing.T) {
-	api := buildTestAPI(t)
-	_, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", nil)
-
 	forbidden := []string{"secondsAgo", "ageSeconds", "\"age\"", "observedAgeSecs"}
-	for _, f := range forbidden {
-		if strings.Contains(string(body), f) {
-			t.Errorf("snapshot response contains forbidden precomputed-age field %q; body: %s", f, body)
+	assertNoPrecomputedAge := func(t *testing.T, label string, body []byte) {
+		t.Helper()
+		for _, f := range forbidden {
+			if strings.Contains(string(body), f) {
+				t.Errorf("%s response contains forbidden precomputed-age field %q; body: %s", label, f, body)
+			}
 		}
 	}
+
+	api := buildTestAPI(t)
+	_, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", nil)
+	assertNoPrecomputedAge(t, "snapshot", body)
+
+	// Track F seam F2 review finding 4: readiness.ageSeconds was a
+	// precomputed age (ADR-020 decision 6). Scan a POPULATED night
+	// session — one with a real readiness result and its checks — not
+	// only the empty/no-session case, which has nothing to hide behind.
+	nightAPI, _, token, _, obs := setupNightControlFixture(t, time.Hour)
+	setHealthyFPPReachable(obs, testNow)
+	mustNightCommand(t, nightAPI, token, "prepare-site")
+	readinessOut := mustNightCommand(t, nightAPI, token, "run-readiness")
+	readinessBody, err := json.Marshal(readinessOut)
+	if err != nil {
+		t.Fatalf("marshal readiness response for scanning: %v", err)
+	}
+	assertNoPrecomputedAge(t, "night/commands/run-readiness", readinessBody)
+
+	_, statusBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/session", nil)
+	assertNoPrecomputedAge(t, "night/session", statusBody)
 }
 
 // TestStaleObservationNeverReportsCurrent pins pkg/observation's own

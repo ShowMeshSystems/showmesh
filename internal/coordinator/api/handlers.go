@@ -70,6 +70,10 @@ type handlers struct {
 	fppCommandConfirmDeadline time.Duration
 	fppCommandPollInterval    time.Duration
 
+	// nightReadinessMaxAge backs Track F seam F2's nightsessioncontrol.go
+	// — see [Options.NightReadinessMaxAge]'s doc comment in api.go.
+	nightReadinessMaxAge time.Duration
+
 	// discoveryRunInFlight serializes POST /api/v1/discovery/runs
 	// (discovery.go's handleStartDiscoveryRun): a second concurrent run is
 	// refused with a 409, never queued — see that handler's own doc

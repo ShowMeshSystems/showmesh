@@ -15,9 +15,18 @@ import (
 var ErrSchemaTooNew = errors.New("store: database schema version is newer than this binary supports")
 
 // migration is one forward-only, transactionally-applied schema change.
-// Migrations are numbered contiguously from 1; the target schema version
-// (what migrate writes to PRAGMA user_version once every pending migration
-// has applied) is len(migrations).
+// Migrations are numbered contiguously from 1 for every version that has
+// ever shipped; the target schema version (what migrate writes to
+// PRAGMA user_version once every pending migration has applied) is the
+// MAXIMUM version value across every entry in [migrations], never the
+// slice's own length. Those two were identical for this project's entire
+// history up to Track F seam F2, because "contiguous from 1" made length
+// and maximum the same number by construction — until a branch legitimately
+// holds a real gap (a schema version reserved to a DIFFERENT, not-yet-merged
+// branch), at which point a count stops being a maximum: a slice of 9
+// entries whose versions are 1..8,10 has length 9 but maximum 10, and only
+// the maximum is safe to stamp — see [migrate]'s own doc comment for what
+// goes wrong if a count is stamped instead.
 type migration struct {
 	version int
 	sql     string
@@ -37,6 +46,7 @@ var migrations = []migration{
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
 	{version: 8, sql: schemaV8},
+	{version: 10, sql: schemaV10},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1049,14 +1059,116 @@ CREATE TABLE node_asset_reports (
 );
 `
 
+// schemaV10 is Track F seam F2's own migration: the night-session
+// lifecycle controller (RESTING-MODE.md, ADR-038) and its cue outbox
+// (filled by Track F seam F4). Reserved as "v10" in docs/build/
+// IDENTIFIER-REGISTER.md; "v9" is separately reserved to Track C and does
+// not exist in this worktree, so this branch's own migrations slice has a
+// deliberate gap at 9 — [migrate]'s target is the MAXIMUM version in the
+// slice, not its length, so a fresh database here is correctly stamped 10.
+// Any coordinator database created by a pre-merge branch binary (this one
+// or Track C's) must be discarded and recreated after the merge, never
+// migrated forward: once both migrations exist in one ordered slice, a
+// database already stamped 10 will never receive the version-9 entry
+// inserted ahead of it.
+//
+// night_sessions: one row per lifecycle session; a session's own id also
+// serves as its preparation epoch (RESTING-MODE.md §4.1). night_readiness_
+// results: one row per run-readiness call, never updated. night_cue_outbox
+// is Track F seam F4's table, created here only; its UNIQUE index on
+// (session_id, cycle, cue_name) is RESTING-MODE.md §7.1.1's own stable
+// invocation identity.
+const schemaV10 = `
+CREATE TABLE night_sessions (
+    id                       TEXT PRIMARY KEY,
+    config_object_id         TEXT NOT NULL,
+    config_revision          INTEGER NOT NULL,
+    state                    TEXT NOT NULL,
+    state_entered_at         TEXT NOT NULL,
+    readiness_id             TEXT NOT NULL DEFAULT '',
+    final_show_requested     INTEGER NOT NULL DEFAULT 0,
+    final_show_requested_at  TEXT,
+    admission_closed         INTEGER NOT NULL DEFAULT 0,
+    admission_closed_at      TEXT,
+    shutdown_intent          TEXT NOT NULL DEFAULT '',
+    cycle                    INTEGER NOT NULL DEFAULT 0,
+    content_anchor_json      TEXT NOT NULL DEFAULT '',
+    boundary_json            TEXT NOT NULL DEFAULT '',
+    armed_show_id            TEXT NOT NULL DEFAULT '',
+    show_committed           INTEGER NOT NULL DEFAULT 0,
+    power_phase              TEXT NOT NULL DEFAULT '',
+    degraded                 INTEGER NOT NULL DEFAULT 0,
+    degraded_reason          TEXT NOT NULL DEFAULT '',
+    prepare_site_idempotency_key TEXT NOT NULL DEFAULT '',
+    attribution_degraded     INTEGER NOT NULL DEFAULT 0,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
+);
+
+-- GetCurrentNightSession reads "the current session" as the most recently
+-- created row; this index is what keeps that query cheap as history grows.
+CREATE INDEX night_sessions_created_at ON night_sessions (created_at);
+
+-- Replay support for prepare-site (the only command that creates
+-- something new): a repeat with the same key returns the original
+-- session rather than minting a second one.
+CREATE UNIQUE INDEX night_sessions_prepare_idempotency
+    ON night_sessions (prepare_site_idempotency_key)
+    WHERE prepare_site_idempotency_key != '';
+
+CREATE TABLE night_readiness_results (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL,
+    epoch_id      TEXT NOT NULL,
+    completed_at  TEXT NOT NULL,
+    outcome       TEXT NOT NULL,
+    checks_json   TEXT NOT NULL
+);
+
+CREATE INDEX night_readiness_by_session ON night_readiness_results (session_id, completed_at);
+
+CREATE TABLE night_cue_outbox (
+    id                TEXT PRIMARY KEY,
+    session_id        TEXT NOT NULL,
+    cycle             INTEGER NOT NULL,
+    cue_name          TEXT NOT NULL,
+    action_revision   INTEGER NOT NULL,
+    state             TEXT NOT NULL,
+    dispatched_at     TEXT,
+    resolved_at       TEXT,
+    outcome           TEXT NOT NULL DEFAULT '',
+    outcome_reason    TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL
+);
+
+-- RESTING-MODE.md §7.1.1: "a stable cue invocation identity ... unique
+-- across (session, cycle, cue)" — the mechanism, not a nicety.
+CREATE UNIQUE INDEX night_cue_outbox_identity ON night_cue_outbox (session_id, cycle, cue_name);
+`
+
+// maxMigrationVersion is the maximum [migration.version] across
+// [migrations] — [migrate]'s own target. A maximum, not len(migrations):
+// the two agree only while no version number is ever skipped, and a gap
+// (this package's own schemaV10 entry skips 9) would let a count stamp
+// the wrong value, silently hiding a later-inserted migration behind
+// current == target. Factored out so tests assert against the exact
+// value migrate stamps.
+func maxMigrationVersion() int {
+	max := 0
+	for _, m := range migrations {
+		if m.version > max {
+			max = m.version
+		}
+	}
+	return max
+}
+
 // migrate applies every pending migration inside one transaction and
-// refuses (returning an error wrapping [ErrSchemaTooNew]) if db's current
-// schema version is already newer than this binary's newest known
-// migration. It is idempotent: calling it again once the database is
-// already at the newest known version is a no-op that opens no
-// transaction at all.
+// refuses (wrapping [ErrSchemaTooNew]) if db's current schema version is
+// newer than this binary's newest known migration. Idempotent: once the
+// database is at the newest known version, calling it again is a no-op.
 func migrate(ctx context.Context, db *sql.DB) error {
-	target := len(migrations)
+	target := maxMigrationVersion()
 
 	var current int
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
@@ -1087,8 +1199,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 
 	// PRAGMA statements do not accept bound parameters in SQLite; target is
-	// this package's own len(migrations), never external input, so building
-	// the statement with fmt.Sprintf is safe here.
+	// this package's own computed maximum migration version (see
+	// [migrate]'s own doc comment for why that is a maximum and not a
+	// count), never external input, so building the statement with
+	// fmt.Sprintf is safe here.
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, target)); err != nil {
 		return fmt.Errorf("store: set schema version: %w", err)
 	}
