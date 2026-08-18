@@ -124,20 +124,25 @@ func TestCapsFilterStagePinsPixelFormat(t *testing.T) {
 
 // TestFSEQSourceSpecUsesFdsrcAndRawvideoparse proves B3's real source stage
 // reads from this process's own stdin (fd=0) rather than generating content
-// itself (B2a's videotestsrc), that geometry/format/frameRate reach
-// rawvideoparse's argv untouched, and that fdsrcIsLive controls only
-// whether fdsrc's is-live property is emitted at all — GStreamer < 1.26
-// rejects the whole pipeline if it is ever present (see [ProbeFdsrcLive]'s
-// doc comment), so this input must be able to build both shapes with no
-// gst-launch-1.0 involved.
+// itself (B2a's videotestsrc), that geometry/frameRate reach rawvideoparse's
+// argv untouched, that fdsrcIsLive controls only whether fdsrc's is-live
+// property is emitted at all — GStreamer < 1.26 rejects the whole pipeline
+// if it is ever present (see [ProbeFdsrcLive]'s doc comment), so this input
+// must be able to build both shapes with no gst-launch-1.0 involved — and
+// that rawvideoparse's "format" property argv carries the lower-case
+// GstVideoFormat nick ("rgb"), not the upper-case caps spelling
+// ([Spec.PixelFormat] and [GstVideoFormatForPixelFormat] carry "RGB",
+// asserted separately below): MEASURED, gst-launch-1.0 1.24.2 rejects
+// rawvideoparse format=RGB as a property value (see gstVideoFormat's doc
+// comment).
 func TestFSEQSourceSpecUsesFdsrcAndRawvideoparse(t *testing.T) {
 	cases := []struct {
 		name        string
 		fdsrcIsLive bool
 		want        string
 	}{
-		{"is-live supported", true, "fdsrc fd=0 is-live=true ! rawvideoparse width=64 height=32 format=RGB framerate=40/1"},
-		{"is-live not supported", false, "fdsrc fd=0 ! rawvideoparse width=64 height=32 format=RGB framerate=40/1"},
+		{"is-live supported", true, "fdsrc fd=0 is-live=true ! rawvideoparse width=64 height=32 format=rgb framerate=40/1"},
+		{"is-live not supported", false, "fdsrc fd=0 ! rawvideoparse width=64 height=32 format=rgb framerate=40/1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

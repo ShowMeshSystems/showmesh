@@ -70,6 +70,59 @@ func ProbeVideoFormat(ctx context.Context, starter ProcessStarter, format string
 	return runProbe(ctx, starter, argv, genericUnavailableReason)
 }
 
+// probeFSEQGeometry is the throwaway width/height/frameRate
+// [ProbeFSEQSourceFormat] builds its [FSEQSourceSpec] with. Small enough
+// that one dummy frame is trivial to build and feed repeatedly, and
+// otherwise arbitrary: FSEQSourceSpec performs no scaling, so nothing about
+// whether the pipeline reaches PLAYING depends on the actual value.
+const (
+	probeFSEQWidth     = 4
+	probeFSEQHeight    = 4
+	probeFSEQFrameRate = 25
+)
+
+// probeFrameInterval is how often [ProbeFSEQSourceFormat] writes another
+// throwaway frame to the probe pipeline's stdin. fdsrc genuinely PREROLLs
+// (see [FSEQSourceSpec]'s fdsrc doc comment), so a probe of this exact
+// pipeline with nothing arriving on stdin would run out probeTimeout's
+// clock every time rather than proving anything, unlike ProbeVideoFormat's
+// self-terminating num-buffers pipeline. A var, not a const, for the same
+// probeTimeout reason: only probe_test.go shrinks it, to exercise the feed
+// loop in milliseconds.
+var probeFrameInterval = 20 * time.Millisecond
+
+// ProbeFSEQSourceFormat attempts a real NULL -> PLAYING transition of the
+// EXACT pipeline [FSEQSourceSpec] builds for pixelFormat — fdsrc and
+// rawvideoparse included, not a standalone capsfilter probe.
+//
+// This exists because [ProbeVideoFormat]'s caps-string probe and
+// FSEQSourceSpec's rawvideoparse "format" *property* need different
+// GStreamer spellings on GStreamer < 1.26 (see gstVideoFormat's doc
+// comment in spec.go): a caps probe succeeding was never evidence the real
+// render pipeline could be built. That gap let a node advertise
+// render.surface support for a pipeline that then failed to construct on
+// every subsequent apply — exactly the "compiles, passes tests, cannot be
+// reached" failure shape this project has found before, just this time in
+// the probe meant to catch it rather than in the thing being probed.
+func ProbeFSEQSourceFormat(ctx context.Context, starter ProcessStarter, pixelFormat string, fdsrcIsLive bool) ProbeResult {
+	spec, err := FSEQSourceSpec("probe", probeFSEQWidth, probeFSEQHeight, pixelFormat, probeFSEQFrameRate, fdsrcIsLive)
+	if err != nil {
+		return ProbeResult{Available: false, Reason: err.Error()}
+	}
+	argv, err := spec.BuildArgv()
+	if err != nil {
+		return ProbeResult{Available: false, Reason: err.Error()}
+	}
+
+	m, ok := gstVideoFormatsByPixelFormat[pixelFormat]
+	if !ok {
+		return ProbeResult{Available: false, Reason: "pipeline: no byte-size mapping for pixel format " + pixelFormat}
+	}
+	frame := make([]byte, probeFSEQWidth*probeFSEQHeight*m.bytesPerPixel)
+
+	return runProbeWithFeed(ctx, starter, argv, frame, genericUnavailableReason)
+}
+
 // ProbeFdsrcLive attempts a real NULL -> PLAYING transition of a throwaway
 // fdsrc(fd=0, is-live=true) -> fakesink pipeline, fd 0 left open and
 // unfed. fdsrc's is-live property was added upstream in GStreamer 1.26;
@@ -129,6 +182,17 @@ func resetFdsrcLiveProbeCache() {
 // is exactly what a first version of [ProbeFdsrcLive] did on a real
 // gst-launch-1.0 that had genuinely gone PLAYING.
 func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reasonFor func(stderrTail string) string) ProbeResult {
+	return runProbeWithFeed(ctx, starter, argv, nil, reasonFor)
+}
+
+// runProbeWithFeed is [runProbe] plus an optional stdin feed: when frame is
+// non-nil, it is written to the started process's stdin on
+// [probeFrameInterval] until the process reaches PLAYING, exits, or the
+// probe times out. [ProbeFSEQSourceFormat] is the only caller that needs
+// this — its pipeline's fdsrc genuinely PREROLLs waiting for a first
+// buffer, unlike every other probe in this file, which either has no
+// stdin-fed source or self-terminates via num-buffers.
+func runProbeWithFeed(ctx context.Context, starter ProcessStarter, argv []string, frame []byte, reasonFor func(stderrTail string) string) ProbeResult {
 	if starter == nil {
 		starter = startRealProcess
 	}
@@ -145,6 +209,25 @@ func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reason
 	proc, err := starter(ctx, path, argv, onRunning)
 	if err != nil {
 		return ProbeResult{Available: false, Reason: "starting gst-launch-1.0 for the probe: " + err.Error()}
+	}
+
+	if frame != nil {
+		stopFeed := make(chan struct{})
+		var feedDone sync.WaitGroup
+		feedDone.Add(1)
+		go func() {
+			defer feedDone.Done()
+			feedProbeFrames(proc, frame, sawMarker, stopFeed)
+		}()
+		// Waited on, not just signaled: probeFrameInterval is a
+		// package-level var mutated by probe_test.go between test cases,
+		// and returning while this goroutine might still be about to read
+		// it for the first time (time.NewTicker inside feedProbeFrames) is
+		// a data race a fire-and-forget close(stopFeed) does not close.
+		defer func() {
+			close(stopFeed)
+			feedDone.Wait()
+		}()
 	}
 
 	resultCh := make(chan ExitResult, 1)
@@ -171,6 +254,33 @@ func runProbe(ctx context.Context, starter ProcessStarter, argv []string, reason
 		_ = proc.Kill()
 		<-resultCh
 		return ProbeResult{Available: false, Reason: "probe canceled: " + ctx.Err().Error()}
+	}
+}
+
+// feedProbeFrames writes frame to proc's stdin every [probeFrameInterval]
+// until stop or sawMarker closes, or the write itself fails (the process
+// exited or closed its stdin). Errors are swallowed deliberately: the
+// caller's own select on resultCh/sawMarker/timer is the sole source of
+// truth for the probe's outcome, and a write failure here is not new
+// evidence — it is downstream of something that select will already see.
+func feedProbeFrames(proc ProcessHandle, frame []byte, sawMarker, stop <-chan struct{}) {
+	w, err := proc.Stdin()
+	if err != nil {
+		return
+	}
+	ticker := time.NewTicker(probeFrameInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-sawMarker:
+			return
+		case <-ticker.C:
+			if _, err := w.Write(frame); err != nil {
+				return
+			}
+		}
 	}
 }
 

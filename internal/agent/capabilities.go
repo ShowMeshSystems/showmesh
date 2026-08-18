@@ -77,26 +77,23 @@ func detectCapabilities(ctx context.Context) capability.Set {
 	return set
 }
 
-// detectRenderSurfaceFormats runs a real, throwaway videotestsrc ->
-// capsfilter -> fakesink pipeline per candidate show.surface pixel format
-// (mapped to its GStreamer caps string via
-// [pipeline.GstVideoFormatForPixelFormat]) and returns exactly the
-// show-vocabulary values that reached PLAYING — the same strings
-// render.surface.apply's own geometry.pixelFormat field carries, so a
-// value in this list is evidence the whole path (FSEQSourceSpec's mapping
-// plus this node's actual negotiation) works end to end, not just that
-// GStreamer recognizes a format render.surface.apply will never ask for.
+// detectRenderSurfaceFormats runs [pipeline.ProbeFSEQSourceFormat] per
+// candidate show.surface pixel format — the EXACT pipeline
+// render.surface.apply builds via [pipeline.FSEQSourceSpec], fdsrc and
+// rawvideoparse included — and returns exactly the show-vocabulary values
+// that reached PLAYING. This used to probe a standalone
+// videotestsrc->capsfilter->fakesink pipeline instead, which measures a
+// different GStreamer vocabulary (a caps string, not rawvideoparse's
+// "format" property — see spec.go's gstVideoFormat) and, on GStreamer
+// 1.24, succeeded while the real FSEQSourceSpec pipeline was rejected at
+// construction: a value in the list was not actually evidence the apply
+// path worked, contrary to what this comment used to claim. Probing the
+// real Spec is what makes the claim true.
 func detectRenderSurfaceFormats(ctx context.Context) []string {
+	fdsrcIsLive := pipeline.FdsrcSupportsIsLive(nil)
 	var ok []string
 	for _, showFormat := range candidateShowPixelFormats {
-		gstFormat, mapped := pipeline.GstVideoFormatForPixelFormat(showFormat)
-		if !mapped {
-			// Would only happen if this list drifted out of sync with
-			// GstVideoFormatForPixelFormat's own switch; skip rather than
-			// probe a format string that function does not recognize.
-			continue
-		}
-		if pipeline.ProbeVideoFormat(ctx, nil, gstFormat).Available {
+		if pipeline.ProbeFSEQSourceFormat(ctx, nil, showFormat, fdsrcIsLive).Available {
 			ok = append(ok, showFormat)
 		}
 	}

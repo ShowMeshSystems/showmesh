@@ -172,12 +172,36 @@ func DefaultTestPatternSpec(surfaceID string) Spec {
 	}
 }
 
+// gstVideoFormat carries both GStreamer spellings of one raw-video format:
+// GStreamer names a format two different ways depending on where it is
+// used. A caps string (video/x-raw,format=...) wants the upper-case
+// GstVideoFormat enum name; an element property of GstVideoFormat type
+// wants the enum's lower-case nick. MEASURED, ubuntu:24.04's
+// gst-launch-1.0 1.24.2: rawvideoparse's "format" property rejects
+// format=RGB ("could not set property") and accepts format=rgb; 1.28.6
+// tolerates both, which is why this went undetected until CI ran on an
+// older GStreamer. bytesPerPixel is carried alongside for
+// [ProbeFSEQSourceFormat], which needs to hand the real pipeline a
+// correctly sized dummy frame. Every format this package supports is
+// listed exactly once here — adding one (e.g. rgbw) means filling in all
+// three fields, not picking one spelling and hoping it is also the other.
+type gstVideoFormat struct {
+	caps          string
+	propertyNick  string
+	bytesPerPixel int
+}
+
+var gstVideoFormatsByPixelFormat = map[string]gstVideoFormat{
+	"rgb": {caps: "RGB", propertyNick: "rgb", bytesPerPixel: 3},
+}
+
 // GstVideoFormatForPixelFormat maps a show.surface.geometry.pixelFormat
 // value (config.ShowSurfacePixelFormatRGB / ...RGBW) to a GStreamer
-// video/x-raw "format" string. ok is false for an unrecognized input,
-// including rgbw — GStreamer's raw-video format registry has no packed
-// 4-byte-per-pixel RGBW format, so B3 does not invent a mapping for it;
-// see FSEQSourceSpec's doc comment for the consequence.
+// video/x-raw caps "format" string, for [CapsFilterStage] and
+// [ProbeVideoFormat]'s caps-based probe. ok is false for an unrecognized
+// input, including rgbw — GStreamer's raw-video format registry has no
+// packed 4-byte-per-pixel RGBW format, so B3 does not invent a mapping for
+// it; see FSEQSourceSpec's doc comment for the consequence.
 //
 // SHOWMESH HYPOTHESIS, NOT MEASURED: "RGB" is chosen because it is a
 // direct, unconverted byte-for-byte copy of what an rgb-format FSEQ frame
@@ -186,12 +210,21 @@ func DefaultTestPatternSpec(surfaceID string) Spec {
 // format where possible" guidance is a placement decision for whoever adds
 // the sink stage (B4), not this function's job.
 func GstVideoFormatForPixelFormat(pixelFormat string) (format string, ok bool) {
-	switch pixelFormat {
-	case "rgb":
-		return "RGB", true
-	default:
-		return "", false
-	}
+	m, ok := gstVideoFormatsByPixelFormat[pixelFormat]
+	return m.caps, ok
+}
+
+// gstVideoFormatPropertyNickForPixelFormat maps a
+// show.surface.geometry.pixelFormat value to the lower-case nick
+// rawvideoparse's GstVideoFormat-typed "format" property wants — see
+// [gstVideoFormat]'s doc comment for why this is not [GstVideoFormatForPixelFormat].
+// Unexported: FSEQSourceSpec is the only caller that ever emits this
+// property, and [ProbeFSEQSourceFormat] reaches it by building the same
+// Spec rather than by calling this function a second time, so a probe can
+// never drift from what the real pipeline sends.
+func gstVideoFormatPropertyNickForPixelFormat(pixelFormat string) (nick string, ok bool) {
+	m, ok := gstVideoFormatsByPixelFormat[pixelFormat]
+	return m.propertyNick, ok
 }
 
 // FSEQSourceSpec builds a surface's real pipeline: a source stage reading
@@ -220,6 +253,13 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 	gstFormat, ok := GstVideoFormatForPixelFormat(pixelFormat)
 	if !ok {
 		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known GStreamer raw-video mapping", surfaceID, pixelFormat)
+	}
+	formatNick, ok := gstVideoFormatPropertyNickForPixelFormat(pixelFormat)
+	if !ok {
+		// Unreachable while both maps are built from the same table above,
+		// but this function never trusts that invariant silently — see the
+		// identical guard's reasoning in detectRenderSurfaceFormats.
+		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known GStreamer property-nick mapping", surfaceID, pixelFormat)
 	}
 	if width < 1 || height < 1 {
 		return Spec{}, fmt.Errorf("pipeline: surface %q: geometry %dx%d is invalid", surfaceID, width, height)
@@ -265,11 +305,17 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 						// on stdin into framed video/x-raw buffers at
 						// exactly this surface's geometry; it does no
 						// scaling or conversion of its own.
+						//
+						// "format" below is an element PROPERTY, not a caps
+						// string, so it takes formatNick (the lower-case
+						// GstVideoFormat nick) rather than gstFormat -- see
+						// gstVideoFormat above for the measured GStreamer
+						// 1.24.2 rejection this distinction fixes.
 						Factory: "rawvideoparse",
 						Properties: []Property{
 							{Key: "width", Value: fmt.Sprintf("%d", width)},
 							{Key: "height", Value: fmt.Sprintf("%d", height)},
-							{Key: "format", Value: gstFormat},
+							{Key: "format", Value: formatNick},
 							{Key: "framerate", Value: fmt.Sprintf("%d/1", frameRate)},
 						},
 					},

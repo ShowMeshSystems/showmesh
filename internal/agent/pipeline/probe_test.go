@@ -229,6 +229,104 @@ func TestProbeVideoFormatBuildsCapsFilterForRequestedFormat(t *testing.T) {
 	}
 }
 
+// TestProbeFSEQSourceFormatBuildsRawvideoparsePropertyNickNotCaps is the
+// regression test for the defect this seam fixed: ProbeVideoFormat's argv
+// (a capsfilter caps string, upper-case correct) is not the argv
+// FSEQSourceSpec actually emits for rawvideoparse's "format" property
+// (lower-case nick required — see gstVideoFormat in spec.go). This asserts
+// ProbeFSEQSourceFormat's argv is the real FSEQSourceSpec shape, not a
+// stand-in: fdsrc/rawvideoparse present and format=rgb, never format=RGB.
+func TestProbeFSEQSourceFormatBuildsRawvideoparsePropertyNickNotCaps(t *testing.T) {
+	withResolvedGstLaunch(t)
+	fs := &fakeStarter{onStart: func(p *fakeProcess, _ func()) {
+		p.exitNow(ExitResult{SawRunningMarker: true, ExitCode: intPtr(0)})
+	}}
+
+	got := ProbeFSEQSourceFormat(context.Background(), fs.Start, "rgb", true)
+	if !got.Available {
+		t.Fatalf("Available = false, want true; reason = %q", got.Reason)
+	}
+	argv := fs.calls[0].argv
+	if !containsArg(argv, "fdsrc") || !containsArg(argv, "rawvideoparse") {
+		t.Fatalf("argv = %v, want the real FSEQSourceSpec shape (fdsrc ! rawvideoparse ...), not a standalone capsfilter probe", argv)
+	}
+	if !containsArg(argv, "format=rgb") {
+		t.Errorf("argv = %v, want rawvideoparse's format PROPERTY as the lower-case nick \"rgb\", never the caps spelling \"RGB\"", argv)
+	}
+	if containsArg(argv, "format=RGB") {
+		t.Errorf("argv = %v, contains format=RGB: this is exactly the bug this test guards against (rawvideoparse rejects it as a property on GStreamer < 1.26)", argv)
+	}
+}
+
+// TestProbeFSEQSourceFormatFeedsStdinUntilMarker proves ProbeFSEQSourceFormat
+// actually feeds frame bytes to the process's stdin while waiting for
+// PLAYING — FSEQSourceSpec's fdsrc genuinely PREROLLs with nothing on
+// stdin, so a probe of this exact pipeline that never writes anything would
+// hang every time until probeTimeout, never proving the pipeline works.
+func TestProbeFSEQSourceFormatFeedsStdinUntilMarker(t *testing.T) {
+	withResolvedGstLaunch(t)
+	prev := probeFrameInterval
+	probeFrameInterval = time.Millisecond
+	t.Cleanup(func() { probeFrameInterval = prev })
+
+	var proc *fakeProcess
+	fs := &fakeStarter{onStart: func(p *fakeProcess, onRunningMarker func()) {
+		proc = p
+		// Fire the marker only after this fake process has actually
+		// received at least one fed frame, so a false pass (marker firing
+		// with an empty feed loop) cannot happen.
+		go func() {
+			for {
+				if len(p.stdinSnapshot()) > 0 {
+					onRunningMarker()
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}}
+
+	got := ProbeFSEQSourceFormat(context.Background(), fs.Start, "rgb", true)
+	if !got.Available {
+		t.Fatalf("Available = false, want true; reason = %q", got.Reason)
+	}
+	if len(proc.stdinSnapshot()) == 0 {
+		t.Fatalf("no bytes were ever written to the probe process's stdin")
+	}
+}
+
+// TestProbeFSEQSourceFormatUnrecognizedPixelFormat proves an unmapped pixel
+// format is refused before any process is started, matching
+// FSEQSourceSpec's own refusal — never a probe that silently guesses.
+func TestProbeFSEQSourceFormatUnrecognizedPixelFormat(t *testing.T) {
+	withResolvedGstLaunch(t)
+	fs := &fakeStarter{}
+
+	got := ProbeFSEQSourceFormat(context.Background(), fs.Start, "rgbw", true)
+	if got.Available {
+		t.Fatalf("Available = true, want false: rgbw has no known GStreamer raw-video mapping")
+	}
+	if fs.callCount() != 0 {
+		t.Errorf("callCount = %d, want 0: an unrecognized pixel format must never start a process", fs.callCount())
+	}
+}
+
+// TestProbeFSEQSourceFormatRealMachine runs ProbeFSEQSourceFormat against
+// the REAL gst-launch-1.0 on whatever machine this test executes on,
+// matching TestProbeFdsrcLiveRealMachine's shape. "rgb" is expected
+// Available on any GStreamer install this project targets — this is the
+// same argv render.surface.apply itself builds.
+func TestProbeFSEQSourceFormatRealMachine(t *testing.T) {
+	requireGstLaunch(t)
+
+	got := ProbeFSEQSourceFormat(context.Background(), nil, "rgb", FdsrcSupportsIsLive(nil))
+	t.Logf("ProbeFSEQSourceFormat(rgb) on this machine: Available=%v Reason=%q", got.Available, got.Reason)
+
+	if !got.Available {
+		t.Errorf("Available = false, want true for \"rgb\" on this project's target GStreamer versions; reason = %q", got.Reason)
+	}
+}
+
 // capturingHandle wraps a real [ProcessHandle] and records its ExitResult
 // into out, so a test can inspect the raw captured stderr a real
 // gst-launch-1.0 process actually produced — the same result ProbeNDISend
