@@ -264,6 +264,47 @@ listed because the last row was minted after the others had shipped:
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 
+**Track C's `audio_session.*` signals**, reserved 2026-08-18 for seams C3
+and C4 before either was written, so two seams cannot mint overlapping
+names for one session's state. All are on the `audio_session` resource
+kind, resource id the session id:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.state` | reserved | Track C seam C3 |
+| `audio_session.reason` | reserved | Track C seam C3 |
+| `audio_session.source_role` | reserved | Track C seam C3 |
+| `audio_session.media.asset_id` | reserved | Track C seam C3 |
+| `audio_session.media.content_hash` | reserved | Track C seam C3 |
+| `audio_session.position_ms` | reserved | Track C seam C3 |
+| `audio_session.reference_position_ms` | reserved | Track C seam C3 |
+| `audio_session.drift_ms` | reserved | Track C seam C3 |
+| `audio_session.desired_revision` | reserved | Track C seam C3 |
+| `audio_session.playlist.revision` | reserved | Track C seam C3 |
+| `audio_session.playlist.item_id` | reserved | Track C seam C3 |
+| `audio_session.playlist.item_index` | reserved | Track C seam C3 |
+| `audio_session.playlist.repeat` | reserved | Track C seam C3 |
+| `audio_session.readiness.state` | reserved | Track C seam C2 |
+| `audio_session.readiness.reason` | reserved | Track C seam C2 |
+| `audio_session.gain.effective` | reserved | Track C seam C4 |
+| `audio_session.gain.ceiling` | reserved | Track C seam C4 |
+| `audio_session.fade.state` | reserved | Track C seam C4 |
+| `audio_session.mix.state` | reserved | Track C seam C4 |
+| `audio_session.last_outcome` | reserved | Track C seam C3 |
+| `audio_session.last_outcome_reason` | reserved | Track C seam C3 |
+
+**`drift_ms` is reported, never acted on continuously.** ADR-017 makes
+audio's divergence from the MultiSync slew/jump model deliberate: the
+signal exists so the threshold can be set from measurement, and a future
+reader who "fixes" audio to chase it has reintroduced the defect the ADR
+exists to prevent.
+
+**A probe result is a command outcome, not an observation.**
+`audio.media.probe` answers about an asset, which is not a session and has
+no resource of its own; only a session's own readiness becomes an
+observation, which is why the two readiness rows above are the seam C2
+entries and there are no node-level probe signals.
+
 **Four rows above were wrong until 2026-08-17 and the review caught it.** The
 register recorded `surface.reason`, `surface.restart.count` and
 `surface.consecutive.failures` while the code shipped
