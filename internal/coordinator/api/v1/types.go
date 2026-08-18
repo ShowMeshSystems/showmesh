@@ -893,6 +893,132 @@ type FPPEndpointsConfigResponse struct {
 	RestartRequiredReason  string                    `json:"restartRequiredReason"`
 }
 
+// ConfigResolumeInstance is one element of
+// [ConfigResolumeInstancesPayload.Instances]: one Resolume Arena instance's
+// (id, url) pair, mirroring [ConfigFPPEndpoint]'s identical shape. The
+// payload stays a list — [ResolumeInstancesConfigResponse]'s own doc
+// comment says why — even though Track G seam G-2 enforces at most one
+// element at write time.
+type ConfigResolumeInstance struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// ConfigResolumeInstancesPayload is the "resolume.instances" configuration
+// kind's decoded payload (Track G seam G-2, ADR-039): the body PUT
+// /config/resolume.instances accepts, and the "payload" member of GET
+// /config/resolume.instances' response. Instances is never null on the
+// wire — zero configured Resolume instances is a real, valid state, not an
+// absence.
+type ConfigResolumeInstancesPayload struct {
+	Instances []ConfigResolumeInstance `json:"instances"`
+}
+
+// ResolumeInstancesConfigResponse is the body of GET and PUT
+// /config/resolume.instances, mirroring [FPPEndpointsConfigResponse]'s
+// shape exactly, including the list-shaped payload: this list holds at
+// most one element today and stays a list (api/interfaces.go's
+// ResolumeLister doc comment already commits GET /resolume/instances to
+// the identical convention) — the limit lives in validation, never in the
+// schema, matching ADR-026's "N surfaces implemented at N=1".
+//
+// RestartRequired is always false: the coordinator's collector set follows
+// this configuration within about ten seconds with no restart (Track G
+// seam G-2 applies ADR-036 to this kind exactly as fpp.endpoints already
+// has it). The field stays on the wire for the identical additive-only
+// reason [FPPEndpointsConfigResponse.RestartRequired] does.
+//
+// CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
+// the startup env->store migration creates (Source "env_migration"): a
+// startup migration has no principal — see
+// internal/coordinator's resolumeinstancessync.go.
+type ResolumeInstancesConfigResponse struct {
+	ServerTime             string                         `json:"serverTime"`
+	Kind                   string                         `json:"kind"`
+	Revision               int64                          `json:"revision"`
+	Payload                ConfigResolumeInstancesPayload `json:"payload"`
+	UpdatedAt              string                         `json:"updatedAt"`
+	CreatedByPrincipalID   *string                        `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                        `json:"createdByPrincipalName"`
+	Source                 string                         `json:"source"`
+	RestartRequired        bool                           `json:"restartRequired"`
+	RestartRequiredReason  string                         `json:"restartRequiredReason"`
+}
+
+// ConfigFPPMQTTPayload is the "fpp.mqtt" configuration kind's decoded
+// payload (Track G seam G-3, ADR-039): the "payload" member of GET and PUT
+// /config/fpp.mqtt's response. PasswordSet reports presence only — the
+// password itself never appears on this or any other wire type (ADR-039
+// decision 7). Hosts is never null on the wire.
+type ConfigFPPMQTTPayload struct {
+	BrokerURL   string            `json:"brokerURL"`
+	Username    string            `json:"username"`
+	TopicPrefix string            `json:"topicPrefix"`
+	Hosts       map[string]string `json:"hosts"`
+	PasswordSet bool              `json:"passwordSet"`
+}
+
+// FPPMQTTConfigResponse is the body of GET and PUT /config/fpp.mqtt,
+// mirroring [FPPEndpointsConfigResponse]'s shape. RestartRequired is
+// always false: this configuration applies without a restart from the
+// start (ADR-036 via ADR-039 decision 6).
+type FPPMQTTConfigResponse struct {
+	ServerTime             string               `json:"serverTime"`
+	Kind                   string               `json:"kind"`
+	Revision               int64                `json:"revision"`
+	Payload                ConfigFPPMQTTPayload `json:"payload"`
+	UpdatedAt              string               `json:"updatedAt"`
+	CreatedByPrincipalID   *string              `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string              `json:"createdByPrincipalName"`
+	Source                 string               `json:"source"`
+	RestartRequired        bool                 `json:"restartRequired"`
+	RestartRequiredReason  string               `json:"restartRequiredReason"`
+}
+
+// ConfigAssetsSettingsPayload is the "assets.settings" configuration kind's
+// decoded payload (Track G seam G-4, ADR-039): the body PUT
+// /config/assets.settings accepts, and the "payload" member of GET
+// /config/assets.settings' response. Every field is optional on a PUT
+// request body (absent means "leave the stored value alone" — ADR-039
+// decision 5); on a response every field is always present. Durations are
+// seconds, matching this contract's existing "...Seconds" convention (e.g.
+// ObservationEvidence.ValidForSeconds) rather than a Go duration string —
+// FLOAT64, not an integer, mirroring ResolumeRecoveryResponse.
+// SettleDelaySeconds' identical choice one seam over: an integer-second
+// encoding silently truncates a legitimate sub-second interval to zero.
+type ConfigAssetsSettingsPayload struct {
+	ContentBaseURL           string  `json:"contentBaseUrl"`
+	MaxUploadBytes           int64   `json:"maxUploadBytes"`
+	SyncIntervalSeconds      float64 `json:"syncIntervalSeconds"`
+	InventoryIntervalSeconds float64 `json:"inventoryIntervalSeconds"`
+}
+
+// AssetsSettingsConfigResponse is the body of GET and PUT
+// /config/assets.settings, mirroring [ResolumeInstancesConfigResponse]'s
+// shape exactly (env->store migration, singleton object, no-restart apply).
+//
+// RestartRequired is always false: every field of this kind applies to the
+// already-running asset sync service with no restart (ADR-039 decision 6,
+// Track G seam G-4). The field stays on the wire for the identical
+// additive-only reason [FPPEndpointsConfigResponse.RestartRequired] does.
+//
+// CreatedByPrincipalID/CreatedByPrincipalName are null for the one revision
+// the startup env->store migration creates (Source "env_migration"): a
+// startup migration has no principal — see
+// internal/coordinator's assetsettingssync.go.
+type AssetsSettingsConfigResponse struct {
+	ServerTime             string                      `json:"serverTime"`
+	Kind                   string                      `json:"kind"`
+	Revision               int64                       `json:"revision"`
+	Payload                ConfigAssetsSettingsPayload `json:"payload"`
+	UpdatedAt              string                      `json:"updatedAt"`
+	CreatedByPrincipalID   *string                     `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                     `json:"createdByPrincipalName"`
+	Source                 string                      `json:"source"`
+	RestartRequired        bool                        `json:"restartRequired"`
+	RestartRequiredReason  string                      `json:"restartRequiredReason"`
+}
+
 // ConfigRevisionMeta is one element of [ConfigRevisionsResponse.Revisions]:
 // a config_revisions row's metadata, WITHOUT its payload — the revisions
 // list is for browsing history (which revision, when, by whom, from what

@@ -22,22 +22,39 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  AssetsSettingsConfigResponse,
+  ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
+  ConfigFPPMQTTPutRequest,
   ConfigRenderSettingsPayload,
+  ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
   ConfigShowAction,
+  ConfigShowActive,
   ConfigShowMacro,
+  ConfigShowSurface,
+  ConfigShowWrite,
+  CreatePrincipalRequest,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
+  FPPMQTTConfigResponse,
+  IssueTokenRequest,
+  IssueTokenResponse,
   Model,
+  PrincipalResponse,
+  PrincipalsResponse,
   RenderCommandResult,
   RenderSettingsConfigResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
+  ResolumeInstancesConfigResponse,
   ResolumeRecoveryConfigResponse,
   ResolumeRecoveryResponse,
   ResolumeRecoveryRestoreResponse,
+  SetPrincipalPasswordRequest,
+  SetPrincipalRoleRequest,
+  TokensResponse,
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
@@ -55,6 +72,14 @@ type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse'
 type SchemaResolumeInstancesResponse = components['schemas']['ResolumeInstancesResponse']
 type SchemaResolumeInstanceResponse = components['schemas']['ResolumeInstanceResponse']
 type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
+// Track G seam G-8: the Operator UI for Track E.
+type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
+type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+type SchemaAssetResponse = components['schemas']['AssetResponse']
+type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
+type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
+type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaAuditResponse = components['schemas']['AuditResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -104,6 +129,59 @@ export function putFPPEndpointsConfig(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// Track G seam G-2 (ADR-039): the same thin pass-through pattern, for the
+// resolume.instances configuration write surface.
+export function getResolumeInstancesConfig(): Promise<ResolumeInstancesConfigResponse> {
+  return store.getResolumeInstancesConfig()
+}
+
+export function putResolumeInstancesConfig(
+  payload: ConfigResolumeInstancesPayload,
+): Promise<ResolumeInstancesConfigResponse> {
+  return store.putResolumeInstancesConfig(payload)
+}
+
+export function getResolumeInstancesConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getResolumeInstancesConfigRevisions()
+}
+
+// Track G seam G-3 (ADR-039): the same thin pass-through pattern, for the
+// fpp.mqtt configuration write surface. putFPPMQTTConfig's request shape
+// is ConfigFPPMQTTPutRequest, not ConfigFPPMQTTPayload — every field is
+// independently optional (decision 5), unlike every other config kind's
+// PUT here.
+export function getFPPMQTTConfig(): Promise<FPPMQTTConfigResponse> {
+  return store.getFPPMQTTConfig()
+}
+
+export function putFPPMQTTConfig(
+  request: ConfigFPPMQTTPutRequest,
+): Promise<FPPMQTTConfigResponse> {
+  return store.putFPPMQTTConfig(request)
+}
+
+export function getFPPMQTTConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPMQTTConfigRevisions()
+}
+
+// Track G seam G-4 (ADR-039): the same thin pass-through pattern, for the
+// assets.settings configuration write surface. putAssetsSettingsConfig's
+// payload is the SEPARATE PutPayload type — every field optional, unlike
+// AssetsSettingsConfigResponse's own always-fully-populated payload.
+export function getAssetsSettingsConfig(): Promise<AssetsSettingsConfigResponse> {
+  return store.getAssetsSettingsConfig()
+}
+
+export function putAssetsSettingsConfig(
+  payload: ConfigAssetsSettingsPutPayload,
+): Promise<AssetsSettingsConfigResponse> {
+  return store.putAssetsSettingsConfig(payload)
+}
+
+export function getAssetsSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getAssetsSettingsConfigRevisions()
 }
 
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
@@ -220,9 +298,10 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show.surface',
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+  show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
-  return store.listConfigObjects(kind)
+  return store.listConfigObjects(kind, show)
 }
 
 // Server-side node filter (GET /config/show.surface?node=) — see
@@ -338,4 +417,109 @@ export function setResolumeLayerBypass(layer: string, bypassed: boolean): Promis
 
 export function setResolumeLayerMaster(layer: string, master: number): Promise<ResolumeActionResult> {
   return store.setResolumeLayerMaster(layer, master)
+}
+
+// -- Track G seam G-5: identity administration over the API -------------
+
+export function listPrincipals(): Promise<PrincipalsResponse> {
+  return store.listPrincipals()
+}
+
+export function createPrincipal(payload: CreatePrincipalRequest): Promise<PrincipalResponse> {
+  return store.createPrincipal(payload)
+}
+
+export function setPrincipalRole(id: string, payload: SetPrincipalRoleRequest): Promise<PrincipalResponse> {
+  return store.setPrincipalRole(id, payload)
+}
+
+export function disablePrincipal(id: string): Promise<PrincipalResponse> {
+  return store.disablePrincipal(id)
+}
+
+export function enablePrincipal(id: string): Promise<PrincipalResponse> {
+  return store.enablePrincipal(id)
+}
+
+export function resetPrincipalPassword(id: string, payload: SetPrincipalPasswordRequest): Promise<PrincipalResponse> {
+  return store.resetPrincipalPassword(id, payload)
+}
+
+export function listPrincipalTokens(id: string): Promise<TokensResponse> {
+  return store.listPrincipalTokens(id)
+}
+
+export function issuePrincipalToken(id: string, payload: IssueTokenRequest): Promise<IssueTokenResponse> {
+  return store.issuePrincipalToken(id, payload)
+}
+
+export function revokePrincipalToken(id: string, tokenId: string): Promise<void> {
+  return store.revokePrincipalToken(id, tokenId)
+}
+
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028). Same thin pass-through pattern as every method above.
+
+export function getShow(id: string): Promise<SchemaShowConfigResponse> {
+  return store.getShow(id)
+}
+
+export function putShow(id: string, payload: ConfigShowWrite): Promise<SchemaShowConfigResponse> {
+  return store.putShow(id, payload)
+}
+
+export function getShowRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowRevisions(id)
+}
+
+export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {
+  return store.putShowSurface(id, payload)
+}
+
+export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowSurfaceRevisions(id)
+}
+
+export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {
+  return store.getShowActive()
+}
+
+export function putShowActive(payload: ConfigShowActive): Promise<SchemaShowActiveConfigResponse> {
+  return store.putShowActive(payload)
+}
+
+export function getShowActiveRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getShowActiveRevisions()
+}
+
+export function listAssets(filter?: {
+  show?: string
+  sequence?: string
+  node?: string
+}): Promise<SchemaAssetsListResponse> {
+  return store.listAssets(filter)
+}
+
+export function uploadAsset(
+  file: File,
+  fields: { show: string; sequence: string; mediaType: 'fseq' | 'audio' | 'media'; targetKind: 'node' | 'show'; target?: string },
+  onProgress: (progress: UploadProgress) => void,
+): Promise<SchemaAssetResponse> {
+  return store.uploadAsset(file, fields, onProgress)
+}
+
+export function assetContentUrl(id: string): string {
+  return store.assetContentUrl(id)
+}
+
+export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
+  return store.getAssetManifest()
+}
+
+export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
+  return store.getNodeAssetManifest(nodeId)
+}
+
+export function listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+  return store.listAudit(filter)
 }

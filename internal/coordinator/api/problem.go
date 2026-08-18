@@ -371,6 +371,113 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 	}
 }
 
+// resolumeInstancesEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s
+// mirror for Track G seam G-2 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/resolume.instances with 409 while SHOWMESH_RESOLUME_URL is
+// still set, for the identical reason — a write accepted now cannot
+// survive this coordinator's own next restart.
+func resolumeInstancesEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: SHOWMESH_RESOLUME_URL is still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because SHOWMESH_RESOLUME_URL is still set in this coordinator's environment " +
+			"— accepting it now would conflict with that variable on the next restart. Remove SHOWMESH_RESOLUME_URL " +
+			"and SHOWMESH_RESOLUME_ID and restart this coordinator once, then retry.",
+	}
+}
+
+// resolumeInstancesMigrationDeferredProblem is
+// [fppEndpointsMigrationDeferredProblem]'s mirror: the standard remedy
+// above is not safe while the startup migration is deferred, because no
+// store configuration exists yet — removing the variable and restarting
+// would resolve this coordinator to zero Resolume instances.
+func resolumeInstancesMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of SHOWMESH_RESOLUME_URL was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID migration could not be " +
+			"saved on this boot, so the store holds no resolume.instances configuration yet. Do NOT remove " +
+			"SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID — they are currently the only copy of this coordinator's " +
+			"Resolume instance. Check the coordinator's data volume (often full, read-only, or damaged) and restart; " +
+			"the migration retries on every boot. Once it succeeds, remove the variables and retry.",
+	}
+}
+
+// fppMQTTEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s mirror for
+// Track G seam G-3 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/fpp.mqtt with 409 while SHOWMESH_FPP_MQTT_BROKER_URL is
+// still set, for the identical reason — a write accepted now cannot
+// survive this coordinator's own next restart.
+func fppMQTTEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: SHOWMESH_FPP_MQTT_BROKER_URL is still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because SHOWMESH_FPP_MQTT_BROKER_URL is still set in this coordinator's " +
+			"environment — accepting it now would conflict with that variable on the next restart. Remove " +
+			"SHOWMESH_FPP_MQTT_BROKER_URL, SHOWMESH_FPP_MQTT_USERNAME, SHOWMESH_FPP_MQTT_PASSWORD, " +
+			"SHOWMESH_FPP_MQTT_TOPIC_PREFIX, and SHOWMESH_FPP_MQTT_HOSTS and restart this coordinator once, then retry.",
+	}
+}
+
+// fppMQTTMigrationDeferredProblem is [fppEndpointsMigrationDeferredProblem]'s
+// mirror: the standard remedy above is not safe while the startup
+// migration is deferred, because no store configuration exists yet —
+// removing the variables and restarting would resolve this coordinator to
+// an unconfigured fpp.mqtt collector.
+func fppMQTTMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of SHOWMESH_FPP_MQTT_BROKER_URL was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_FPP_MQTT_* migration could not be saved on this boot, " +
+			"so the store holds no fpp.mqtt configuration yet. Do NOT remove SHOWMESH_FPP_MQTT_* — they are " +
+			"currently the only copy of this coordinator's FPP MQTT configuration. Check the coordinator's data " +
+			"volume (often full, read-only, or damaged) and restart; the migration retries on every boot. Once it " +
+			"succeeds, remove the variables and retry.",
+	}
+}
+
+// assetsSettingsEnvVarSetProblem is [fppEndpointsEnvVarSetProblem]'s mirror
+// for Track G seam G-4 (ADR-039 decision 4): refuses PUT
+// /api/v1/config/assets.settings with 409 while any of the four
+// SHOWMESH_ASSET_* settings variables is still set, for the identical
+// reason — a write accepted now cannot survive this coordinator's own next
+// restart.
+func assetsSettingsEnvVarSetProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: one or more SHOWMESH_ASSET_* settings variables are still set",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because one or more of SHOWMESH_ASSET_CONTENT_BASE_URL, " +
+			"SHOWMESH_ASSET_MAX_UPLOAD_BYTES, SHOWMESH_ASSET_SYNC_INTERVAL, or SHOWMESH_ASSET_INVENTORY_INTERVAL is " +
+			"still set in this coordinator's environment — accepting it now would conflict with those variables on " +
+			"the next restart. Remove all four from your environment (SHOWMESH_ASSET_DIR is unaffected — it stays " +
+			"environment-only) and restart this coordinator once, then retry.",
+	}
+}
+
+// assetsSettingsMigrationDeferredProblem is
+// [resolumeInstancesMigrationDeferredProblem]'s mirror: the standard remedy
+// above is not safe while the startup migration is deferred, because no
+// store configuration exists yet — removing the variables and restarting
+// would resolve this coordinator to config.DefaultAssetSettings rather than
+// to what it is actually using right now.
+func assetsSettingsMigrationDeferredProblem() v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Configuration write refused: the startup migration of the SHOWMESH_ASSET_* settings variables was deferred",
+		Status: http.StatusConflict,
+		Detail: "This write is refused because the SHOWMESH_ASSET_* settings migration could not be saved on this " +
+			"boot, so the store holds no assets.settings configuration yet. Do NOT remove those variables — they are " +
+			"currently the only copy of this coordinator's asset store settings. Check the coordinator's data volume " +
+			"(often full, read-only, or damaged) and restart; the migration retries on every boot. Once it succeeds, " +
+			"remove the variables and retry.",
+	}
+}
+
 // discoveryRunConflictProblem is Step 7 seam B review DEFECT 7a's 409:
 // [handlers.handleStartDiscoveryRun] refuses a second discovery run while
 // one is already in flight on this coordinator, rather than queuing it —
@@ -379,6 +486,22 @@ func fppEndpointsMigrationDeferredProblem() v1.Problem {
 // declared node in the installation reading not_seen, because whichever
 // run's RecordNodeDiscoverySeen pass lands last wins "the most recent run"
 // regardless of which one an operator actually meant to be looking at.
+// principalLockoutProblem is Track G seam G-5's own 409 (requirement 3 /
+// ADR-039 decision 8): the request would leave no enabled principal able
+// to reach principal:write, either by disabling the last enabled admin, by
+// changing its role away from principal:write, or by revoking the last
+// credential able to reach that scope. Shares [ProblemTypeConflict] with
+// every other "valid request, unsafe right now" refusal in this file —
+// detail states which of the three triggered it and the remedy.
+func principalLockoutProblem(detail string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Refused: this would lock out every administrator",
+		Status: http.StatusConflict,
+		Detail: detail,
+	}
+}
+
 func discoveryRunConflictProblem() v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,

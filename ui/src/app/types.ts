@@ -78,6 +78,25 @@ export type {
   MacroRunStepCommand,
   MacroRunStep,
   MacroRun,
+  // Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+  // ADR-028).
+  ConfigShow,
+  ConfigShowWrite,
+  ShowConfigResponse,
+  ConfigShowSurfaceChannelRange,
+  ConfigShowSurfaceGeometry,
+  ConfigShowSurfaceNDIOutput,
+  ConfigShowSurfaceHDMI,
+  ConfigShowSurfaceOutput,
+  ConfigShowActive,
+  ShowActiveConfigResponse,
+  Asset,
+  AssetResponse,
+  NodeAssetManifest,
+  MissingAsset,
+  AssetGap,
+  ExtraAsset,
+  AuditEntry,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);
@@ -102,6 +121,10 @@ import type {
   ResolumeActionResult as ResolumeActionResultType,
   ResolumeRecoveryRecordEntry as ResolumeRecoveryRecordEntryType,
   ResolumeRecoveryRestoreLayer as ResolumeRecoveryRestoreLayerType,
+  ConfigShowSurfaceGeometry as ConfigShowSurfaceGeometryType,
+  ConfigShowSurfaceOutput as ConfigShowSurfaceOutputType,
+  Asset as AssetType,
+  NodeAssetManifest as NodeAssetManifestType,
 } from '../api'
 
 // Derived, not duplicated: these are indexed-access views onto seam B's
@@ -131,3 +154,10 @@ export type ResolumeHealth = ResolumeInstanceType['health']
 export type ResolumeActionOutcome = ResolumeActionResultType['outcome']
 export type ResolumeRecoveryLayerState = ResolumeRecoveryRecordEntryType['state']
 export type ResolumeRecoveryRestoreResult = ResolumeRecoveryRestoreLayerType['result']
+// Track G seam G-8: same derived-not-duplicated pattern as every alias
+// above.
+export type SurfacePixelFormat = ConfigShowSurfaceGeometryType['pixelFormat']
+export type SurfaceTransport = ConfigShowSurfaceOutputType['transport']
+export type AssetMediaType = AssetType['mediaType']
+export type AssetTargetKind = AssetType['targetKind']
+export type NodeAssetManifestState = NodeAssetManifestType['state']

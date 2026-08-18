@@ -635,3 +635,90 @@ type fppCommandResult struct {
 	DispatchedAt        *time.Time `json:"dispatchedAt"`
 	ResolvedAt          *time.Time `json:"resolvedAt"`
 }
+
+// Track G seam G-5: identity administration. principalObject mirrors
+// v1.PrincipalObject field for field — this program's own independent
+// transcription, per this file's own doc comment.
+type principalObject struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Kind        string    `json:"kind"`
+	Role        string    `json:"role"`
+	Disabled    bool      `json:"disabled"`
+	HasPassword bool      `json:"hasPassword"`
+	Reserved    bool      `json:"reserved"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// principalsResponse is the body of GET /api/v1/principals.
+type principalsResponse struct {
+	ServerTime time.Time         `json:"serverTime"`
+	Principals []principalObject `json:"principals"`
+}
+
+// principalResponse is the body of GET /api/v1/principals/{id}, POST
+// /api/v1/principals, PUT .../role, POST .../enable, .../disable, and
+// .../password.
+type principalResponse struct {
+	ServerTime time.Time       `json:"serverTime"`
+	Principal  principalObject `json:"principal"`
+}
+
+// createPrincipalRequest is POST /api/v1/principals' body. Password is
+// omitted from the JSON entirely (omitempty) when empty — the coordinator
+// treats an absent, null, or empty password identically ("no password,
+// token-only"), so there is no ambiguity this needs to avoid the way
+// config.go's endpoints field does.
+type createPrincipalRequest struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Role     string `json:"role"`
+	Password string `json:"password,omitempty"`
+}
+
+// setPrincipalRoleRequest is PUT /api/v1/principals/{id}/role's body.
+type setPrincipalRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// setPrincipalPasswordRequest is POST /api/v1/principals/{id}/password's
+// body.
+type setPrincipalPasswordRequest struct {
+	Password string `json:"password"`
+}
+
+// tokenObject mirrors v1.TokenObject — never a digest or a raw token
+// value; see issueTokenResponse.Value for the one place a value ever
+// appears.
+type tokenObject struct {
+	ID          string     `json:"id"`
+	PrincipalID string     `json:"principalId"`
+	Hint        string     `json:"hint"`
+	Label       string     `json:"label"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt"`
+	LastUsedAt  *time.Time `json:"lastUsedAt"`
+}
+
+// tokensResponse is the body of GET /api/v1/principals/{id}/tokens.
+type tokensResponse struct {
+	ServerTime time.Time     `json:"serverTime"`
+	Tokens     []tokenObject `json:"tokens"`
+}
+
+// issueTokenRequest is POST /api/v1/principals/{id}/tokens' body.
+// ExpiresAt is an RFC3339 string, omitted entirely for "never expires"
+// (ADR-024 decision 1's default).
+type issueTokenRequest struct {
+	Label     string  `json:"label,omitempty"`
+	ExpiresAt *string `json:"expiresAt,omitempty"`
+}
+
+// issueTokenResponse is POST /api/v1/principals/{id}/tokens' response.
+// Value is this token's plaintext, rendered exactly once (ADR-024
+// decision 1) — no other response this program ever decodes carries it.
+type issueTokenResponse struct {
+	ServerTime time.Time   `json:"serverTime"`
+	Token      tokenObject `json:"token"`
+	Value      string      `json:"value"`
+}

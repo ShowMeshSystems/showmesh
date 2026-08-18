@@ -60,11 +60,19 @@ func (l resolumeCollectorStatusLister) CollectorStatuses(context.Context) ([]api
 	return []api.CollectorState{{ID: resolumeCollectorSourceID, State: string(api.CollectorRunning)}}, nil
 }
 
-// resolumeInstanceLister adapts *store.Store plus the coordinator's
-// resolved SHOWMESH_RESOLUME_ID into api.ResolumeLister. instanceID is
-// resolved once at construction, since it cannot change without a
-// coordinator restart. An empty instanceID (SHOWMESH_RESOLUME_URL unset)
-// means ListInstances always answers an empty slice.
+// resolumeInstanceLister adapts *store.Store plus one instance id into
+// api.ResolumeLister. An empty instanceID means ListInstances always
+// answers an empty slice.
+//
+// Track G seam G-2: instanceID used to be resolved once, at coordinator.go's
+// own startup, into a value that "cannot change without a coordinator
+// restart" — this type's own doc comment said so directly. That stopped
+// being true when resolume.instances became store-backed configuration
+// applied without a restart (ADR-036): [resolumeManager] now constructs a
+// fresh resolumeInstanceLister on every call, carrying whatever instance id
+// is current at that moment, so a value that reads as "resolved once" here
+// is in fact resolved live by its caller — see
+// [resolumeManager.ListInstances].
 type resolumeInstanceLister struct {
 	st         *store.Store
 	instanceID string

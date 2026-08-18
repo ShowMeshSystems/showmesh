@@ -18,9 +18,9 @@ The night controller instead consumes finite logical actions and FPP observation
 
 - FPP playlist primitives and observations exist, including start, immediate/graceful stop, playlist identity, item position, remaining time, and repeat state.
 - FPP playlist definitions remain FPP-owned. The operator supplies a one-item resting playlist; this track validates its expected FSEQ and uses the shipped `startPlaylist` primitive rather than assuming a sequence-start primitive exists.
-- Track C must supply background sessions, announcements, gain, fades, and node-local playback before the integrated audio path is complete.
+- Track C must supply background sessions, announcements, loop/resume policy, gain ceilings, fades with observable completion, duck/mix/interrupt policy, audio metadata probing, node-local playback, and command outcomes before the integrated audio path is complete.
 - Track D supplies confirmed resting visual and blackout operations. Track E's logical-action wiring must make those adapter operations invocable without protocol paths in the session definition.
-- Track E supplies exact asset identity, per-target FSEQ variants, duration metadata, and node-local audio assets.
+- Track E supplies exact asset identity, per-target FSEQ variants, and node-local audio assets. F0 proves FSEQ duration; Track C probes audio duration and decoder metadata rather than treating `mediaType: audio` as evidence.
 - Optional power integration may use the existing external MQTT action and response contract. Neither that integration nor a full Home Assistant provider is a prerequisite for the night loop.
 
 These dependencies do not prevent F1–F3 from being built against fakes and recorded observations. They prevent an integrated acceptance claim.
@@ -40,7 +40,9 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 
 ### F1. Versioned configuration and validation
 
-Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show playlist references, asset/action references, and relative cue timing only. Validation rejects calendar fields, a manual duplicate rest duration, a resting playlist that is not exactly the expected one-item FSEQ playlist, missing referenced actions, impossible offsets, configured unsafe power grouping, and assets without usable duration metadata. Power, climate, and interlock blocks are optional; their absence is valid. When present, validation enforces unique rule names, the closed lifecycle-phase and posture/unavailable enums, exactly one guarded phase per rule, power domain and provenance metadata, and an explicit complete removal policy for every presentation power-off binding. Prerequisite lists and delays are bounded and cannot recurse into their own power-off binding.
+Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show playlist references, asset/action references, relative cue timing, and a background-audio source. That source is either one logical Track E audio slot or an embedded ordered list of logical audio slots plus repeat, resume/restart, and sequential/gapless/crossfade item-transition policy. Each slot identifies the current show/sequence/target audio asset rather than a filename. The Night Session configuration revision is the playlist revision; session activation pins it and resolves every ordered slot to an exact asset id and content hash. No separate audio-playlist configuration kind or undocumented authoring path is introduced.
+
+Validation rejects calendar fields, a manual duplicate rest duration, a resting playlist that is not exactly the expected one-item FSEQ playlist, an empty or duplicate background-audio item list, missing asset/action references, impossible offsets, configured unsafe power grouping, assets without usable duration metadata, and a required item transition unsupported by any selected output. Power, climate, and interlock blocks are optional; their absence is valid. When present, validation enforces unique rule names, the closed lifecycle-phase and posture/unavailable enums, exactly one guarded phase per rule, power domain and provenance metadata, and an explicit complete removal policy for every presentation power-off binding. Prerequisite lists and delays are bounded and cannot recurse into their own power-off binding.
 
 Configuration pins revisions for an active session. Editing a show at 8 PM cannot silently change the controller running that night.
 
@@ -72,7 +74,9 @@ This is a purpose-built relative cue runner inside the night controller, not a g
 
 ### F5. Audio integration
 
-Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves, local asset readiness, and the configured duck/interrupt policy. Add output-specific validation so a PulseMesh binding can require MP3 without narrowing the generic asset store.
+Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves with observable completion, exact local asset readiness, loop/resume policy, and the configured duck/mix/interrupt policy. Carry the night controller's stable cue invocation identity and desired revision through the audio command so recovery cannot duplicate an effect or let stale work reverse a newer state.
+
+Validate every output against the formats and reproduction capabilities it honestly declares without narrowing the generic asset store. This includes playlist selection/advancement and the requested sequential, gapless, or crossfade item transition. For an optional synchronized third-party output, missing provisioning/readiness evidence warns and does not block local/FM audio. If configuration marks it required and no status API exists, readiness may accept current attributed operator attestations pinned to the immutable destination-configuration revision or fingerprint and **every** exact audio/announcement content hash required by the pinned Night Session revision. One verified playlist item is insufficient; an attempted or acknowledged upload alone is not `ready`.
 
 ### F6. Optional power, thermal, and interlock integration
 
@@ -90,7 +94,7 @@ Add CLI coverage first, then UI configuration and operation. Show lifecycle stat
 
 ### F8. Integrated and failure verification
 
-Run every acceptance scenario in `RESTING-MODE.md` first with no site-control/interlock configuration, then against the reference installation's configured MQTT/Home Assistant path. Exercise every posture, both unavailable-source choices, phase isolation, override authorization, domain/provenance rejection, both removal policies, and partial-configuration rejection. Include overnight repetition and failure injection. Update RES-007 and RES-016 only to the evidence level actually reached.
+Run every acceptance scenario in `RESTING-MODE.md` first with no site-control/interlock configuration, then against the reference installation's configured MQTT/Home Assistant path. Exercise every posture, both unavailable-source choices, phase isolation, override authorization, domain/provenance rejection, both removal policies, partial-configuration rejection, overnight repetition, and failure injection. Update RES-007 and [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) only to the evidence level actually reached; a mock destination changes no claim about a real service.
 
 ## Safety and failure direction
 

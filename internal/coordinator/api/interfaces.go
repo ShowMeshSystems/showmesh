@@ -95,6 +95,26 @@ type NodeRenderLister interface {
 	NodeRenderObservations(nodeID string) []observation.Observation
 }
 
+// FPPMQTTHostLister reports the id->HostName map fpp.mqtt currently
+// configures, live — not a startup snapshot. Used by
+// handlePutFPPEndpointsConfig (config.go) to cross-check a proposed
+// fpp.endpoints list against fpp.mqtt as it stands right now, mirroring
+// the identical live re-check that handler already runs against
+// [Dependencies.Resolume].
+type FPPMQTTHostLister interface {
+	CurrentHosts(ctx context.Context) (map[string]string, error)
+}
+
+// FPPMQTTSecretStore stores and reports presence of the fpp.mqtt broker
+// password (ADR-039 decision 7). The value itself is never read back
+// through this interface — only Set/Clear write it, and Has reports
+// presence only.
+type FPPMQTTSecretStore interface {
+	HasFPPMQTTPassword(ctx context.Context) (bool, error)
+	SetFPPMQTTPassword(ctx context.Context, password string) error
+	ClearFPPMQTTPassword(ctx context.Context) error
+}
+
 // ObservationFilter narrows GET /api/v1/observations per contract section
 // 6.1 ("filters resourceKind, resourceId, signal"). A nil field means no
 // filter on that dimension.
@@ -394,6 +414,30 @@ type FPPPollNudger interface {
 // SHOWMESH_ASSET_SYNC_INTERVAL (5 minutes) later.
 type AssetSyncNudger interface {
 	Nudge()
+}
+
+// AssetSettingsSource is Track G seam G-4's live, no-restart view of the
+// assets.settings configuration kind (ADR-039 decision 6): the three
+// settings this package itself needs to read on every request rather than
+// once at startup. Declared here, at the consumer, for the identical
+// reason [AssetSyncNudger] is: the real implementation is
+// *assetsync.Service itself (assetsync.Settings' three matching fields),
+// which already satisfies this interface with no adapter needed.
+//
+// SyncInterval and MaxUploadBytes... only MaxUploadBytes appears below:
+// SyncInterval governs assetsync.Service's OWN loop cadence, which this
+// package never reads (it has no reason to know how often the service
+// ticks, only what it would do once it does).
+type AssetSettingsSource interface {
+	// ContentBaseURL is the live assets.settings contentBaseUrl. Empty
+	// means the asset sync service is disabled — see assetmanifest.go's
+	// syncEnabled derivation.
+	ContentBaseURL() string
+	// MaxUploadBytes bounds a single asset upload.
+	MaxUploadBytes() int64
+	// InventoryInterval is the ONE staleness computation every manifest
+	// response rests on (assetsync.StalenessWindow).
+	InventoryInterval() time.Duration
 }
 
 // DeclarationStore is what this package needs from seam 0's

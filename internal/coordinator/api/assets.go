@@ -246,7 +246,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	now := h.now()
 	ac := authFromContext(r.Context())
 
-	maxUpload := h.deps.AssetMaxUploadBytes
+	maxUpload := h.deps.AssetSettings.MaxUploadBytes()
 
 	// httpapi.NewServer sets ReadTimeout AND WriteTimeout to 10s, and both
 	// bound this handler. Both are extended here, sized from the same

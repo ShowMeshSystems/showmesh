@@ -8,7 +8,7 @@ Status: planned (bench) · Risk: critical · Verification: L0 — assumption
 
 Establish whether the audio architecture decided on 2026-08-10 is achievable on real hardware, and produce the numbers it depends on but does not contain.
 
-Three ADRs settled the questions this record originally asked about clock ownership and playback model: ShowMesh owns audience-facing audio and nodes play local media against their own clock (ADR-017), program and LTC share one clock domain (ADR-018), and audio device loss fails silent with no automatic FPP fallback (ADR-019). Those decisions are architectural intent at L0. **Nothing below has been prototyped**, and this record is now the work queue that either confirms them or forces a superseding ADR.
+Three ADRs settled the questions this record originally asked about clock ownership and playback model: ShowMesh owns audience-facing audio and nodes play local media against their own clock (ADR-017), program and LTC share one clock domain (ADR-018), and audio device loss fails silent with no automatic FPP fallback (ADR-019). Those decisions are architectural intent at L0. **Nothing below has been prototyped**, and this record is now the work queue that either confirms them or forces a superseding ADR. The physical questions block commissioning claims for a particular interface and Day-0 readiness on that device; they do **not** block building the device-agnostic engine, sessions, routing, mixing, telemetry, or runtime capability model.
 
 ## Required use cases
 
@@ -22,26 +22,26 @@ Three ADRs settled the questions this record originally asked about clock owners
 
 ## Questions
 
-**Rendering (blocks ADR-007 applied to audio; AUDIO-ENGINE §7)**
+**Rendering (bench evidence required to validate ADR-007 applied to audio; AUDIO-ENGINE §7)**
 
 - Can agent-supervised GStreamer pipelines deliver click-free ducking, reliable gapless playback, and multichannel interleave on the target Linux host?
 - Can LTC be generated within the same pipeline and remain sample-aligned to program audio, or does it require an element or approach that does not exist? What is the actual alignment achieved, in samples?
 - Does the pipeline hold alignment across track changes, seeks, gain transitions, and process restarts?
 
-**Drift (blocks ADR-017's correction policy)**
+**Drift (bench evidence required to validate ADR-017's correction policy)**
 
 - What drift does a free-running audio node accumulate against the FPP show timeline over a 30–60 minute show, on the intended hardware?
 - What audio-to-lighting offset is perceptible to an audience, and therefore what threshold should the ignore band use?
 - Is correction at track boundaries sufficient in practice, or does a show reach the significant-drift threshold mid-track?
 - Is a discrete seek correction audibly acceptable when it does occur?
 
-**Clock domains (blocks ADR-018)**
+**Clock domains (per-device evidence required for ADR-018 placement and commissioning)**
 
 - What program-to-LTC alignment is achieved on the selected interface, and how does it behave over a full show?
 - How many usable output channels from one clock does the candidate interface actually provide, and does the driver expose them as one device?
 - What happens to alignment on device hot-plug, sample-rate change, and PipeWire versus raw ALSA paths?
 
-**Failure behavior (blocks ADR-019)**
+**Failure behavior (bench evidence required to validate ADR-019)**
 
 - How quickly is device loss detected, and how long is the unreported silent window?
 - Does session and show state survive device loss, device return, and engine process restart?
@@ -70,11 +70,11 @@ Three ADRs settled the questions this record originally asked about clock owners
 
 ## Test method
 
-Prototype the minimum engine on the intended Linux host and interface. Record program audio, LTC, and a visual reference together so alignment is measurable after the fact rather than judged live.
+The bench has two stages and the first begins without the final interface.
 
-Exercise every lifecycle transition plus coordinator loss, FPP timing loss, device unplug and replug, sample-rate change, process restart, missing media, media hash mismatch, Dante interruption where applicable, standby-node failover, and power restoration.
+**Device-independent software bench:** prototype an N-output engine on a representative Linux host using GStreamer virtual/null sinks, ALSA loopback or PipeWire virtual devices where useful, and any available Linux-supported interface. Drive capabilities and channel maps from runtime discovery. Exercise decode, program/LTC graph separation, every session transition, playlists, gain/duck/fade behavior, telemetry, coordinator and FPP timing loss, process restart, missing media, hash mismatch, and injected device errors. This validates ShowMesh behavior and pipeline construction; it makes no claim about a future interface's physical channel independence, clock, driver, latency, or hot-plug behavior.
 
-Measure rather than observe: alignment in samples, drift in milliseconds against elapsed show time, detection latency in seconds, underrun counts.
+**Per-device commissioning:** when a candidate show interface is available, run the physical tone-separation check and record program audio, LTC, and a visual reference together so alignment is measurable rather than judged live. Exercise device unplug/replug, sample-rate change, physical routing, driver behavior, power restoration, and Dante interruption where applicable. Measure alignment in samples, drift in milliseconds against elapsed show time, detection latency in seconds, and underrun counts. A failure rejects that interface or route; it does not send the implementation back to the beginning.
 
 ## Evidence and findings
 
@@ -87,6 +87,8 @@ No evidence collected. This section is a work queue, not a conclusion.
 **The occasion was the backorder; the decision is structural.** [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) names a property, not a product, and gating the audio track on one consumer unit behaving as advertised was the wrong shape regardless of stock levels. **ADR-018 is unchanged and needs no supersession**: program and LTC still leave one interface in one clock domain, LTC still lands on a discrete output that program never touches, and program on USB with LTC on Dante is still forbidden.
 
 **What changes is where the property is checked.** The engine is built against the channel count and output addressing the audio stack reports at run time, so any multichannel interface with working Linux support is a candidate and no device model appears in the code. The ADR-018 placement constraint is then enforced from advertised capability attributes, meaning a node whose interface cannot supply a discrete output outside the program pair is refused placement by the coordinator. Recorded in [Track C](../build/TRACK-C-audio-node.md), which owns the delivery.
+
+**What may proceed before the show interface exists:** the GStreamer graph builder, runtime capability discovery, N-output routing, local asset decode, playback sessions, background playlists, announcements, gain/fade/duck behavior, command idempotency, telemetry, mock failures, and the generic output-adapter contract. Virtual devices and any available Linux-supported interface are valid tools for that work. They do not raise the physical-interface questions above L0; only per-device commissioning can do that.
 
 **The mirror problem is real and stays on the test list, as a per-device commissioning check.** This record's own clock-domain question asks how many usable output channels from one clock an interface provides *and whether the driver exposes them as one device*. On consumer interfaces a second output pair is sometimes a **hardware mirror** of the main pair rather than an independently addressable one, and that is only partly visible to software: a driver can report four outputs on a unit that routes the second pair from the first downstream of anything ALSA can observe. Where it is true, LTC sums into program audio, which is close to inaudible on a casual listen, corrupts timecode, and would be discovered during a show.
 

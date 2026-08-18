@@ -217,11 +217,11 @@ If the ceiling cannot be observed or the control path exposes only one destructi
 
 ## 8. Audio
 
-Resting audio is a ShowMesh `background` playback session. It uses node-local assets, loop behavior, gain, and the Audio Engine's fade machinery. Configuration includes source or playlist, loop policy, fade curve, per-transition offsets, maximum resting gain, and whether a source resumes or restarts where that distinction applies.
+Resting audio is a ShowMesh `background` playback session. It uses node-local assets, loop behavior, gain, and the Audio Engine's fade machinery. Configuration includes source or playlist, loop policy, fade curve, per-transition offsets, maximum resting gain, and whether a source resumes or restarts where that distinction applies. A multi-item playlist follows `AUDIO-ENGINE.md` §3: it pins an ordered revision and exact item assets, advances each item once, and never guesses after a stale bookmark or missing next item.
 
 Announcements are separate higher-priority sessions. A normal transition announcement is placed after the configured background fade or uses an explicitly configured duck/interrupt policy. Public-safety interruption of all playout is a separate future safety design; this document does not represent ShowMesh as an emergency-alert receiver.
 
-The generic asset store remains codec-agnostic. A PulseMesh output requiring MP3 validates that output-specific constraint without prohibiting WAV, FLAC, or other formats for local outputs. Current PulseMesh evidence and open integration questions are recorded in [RES-016](../research/RES-016-pulsemesh-audio-integration.md).
+The generic asset store remains codec-agnostic. Every output validates its own supported-format and mix capabilities without narrowing formats available to other outputs. The first synchronized-third-party compatibility corpus uses the formats FPP recognizes as audio, but that is an L0 owner assumption rather than evidence that a destination accepts them. Advance provisioning, absent-readiness behavior, and open integration questions are recorded in [RES-016](../research/RES-016-third-party-synchronized-audio-output.md).
 
 ## 9. Projections and other presentation systems
 
@@ -351,7 +351,14 @@ nightSession:
   resting:
     playlist: christmas-resting
     timelineAsset: christmas-resting-fseq
-    backgroundAudio: christmas-resting-music
+    backgroundAudio:
+      source: playlist
+      items:
+        - christmas-resting-track-1
+        - christmas-resting-track-2
+      repeat: playlist
+      resume: true
+      itemTransition: sequential
     endOfNightRepeat: true
     maxAudioGainDb: -10
 
@@ -414,9 +421,14 @@ Before `start-night`, ShowMesh must report at least:
 - configured FPP resting playlist exists, contains exactly the expected FSEQ item, contains no FPP audio item, and can run one-shot or repeated as requested;
 - parseable non-zero duration and cue offsets within the usable timeline;
 - show playlist present and not unexpectedly busy;
-- configured audio and announcement assets local and hash-current;
-- configured background output and maximum gain available;
-- configured projection actions resolve uniquely and are ready;
+- required audio and announcement assets local and hash-current;
+- required audio assets probe successfully with usable duration and other metadata Track C needs;
+- every configured audio output declares the background, announcement, playlist, mix/duck/interrupt, loop, gain, fade, seek, position, and requested sequential/gapless/crossfade item-transition capabilities this session requires;
+- an optional synchronized third-party output with absent or stale provisioning evidence is a warning and does not block the local/FM path;
+- a synchronized third-party output marked required has evidence covering every exact audio and announcement content hash in the pinned Night Session revision, including every background-playlist item: destination-reported states where they exist, or current operator attestations pinned to the immutable destination-configuration revision or fingerprint and each required hash where they do not. One verified item cannot satisfy a multi-item source, and an upload attempt or acknowledgement alone is never silently called ready;
+- background output and configured maximum gain available;
+- a fresh installed-path program-to-LTC offset measurement with method/provenance and the current threshold verdict, or `unknown` while RES-007 has not established a threshold;
+- required projection actions resolve uniquely and are ready;
 - required logical actions have valid confirmation/fallback declarations;
 - configured observe-only interlocks report their current outcome without blocking;
 - blocking interlocks for the phase being entered have fresh passing evidence, explicitly allow unavailable evidence, or have an explicit override permitted by that rule; other-phase failures remain visible but do not block;
@@ -463,7 +475,7 @@ Implementation is not complete until observed end-to-end behavior covers:
 12. a complete night with no power, climate, or interlock configuration;
 13. the reference profile's blocking cold-enclosure rule, projector-generated heat requiring exhaust, and environmental protection surviving configured presentation power-off;
 14. an unexpectedly late live show deferring ordinary configured fade and power-off;
-15. PulseMesh MP3 validation without restricting local-output asset formats;
+15. generic third-party format/capability validation without restricting local-output asset formats, including acknowledgement with no readiness status, optional-output warning behavior, and a required-output policy satisfied by time-stamped audible checks covering every pinned asset on the listener device;
 16. false and unavailable `observe` rules reporting without blocking, and `disabled` rules never evaluating;
 17. unavailable `block` rules exercising both required `onUnavailable` choices, plus permitted and forbidden manual overrides;
 18. a failing shutdown-only interlock remaining visible without gating `start-night`;

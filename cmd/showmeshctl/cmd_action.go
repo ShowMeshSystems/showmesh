@@ -19,8 +19,9 @@ import (
 // payload it is given, fpp, mqtt, or resolume) rather than growing
 // per-integration flags: "action show --output json" prints exactly what
 // "action put" accepts back, mirroring "config get"/"config set"'s own
-// round-trip contract (cmd_config.go). Writing a show.macro definition
-// remains Track E's authoring surface.
+// round-trip contract (cmd_config.go). Writing a show.macro definition is
+// "macro put" (cmd_macro.go, Track G seam G-6), following this file's own
+// shape.
 
 func cmdAction(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	if len(args) == 0 {
@@ -67,8 +68,8 @@ Validated before activation: an invalid payload, or a reference that does
 not resolve against the currently stored composition, is rejected and
 appends no revision (ADR-009).
 
-Writing a show.macro definition is not this program's job — the
-show-authoring surface (Track E, not yet built) owns PUT for show.macro.
+Writing a show.macro definition is "showmeshctl macro put" — see
+"showmeshctl macro --help".
 
 Run "showmeshctl action <subcommand> --help" for flags specific to one
 subcommand.

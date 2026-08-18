@@ -96,20 +96,82 @@ func TestFetchConfirmedRequiresPostDispatchEvidence(t *testing.T) {
 
 func TestServiceDisabledWhenNoContentBaseURL(t *testing.T) {
 	st := openTestStore(t)
-	svc := NewService(st, &fakePublisher{}, discardLogger(), "", time.Minute)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{SyncInterval: time.Millisecond, InventoryInterval: time.Minute})
 	if svc.Enabled() {
 		t.Fatal("Enabled() = true, want false with an empty content base URL")
 	}
 
+	// Track G seam G-4 (ADR-039 decision 6): Run must NOT return early
+	// just because it started disabled — contentBaseUrl can be set later,
+	// through the assets.settings configuration kind, with no restart, and
+	// a Run that already returned could never notice. It must keep
+	// looping (responsive to ctx) until told to stop.
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	done := make(chan struct{})
-	go func() { svc.Run(ctx, time.Millisecond); close(done) }()
+	go func() { svc.Run(ctx); close(done) }()
 
 	select {
 	case <-done:
+		t.Fatal("Run() returned while ctx was still live; a disabled service must keep watching for its settings to change rather than exiting")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Run() did not return promptly when disabled; it must log and return rather than looping")
+		t.Fatal("Run() did not return promptly after ctx was cancelled")
+	}
+}
+
+// TestServiceEnabledFollowsLiveSetSettings is Track G seam G-4's own
+// acceptance shape at the unit level: SetSettings flips Enabled with no
+// reconstruction, and Run (already looping while disabled) starts
+// dispatching on its very next iteration rather than needing to be
+// restarted — the "zero to one" transition ADR-039 decision 6 names as the
+// one that must actually work.
+func TestServiceEnabledFollowsLiveSetSettings(t *testing.T) {
+	st := openTestStore(t)
+	pub := &fakePublisher{}
+	svc := NewService(st, pub, discardLogger(), Settings{SyncInterval: 2 * time.Millisecond, InventoryInterval: time.Minute})
+	if svc.Enabled() {
+		t.Fatal("Enabled() = true, want false before any settings are applied")
+	}
+
+	nodeID := "shed-01"
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, nodeID)
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, nodeID, "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, nodeID, time.Now())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { svc.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	// Give Run a couple of disabled iterations to prove it does not dispatch.
+	time.Sleep(20 * time.Millisecond)
+	if pub.callCount() != 0 {
+		t.Fatalf("callCount() = %d, want 0: a disabled service must not dispatch", pub.callCount())
+	}
+
+	svc.SetSettings(Settings{ContentBaseURL: "https://coordinator.example", MaxUploadBytes: 1, SyncInterval: 2 * time.Millisecond, InventoryInterval: time.Minute})
+	if !svc.Enabled() {
+		t.Fatal("Enabled() = false after SetSettings with a non-empty ContentBaseURL, want true")
+	}
+
+	deadline := time.After(2 * time.Second)
+	for pub.callCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("no asset.fetch was dispatched within the deadline after SetSettings enabled the service with no restart")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -117,7 +179,9 @@ func TestServiceDisabledWhenNoContentBaseURL(t *testing.T) {
 
 func newTestService(t *testing.T, st *store.Store, pub Publisher) *Service {
 	t.Helper()
-	svc := NewService(st, pub, discardLogger(), "https://coordinator.example", time.Minute)
+	svc := NewService(st, pub, discardLogger(), Settings{
+		ContentBaseURL: "https://coordinator.example", MaxUploadBytes: 1, InventoryInterval: time.Minute,
+	})
 	return svc
 }
 
@@ -532,7 +596,7 @@ func TestServiceNoActiveShowDispatchesNothing(t *testing.T) {
 
 func TestServiceNudgeIsNonBlockingAndCoalesces(t *testing.T) {
 	st := openTestStore(t)
-	svc := NewService(st, &fakePublisher{}, discardLogger(), "https://coordinator.example", time.Minute)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
 
 	// Two nudges before anything drains the channel must not block, and
 	// must coalesce to one pending request.

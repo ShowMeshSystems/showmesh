@@ -260,6 +260,8 @@ func cmdResolume(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return cmdResolumeStatus(rest, stdout, stderr, clock)
 	case "recovery":
 		return cmdResolumeRecovery(rest, stdout, stderr, clock)
+	case "instance":
+		return cmdResolumeInstance(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl resolume: unknown subcommand %q\n\n", sub)
 		printResolumeUsage(stderr)
@@ -271,6 +273,10 @@ func printResolumeUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl resolume <subcommand> [flags]
 
 Subcommands:
+  instance      connect this coordinator to a Resolume Arena instance:
+                read, write, or remove the resolume.instances configuration
+                (Track G seam G-2, ADR-039) — the step that has to happen
+                before any of the subcommands below can do anything
   composition   upload or show the stored Resolume Arena composition: the
                 id map of decks, layers, columns and clips every ShowMesh
                 reference to a Resolume object resolves through
@@ -282,9 +288,10 @@ Subcommands:
   recovery      Arena crash recovery: the auto-restore toggle, the
                 recovery record, and running a restore on demand
 
-Run "showmeshctl resolume composition --help", "showmeshctl resolume
-action --help", "showmeshctl resolume status --help", or "showmeshctl
-resolume recovery --help" for their own subcommands and flags.
+Run "showmeshctl resolume instance --help", "showmeshctl resolume
+composition --help", "showmeshctl resolume action --help", "showmeshctl
+resolume status --help", or "showmeshctl resolume recovery --help" for
+their own subcommands and flags.
 `)
 }
 

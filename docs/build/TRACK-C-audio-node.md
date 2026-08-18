@@ -1,70 +1,169 @@
 # Track C: Audio node
 
-[Build plan](BUILD-PLAN.md) · [Audio engine spec](../architecture/AUDIO-ENGINE.md) · [RES-007](../research/RES-007-audio-node-architecture.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)
+[Build plan](BUILD-PLAN.md) · [Audio engine spec](../architecture/AUDIO-ENGINE.md) · [RES-007](../research/RES-007-audio-node-architecture.md) · [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md)
 
-Status: not started. Specified 2026-08-13. **Interface selection reopened 2026-08-14** and deliberately removed from this track's critical path, per the section below.
+Status: not started. Specified 2026-08-13; dependency-complete review 2026-08-17. **All behavior remains L0 design intent until the benches below run.**
 
-## Goal
+## Goal and milestone boundary
 
-ShowMesh owns audience-facing audio: a node plays show audio and background music on its own clock, generates LTC on a discrete output in the same clock domain, and fails silent when the device goes away.
+ShowMesh owns audience-facing audio: a Linux node plays exact node-local show assets on its own clock, renders background music and announcements into the program bus, generates LTC on a discrete output in the same clock domain, exposes honest readiness and playback evidence, and fails silent when the device goes away.
 
-**This track is also Resolume's timecode source, which makes it more critical than "audio" suggests.** Resolume Arena accepts SMPTE only as audio LTC, so [Track D](TRACK-D-resolume.md) follows the show over a physical cable from a discrete output on this node into the Resolume machine.
+This track is also Resolume's timecode source. Track D follows the show over physical LTC from this node; a session saying `playing` is not evidence that Resolume received or locked to the signal.
+
+**Day-0 is the mid-September real-show path.** It requires local/FM program audio, same-clock LTC, the background and announcement primitives Track F consumes, exact local asset readiness, telemetry, fail-silent behavior, and manual recovery. A real synchronized third-party output, its upload protocol, server-side processing status, and playback on a listener device are **not Day-0 gates**.
+
+The generic synchronized-remote-output boundary is specified now so the engine does not grow around one product. Its deterministic mock is built only after the core session engine emits real media changes, start/stop state, position, and timing. A real adapter remains later integration research.
 
 ## No specific interface gates this track
 
-**Owner's decision, 2026-08-14, replacing the interface check that opened this track.** The U-Phoria UMC204HD ordered on 2026-08-13 turned out to be backordered, and the interface will be reselected against wider requirements than this project's. That is the occasion for the change rather than its reason. The reason is that gating a track on one consumer unit behaving as advertised was the wrong shape to begin with: **[ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) names a property, not a product.**
+ADR-018 names a property, not a product. Program and LTC leave one interface in one clock domain; LTC lands on a discrete output that program never touches; program on USB with LTC on an independent Dante clock remains forbidden.
 
-**Nothing in ADR-018 changes.** Program and LTC still leave one interface in one clock domain, LTC still lands on a discrete output that program never touches, and program on USB with LTC on Dante is still forbidden. What changes is where that property is checked.
+The engine builds against what the Linux audio stack reports. It reads output count and addressing at run time and contains no device-model branch. Capability advertisement carries the reported channel count and clock domain so the coordinator can refuse placement that cannot satisfy ADR-018.
 
-**The engine is built against what the audio stack reports**, meaning channel count and output addressing are read from ALSA at run time and the pipeline is built for N outputs. No device model appears anywhere in the code, and no interface-specific workaround is written. Any multichannel interface with working Linux support is a candidate, which is also the posture a released product needs.
+Software discovery is necessary and insufficient. Some interfaces report four outputs while mirroring channels 1/2 onto 3/4 downstream of anything ALSA can observe. Commissioning therefore sends a tone to the intended LTC output alone, confirms that nothing appears on the program pair, and records the device, host, audio stack, sample rate, route, and result in RES-007. Failure blocks that interface, not this track.
 
-**The placement check moves into capability advertisement**, which is what C5 was always for and is now load-bearing rather than late. A node advertises its output channel count and clock domain as attributes, and a device that cannot supply a discrete output outside the program pair fails ADR-018 placement at configuration time, whatever the device is. That is the coordinator checking the constraint instead of a human remembering it.
+## Standing constraints
 
-**The twenty-minute tone test survives as commissioning, not as a gate.** On consumer interfaces a second output pair is sometimes a hardware mirror of the main pair rather than a separately addressable one, and that is only partly visible to software: a driver can report four outputs on a unit that routes 3/4 from 1/2 downstream of anything ALSA can see. If it is true of the interface in use, LTC sums into program audio, which is close to inaudible on a casual listen, corrupts timecode, and would be found during a show. So the test still exists, it runs against whichever interface is present, and **it blocks that interface rather than this track.** Send tone to the intended LTC output alone and confirm nothing appears on the program pair. Record the result and the device in RES-007.
+- Nodes play complete local files against their own audio clock. The coordinator and broker never carry the real-time PCM path.
+- Audio aligns to the FPP timeline at start and explicit correction points. It measures drift and never continuously slews program audio to chase small differences.
+- Program and LTC share one clock domain. LTC never enters the program bus.
+- FPP's audience-audio output is unused during ShowMesh operation.
+- Device loss fails silent, preserves session state, alerts critically, and never hands audio back to FPP automatically.
+- Track E owns source asset identity, bytes, hashing, and node distribution. Track C consumes exact content hashes and probes whether audio is actually decodable.
+- `unknown`, `unsupported`, `unconfirmable`, `not_ready`, and `failed` are different states. No implementation may collapse them into success.
 
-**Track D is no longer waiting on this track's build**, which is the practical consequence. D0 needs LTC, not ShowMesh's LTC, so any generator on any working interface answers RES-001's question about what Resolume does when timecode disappears.
+## Session and command contract
 
-## What is decided, and what is entirely unproven
+The engine implements the semantic session states and operations in `AUDIO-ENGINE.md` §3 and §14. The minimum Day-0 vocabulary is:
 
-The architecture is settled across three ADRs and `AUDIO-ENGINE.md`. **All of it is design intent at L0**, and RES-007 is critical-risk with no evidence collected. This track is where that changes.
+- select or replace media, including the same filename with a new hash;
+- select a pinned ordered playlist, advance each item exactly once, and expose current item identity/index;
+- prepare and probe an asset;
+- start at an authoritative position;
+- pause, resume, seek, restart, stop, and observe natural completion;
+- set loop and resume-versus-restart policy;
+- set and fade gain, including a maximum background gain;
+- create an announcement and apply its configured duck, mix, or interrupt policy;
+- mute and unmute an output without changing session authority.
 
-The three constraints that shape everything and must not be "improved" during implementation:
+Every state-changing command carries a stable invocation identity, target session, desired revision, deadline, and confirmation contract through the standard command envelope. Repeating one invocation is idempotent. A stale revision cannot overwrite newer desired state. Receipt confirms only receipt; Track F transition barriers require the named observed effect such as `started`, `fade-complete`, `stopped`, or `completed`.
 
-- **Nodes play complete local files against their own audio clock**, never a PCM or sample-position stream (ADR-017). Drift is measured and corrected **discretely at track boundaries**, never by continuous rate manipulation. Audio deliberately does not follow the MultiSync slew and jump model that Track B's renderer uses. Two subsystems in this project synchronise differently on purpose, and that divergence is the decision, not a bug.
-- **Program and LTC share one clock domain** (ADR-018), LTC on a discrete output, never mixed into program.
-- **Device loss fails silent** (ADR-019): stop the failed output, keep session state, mark critical, alert, continue other outputs. **Never auto-fall back to FPP audio.** Uncontrolled routing and gain into an FM transmitter is worse than silence. This is a deliberate, recorded exception to ADR-004's fallback rule.
+Pause, seek, restart, media replacement, and loss or reacquisition of authoritative FPP timing are discontinuities. They trigger an explicit realignment or visible failure; they are not ordinary drift. Natural completion remains distinct from commanded stop because Track F uses observed completion as a transition anchor.
 
-FPP's own audio output goes unused. That is ADR-017 and it is why `Volume Set` was rejected as Step 7's first command: a control for FPP audio would be built to be deleted.
+## Assets and readiness
 
-## Deliverables
+Track E supplies the exact current ShowMesh asset id, content hash, size, and node-local runtime filename. Track C probes the local file and reports duration plus detectable container, codec, channel count, and sample rate before admitting it to a session. `mediaType: audio` and a familiar extension are not decoder evidence. An ordered background playlist pins its own revision and every item's exact asset identity; readiness covers the whole playlist rather than only its first item.
 
-**C0. The RES-007 prototype**, the minimum engine on the intended host, recording program audio, LTC, and a visual reference **together**, so alignment is measurable after the fact rather than judged live by ear. It runs against whichever multichannel interface is present, and the commissioning tone test above runs against that interface first. **This no longer waits for a specific unit to arrive**, which is the 2026-08-14 change.
+Audio authority requires fresh evidence that:
 
-**C1. Audio pipelines under the same agent Track B builds.** Mixing, fades, ducking, interleave, and LTC generation are GStreamer, never a Go sample path (ADR-007). The agent supervises; it does not process audio.
+- the exact assigned content hash exists on the node and still matches;
+- the media probe succeeded and any required duration is known;
+- the selected program and LTC routes are present and share the required clock domain;
+- physical output separation was commissioned for the installed interface;
+- every operation required by the active show and resting configuration is supported;
+- the active engine and output observations are fresh.
 
-**C2. Playback sessions.** Session state, transport, and the drift policy from `AUDIO-ENGINE.md`, with correction only at track boundaries.
+If a file disappears, changes, or fails decoding after readiness but before playback, that session fails visibly and the output remains silent. Show start never initiates an asset transfer.
 
-**C3. LTC generation** on the discrete output, in the program clock domain.
+## Consumers this track must satisfy
 
-**C4. Device-loss behaviour** per ADR-019, including how fast loss is detected and how long the unreported silent window is, which RES-007 lists as an open question and which is operator-visible.
+### Resting Mode and Track F
 
-**C5. Capability advertisement** for audio output and LTC, versioned per ADR-002, with the channel count and clock domain as attributes so [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md)'s placement constraint is checkable by the coordinator rather than by a human remembering it. **This is now how the interface requirement is enforced at all**, per the 2026-08-14 decision above, so it is not the last thing built despite being the last thing listed. The attributes are read from the audio stack rather than configured, because a hand-entered channel count is a claim and the point of this deliverable is evidence.
+Track F owns when cues occur. Track C owns the audio effects and observations those cues invoke:
 
-## Decisions this track must make
+- background sessions with source or playlist, looping, resume/restart, maximum gain, and fade curve/duration;
+- ordered playlist advancement, pinned resume bookmarks, and explicit behavior when the next item is missing or changed;
+- show-over-background replace or duck behavior;
+- announcement sessions over background or show audio, using declared mix, duck, or interrupt policy;
+- independently scheduled gain fades and an observable `fade-complete` barrier outcome;
+- natural completion, commanded stop, and failure as distinct observations;
+- idempotent replay of the same durable cue invocation after a crash;
+- current media, active sources, mix/duck state, effective gain, cue result, and recovery guidance for the operator surface.
 
-- **PipeWire or raw ALSA.** RES-007 lists this as an open question affecting alignment, and it is the kind of choice that is cheap now and expensive to reverse once the engine is built on it.
-- ~~What the show audio actually is, and where it comes from.~~ **Answered 2026-08-13: it belongs to [Track E](TRACK-E-show-authoring-and-assets.md)**, which owns one asset store and one sync service for every node type, so the delivery and freshness problem is solved once rather than twice as this bullet asked. [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md) decision 5 also settles the ADR-017 question directly: **playback is always from node-local storage**, and no playback path may reach the store.
-- ~~What background and resting audio does between shows.~~ **Answered 2026-08-16 by [RESTING-MODE](../architecture/RESTING-MODE.md) and [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md):** resting audio is a ShowMesh background session with configurable gain, loop, fade, and source policy. The exact resting FSEQ supplies inter-show duration; the night-session controller supplies transition cues; this track supplies the audio operations and evidence they invoke.
+F1–F3 may use fakes before Track C exists. Track F is not integrated until the same cases pass against the real engine.
+
+### Track D
+
+Track C generates LTC from the same pipeline clock as program audio and keeps start, stop, seek, restart, and discontinuity behavior explicit. RES-001 decides the configured frame rate and records destination-side lock and playhead behavior. Generation is not proof that the cable, input, or Resolume received it.
+
+### Track E
+
+Track C uses Track E's content-addressed store and ahead-of-show node sync. It does not invent another source store or fetch during playback. Audio-specific probing is Track C's responsibility; generic storage remains Track E's.
+
+### Observability and operator recovery
+
+Track C publishes the complete telemetry set in `AUDIO-ENGINE.md` §15 through the desired-versus-observed model. Stale evidence reads `unknown`. A `playing` session proves engine state only, not that the FM audience, physical speakers, timecode receiver, or remote listener heard anything.
+
+ADR-019 requires a documented manual recovery path because automatic fallback was rejected. The operator identifies the failed device or pipeline and keeps it silent; revalidates route, gain, channel separation, clock relationship, every exact asset and probe in the pinned source/playlist, and the current playlist item/bookmark; then restarts the output or deliberately reassigns to an eligible node satisfying the same checks. Deliberately returning a deployment to FPP audio is an installation change with its own route and gain checks, never an automatic fallback command.
+
+## Deliverables and order
+
+### Day-0 core
+
+**C0. RES-007 viability and commissioning bench, in two non-blocking stages.**
+
+- **C0a, available immediately:** build the minimum N-output GStreamer pipeline on a representative Linux host using virtual/null/loopback audio devices and any available Linux-supported interface. Exercise pipeline construction from runtime-discovered capabilities, channel mapping, program/LTC separation in the graph, decode, sessions, gain changes, ducking, playlists, gap/loop behavior, telemetry, and failure injection that does not claim physical-device behavior. C0a, C1–C4, C6, and the non-hardware portions of C7 do not wait for the eventual show interface.
+- **C0b, per-device commissioning when hardware is available:** on the actual candidate interface, send tone to the intended LTC output and prove it does not appear on program, then record program audio, LTC, and a visual reference together. Measure physical channel independence, click-free output, full-show program-to-LTC alignment, drift, hot-plug, sample-rate changes, and the installed-path alignment acquisition method. Failure blocks that interface's placement and Day-0 readiness; it does not invalidate the device-agnostic engine or stop work on the track.
+
+**C1. Audio capability and placement.** Advertise engine/output capabilities, reported output count, route identity, and clock domain. Refuse a placement that lacks a discrete same-clock LTC output or required session operation. Capability evidence is discovered, not hand-entered.
+
+**C2. Asset resolution and probe.** Resolve exact Track E content to a safe local path, recheck hash/size at the required boundary, probe media metadata, and expose readiness faults. Exercise missing, corrupt, changed, unsupported, and duration-unknown files.
+
+**C3. Authoritative playback sessions.** Implement state, revisions, idempotent commands, media changes, start/stop, pause/resume, seek/restart, natural completion, loop/resume policy, drift observation, explicit boundary correction, and timing-authority loss/reacquisition. A playlist pins an ordered revision, current item identity/index/position, and repeat mode; advancement occurs exactly once, and a stale bookmark or missing/corrupt next item fails visibly. Persist the completion/advance boundary with a stable item invocation identity so a crash cannot replay the prior item or skip/double-start the next one.
+
+**C4. Program mix and Resting Mode primitives.** Implement background, show, announcement, and manual sources; multi-item background playlists; gain ceilings; fades with observable completion; duck/mix/interrupt policy; and clean restoration of the prior source after an announcement. Default playlist item changes promise neither overlap nor gapless playback; requested gapless or crossfade behavior requires matching output capability and measurement.
+
+**C5. LTC and physical outputs.** Generate LTC on the discrete same-clock output, route stereo program to local/FM outputs, and expose LTC state. Exercise start, stop, seek, restart, and signal loss against Track D's destination-side bench.
+
+**C6. Telemetry, readiness, and command outcomes.** Publish all session/playlist, asset, device, route, mix, gain, timing, drift, LTC, freshness, and operation evidence required by the Audio Engine, Resting Mode, Observability, and Operator UI specifications. Program-to-LTC evidence includes current measured offset, method/provenance, measured-at time, freshness, threshold, and verdict; the pre-show readiness run obtains a fresh installed-path measurement rather than reusing commissioning history.
+
+**C7. Failure containment and manual recovery.** Exercise device unplug/replug, pipeline crash/freeze, decode failure, asset loss, sample-rate or route change, timing-authority loss, coordinator loss, broker loss, process restart, and both crash sides of natural item completion/playlist advancement. Failed output stays silent; unaffected outputs continue; already-playing local media survives loss of the coordinator and broker; later unavailable transitions fail visibly. Publish and execute the manual restoration procedure.
+
+### After the core session engine; not a Day-0 gate
+
+**C8. Generic synchronized-remote-output mock.** Implement the `AUDIO-ENGINE.md` §8 contract against a deterministic fake destination. It accepts advance provisioning keyed by destination-configuration revision plus ShowMesh asset id/content hash and consumes the engine's real media/playlist selection, item advancement, start, stop, position, source-role, loop, item-transition, and gain-intent events.
+
+The fake provides configurable capability profiles and evidence quality. At minimum it exercises:
+
+- full mix reproduction versus one-session-only output;
+- playlists, sequential/gapless/crossfade item transitions, mixing, announcements, ducking, looping, gain fades, seeking, and position reporting as independently supported, unsupported, or unknown;
+- provisioning before playback, duplicate provisioning, same filename with a replaced hash, failed transfer, acknowledgement without readiness, and no status interface;
+- optional-output warnings versus a required-output policy whose current evidence covers every exact required playlist and announcement hash; prove that one manually verified item plus one unverified item remains unsatisfied;
+- delayed, duplicate, and out-of-order commands without a stale command overwriting newer desired state.
+
+The FPP-recognized audio formats form the initial **L0 test corpus** for adapter work. Passing the mock proves only ShowMesh's boundary. It proves no real service accepts those formats, uploads a file, completes processing, stays synchronized, or plays on a phone.
 
 ## Acceptance criteria
 
-- **The LTC output carries LTC and the program pair carries program, on the interface actually in use**, proven by measurement rather than by that interface's marketing. Which output number that is depends on the device and is not fixed by this document.
-- **A node whose interface cannot supply a discrete output outside the program pair is refused ADR-018 placement by the coordinator**, from advertised attributes, rather than being discovered by a listener during a show.
-- Program-to-LTC alignment is measured over a full-show duration and recorded in RES-007 with the host, interface, sample rate, and audio stack named.
-- Drift against the FPP show timeline over a 30 to 60 minute show is measured, which is one of RES-007's two headline numbers and cannot be produced by a unit test.
-- Pulling the interface mid-playback stops that output, keeps session state, marks critical, alerts, and **does not** route anything to FPP audio.
-- A discrete boundary correction is audibly acceptable, judged on the real system.
+Day-0 is not accepted until all of the following are observed on the assembled local path:
 
-**Bound by:** ADR-007, ADR-011, ADR-017, ADR-018, ADR-019, and `AUDIO-ENGINE.md`.
+1. The installed interface carries stereo program and discrete LTC with no LTC on the program pair, proven by measurement.
+2. A node or route that cannot satisfy the same-clock discrete-output constraint is refused before playback.
+3. Exact node-local assets start at the requested authoritative position; missing, changed, corrupt, and undecodable content is refused explicitly.
+4. A real show media change, start, pause/resume where observable, seek/restart, natural completion, and stop produce the documented session transitions and fresh position/drift evidence.
+5. Background audio loops, resumes or restarts as configured, never exceeds its maximum gain, fades on independently timed cues, and reports fade completion.
+6. A real multi-item background playlist advances each item once, repeats at the configured scope, resumes from the pinned item/position, completes correctly, measures its inter-item gap, and fails visibly when the next item is missing or corrupt. Required gapless or crossfade configuration is refused when unsupported.
+7. Show audio replaces or ducks background as configured; an announcement over background and over show audio applies its declared policy and restores the prior mix once.
+8. Replaying the same cue invocation after a crash does not duplicate the audible effect; a stale desired revision cannot reverse a newer state.
+9. Crashes immediately before and after persisted natural item completion recover to one unambiguous current item without replaying the completed item or skipping/double-starting the next one.
+10. Program-to-LTC alignment and drift are measured over a 30–60 minute show with host, interface, sample rate, audio stack, and results recorded in RES-007.
+11. A pre-show readiness run measures the installed program-to-LTC offset freshly, records method/provenance and threshold, and returns `within_tolerance`, `out_of_tolerance`, or `unknown` without treating stale commissioning evidence as current.
+12. Pulling the interface and the other C7 faults produce the specified silent/degraded behavior, critical evidence, and no automatic FPP-audio fallback.
+13. The documented manual recovery procedure is executed before sound resumes, including route, gain, channel separation, clock relationship, every pinned asset/probe, and current playlist item/bookmark validation.
+14. Coordinator and broker loss do not stop media already playing from local storage; transitions needing unavailable authority fail visibly.
+15. Track F's background, announcement, fade, barrier, and recovery cases pass against the real engine rather than only its fakes.
 
-**Out of scope:** Dante, multi-node audio failover (deferred by ADR-019 until the roadmap's failover item lands, and operator-initiated before that), and any use of FPP's audio output.
+C8 is accepted separately when its mock trace proves advance provisioning and every capability/evidence profile above without making a real third-party integration or Day-0 claim.
+
+## Decisions still open
+
+- PipeWire or raw ALSA, decided by RES-007 evidence rather than preference.
+- The tolerable drift threshold and whether discrete correction is audibly acceptable.
+- LTC frame-rate configuration, coupled to RES-001 and the actual Resolume input.
+- The installed-path program-to-LTC measurement mechanism. C0 must select and bench a repeatable acquisition method that measures the physical outputs and records provenance; until then pre-show alignment is `unknown`, never inferred from shared-clock configuration alone.
+- Per-show announcement policy: mix, duck, interrupt, or unsupported for each output.
+- Real third-party upload, acknowledgement, processing, playback, format, authentication, retention, privacy, and timing behavior in RES-016.
+
+**Bound by:** ADR-007, ADR-008, ADR-011, ADR-017, ADR-018, ADR-019, ADR-028, `AUDIO-ENGINE.md`, and the command envelope in ARCHITECTURE §8.1.
+
+**Out of Day-0 scope:** a real synchronized third-party destination, Dante as a required transport, real-time PCM streaming between ShowMesh nodes, automatic or sample-transparent failover, multi-zone audio, dynamic clock-rate correction, and automatic fallback to FPP audio.

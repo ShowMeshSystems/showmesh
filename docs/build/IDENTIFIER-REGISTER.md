@@ -79,9 +79,9 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.surface` | operator-chosen | shipped | Track E |
 | `show.action` | operator-chosen | shipped | Step 9 |
 | `show.macro` | operator-chosen | shipped | Step 9 |
-| `resolume.instances` | `default` singleton | **reserved** | Track G seam G-2 |
-| `fpp.mqtt` | `default` singleton | **reserved** | Track G seam G-3 |
-| `assets.settings` | `default` singleton | **reserved** | Track G seam G-4 |
+| `resolume.instances` | `default` singleton | shipped | Track G seam G-2 |
+| `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
+| `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
 | `render.settings` | `default` singleton | **reserved** | Track B seam B2 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
@@ -117,11 +117,11 @@ bundles of these (ADR-024).
 | `resolume:action` | shipped | the seven Resolume actions |
 | `asset:write` | shipped | asset upload |
 | `render:command` | **reserved** | Track B seam B2: surface apply/clear, pipeline restart |
-| `principal:write` | **declared, guards nothing** | first callers land in Track G seam G-5 |
-| `principal:read` | **reserved** | Track G seam G-5 |
+| `principal:write` | shipped | the nine principal/token administration writes (Track G seam G-5) |
+| `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 
-`principal:write` has been in the admin bundle since Step 6 and no handler
-checks it. Treat it as reserved-and-unimplemented, not as available.
+`principal:write` sat in the admin bundle unchecked from Step 6 until Track
+G seam G-5 landed its first callers (merged 2026-08-17).
 
 ## Collector source ids
 

@@ -299,6 +299,22 @@ type Config struct {
 	// every cycle rather than ready. Defaults to 2 minutes, matching the
 	// agent's own default.
 	AssetInventoryInterval time.Duration
+
+	// AssetSettingsEnvVarsSet records whether ANY of the four
+	// SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/
+	// SHOWMESH_ASSET_SYNC_INTERVAL/SHOWMESH_ASSET_INVENTORY_INTERVAL
+	// variables is currently set in the PROCESS ENVIRONMENT this
+	// LoadConfigFrom call read from — mirroring [Config.FPPEndpointsEnvSet]'s
+	// identical "raw environment fact, independent of what value this
+	// coordinator ended up using" role for Track G seam G-4 (ADR-039). The
+	// four variables migrate and are refused-while-set as one group (they
+	// were promoted together, per this kind's own config/assetsettings.go
+	// doc comment), so one bool covers all four rather than four separate
+	// flags. "Set" is checked as non-empty, exactly like FPPEndpointsEnvSet's
+	// identical convention — a blank-but-present line in an operator's .env
+	// must not trip a refusal built for the non-empty case.
+	AssetSettingsEnvVarsSet bool
+
 	// ResolumeRecoverySettle is SHOWMESH_RESOLUME_RECOVERY_SETTLE (Track D
 	// seam D-3a §5 term 2): how long the crash-recovery gate waits after
 	// Resolume becomes reachable again before issuing anything beyond the
@@ -592,6 +608,18 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	// assetSettingsEnvVarsSet backs [Config.AssetSettingsEnvVarsSet]: true
+	// when ANY of the four variables is present and non-empty, regardless
+	// of whether its parsed value above equals its default — a variable
+	// explicitly set to the default is still "set" for this purpose,
+	// exactly like [Config.FPPEndpointsEnvSet]'s identical convention.
+	rawAssetContentBaseURL, _ := lookup(envAssetContentBaseURL)
+	rawAssetMaxUploadBytes, _ := lookup(envAssetMaxUploadBytes)
+	rawAssetSyncInterval, _ := lookup(envAssetSyncInterval)
+	rawAssetInventoryInterval, _ := lookup(envAssetInventoryInterval)
+	assetSettingsEnvVarsSet := rawAssetContentBaseURL != "" || rawAssetMaxUploadBytes != "" ||
+		rawAssetSyncInterval != "" || rawAssetInventoryInterval != ""
+
 	cfg := Config{
 		HTTPAddr:     getEnvDefault(lookup, EnvHTTPAddr, DefaultHTTPAddr),
 		MQTTBroker:   getEnvDefault(lookup, envMQTTBroker, defaultBroker),
@@ -629,12 +657,13 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 		ResolumePollInterval:      resolumePollInterval,
 		ResolumeWebSocketDisabled: resolumeWebSocketDisabled,
 
-		AssetDir:               getEnvDefault(lookup, envAssetDir, filepath.Join(dataDir, "assets")),
-		AssetMaxUploadBytes:    assetMaxUploadBytes,
-		AssetContentBaseURL:    getEnvDefault(lookup, envAssetContentBaseURL, ""),
-		AssetSyncInterval:      assetSyncInterval,
-		AssetInventoryInterval: assetInventoryInterval,
-		ResolumeRecoverySettle: resolumeRecoverySettle,
+		AssetDir:                getEnvDefault(lookup, envAssetDir, filepath.Join(dataDir, "assets")),
+		AssetMaxUploadBytes:     assetMaxUploadBytes,
+		AssetContentBaseURL:     getEnvDefault(lookup, envAssetContentBaseURL, ""),
+		AssetSyncInterval:       assetSyncInterval,
+		AssetInventoryInterval:  assetInventoryInterval,
+		AssetSettingsEnvVarsSet: assetSettingsEnvVarsSet,
+		ResolumeRecoverySettle:  resolumeRecoverySettle,
 	}
 
 	if err := cfg.Validate(); err != nil {

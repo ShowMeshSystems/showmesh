@@ -79,6 +79,16 @@ func (a *resolumeRecoveryAdapter) LastReport() *api.ResolumeRecoveryRestoreRepor
 	return a.last
 }
 
+// Configured always reports true: a *resolumeRecoveryAdapter exists at all
+// only for an instance resolumeManager has actually built a bundle for
+// (resolumemanager.go), so its own existence already answers this
+// question. resolumeManager itself, not this type, is what
+// api.Dependencies.ResolumeRecovery is wired to — see
+// [api.ResolumeRecoveryProvider.Configured]'s own doc comment for why the
+// manager needs a LIVE answer this type alone cannot give (it has no
+// "unconfigured" state to be in).
+func (a *resolumeRecoveryAdapter) Configured() bool { return true }
+
 func (a *resolumeRecoveryAdapter) Restore(ctx context.Context, principalName string) (api.ResolumeRecoveryRestoreReportView, error) {
 	report := a.recovery.RunManualRestore(ctx)
 	view := mapRestoreReport(report, principalName)

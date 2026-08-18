@@ -342,6 +342,22 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Track G seam G-3: h.deps.FPPMQTTHostIDs is a startup snapshot and
+	// cannot see an fpp.mqtt configured or changed after this coordinator
+	// started (that kind applies without a restart too — ADR-036). Read
+	// live, through Dependencies.FPPMQTT, exactly like the Resolume
+	// instance re-check immediately below, so this refusal cannot be sailed
+	// past by writing fpp.endpoints first and fpp.mqtt second.
+	liveFPPMQTTHosts, err := h.deps.FPPMQTT.CurrentHosts(r.Context())
+	if err != nil {
+		h.writeInternalError(w, now, "get current fpp.mqtt hosts for fpp.endpoints collision check", err)
+		return
+	}
+	if err := config.ValidateFPPMQTTHostIDs(liveFPPMQTTHosts, endpoints); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
+	}
+
 	// Track D seam D-1 review finding 1, run only once the list is
 	// shape-valid, for the identical reason Defect 4 is: see this
 	// function's own doc comment. h.deps.ResolumeID is already "" when the
@@ -364,6 +380,28 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 			h.deps.ResolumeID,
 		)))
 		return
+	}
+
+	// Track G seam G-2: h.deps.ResolumeID is a startup snapshot and cannot
+	// see a resolume.instances configured or changed after this coordinator
+	// started (that kind applies without a restart — ADR-036). Read live,
+	// through Dependencies.Resolume exactly like GET /resolume/instances
+	// itself does, so this refusal cannot be sailed past by writing
+	// fpp.endpoints first and resolume.instances second, in either order.
+	resolumeIDs, err := currentResolumeInstanceIDs(r.Context(), h.deps.Resolume)
+	if err != nil {
+		h.writeInternalError(w, now, "get current resolume.instances for fpp.endpoints collision check", err)
+		return
+	}
+	for _, id := range resolumeIDs {
+		if err := config.ValidateResolumeIDAgainstFPPEndpoints(id, endpoints); err != nil {
+			writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
+				"endpoint id %q is the same id a configured Resolume instance uses; "+
+					"rename this endpoint's id, or change the Resolume instance id (PUT /api/v1/config/resolume.instances), then retry.",
+				id,
+			)))
+			return
+		}
 	}
 
 	payloadJSON, err := config.EncodeFPPEndpointsPayload(endpoints)

@@ -28,10 +28,25 @@ import (
 // (new to this seam) a real assetstore.VolumeBackend rooted at a temp
 // directory, driven through the real route table.
 
+// fakeAssetSettingsSource is a test-only, mutable [AssetSettingsSource] —
+// Track G seam G-4 replaced the old plain-field AssetMaxUploadBytes/
+// AssetInventoryInterval/AssetSyncEnabled dependencies with one live
+// interface, so a test that used to assign a field now constructs one of
+// these (or mutates the one assetsTestDeps already wired in).
+type fakeAssetSettingsSource struct {
+	contentBaseURL    string
+	maxUploadBytes    int64
+	inventoryInterval time.Duration
+}
+
+func (f *fakeAssetSettingsSource) ContentBaseURL() string           { return f.contentBaseURL }
+func (f *fakeAssetSettingsSource) MaxUploadBytes() int64            { return f.maxUploadBytes }
+func (f *fakeAssetSettingsSource) InventoryInterval() time.Duration { return f.inventoryInterval }
+
 // assetsTestDeps mirrors showObjectsTestDeps, additionally wiring a real
-// VolumeBackend and a generous AssetMaxUploadBytes so ordinary tests never
-// trip the size bound; tests proving the bound itself override
-// AssetMaxUploadBytes explicitly.
+// VolumeBackend and a generous upload limit so ordinary tests never trip
+// the size bound; tests proving the bound itself override
+// deps.AssetSettings explicitly.
 func assetsTestDeps(t *testing.T, svc identity.Service, st *store.Store) Dependencies {
 	t.Helper()
 	backend, err := assetstore.NewVolumeBackend(t.TempDir())
@@ -41,7 +56,7 @@ func assetsTestDeps(t *testing.T, svc identity.Service, st *store.Store) Depende
 	deps := showObjectsTestDeps(svc, st)
 	deps.Assets = st
 	deps.AssetBackend = backend
-	deps.AssetMaxUploadBytes = 1 << 20 // 1 MiB, generous for every test fixture in this file
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: 1 << 20} // 1 MiB, generous for every test fixture in this file
 	return deps
 }
 
@@ -532,7 +547,7 @@ func TestPostAssetUploadTooLarge(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	deps := assetsTestDeps(t, svc, st)
-	deps.AssetMaxUploadBytes = 4 // tiny, deliberately
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: 4} // tiny, deliberately
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
@@ -675,7 +690,7 @@ func TestGetAssetContentTruncatedBlobFailsLoudly(t *testing.T) {
 	deps := showObjectsTestDeps(svc, st)
 	deps.Assets = st
 	deps.AssetBackend = backend
-	deps.AssetMaxUploadBytes = 1 << 20
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: 1 << 20}
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
@@ -910,7 +925,7 @@ func TestGetAssetContentSurvivesServerWriteTimeout(t *testing.T) {
 	deps := showObjectsTestDeps(svc, st)
 	deps.Assets = st
 	deps.AssetBackend = slowAssetBackend{Backend: backend, perReadDelay: 40 * time.Millisecond, chunkBytes: 4}
-	deps.AssetMaxUploadBytes = 1 << 20
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: 1 << 20}
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)

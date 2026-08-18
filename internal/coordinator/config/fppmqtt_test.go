@@ -1,0 +1,109 @@
+package config
+
+import "testing"
+
+func TestEncodeDecodeFPPMQTTPayloadRoundTrip(t *testing.T) {
+	cfg := FPPMQTTConfig{
+		BrokerURL: "tcp://broker:1883", Username: "showmesh",
+		TopicPrefix: "falcon/player", Hosts: map[string]string{"player-01": "FPP-Player"},
+	}
+	raw, err := EncodeFPPMQTTPayload(cfg, true)
+	if err != nil {
+		t.Fatalf("EncodeFPPMQTTPayload: %v", err)
+	}
+	got, passwordSet, err := DecodeFPPMQTTPayload(raw)
+	if err != nil {
+		t.Fatalf("DecodeFPPMQTTPayload: %v", err)
+	}
+	if !FPPMQTTConfigEqual(got, cfg) {
+		t.Errorf("round trip = %+v, want %+v", got, cfg)
+	}
+	if !passwordSet {
+		t.Errorf("passwordSet = false, want true")
+	}
+}
+
+func TestEncodeFPPMQTTPayloadNeverNullHosts(t *testing.T) {
+	raw, err := EncodeFPPMQTTPayload(FPPMQTTConfig{}, false)
+	if err != nil {
+		t.Fatalf("EncodeFPPMQTTPayload: %v", err)
+	}
+	cfg, passwordSet, err := DecodeFPPMQTTPayload(raw)
+	if err != nil {
+		t.Fatalf("DecodeFPPMQTTPayload: %v", err)
+	}
+	if cfg.Hosts == nil {
+		t.Errorf("decoded Hosts = nil, want a non-nil empty map")
+	}
+	if passwordSet {
+		t.Errorf("passwordSet = true, want false")
+	}
+}
+
+func TestFPPMQTTConfigEqual(t *testing.T) {
+	a := FPPMQTTConfig{BrokerURL: "tcp://b:1883", Username: "u", TopicPrefix: "p", Hosts: map[string]string{"x": "y"}}
+	b := FPPMQTTConfig{BrokerURL: "tcp://b:1883", Username: "u", TopicPrefix: "p", Hosts: map[string]string{"x": "y"}}
+	if !FPPMQTTConfigEqual(a, b) {
+		t.Errorf("identical configs reported unequal")
+	}
+	c := b
+	c.Username = "different"
+	if FPPMQTTConfigEqual(a, c) {
+		t.Errorf("differing username reported equal")
+	}
+	d := b
+	d.Hosts = map[string]string{"x": "different"}
+	if FPPMQTTConfigEqual(a, d) {
+		t.Errorf("differing host value reported equal")
+	}
+	e := b
+	e.Hosts = map[string]string{"other": "y"}
+	if FPPMQTTConfigEqual(a, e) {
+		t.Errorf("differing host key reported equal")
+	}
+}
+
+func TestValidateFPPMQTTConfigKindRejectsBrokerWithNoHosts(t *testing.T) {
+	cfg := FPPMQTTConfig{BrokerURL: "tcp://broker:1883"}
+	if err := ValidateFPPMQTTConfigKind(cfg, nil); err == nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: want an error for a broker URL with no hosts")
+	}
+}
+
+func TestValidateFPPMQTTConfigKindRejectsUserinfo(t *testing.T) {
+	cfg := FPPMQTTConfig{
+		BrokerURL: "tcp://user:pass@broker:1883",
+		Hosts:     map[string]string{"player-01": "FPP-Player"},
+	}
+	if err := ValidateFPPMQTTConfigKind(cfg, nil); err == nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: want an error for userinfo embedded in the broker URL")
+	}
+}
+
+func TestValidateFPPMQTTConfigKindRejectsHostIDNotInFPPEndpoints(t *testing.T) {
+	cfg := FPPMQTTConfig{
+		BrokerURL: "tcp://broker:1883",
+		Hosts:     map[string]string{"player-01": "FPP-Player"},
+	}
+	if err := ValidateFPPMQTTConfigKind(cfg, nil); err == nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: want an error when the host id is not a configured fpp.endpoints id")
+	}
+	if err := ValidateFPPMQTTConfigKind(cfg, []FPPEndpoint{{ID: "player-01", URL: "http://player-01"}}); err != nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: unexpected error once the host id is a configured fpp.endpoints id: %v", err)
+	}
+}
+
+func TestValidateFPPMQTTConfigKindRejectsDuplicateHostName(t *testing.T) {
+	cfg := FPPMQTTConfig{
+		Hosts: map[string]string{"player-01": "FPP-Player", "player-02": "FPP-Player"},
+	}
+	if err := ValidateFPPMQTTConfigKind(cfg, nil); err == nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: want an error when two instance ids share one HostName")
+	}
+}
+
+func TestValidateFPPMQTTConfigKindAllowsUnconfigured(t *testing.T) {
+	if err := ValidateFPPMQTTConfigKind(FPPMQTTConfig{}, nil); err != nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: unexpected error for a fully empty (unconfigured) payload: %v", err)
+	}
+}

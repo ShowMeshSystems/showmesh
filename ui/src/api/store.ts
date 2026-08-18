@@ -96,6 +96,15 @@ type SchemaSessionResponse = components['schemas']['SessionResponse']
 type SchemaFPPEndpointsConfigResponse = components['schemas']['FPPEndpointsConfigResponse']
 type SchemaConfigFPPEndpointsPayload = components['schemas']['ConfigFPPEndpointsPayload']
 type SchemaConfigRevisionsResponse = components['schemas']['ConfigRevisionsResponse']
+// Track G seam G-2 (ADR-039).
+type SchemaResolumeInstancesConfigResponse = components['schemas']['ResolumeInstancesConfigResponse']
+type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolumeInstancesPayload']
+// Track G seam G-3 (ADR-039).
+type SchemaFPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
+type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+// Track G seam G-4 (ADR-039).
+type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
+type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -139,6 +148,27 @@ type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsRespo
 type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
 type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
 type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
+// Track G seam G-5: identity administration over the API.
+type SchemaPrincipalsResponse = components['schemas']['PrincipalsResponse']
+type SchemaPrincipalResponse = components['schemas']['PrincipalResponse']
+type SchemaCreatePrincipalRequest = components['schemas']['CreatePrincipalRequest']
+type SchemaSetPrincipalRoleRequest = components['schemas']['SetPrincipalRoleRequest']
+type SchemaSetPrincipalPasswordRequest = components['schemas']['SetPrincipalPasswordRequest']
+type SchemaTokensResponse = components['schemas']['TokensResponse']
+type SchemaIssueTokenRequest = components['schemas']['IssueTokenRequest']
+type SchemaIssueTokenResponse = components['schemas']['IssueTokenResponse']
+// Track G seam G-8: the Operator UI for Track E (ADR-027, ADR-026,
+// ADR-028) — show, show.surface, show.active, asset, and audit shapes.
+type SchemaConfigShowWrite = components['schemas']['ConfigShowWrite']
+type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
+type SchemaConfigShowSurface = components['schemas']['ConfigShowSurface']
+type SchemaConfigShowActive = components['schemas']['ConfigShowActive']
+type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
+type SchemaAssetResponse = components['schemas']['AssetResponse']
+type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
+type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
+type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaAuditResponse = components['schemas']['AuditResponse']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -534,6 +564,156 @@ export class ApiStore {
     }
   }
 
+  // -- Track G seam G-2 (ADR-039): the resolume.instances configuration
+  // write surface. Same thin pass-through shape as the fpp.endpoints trio
+  // just above, including the same "the config view calls this directly
+  // and renders (or fails to reach, and renders THAT) itself" posture.
+
+  /** `GET /api/v1/config/resolume.instances` (Track G seam G-2). Throws (404) when nothing has been configured yet. */
+  async getResolumeInstancesConfig(): Promise<SchemaResolumeInstancesConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaResolumeInstancesConfigResponse>(
+        '/config/resolume.instances',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/resolume.instances` (Track G seam G-2). Validated
+   * before-activation server-side (ADR-009) — a rejected payload throws
+   * and appends no revision; the caller (the config view's save handler)
+   * renders the thrown error via `describeApiError`, matching
+   * `putFPPEndpointsConfig`'s identical contract.
+   */
+  async putResolumeInstancesConfig(
+    payload: SchemaConfigResolumeInstancesPayload,
+  ): Promise<SchemaResolumeInstancesConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaResolumeInstancesConfigResponse>(
+        '/config/resolume.instances',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/resolume.instances/revisions` (Track G seam G-2): revision history, newest first, metadata only. */
+  async getResolumeInstancesConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/resolume.instances/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-3 (ADR-039): the fpp.mqtt configuration write
+  // surface. Unlike resolume.instances/fpp.endpoints, `set` is a PARTIAL
+  // UPDATE (every field independently optional — see
+  // ConfigFPPMQTTPutRequest's own doc comment); the caller builds a
+  // request object naming only the fields it actually intends to change.
+
+  /** `GET /api/v1/config/fpp.mqtt` (Track G seam G-3). Throws (404) when nothing has been configured yet. The broker password is never returned — `payload.passwordSet` reports presence only. */
+  async getFPPMQTTConfig(): Promise<SchemaFPPMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPMQTTConfigResponse>('/config/fpp.mqtt', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/fpp.mqtt` (Track G seam G-3). A key absent from
+   * request leaves that field's stored value unchanged (ADR-039 decision
+   * 5) — this is what lets the operator edit, say, only topicPrefix
+   * without re-typing a password `getFPPMQTTConfig` never gave back.
+   * Validated before activation (ADR-009) — a rejected payload throws and
+   * appends no revision.
+   */
+  async putFPPMQTTConfig(request: SchemaConfigFPPMQTTPutRequest): Promise<SchemaFPPMQTTConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPMQTTConfigResponse>('/config/fpp.mqtt', request, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/fpp.mqtt/revisions` (Track G seam G-3): revision history, newest first, metadata only. */
+  async getFPPMQTTConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fpp.mqtt/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-4 (ADR-039): the assets.settings configuration write
+  // surface. Same thin pass-through shape as resolume.instances just
+  // above — the one difference is putAssetsSettingsConfig's payload type,
+  // which is INTENTIONALLY the separate PutPayload schema (every field
+  // optional), not the response payload schema.
+
+  /** `GET /api/v1/config/assets.settings` (Track G seam G-4). Throws (404) when nothing has been configured yet. */
+  async getAssetsSettingsConfig(): Promise<SchemaAssetsSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAssetsSettingsConfigResponse>(
+        '/config/assets.settings',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/assets.settings` (Track G seam G-4). payload
+   * carries ONLY the fields the caller wants to change — an absent field
+   * leaves the stored value alone (ADR-039 decision 5). Validated
+   * before-activation server-side (ADR-009) — a rejected payload throws
+   * and appends no revision.
+   */
+  async putAssetsSettingsConfig(
+    payload: SchemaConfigAssetsSettingsPutPayload,
+  ): Promise<SchemaAssetsSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaAssetsSettingsConfigResponse>(
+        '/config/assets.settings',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/assets.settings/revisions` (Track G seam G-4): revision history, newest first, metadata only. */
+  async getAssetsSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/assets.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/fpp.endpoints/revisions` (Step 7 seam A): revision history, newest first, metadata only. */
   async getFPPEndpointsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -808,6 +988,147 @@ export class ApiStore {
     return this.dispatchResolumeAction({ action: 'setLayerMaster', params: { layer, master } })
   }
 
+  // -- Track G seam G-5: identity administration over the API -----------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as Step 7 seam A's fpp.endpoints methods above:
+  // principals and tokens are not part of the SSE snapshot/delta stream
+  // (ADR-020 change-stream resources), so there is nothing here for
+  // `wakeReadLoop()` to do. Every write requires principal:write and every
+  // read requires principal:read (ADR-024, ADR-039 decision 8) — the
+  // Access view (views/Access.tsx) is this surface's only caller and
+  // gates itself on those scopes via `evaluateScope`, mirroring
+  // Configuration.tsx's own posture for config:write.
+
+  /** `GET /api/v1/principals` (Track G seam G-5). Requires principal:read. */
+  async listPrincipals(): Promise<SchemaPrincipalsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaPrincipalsResponse>('/principals', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals` (Track G seam G-5). Requires principal:write. */
+  async createPrincipal(payload: SchemaCreatePrincipalRequest): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>('/principals', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/principals/{id}/role` (Track G seam G-5). Throws (409)
+   * when this would leave no enabled principal able to reach
+   * principal:write (ADR-039 decision 8) — the caller renders the thrown
+   * error via `describeApiError`, matching every other write in this app.
+   */
+  async setPrincipalRole(id: string, payload: SchemaSetPrincipalRoleRequest): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/role`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/principals/{id}/disable` (Track G seam G-5). Throws
+   * (409) when this is the coordinator's last enabled administrator
+   * (ADR-039 decision 8).
+   */
+  async disablePrincipal(id: string): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/disable`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/enable` (Track G seam G-5). Never refused for lockout — enabling only ever adds back a way to authenticate. */
+  async enablePrincipal(id: string): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/enable`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/password` (Track G seam G-5). Bumps the target principal's generation, invalidating its existing sessions and tokens. */
+  async resetPrincipalPassword(
+    id: string,
+    payload: SchemaSetPrincipalPasswordRequest,
+  ): Promise<SchemaPrincipalResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaPrincipalResponse>(
+        `/principals/${encodeURIComponent(id)}/password`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/principals/{id}/tokens` (Track G seam G-5). Requires principal:read. Never carries a digest or a raw value. */
+  async listPrincipalTokens(id: string): Promise<SchemaTokensResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaTokensResponse>(
+        `/principals/${encodeURIComponent(id)}/tokens`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /api/v1/principals/{id}/tokens` (Track G seam G-5). The response's `value` is this token's only appearance on the wire, ever again (ADR-024 decision 1). */
+  async issuePrincipalToken(id: string, payload: SchemaIssueTokenRequest): Promise<SchemaIssueTokenResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaIssueTokenResponse>(
+        `/principals/${encodeURIComponent(id)}/tokens`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `DELETE /api/v1/principals/{id}/tokens/{tokenId}` (Track G seam G-5). Throws (409) when this is the last credential able to reach principal:write (ADR-039 decision 8). */
+  async revokePrincipalToken(id: string, tokenId: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(
+        `/principals/${encodeURIComponent(id)}/tokens/${encodeURIComponent(tokenId)}`,
+        undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   // -- Track D seam D-2a (ADR-032): the Resolume composition upload
   // surface ------------------------------------------------------------
   //
@@ -898,11 +1219,26 @@ export class ApiStore {
   // it silently renders empty/403 for the operator role these config
   // kinds exist to serve. See views/Macros.tsx and views/ShowActions.tsx.
 
-  /** `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`, or `GET /api/v1/config/show.surface` — object ids, labels, and current revision only, never the full payloads (STEP-9-SPEC.md section 5.5; show.surface uses the identical `showConfigReadScopes` gate — api.go route table). */
-  async listConfigObjects(kind: 'show.action' | 'show.macro' | 'show.surface'): Promise<SchemaConfigObjectsListResponse> {
+  /**
+   * `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`,
+   * `GET /api/v1/config/show`, or `GET /api/v1/config/show.surface` —
+   * object ids, labels, and current revision only, never the full
+   * payloads (STEP-9-SPEC.md section 5.5; Track G seam G-8 extends this
+   * to `show`/`show.surface`, same shape, same read posture). `show`
+   * narrows `show.surface` to one show's surfaces (`?show=`, ignored by
+   * every other kind, which the API does not accept it on).
+   */
+  async listConfigObjects(
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+    show?: string,
+  ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
     try {
-      return await this.client.getJson<SchemaConfigObjectsListResponse>(`/config/${kind}`, controller.signal)
+      const query = kind === 'show.surface' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
+      return await this.client.getJson<SchemaConfigObjectsListResponse>(
+        `/config/${kind}${query}`,
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }
@@ -1033,6 +1369,260 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show.macro/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track G seam G-8: show, show.surface, show.active, assets, audit --
+  //
+  // Same "plain side-call, never touches `this.model` or the read loop"
+  // posture as every method above — none of this data is part of the SSE
+  // snapshot/delta stream. Reads (show/show.surface/show.active/assets/
+  // manifest) share the show.action/show.macro read posture just above
+  // (`show:macro:run` OR `config:write`); the audit log is the one
+  // exception (`audit:read` only, always, per api/openapi.yaml's own
+  // description of GET /audit — never one of the open-by-default reads).
+
+  /** `GET /api/v1/config/show/{id}`. Throws (404) when no such show exists. */
+  async getShow(id: string): Promise<SchemaShowConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowConfigResponse>(
+        `/config/show/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show/{id}` (ADR-027 decision 2). `config:write`
+   * only. Full replacement: an absent `notes` resolves to empty, never
+   * "keep the previous value" (ConfigShowWrite's own description).
+   */
+  async putShow(id: string, payload: SchemaConfigShowWrite): Promise<SchemaShowConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowConfigResponse>(
+        `/config/show/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.surface/{id}` (ADR-026). `config:write` only.
+   * Full replacement — every field is required on every write, including
+   * `channelRange` (the manual-channel-range path ADR-027 decision 4
+   * makes permanent, not a fallback) and exactly one of `output.ndi` /
+   * `output.hdmi` matching `output.transport`. Validated and normalized
+   * server-side; a rejected payload throws and appends no revision.
+   */
+  async putShowSurface(id: string, payload: SchemaConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowSurfaceConfigResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.surface/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowSurfaceRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.active` (ADR-027 decision 3). Throws (404)
+   * when nothing has ever been activated.
+   */
+  async getShowActive(): Promise<SchemaShowActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowActiveConfigResponse>('/config/show.active', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.active` (ADR-027 decision 3). `config:write`
+   * only. This is the sharp control: activating a different show changes
+   * what every node is expected to hold (ADR-028) — the caller
+   * (views/ShowActive.tsx) must confirm before calling this, never fire it
+   * from a bare click.
+   */
+  async putShowActive(payload: SchemaConfigShowActive): Promise<SchemaShowActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowActiveConfigResponse>(
+        '/config/show.active',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.active/revisions`: revision history, newest first, metadata only. */
+  async getShowActiveRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/show.active/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/assets`, optionally narrowed by show, sequence, and/or
+   * node (ADR-028). Metadata only — bytes never come down this path.
+   */
+  async listAssets(filter?: { show?: string; sequence?: string; node?: string }): Promise<SchemaAssetsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (filter?.show !== undefined && filter.show !== '') params.set('show', filter.show)
+      if (filter?.sequence !== undefined && filter.sequence !== '') params.set('sequence', filter.sequence)
+      if (filter?.node !== undefined && filter.node !== '') params.set('node', filter.node)
+      const query = params.toString()
+      return await this.client.getJson<SchemaAssetsListResponse>(
+        `/assets${query === '' ? '' : `?${query}`}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/assets`, `multipart/form-data` (ADR-028, ADR-030).
+   * Requires `asset:write`. `show`, `sequence`, `mediaType`, and
+   * `targetKind` are required on every call; `target` is required
+   * (non-empty) when `targetKind` is `"node"` — the caller
+   * (components/AssetUpload.tsx) must not omit it, since the target is
+   * part of the asset's own identity (ADR-028 decision 1). `onProgress`
+   * reports real byte counts, matching [uploadResolumeComposition]'s own
+   * contract; a rejected upload (400/413/507) registers nothing and the
+   * caller must not render it as stored (ADR-030: "a partial upload
+   * registers nothing").
+   */
+  async uploadAsset(
+    file: File,
+    fields: { show: string; sequence: string; mediaType: 'fseq' | 'audio' | 'media'; targetKind: 'node' | 'show'; target?: string },
+    onProgress: (progress: UploadProgress) => void,
+  ): Promise<SchemaAssetResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const formFields: Record<string, string> = {
+        show: fields.show,
+        sequence: fields.sequence,
+        mediaType: fields.mediaType,
+        targetKind: fields.targetKind,
+      }
+      if (fields.target !== undefined) formFields.target = fields.target
+      return await uploadFileWithProgress<SchemaAssetResponse>(
+        this.baseUrl,
+        '/assets',
+        file,
+        onProgress,
+        controller.signal,
+        formFields,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * The same-origin URL for `GET /api/v1/assets/{id}/content` (ADR-028).
+   * Never fetched by this store itself — a download is a plain browser
+   * navigation/anchor, which carries the session cookie same-origin per
+   * ADR-022 with no code here needing to touch the bytes.
+   */
+  assetContentUrl(id: string): string {
+    return `${this.baseUrl}/assets/${encodeURIComponent(id)}/content`
+  }
+
+  /**
+   * `GET /api/v1/assets/manifest` (ADR-028 seam E5): every declared
+   * node's asset readiness, "what should it hold" versus "what does it
+   * hold". `ready`/`not_ready`/`unknown` are three distinct states the
+   * caller (views/AssetManifest.tsx) must render distinctly — an
+   * `unknown` verdict is never evidence of absence.
+   */
+  async getAssetManifest(): Promise<SchemaAssetManifestResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAssetManifestResponse>('/assets/manifest', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/nodes/{nodeId}/assets`: the same verdict, for one node. 404 when nodeId is not declared. */
+  async getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeAssetManifestResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/assets`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/audit` (ADR-024 decision 11). Requires `audit:read`
+   * always — this is not one of the four pre-existing open-by-default
+   * reads (api/openapi.yaml's own description of this route).
+   */
+  async listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (filter?.since !== undefined) params.set('since', String(filter.since))
+      if (filter?.limit !== undefined) params.set('limit', String(filter.limit))
+      const query = params.toString()
+      return await this.client.getJson<SchemaAuditResponse>(
+        `/audit${query === '' ? '' : `?${query}`}`,
         controller.signal,
       )
     } finally {
