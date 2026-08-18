@@ -55,11 +55,18 @@ jobs:
           # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
           # took this step from 3 seconds to over 300.
           #
-          # apt has no default network timeout, so the timeouts and the
-          # timeout(1) wrapper keep a stalled fetch from silently consuming
-          # the job's whole budget instead of failing with something to read.
-          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
+          # The runner's default azure.archive.ubuntu.com mirror intermittently
+          # stops answering; apt then retries it per index file before falling
+          # back, so a high retry count makes the stall longer rather than
+          # shorter. Pin the mirrorlist to the canonical archive and keep
+          # retries low so a bad fetch fails over fast. apt sets no network
+          # timeout by default, and the timeout(1) wrapper is the outer bound
+          # so a stall fails with output instead of eating the job budget.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get update $APT_OPTS \
             || sudo timeout 300 apt-get update $APT_OPTS
@@ -141,11 +148,18 @@ jobs:
           # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
           # took this step from 3 seconds to over 300.
           #
-          # apt has no default network timeout, so the timeouts and the
-          # timeout(1) wrapper keep a stalled fetch from silently consuming
-          # the job's whole budget instead of failing with something to read.
-          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
+          # The runner's default azure.archive.ubuntu.com mirror intermittently
+          # stops answering; apt then retries it per index file before falling
+          # back, so a high retry count makes the stall longer rather than
+          # shorter. Pin the mirrorlist to the canonical archive and keep
+          # retries low so a bad fetch fails over fast. apt sets no network
+          # timeout by default, and the timeout(1) wrapper is the outer bound
+          # so a stall fails with output instead of eating the job budget.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get update $APT_OPTS \
             || sudo timeout 300 apt-get update $APT_OPTS
