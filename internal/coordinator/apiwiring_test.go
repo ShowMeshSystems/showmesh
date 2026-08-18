@@ -16,6 +16,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -474,6 +475,206 @@ func TestFPPSinkSkippedPollDeletesNothing(t *testing.T) {
 	}
 	if len(after) != len(seed) {
 		t.Fatalf("after two skipped/partial polls (complete=false): %d observations remain, want unchanged %d — complete=false must delete NOTHING, however non-empty the delivery", len(after), len(seed))
+	}
+}
+
+// TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged is the regression guard
+// for fppSink's notify gate (see its own doc comment): a genuinely empty
+// delivery must never poke the hub, because it can never mutate s.st
+// either way — and a delivery that DOES prune existing rows (the exact
+// case an empty-batch gate would be wrong to skip, if ReplaceObservations
+// pruned that way) must still poke it. Reverting the len(observations) > 0
+// guard in RecordObservations to an unconditional s.notify() makes this
+// test fail on its first assertion (a spurious notify on the empty poll).
+func TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	var notifyCount int
+	sink := &fppSink{st: st, logger: testLogger(), notify: func() { notifyCount++ }}
+
+	// A real, non-empty delivery: must notify.
+	seed := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+		mustMeasured(t, "remote-01", "fpp.port.16.current_ma", float64(0)),
+	}
+	sink.RecordObservations(ctx, seed, true)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after a real delivery = %d, want 1", notifyCount)
+	}
+
+	// A genuinely empty, complete=true delivery: ReplaceObservations
+	// returns immediately on a zero-length batch (see
+	// TestReplaceObservationsEmptyBatchIsNoOp in internal/coordinator/store)
+	// — nothing is pruned, because there is no (resource, source) key in
+	// this call to scope a delete to — so this must not notify either.
+	sink.RecordObservations(ctx, nil, true)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after an empty complete=true delivery = %d, want unchanged 1 (nothing could have changed)", notifyCount)
+	}
+
+	// An empty, complete=false (backed-off) delivery: same reasoning, the
+	// per-observation upsert loop below never runs.
+	sink.RecordObservations(ctx, nil, false)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount after an empty complete=false delivery = %d, want unchanged 1", notifyCount)
+	}
+
+	// A non-empty delivery that OMITS remote-01's port signal (still
+	// mentions fpp.reachable, so the resource's key IS present this time)
+	// drives a real prune via ReplaceObservations — see
+	// TestReplaceObservationsPrunesSignalsNotInDelivery in
+	// internal/coordinator/store for the store-level proof. This is the
+	// shape a wrongly-scoped "skip on anything empty-ish" gate could get
+	// wrong; a plain len(observations) > 0 gate gets it right because the
+	// delivery itself is non-empty.
+	pruning := []observation.Observation{
+		mustMeasured(t, "remote-01", "fpp.reachable", true),
+	}
+	sink.RecordObservations(ctx, pruning, true)
+	if notifyCount != 2 {
+		t.Fatalf("notifyCount after a pruning delivery = %d, want 2 (a prune is a real store mutation)", notifyCount)
+	}
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceFPP, ResourceID: "remote-01"})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after the pruning delivery: %d observations remain, want 1 (fpp.port.16.current_ma must be pruned)", len(after))
+	}
+}
+
+// renderSurfacePayload builds a one-surface [mqttproto.RenderPayload], for
+// surfaceID.
+func renderSurfacePayload(surfaceID string) mqttproto.RenderPayload {
+	return mqttproto.RenderPayload{
+		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
+		GstLaunchAvailable: true,
+		Surfaces: []mqttproto.RenderSurfaceReport{{
+			SurfaceID:     surfaceID,
+			PipelineState: mqttproto.RenderPipelineStateRunning,
+			Since:         time.Unix(1000, 0).UTC(),
+			FramesWritten: 10,
+			Transport:     "ndi",
+			ObservedAt:    time.Unix(2000, 0).UTC(),
+		}},
+	}
+}
+
+// TestFPPSinkPrunesADroppedRenderSurfaceViaAbsence is this codebase's
+// replacement for df483c8's rejected DeleteObservationsForResource
+// approach: noderender is wired to the SAME shared fppSink every other
+// collector uses (coordinator.go), because noderender.Collector.Poll now
+// earns its own completeness claim by emitting an explicit absence for a
+// surface it no longer reports, rather than needing a caller with special
+// knowledge to delete it. Drives the real noderender.Collector against a
+// real *store.Store via fppSink — a fake would only prove this package's
+// own assumptions back at itself.
+//
+// Mutation-checked (collector_test.go's own
+// TestPollEmitsAbsenceForADroppedSurface already covers the collector in
+// isolation; this proves the PERSISTED result all the way through
+// ReplaceObservations' per-signal pruning): if noderender.Collector stopped
+// emitting the absence, this test would see the OLD ghost-row shape (7
+// stale signals) survive unpruned, since there would be no key for that
+// surface at all in the delivery.
+func TestFPPSinkPrunesADroppedRenderSurfaceViaAbsence(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs, complete)
+
+	before, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (before): %v", err)
+	}
+	if len(before) < 2 {
+		t.Fatalf("after the first poll: %d observations stored for surface %q, want several", len(before), "garage")
+	}
+
+	// render-a's node clears its render assignment: its next report names
+	// no surfaces at all. render-b is unaffected and keeps reporting
+	// "patio" every cycle, which is what keeps this poll's overall batch
+	// non-empty.
+	renderStore.Put("render-a", mqttproto.RenderPayload{GstLaunchPath: "/usr/bin/gst-launch-1.0", GstLaunchAvailable: true}, false, time.Now())
+
+	obs2, complete2 := c.Poll(ctx)
+	if !complete2 {
+		t.Fatalf("second Poll complete = false, want true")
+	}
+	sink.RecordObservations(ctx, obs2, complete2)
+
+	after, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "garage"})
+	if err != nil {
+		t.Fatalf("list observations (after): %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after render-a cleared its surface: %d observations remain for %q, want exactly 1 (the absence row)", len(after), "garage")
+	}
+	if after[0].Signal != noderender.SignalSurfacePipelineState {
+		t.Errorf("surviving row's signal = %q, want %q", after[0].Signal, noderender.SignalSurfacePipelineState)
+	}
+	if after[0].Absence != observation.StateNotCollected {
+		t.Errorf("surviving row's absence state = %q, want %q", after[0].Absence, observation.StateNotCollected)
+	}
+	if after[0].Reason == "" {
+		t.Errorf("surviving absence row carries no reason")
+	}
+
+	// Sanity: render-b's still-live surface must be unaffected either way.
+	stillThere, err := st.ListObservations(ctx, store.ObservationFilter{ResourceKind: observation.ResourceSurface, ResourceID: "patio"})
+	if err != nil {
+		t.Fatalf("list observations (patio): %v", err)
+	}
+	if len(stillThere) < 2 {
+		t.Errorf("render-b's still-live surface %q lost rows too, want unaffected (%d remain)", "patio", len(stillThere))
+	}
+}
+
+// TestSeedNodeRenderKnownSurfacesGroupsByNode proves coordinator.go's
+// restart-seeding helper: it reads back persisted surface.pipeline.state
+// rows and groups them by the node that produced each one, via
+// noderender.NodeFromSource, so a fresh Collector after a restart is not
+// starting with amnesia about every surface a still-live node had already
+// reported.
+func TestSeedNodeRenderKnownSurfacesGroupsByNode(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	renderStore := noderender.NewStore()
+	renderStore.Put("render-a", renderSurfacePayload("garage"), false, time.Now())
+	renderStore.Put("render-b", renderSurfacePayload("patio"), false, time.Now())
+	c := noderender.New(renderStore)
+	obs, complete := c.Poll(ctx)
+	if !complete {
+		t.Fatalf("Poll complete = false, want true")
+	}
+	if err := st.ReplaceObservations(ctx, obs); err != nil {
+		t.Fatalf("persist observations: %v", err)
+	}
+
+	known, err := seedNodeRenderKnownSurfaces(ctx, st)
+	if err != nil {
+		t.Fatalf("seedNodeRenderKnownSurfaces: %v", err)
+	}
+	if _, ok := known["render-a"]["garage"]; !ok {
+		t.Errorf("known[render-a] = %v, want it to contain %q", known["render-a"], "garage")
+	}
+	if _, ok := known["render-b"]["patio"]; !ok {
+		t.Errorf("known[render-b] = %v, want it to contain %q", known["render-b"], "patio")
+	}
+	if _, ok := known["render-a"]["patio"]; ok {
+		t.Errorf("known[render-a] wrongly contains render-b's surface %q", "patio")
 	}
 }
 

@@ -11,13 +11,24 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // advertiseTimeout bounds the on-connect hello + LWT-online publish pair so
 // a hung publish cannot leak the goroutine newMQTTConn's OnConnectionUp
-// callback spawns for it.
+// callback spawns for it. Since review finding 14, real capability
+// detection never runs inside this budget — see capabilityDetectionTimeout
+// and scheduleCapabilityDetection.
 const advertiseTimeout = 10 * time.Second
+
+// capabilityDetectionTimeout bounds one background detection run
+// (scheduleCapabilityDetection), independent of advertiseTimeout.
+// detectCapabilities can run up to three real gst-launch-1.0 probes,
+// each bounded by pipeline.probeTimeout (8s); this leaves headroom for
+// all three plus the republish that follows, without ever being able to
+// compete with the hello publish's own budget for time.
+var capabilityDetectionTimeout = 30 * time.Second
 
 // willDisconnectReason is the Reason recorded on the Will payload
 // registered at CONNECT time (see newMQTTConn). It describes what the
@@ -42,12 +53,17 @@ func platformString() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
-// publishHello publishes cfg's identity and (per Config.Capabilities' doc
-// comment, ordinarily empty) capability set to the retained hello topic.
-func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time) error {
+// publishHello publishes cfg's identity and caps, this node's capability
+// set, to the retained hello topic, and returns how many capabilities were
+// published. Since review finding 14, publishHello performs no detection
+// of its own — it only builds and publishes an envelope from whatever caps
+// its caller already resolved, so it can never be the thing that makes a
+// hello publish late. See capabilitiesForImmediateHello and
+// scheduleCapabilityDetection for how a caller resolves caps.
+func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, caps capability.Set) (int, error) {
 	topic, err := mqttproto.HelloTopic(cfg.NodeID)
 	if err != nil {
-		return fmt.Errorf("building hello topic: %w", err)
+		return 0, fmt.Errorf("building hello topic: %w", err)
 	}
 
 	env, err := mqttproto.NewHelloEnvelope(time.Now, cfg.NodeID, mqttproto.HelloPayload{
@@ -56,18 +72,21 @@ func publishHello(ctx context.Context, pub Publisher, cfg config.Config, bootID 
 		AgentVersion: version.Version,
 		BootID:       bootID,
 		StartedAt:    startedAt,
-		Capabilities: cfg.Capabilities,
+		Capabilities: caps,
 	})
 	if err != nil {
-		return fmt.Errorf("building hello envelope: %w", err)
+		return 0, fmt.Errorf("building hello envelope: %w", err)
 	}
 
 	payload, err := json.Marshal(env)
 	if err != nil {
-		return fmt.Errorf("marshaling hello envelope: %w", err)
+		return 0, fmt.Errorf("marshaling hello envelope: %w", err)
 	}
 
-	return pub.Publish(ctx, topic, mqttproto.HelloDeliveryPolicy.QoS, mqttproto.HelloDeliveryPolicy.Retain, payload)
+	if err := pub.Publish(ctx, topic, mqttproto.HelloDeliveryPolicy.QoS, mqttproto.HelloDeliveryPolicy.Retain, payload); err != nil {
+		return 0, err
+	}
+	return len(caps), nil
 }
 
 // publishLWT publishes an online/reason LWT payload to nodeID's LWT topic,
@@ -106,6 +125,57 @@ func publishOffline(ctx context.Context, pub Publisher, nodeID, reason string) e
 	return publishLWT(ctx, pub, nodeID, false, reason)
 }
 
+// capabilitiesForImmediateHello resolves the capability set publishAdvertisement
+// publishes without waiting on any probing: cfg.Capabilities verbatim when
+// SHOWMESH_NODE_CAPABILITIES set it (an explicit operator override always
+// wins outright and is never probed for), otherwise whatever
+// detectedCapabilityCache last stored — empty, honestly, on this process's
+// first-ever connect, before any detection run has completed. This is
+// exactly review finding 14's fix: nothing that can block or hang is on
+// this path.
+func capabilitiesForImmediateHello(cfg config.Config) capability.Set {
+	if len(cfg.Capabilities) != 0 {
+		return cfg.Capabilities
+	}
+	cached, _ := detectedCapabilityCache.snapshot()
+	return cached
+}
+
+// scheduleCapabilityDetection runs real capability detection in the
+// background, outside advertiseTimeout's budget, and republishes hello
+// with the result — the other half of review finding 14's fix. It is a
+// no-op when cfg.Capabilities holds an operator override, matching
+// capabilitiesForImmediateHello: an override is never probed for, so there
+// is nothing to detect and nothing to republish.
+//
+// Called once per successful connect (including every reconnect), same as
+// publishAdvertisement itself, so a capability that becomes available
+// later (e.g. the NDI runtime gets installed) is still picked up with no
+// agent restart. ctx is expected to be the agent's own lifetime context
+// (not a connection-scoped one — see mqtt.go's OnConnectionUp, which
+// passes the same ctx to publishAdvertisement), so this goroutine survives
+// past advertiseTimeout and past the connect that spawned it; a hung probe
+// only ever costs capabilityDetectionTimeout, never the agent's ability to
+// have published a hello.
+func scheduleCapabilityDetection(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) {
+	if len(cfg.Capabilities) != 0 {
+		return
+	}
+
+	detectCtx, cancel := context.WithTimeout(ctx, capabilityDetectionTimeout)
+	defer cancel()
+	caps := capabilityDetector(detectCtx)
+	detectedCapabilityCache.store(caps)
+
+	pubCtx, cancel2 := context.WithTimeout(ctx, advertiseTimeout)
+	defer cancel2()
+	if n, err := publishHello(pubCtx, pub, cfg, bootID, startedAt, caps); err != nil {
+		logPublishFailure(logger, "hello (post-detection republish)", cfg.NodeID, err)
+	} else {
+		logger.Info("republished hello after capability detection", "node_id", cfg.NodeID, "capability_count", n)
+	}
+}
+
 // publishAdvertisement publishes the retained hello, then the retained
 // "online: true" LWT payload, in that order, per the Task D spec. It runs
 // once per successful connect (including every reconnect: a broker that
@@ -115,14 +185,22 @@ func publishOffline(ctx context.Context, pub Publisher, nodeID, reason string) e
 // fatal, since newMQTTConn's caller has no synchronous way to react to an
 // OnConnectionUp-triggered publish failing anyway (see its "must not
 // block" contract).
+//
+// The hello publish here always uses capabilitiesForImmediateHello — never
+// a live probe — so this whole function is bounded by advertiseTimeout
+// with no possibility of a hung gst-launch-1.0 subprocess costing this
+// node its hello (review finding 14). Real detection, when applicable, is
+// kicked off separately by scheduleCapabilityDetection and republishes
+// hello on its own schedule once it finishes.
 func publishAdvertisement(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, advertiseTimeout)
 	defer cancel()
 
-	if err := publishHello(pubCtx, pub, cfg, bootID, startedAt); err != nil {
+	caps := capabilitiesForImmediateHello(cfg)
+	if n, err := publishHello(pubCtx, pub, cfg, bootID, startedAt, caps); err != nil {
 		logPublishFailure(logger, "hello", cfg.NodeID, err)
 	} else {
-		logger.Info("published hello", "node_id", cfg.NodeID, "capability_count", len(cfg.Capabilities))
+		logger.Info("published hello", "node_id", cfg.NodeID, "capability_count", n)
 	}
 
 	if err := publishOnline(pubCtx, pub, cfg.NodeID); err != nil {
@@ -130,6 +208,8 @@ func publishAdvertisement(ctx context.Context, pub Publisher, cfg config.Config,
 	} else {
 		logger.Info("published lwt online=true", "node_id", cfg.NodeID)
 	}
+
+	go scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger)
 }
 
 // logPublishFailure logs a failed publish of what (a short description,

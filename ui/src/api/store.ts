@@ -59,6 +59,7 @@
 import {
   ApiClient,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
+  RENDER_COMMAND_REQUEST_TIMEOUT_MS,
   RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
   RESOLUME_RECOVERY_RESTORE_REQUEST_TIMEOUT_MS,
   type FetchLike,
@@ -76,6 +77,7 @@ import {
   type FPPCommandResult,
   type FPPInstance,
   type Model,
+  type RenderCommandResult,
   type ResolumeInstance,
 } from './domain'
 import { IncompatibleVersionError, UnauthorizedError, isAbortError } from './errors'
@@ -107,8 +109,15 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+// Track B seam B2c (ADR-039): the render.settings configuration singleton.
+type SchemaRenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
+type SchemaConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
+// Track B seam B2b-front: the three render.* dispatch endpoints.
+type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
+type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
+type SchemaRenderSurfaceRequest = components['schemas']['RenderSurfaceRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -119,6 +128,8 @@ type SchemaConfigShowAction = components['schemas']['ConfigShowAction']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+// Finding 16: show.surface's own read response, same aliasing pattern.
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -151,7 +162,6 @@ type SchemaIssueTokenResponse = components['schemas']['IssueTokenResponse']
 type SchemaConfigShowWrite = components['schemas']['ConfigShowWrite']
 type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
 type SchemaConfigShowSurface = components['schemas']['ConfigShowSurface']
-type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaConfigShowActive = components['schemas']['ConfigShowActive']
 type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
 type SchemaAssetResponse = components['schemas']['AssetResponse']
@@ -783,6 +793,98 @@ export class ApiStore {
     }
   }
 
+  // -- Track B seam B2c: render.settings (ADR-039) -----------------------
+  //
+  // Same "plain pass-through, touches neither `this.model` nor the read
+  // loop" posture as the resolume.recovery config methods just above: not
+  // part of the SSE snapshot/delta stream.
+
+  /** `GET /api/v1/config/render.settings` (Track B seam B2c). Requires config:write. Never 404s — reports the built-in default. */
+  async getRenderSettingsConfig(): Promise<SchemaRenderSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaRenderSettingsConfigResponse>('/config/render.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/render.settings` (Track B seam B2c). Requires config:write. A full replacement — every field required. */
+  async putRenderSettingsConfig(
+    payload: SchemaConfigRenderSettingsPayload,
+  ): Promise<SchemaRenderSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaRenderSettingsConfigResponse>(
+        '/config/render.settings',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/render.settings/revisions` (Track B seam B2c). Requires config:write. */
+  async getRenderSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/render.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track B seam B2b-front: the three render.* dispatch endpoints -----
+  //
+  // Same "long request by design, RENDER_COMMAND_REQUEST_TIMEOUT_MS not
+  // the default budget" posture as dispatchFPPCommand above: the
+  // coordinator holds the response open for its own confirmation deadline
+  // before answering (renderdispatch.go). Never rendered as unqualified
+  // success on a bare 200 (ADR-003) — the caller reads `.outcome`.
+
+  private async dispatchRenderCommand(
+    nodeId: string,
+    surfaceId: string,
+    verb: 'apply' | 'clear' | 'restart',
+    sequenceId?: string,
+  ): Promise<RenderCommandResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaRenderApplyRequest | SchemaRenderSurfaceRequest =
+        sequenceId !== undefined
+          ? { sequenceId, idempotencyKey: randomUUIDv4() }
+          : { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaRenderCommandResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/render/surfaces/${encodeURIComponent(surfaceId)}/${verb}`,
+        body,
+        controller.signal,
+        RENDER_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+      return resp.command
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply`. Requires render:command. */
+  async applyRenderSurface(nodeId: string, surfaceId: string, sequenceId: string): Promise<RenderCommandResult> {
+    return this.dispatchRenderCommand(nodeId, surfaceId, 'apply', sequenceId)
+  }
+
+  /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/clear`. Requires render:command. */
+  async clearRenderSurface(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+    return this.dispatchRenderCommand(nodeId, surfaceId, 'clear')
+  }
+
+  /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/restart`. Requires render:command. */
+  async restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+    return this.dispatchRenderCommand(nodeId, surfaceId, 'restart')
+  }
+
   // -- Track D seam D-4: Resolume observability (seam E) and the
   // seven-action vocabulary (D-3/seam B). Plain side-calls; `model.resolume`
   // is populated from the snapshot/`resolume.changed` stream, not these. --
@@ -1142,6 +1244,45 @@ export class ApiStore {
     }
   }
 
+  /**
+   * `GET /api/v1/config/show.surface?node=<nodeId>` — server-side
+   * filtered, so this is how the Operator UI learns which show.surface
+   * objects are assigned to nodeId (payload.node) without a per-row
+   * detail fetch. Replaces the earlier approach of calling
+   * [listConfigObjects]('show.surface') and then [getShowSurface] once
+   * per candidate to read its node field (an external review of PR #14
+   * caught that as O(M) HTTP calls per render for a node with M
+   * configured surfaces — api.go's showobjects.go now filters server-side
+   * instead).
+   */
+  async listShowSurfacesForNode(nodeId: string): Promise<SchemaConfigObjectsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigObjectsListResponse>(
+        `/config/show.surface?node=${encodeURIComponent(nodeId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.surface/{id}`. Throws (404) when no such
+   * surface exists.
+   */
+  async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowSurfaceConfigResponse>(
+        `/config/show.surface/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/show.action/{id}`. Throws (404) when no such action exists. */
   async getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
     const controller = this.beginSideCall()
@@ -1283,19 +1424,6 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show/${encodeURIComponent(id)}/revisions`,
-        controller.signal,
-      )
-    } finally {
-      this.endSideCall(controller)
-    }
-  }
-
-  /** `GET /api/v1/config/show.surface/{id}`. Throws (404) when no such surface exists. */
-  async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
-    const controller = this.beginSideCall()
-    try {
-      return await this.client.getJson<SchemaShowSurfaceConfigResponse>(
-        `/config/show.surface/${encodeURIComponent(id)}`,
         controller.signal,
       )
     } finally {

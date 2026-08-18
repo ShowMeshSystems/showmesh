@@ -112,8 +112,23 @@ func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind string
 	return out, nil
 }
 
+// unsupportedNodeFilterProblem rejects `?node=` on a list route whose kind
+// has no "node" field to filter on (show.action, show.macro). show.surface
+// is the only kind a node filter is meaningful for (payload.node —
+// showsurface.go); silently ignoring the parameter here would let a
+// caller believe the response was narrowed when it was not, which is
+// exactly the "quietly returning everything" failure GET
+// /config/show.surface?node= exists to avoid.
+func unsupportedNodeFilterProblem(kind string) v1.Problem {
+	return invalidParameterProblem(fmt.Sprintf(`"node" is not a supported filter for kind %q; only show.surface objects carry a node`, kind))
+}
+
 func (h *handlers) handleListShowActions(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	if r.URL.Query().Has("node") {
+		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.ShowActionConfigKind))
+		return
+	}
 	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowActionConfigKind)
 	if err != nil {
 		h.writeInternalError(w, now, "list show.action config objects", err)
@@ -124,6 +139,10 @@ func (h *handlers) handleListShowActions(w http.ResponseWriter, r *http.Request)
 
 func (h *handlers) handleListShowMacros(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	if r.URL.Query().Has("node") {
+		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.ShowMacroConfigKind))
+		return
+	}
 	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowMacroConfigKind)
 	if err != nil {
 		h.writeInternalError(w, now, "list show.macro config objects", err)

@@ -145,6 +145,32 @@ export const MIN_RESOLUME_ACTION_CLIENT_TIMEOUT_MS =
   SERVER_RESOLUME_ACTION_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
+ * Track B seam B2b-front's own request budget for the three
+ * `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply|clear|restart`
+ * endpoints — the render sibling of [FPP_COMMAND_REQUEST_TIMEOUT_MS], for
+ * the identical reason: the coordinator holds the response open for its
+ * own write deadline (`renderHandlerWriteDeadline()`,
+ * internal/coordinator/api/renderdispatch.go — 25s, composed from a 15s
+ * confirm deadline plus a 10s margin) before answering. 40s is
+ * comfortably above `cmd/showmeshctl`'s own independently chosen
+ * `minRenderCommandClientTimeout` (cmd_render_command.go, 35s) — the two
+ * are duplicated by value, not shared, for the same module-boundary
+ * reason [FPP_COMMAND_REQUEST_TIMEOUT_MS]'s own doc comment gives, and
+ * need not be identical, only each individually >= the server's own
+ * deadline with margin.
+ */
+const SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS = 25_000 // internal/coordinator/api/renderdispatch.go renderHandlerWriteDeadline()
+const RENDER_COMMAND_CLIENT_MARGIN_MS = 15_000
+export const RENDER_COMMAND_REQUEST_TIMEOUT_MS =
+  SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS + RENDER_COMMAND_CLIENT_MARGIN_MS
+/**
+ * Reconciliation target for [RENDER_COMMAND_REQUEST_TIMEOUT_MS] — see
+ * [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS]'s identical role.
+ */
+export const MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS =
+  SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
+
+/**
  * The manual restore (`POST /resolume/recovery/restore`) can dispatch up
  * to `resolumeRecoveryMaxLayers` (30, internal/coordinator/api/resolumerecovery.go)
  * sequential per-layer actions before answering, so its own write deadline

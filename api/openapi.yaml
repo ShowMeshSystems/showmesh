@@ -460,6 +460,217 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/apply:
+    post:
+      operationId: dispatchRenderSurfaceApply
+      summary: Dispatch render.surface.apply to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Resolves the surface's COMPLETE
+        self-contained assignment — its show.surface configuration plus
+        the coordinator-resolved runtime filename and content hash of its
+        current FSEQ asset for `sequenceId` (identity: show + sequence +
+        target + content hash, never a filename — ADR-028) — and dispatches
+        it to the node over MQTT (build contract ruling 4: the node is
+        told its surface, it does not discover it). Refuses with `400`
+        naming exactly what could not be resolved (no active show, the
+        surface is not assigned to this node, no current asset for the
+        requested sequence, or more than one current asset matches it)
+        rather than ever dispatching a partial assignment. Confirms by
+        `surface.pipeline.state` evidence dated at or after dispatch
+        (ADR-003); a `200` is never conflated with the pipeline having
+        actually reached `running` — see RenderCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderApplyRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/clear:
+    post:
+      operationId: dispatchRenderSurfaceClear
+      summary: Dispatch render.surface.clear to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Stops the surface's pipeline and clears
+        its persisted assignment. Confirms by `surface.pipeline.state`
+        evidence reporting `stopped`, dated at or after dispatch
+        (ADR-003).
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderSurfaceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/restart:
+    post:
+      operationId: dispatchRenderPipelineRestart
+      summary: Dispatch render.pipeline.restart to a node (Track B seam B2b-front)
+      description: >-
+        Behind `render:command`. Clears any fast-failure lockout and
+        restarts the surface's pipeline from its currently-applied spec.
+        Confirms by `surface.pipeline.state` evidence reporting `running`,
+        dated at or after dispatch (ADR-003).
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderSurfaceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe:
+    post:
+      operationId: dispatchRenderTransportProbe
+      summary: Dispatch render.transport.probe to a node (Track B seam B4)
+      description: >-
+        Behind `render:command`. A COMMAND, not a read: it starts a real
+        gst-launch-1.0 subprocess on the node that attempts a genuine
+        NULL->PLAYING state transition against the configured output
+        transport (ADR-026 decision 6: element presence is not runtime
+        presence, so this is the only thing that may answer "is NDI usable
+        right now"). Confirms once a `surface.transport.available` reading
+        dated at or after dispatch exists — regardless of its value: a
+        probe correctly reporting the transport unavailable is confirmed
+        exactly like one reporting it available, because there is no
+        desired transport value here the way `apply`/`restart` have a
+        desired pipeline state. `showmeshctl render transport` remains the
+        separate read of last-known evidence; this is the "go find out
+        now" counterpart, never reachable by `GET` (ADR-024).
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: surfaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderSurfaceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -602,7 +813,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [node, fpp, coordinator, resolume]
+            enum: [node, fpp, coordinator, resolume, surface]
           description: Restrict to observations about resources of this kind.
         - name: resourceId
           in: query
@@ -2316,6 +2527,107 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/render.settings:
+    get:
+      operationId: getRenderSettingsConfig
+      summary: The render.settings idle-output/restart-policy singleton (Track B seam B2c, ADR-039)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/resolume.recovery`'s
+        own always-sensitive, never-404 posture: the payload has a
+        well-defined default, so this always answers `200`, with `revision`
+        `0` and `source` `"default"` when nothing has ever been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putRenderSettingsConfig
+      summary: Write a new render.settings revision (Track B seam B2c, ADR-039)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: every
+        field is required and non-null on every write — `idleOutput` and
+        the three members of `restartPolicy` — never merged against the
+        previous revision, so an absent key is refused by name rather than
+        silently defaulting or carrying the old value forward. On success,
+        appends a new immutable revision and activates it in the SAME
+        transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule) — with the audit store failing, the write is
+        refused and no revision is created. A cookie-authenticated request
+        additionally requires `Sec-Fetch-Site: same-origin` (ADR-024
+        decision 6); a bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigRenderSettingsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/render.settings/revisions:
+    get:
+      operationId: getRenderSettingsConfigRevisions
+      summary: render.settings revision history, newest first (Track B seam B2c)
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -2598,7 +2910,9 @@ paths:
         exactly like `GET /audit`). Corrected from an earlier draft that
         would have copied `fpp.endpoints`' `config:write`-only posture,
         which breaks the operator role's own macro list (the operator role
-        holds `show:macro:run`, never `config:write`).
+        holds `show:macro:run`, never `config:write`). show.action objects
+        carry no `node` field, so `?node=` is rejected with 400 rather than
+        silently ignored — only `GET /config/show.surface` supports it.
       responses:
         "200":
           description: OK
@@ -2609,6 +2923,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2733,6 +3049,9 @@ paths:
       description: >-
         Object ids with label, show, and current revision number, NOT the
         full payloads. Same read posture as GET /config/show.action.
+        show.macro objects carry no `node` field, so `?node=` is rejected
+        with 400 rather than silently ignored — only `GET
+        /config/show.surface` supports it.
       responses:
         "200":
           description: OK
@@ -2743,6 +3062,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3023,7 +3344,10 @@ paths:
         id — a show belongs to no other show), and current revision
         number, NOT the full payloads. Requires `show:macro:run` OR
         `config:write`, matching GET /config/show.action and GET
-        /config/show.macro — never toggled by `Options.CloseReads`.
+        /config/show.macro — never toggled by `Options.CloseReads`. show
+        objects carry no `node` field, so `?node=` is rejected with 400
+        rather than silently ignored — only `GET /config/show.surface`
+        supports it.
       responses:
         "200":
           description: OK
@@ -3034,6 +3358,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3152,8 +3478,11 @@ paths:
       description: >-
         Object ids with label (the surface's own name), show (the parent
         show id), and current revision number, NOT the full payloads.
-        Optionally narrowed with `?show=<id>`. Same read posture as GET
-        /config/show.
+        Optionally narrowed with `?show=<id>` and/or `?node=<id>` (both may
+        be set at once; a surface must match every filter given). `?node=`
+        exists so a caller that wants "which surfaces are assigned to this
+        node" never has to fetch each candidate's full payload just to
+        read its node field. Same read posture as GET /config/show.
       parameters:
         - name: show
           in: query
@@ -3161,6 +3490,12 @@ paths:
           schema:
             type: string
           description: Narrow the list to surfaces belonging to this show id.
+        - name: node
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to surfaces assigned to this node id.
       responses:
         "200":
           description: OK
@@ -4046,7 +4381,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [node, fpp, coordinator, resolume]
+          enum: [node, fpp, coordinator, resolume, surface]
         id:
           type: string
     Capability:
@@ -4093,7 +4428,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration]
+         declaration, render]
       properties:
         nodeId:
           type: string
@@ -4124,6 +4459,21 @@ components:
           $ref: "#/components/schemas/NodeEvidence"
         declaration:
           $ref: "#/components/schemas/NodeDeclaration"
+        render:
+          type: array
+          description: >-
+            Track B seam B2b: whatever render-pipeline observations this
+            coordinator currently holds for this node, one entry per
+            signal. Never omitted; an empty array means this node has never
+            published a render report. Most entries' resource names the
+            SURFACE they concern (ADR-026), not this node — the exception
+            (finding 7) is the two `node.multisync.*` signals, which name
+            this node directly, because one MultiSync listener serves every
+            surface a node supervises and attributing its status to a
+            surface would report one fact once per surface as though each
+            were independent.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
       type: object
       description: >-
@@ -4841,6 +5191,128 @@ components:
             Optional; this action takes no parameters — a non-empty
             `params` object is a `400`.
           additionalProperties: false
+    RenderApplyRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply.
+      required: [sequenceId]
+      additionalProperties: false
+      properties:
+        sequenceId:
+          type: string
+          description: >-
+            Which of the show's sequences to resolve the surface's current
+            FSEQ asset from — see this operation's own description for the
+            identity rule (show + sequence + target + content hash).
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key dispatches nothing and returns the original
+            command's own result, flagged `replay: true`.
+    RenderSurfaceRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/clear
+        and .../restart, which take no parameters of their own beyond the
+        path's surfaceId.
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key dispatches nothing and returns the original
+            command's own result, flagged `replay: true`.
+    RenderCommandResponse:
+      type: object
+      description: >-
+        The body of a successful (200) response from any of this seam's
+        three dispatch endpoints.
+      required: [serverTime, command]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/RenderCommandResult"
+    RenderCommandResult:
+      type: object
+      description: >-
+        What happened to one dispatched (or replayed) render.* command.
+        outcome is never "successful" merely because the publish to the
+        node succeeded (ADR-003): it is exactly "confirmed" or
+        "unconfirmed" once resolved, decided by confirming
+        `surface.pipeline.state` evidence dated at or after dispatch.
+      required:
+        [commandId, idempotencyKey, action, nodeId, surfaceId, replay,
+         outcome, outcomeState, outcomeReason, pipelineFailed, dispatchedAt,
+         resolvedAt, idleOutput]
+      additionalProperties: false
+      properties:
+        commandId:
+          type: string
+        idempotencyKey:
+          type: string
+        action:
+          type: string
+          enum:
+            ["render.surface.apply", "render.surface.clear", "render.pipeline.restart", "render.transport.probe"]
+        nodeId:
+          type: string
+        surfaceId:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            the command described here was NOT dispatched by this
+            request — it is the ORIGINAL command's already-recorded
+            result.
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", ""]
+          description: >-
+            Empty only for a REPLAY response returned before the original
+            request's own dispatch/confirmation has finished — matching
+            FPPCommandResult.outcome's identical accepted-empty case.
+        outcomeState:
+          type: string
+          description: >-
+            pkg/observation's six-value evidence-state vocabulary — the
+            state of the evidence this outcome was actually decided from.
+          enum:
+            [current, stale, unknown_age, not_collected, collection_failed,
+             unsupported]
+        outcomeReason:
+          type: string
+          description: A short, human-readable explanation. Always non-empty.
+        pipelineFailed:
+          type: boolean
+          description: >-
+            True only when this command's outcome evidence is itself the
+            pipeline's own reported "failed" state, distinct from absent,
+            stale, or a merely-not-yet-reached state. outcomeState above
+            only ever carries the six-value evidence-state vocabulary
+            (never "failed") — a caller that wants to react to the
+            pipeline specifically being down must use this field, never
+            outcomeState or a parse of outcomeReason's free text. Always
+            false for a confirmed outcome and for render.transport.probe.
+        dispatchedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        idleOutput:
+          type: string
+          enum: ["black", "hold", "diagnostic", ""]
+          description: >-
+            The render.settings.idleOutput value RESOLVED and sent to the
+            node as part of THIS render.surface.apply assignment. Empty for
+            render.surface.clear/render.pipeline.restart/render.transport.probe,
+            which carry no idleOutput.
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.
@@ -5807,14 +6279,16 @@ components:
         /config/show.surface/{id}/revisions, GET
         /config/show.active/revisions, GET
         /config/resolume.recovery/revisions, GET
+        /config/render.settings/revisions, GET
         /config/resolume.instances/revisions, GET
         /config/fpp.mqtt/revisions, and GET
         /config/assets.settings/revisions, newest first — one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained more
-        callers; Track E added three more, Track D seam D-3a another, and
-        Track G seams G-2, G-3, and G-4 one each more).
+        callers; Track E added three more, Track D seam D-3a another,
+        Track B seam B2c another, and Track G seams G-2, G-3, and G-4
+        one each more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -5822,7 +6296,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, resolume.instances, fpp.mqtt, assets.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
         revisions:
           type: array
           items:
@@ -6682,6 +7156,81 @@ components:
           type: [string, "null"]
         source:
           type: string
+    ConfigRenderRestartPolicy:
+      type: object
+      description: >-
+        render.settings.restartPolicy (Track B seam B2c): the render
+        pipeline supervisor's bounded exponential backoff — must not restart
+        a pipeline that fails identically and immediately forever.
+      required: [initialDelaySeconds, maxDelaySeconds, maxConsecutiveFastFailures]
+      properties:
+        initialDelaySeconds:
+          type: integer
+          minimum: 1
+          maximum: 60
+        maxDelaySeconds:
+          type: integer
+          minimum: 1
+          maximum: 300
+        maxConsecutiveFastFailures:
+          type: integer
+          minimum: 1
+          maximum: 20
+    ConfigRenderSettingsPayload:
+      type: object
+      description: >-
+        The "render.settings" configuration kind's decoded payload (Track B
+        seam B2c, ADR-039): the body PUT /config/render.settings accepts
+        (a full replacement — every field required and non-null), and the
+        "payload" member of GET /config/render.settings' response.
+        `idleOutput` is what a surface draws while the MultiSync timeline is
+        stopped, opened, or unknown (TRACK-B-BUILD-CONTRACT.md ruling 3 —
+        sync loss changes the picture, never the sender).
+      required: [idleOutput, restartPolicy]
+      properties:
+        idleOutput:
+          type: string
+          enum: [black, hold, diagnostic]
+        restartPolicy:
+          $ref: "#/components/schemas/ConfigRenderRestartPolicy"
+    RenderSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/render.settings. Never `404`s: the
+        payload has a well-defined default, reported with `revision` `0` and
+        `source` `"default"` when nothing has ever been written, mirroring
+        ResolumeRecoveryConfigResponse's identical posture.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source,
+         idleOutputEffectiveNote]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigRenderSettingsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+        idleOutputEffectiveNote:
+          type: string
+          description: >-
+            States that idleOutput takes effect on each surface's own next
+            render.surface.apply dispatch, never on an already-applied
+            surface — there is no config-push path to a node beyond that
+            assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always
+            non-empty.
     Problem:
       type: object
       description: >-

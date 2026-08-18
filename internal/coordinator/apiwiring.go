@@ -612,11 +612,20 @@ func (n fppRunnerNudger) NudgePoll(instanceID string) bool {
 // persisted, and the hub is poked once per batch so a change reaches
 // subscribers well before its own next tick (contract section 6.5;
 // api.API's own doc comment names this exact obligation for whatever wires
-// it in). notify is called even when observations is empty — a
-// backed-off Collector's Poll legitimately returns nothing (see
-// fpp.Collector.Poll's doc comment) — this costs nothing: Hub.Notify is a
-// non-blocking, coalescing poke, and the hub's own render pass is what
-// decides whether anything actually changed.
+// it in). notify fires only when RecordObservations could actually have
+// mutated s.st: both branches below are no-ops on a zero-length
+// observations slice ([store.Store.ReplaceObservations] returns
+// immediately, and an empty range mutates nothing), so len(observations)
+// > 0 is not a proxy for "something changed" — it is the exact condition
+// under which this call could have changed anything, including a prune
+// (ReplaceObservations' delete is scoped to the (resource, source) keys
+// PRESENT in this delivery, so an empty delivery has no key to prune by;
+// see TestReplaceObservationsEmptyBatchIsNoOp and
+// TestFPPSinkNotifiesOnlyWhenStoreCouldHaveChanged). This also stops an
+// always-registered, perpetually-empty collector (e.g. noderender before
+// any node ever publishes) from poking the hub before its own first real
+// tick, which raced a fresh hub's still-empty lastRendered map ahead of
+// any subscriber ever connecting.
 type fppSink struct {
 	st     *store.Store
 	notify func()
@@ -648,7 +657,7 @@ func (s *fppSink) RecordObservations(ctx context.Context, observations []observa
 			}
 		}
 	}
-	if s.notify != nil {
+	if s.notify != nil && len(observations) > 0 {
 		s.notify()
 	}
 }

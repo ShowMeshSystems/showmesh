@@ -68,6 +68,13 @@ export SHOWMESH_TEST_STALENESS_WINDOW="${SHOWMESH_TEST_STALENESS_WINDOW:-1s}"
 export SHOWMESH_ASSET_INVENTORY_INTERVAL="${SHOWMESH_ASSET_INVENTORY_INTERVAL:-250ms}"
 export SHOWMESH_ASSET_SYNC_INTERVAL="${SHOWMESH_ASSET_SYNC_INTERVAL:-750ms}"
 
+# Track B render-pipeline supervision's identical knob: the agent's render
+# report ticker (internal/agent/config's SHOWMESH_RENDER_REPORT_INTERVAL,
+# production default 15s) is what carries a killed-and-restarted pipeline's
+# new state to the coordinator; see
+# test/integration/harness_test.go's envRenderReportInterval forwarding.
+export SHOWMESH_RENDER_REPORT_INTERVAL="${SHOWMESH_RENDER_REPORT_INTERVAL:-100ms}"
+
 export SHOWMESH_TEST_MQTT_BROKER="tcp://localhost:${HOST_PORT}"
 export SHOWMESH_TEST_MOSQUITTO_CONTAINER="$CONTAINER_NAME"
 
@@ -191,7 +198,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 echo "test-integration: running against $SHOWMESH_TEST_MQTT_BROKER (container $CONTAINER_NAME)"
-if ! go test -tags=integration -race -count=1 -timeout=8m -v ./test/integration/...; then
+if ! go test -tags=integration -race -count=1 -timeout=8m -v ${SHOWMESH_TEST_RUN:+-run "$SHOWMESH_TEST_RUN"} ./test/integration/...; then
   echo "test-integration: go test failed; dumping $CONTAINER_NAME logs before teardown" >&2
   docker logs "$CONTAINER_NAME" >&2 || true
   exit 1

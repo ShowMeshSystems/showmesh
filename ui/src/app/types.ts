@@ -37,6 +37,9 @@ export type {
   ResourceRef,
   SessionInfo,
   SessionResponse,
+  // Track B seam B2b-front: the three render.* dispatch endpoints.
+  ObservationEntry,
+  RenderCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,
@@ -58,6 +61,10 @@ export type {
   // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
+  // Finding 16: show.surface reads, so the UI can discover a
+  // configured-but-not-yet-applied surface the way showmeshctl already can.
+  ConfigShowSurface,
+  ShowSurfaceConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -81,8 +88,6 @@ export type {
   ConfigShowSurfaceNDIOutput,
   ConfigShowSurfaceHDMI,
   ConfigShowSurfaceOutput,
-  ConfigShowSurface,
-  ShowSurfaceConfigResponse,
   ConfigShowActive,
   ShowActiveConfigResponse,
   Asset,

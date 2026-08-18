@@ -86,6 +86,26 @@ type Config struct {
 	// inventory report when nothing else (a completed asset.fetch) has
 	// already triggered one. See internal/agent/assetinventory.go.
 	AssetInventoryInterval time.Duration
+
+	// RenderReportInterval is how often this agent publishes its render
+	// pipeline health report when no pipeline state transition has already
+	// triggered one. See internal/agent/renderreport.go. Shorter than
+	// AssetInventoryInterval's default: a stuck or crash-looping render
+	// pipeline is show-affecting in a way a stale asset list is not.
+	RenderReportInterval time.Duration
+
+	// MultiSyncListenAddr is the local "host:port" the render node's
+	// MultiSync listener binds. Defaults to "" meaning
+	// pkg/multisync.NewListener's own default (":32320", the fixed FPP
+	// control port). Tests and any co-located non-production run MUST
+	// override this to a non-32320 port; see pkg/multisync's ADR-013
+	// warning on why this agent never sets AllowPortSharing.
+	MultiSyncListenAddr string
+
+	// MultiSyncInterface restricts the MultiSync multicast group join to
+	// one named network interface. Empty means join every suitable
+	// interface (pkg/multisync.NewListener's own default).
+	MultiSyncInterface string
 }
 
 const (
@@ -106,11 +126,15 @@ const (
 	// doing so.
 	envAgentAPIToken          = "SHOWMESH_AGENT_API_TOKEN"
 	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
+	envRenderReportInterval   = "SHOWMESH_RENDER_REPORT_INTERVAL"
+	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
+	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 
 	defaultBroker                 = "tcp://localhost:1883"
 	defaultLogLevel               = "info"
 	defaultAssetDir               = "./assets"
 	defaultAssetInventoryInterval = 2 * time.Minute
+	defaultRenderReportInterval   = 15 * time.Second
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -184,6 +208,18 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		assetInventoryInterval = d
 	}
 
+	renderReportInterval := defaultRenderReportInterval
+	if raw, ok := lookup(envRenderReportInterval); ok && raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s %q is not a valid duration: %w", envRenderReportInterval, raw, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("%s %q must be positive", envRenderReportInterval, raw)
+		}
+		renderReportInterval = d
+	}
+
 	cfg := Config{
 		NodeID:                 nodeID,
 		NodeLabel:              getEnvDefault(lookup, envNodeLabel, ""),
@@ -196,6 +232,9 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AssetDir:               getEnvDefault(lookup, envAssetDir, defaultAssetDir),
 		AgentAPIToken:          getEnvDefault(lookup, envAgentAPIToken, ""),
 		AssetInventoryInterval: assetInventoryInterval,
+		RenderReportInterval:   renderReportInterval,
+		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
+		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -322,6 +361,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envAssetInventoryInterval)
 	}
 
+	if c.RenderReportInterval <= 0 {
+		return fmt.Errorf("%s must be positive", envRenderReportInterval)
+	}
+
 	return nil
 }
 
@@ -364,5 +407,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("asset_dir", c.AssetDir),
 		slog.String("agent_api_token", token),
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
+		slog.Duration("render_report_interval", c.RenderReportInterval),
+		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
+		slog.String("multisync_interface", c.MultiSyncInterface),
 	)
 }

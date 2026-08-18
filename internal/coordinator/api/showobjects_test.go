@@ -343,6 +343,136 @@ func TestListShowSurfacesFiltersByShow(t *testing.T) {
 	}
 }
 
+// TestListShowSurfacesFiltersByNode proves the ?node= query filter added
+// for the PR #14 review finding actually narrows the list server-side
+// rather than being ignored — the same shape as
+// TestListShowSurfacesFiltersByShow, but on the node axis, which is what
+// RenderSurfacePanel.tsx's useConfiguredSurfaceIds now relies on instead
+// of fetching every candidate's full payload.
+//
+// Broken and confirmed to fail: reverted the nodeFilter check in
+// listShowSurfaceSummaries (showobjects.go) back to a no-op — both
+// assertions below failed, since the unfiltered list returned both
+// "garage" (render-01) and "yard" (render-02).
+func TestListShowSurfacesFiltersByNode(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+
+	garageOnRender01 := validSurfaceBodyNDI
+	yardOnRender02 := `{
+		"show": "halloween-2026",
+		"name": "Front Yard",
+		"node": "render-02",
+		"channelRange": {"startChannel": 1, "channelCount": 12},
+		"geometry": {"width": 1, "height": 3, "pixelFormat": "rgbw"},
+		"frameRate": 30,
+		"output": {"transport": "hdmi", "hdmi": {"display": "HDMI-1"}}
+	}`
+	for id, body := range map[string]string{"garage": garageOnRender01, "yard": yardOnRender02} {
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, body, map[string]string{"Authorization": "Bearer " + token})
+		resp, respBody := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT show.surface/%s: status = %d, want 200; body: %s", id, resp.StatusCode, respBody)
+		}
+	}
+
+	_, filtered := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface?node=render-02", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(filtered), `"yard"`) {
+		t.Fatalf("expected yard in the render-02 filtered list; body: %s", filtered)
+	}
+	if containsAll(string(filtered), `"garage"`) {
+		t.Fatalf("garage (render-01) leaked into a render-02 filtered list; body: %s", filtered)
+	}
+}
+
+// TestListShowSurfacesFiltersByShowAndNodeTogether proves both filters
+// combine as AND, not OR: a surface must match every filter given.
+func TestListShowSurfacesFiltersByShowAndNodeTogether(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"Christmas 2026"}`)
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+
+	// Same node, different shows — a request for
+	// show=halloween-2026&node=render-01 must return only "garage".
+	garageHalloweenRender01 := validSurfaceBodyNDI
+	yardChristmasRender01 := `{
+		"show": "christmas-2026",
+		"name": "Front Yard",
+		"node": "render-01",
+		"channelRange": {"startChannel": 1, "channelCount": 12},
+		"geometry": {"width": 1, "height": 3, "pixelFormat": "rgbw"},
+		"frameRate": 30,
+		"output": {"transport": "hdmi", "hdmi": {"display": "HDMI-1"}}
+	}`
+	for id, body := range map[string]string{"garage": garageHalloweenRender01, "yard": yardChristmasRender01} {
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/"+id, body, map[string]string{"Authorization": "Bearer " + token})
+		resp, respBody := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT show.surface/%s: status = %d, want 200; body: %s", id, resp.StatusCode, respBody)
+		}
+	}
+
+	_, filtered := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface?show=halloween-2026&node=render-01", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(filtered), `"garage"`) {
+		t.Fatalf("expected garage in the halloween-2026/render-01 filtered list; body: %s", filtered)
+	}
+	if containsAll(string(filtered), `"yard"`) {
+		t.Fatalf("yard (christmas-2026) leaked into a halloween-2026 filtered list; body: %s", filtered)
+	}
+}
+
+// TestListShowActionsRejectsNodeFilter and its show.macro/show siblings
+// prove the review finding's other half: a "node" filter is meaningful
+// only for show.surface, and the other config-object list routes must
+// say so with a 400 rather than silently ignoring the parameter and
+// returning an unfiltered list, which would let a caller believe a
+// response was narrowed when it was not.
+func TestListShowActionsRejectsNodeFilter(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action?node=render-01", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET show.action?node=: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestListShowMacrosRejectsNodeFilter(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.macro?node=render-01", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET show.macro?node=: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestListShowsRejectsNodeFilter(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show?node=render-01", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET show?node=: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
 // TestShowWriteRequiresConfigWrite proves an operator (show:macro:run,
 // never config:write) cannot write any of the three new kinds, matching
 // fpp.endpoints and show.action/show.macro's identical write posture.

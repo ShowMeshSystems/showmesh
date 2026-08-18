@@ -33,6 +33,11 @@ const (
 	// [AssetInventoryPayload], published retained on
 	// showmesh/nodes/<node-id>/observed/assets.
 	SchemaNodeAssetInventoryV1 = "showmesh.node.asset.inventory/v1"
+
+	// SchemaNodeRenderV1 is Track B seam B2a's addition: the schema for
+	// [RenderPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/render.
+	SchemaNodeRenderV1 = "showmesh.node.render/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -107,6 +112,12 @@ const (
 // ErrPayloadCapabilitySetTooLarge is wrapped by [HelloPayload.Validate] when
 // the capability set has more than [maxCapabilityCount] members.
 var ErrPayloadCapabilitySetTooLarge = errors.New("mqttproto: capability set exceeds the maximum allowed size")
+
+// ErrPayloadTooLarge is wrapped by [RenderPayload.Validate] when a bounded
+// slice or string field exceeds its stated cap — the general-purpose
+// sibling of [ErrPayloadCapabilitySetTooLarge], which stays named for the
+// one payload it was written for.
+var ErrPayloadTooLarge = errors.New("mqttproto: payload field exceeds the maximum allowed size")
 
 // ErrPayloadCapabilityIDTooLong is wrapped by [HelloPayload.Validate] when a
 // capability ID exceeds [maxCapabilityIDLength].
@@ -542,6 +553,278 @@ func (p AssetInventoryPayload) Validate() error {
 	return nil
 }
 
+// Open pipelineState vocabulary for [RenderSurfaceReport.PipelineState].
+// Deliberately a string, not a closed enum: [pkg/agent/pipeline] may need a
+// finer-grained state later, and a consumer that does not recognize one must
+// treat it as evidence-with-an-unrecognized-label, never as an error, per
+// this schema family's "the API is additive; clients ignore what they don't
+// know" convention (ADR-020).
+const (
+	RenderPipelineStateRunning     = "running"
+	RenderPipelineStateStarting    = "starting"
+	RenderPipelineStateRestarting  = "restarting"
+	RenderPipelineStateFailed      = "failed"
+	RenderPipelineStateStopped     = "stopped"
+	RenderPipelineStateUnsupported = "unsupported"
+)
+
+// maxRenderSurfaces bounds [RenderPayload.Surfaces], matching
+// [maxCapabilityCount]'s role: ADR-026 expresses N surfaces per node in the
+// schema even though v1 runs N=1, so this must not be 1. Deliberately small
+// relative to [maxCapabilityCount]: at [maxRenderStderrBytes] each, this
+// bound times that one must stay comfortably under [maxEnvelopeSize]
+// (8*4KiB = 32KiB), not merely under it — a conservative, unmeasured guess
+// at "far more surfaces than any real node will ever run, far short of the
+// envelope cap."
+const maxRenderSurfaces = 8
+
+// maxRenderStderrBytes bounds [RenderSurfaceReport.LastStderr] before
+// [RenderPayload.Validate] rejects the payload outright — the wire-boundary
+// backstop behind whatever cap internal/agent/pipeline already applies when
+// it captures a process's stderr. Truncation must happen, and be visible,
+// before the payload ever reaches this package; see LastStderr's own doc
+// comment.
+const maxRenderStderrBytes = 4 * 1024
+
+// RenderStderrTruncatedSuffix is appended by the publisher (never by this
+// package) when it cuts LastStderr down to [maxRenderStderrBytes], so a
+// truncated tail reads as truncated rather than as a stderr that happened to
+// end mid-sentence.
+const RenderStderrTruncatedSuffix = "...[truncated]"
+
+// RenderSurfaceReport is one surface's pipeline health, inside
+// [RenderPayload.Surfaces]. ADR-026 decision 3 requires N surfaces
+// expressible even though v1 runs exactly one.
+type RenderSurfaceReport struct {
+	// SurfaceID is the show.surface config object id this report concerns.
+	SurfaceID string `json:"surfaceId"`
+
+	// PipelineState is this surface's current supervised pipeline state; see
+	// the RenderPipelineState* constants for the minimum open vocabulary.
+	PipelineState string `json:"pipelineState"`
+
+	// Reason is required whenever PipelineState is not
+	// [RenderPipelineStateRunning] — absent evidence is stated, never
+	// omitted (ADR-020).
+	Reason string `json:"reason"`
+
+	// Since is when this surface entered PipelineState, on the node's own
+	// clock.
+	Since time.Time `json:"since"`
+
+	RestartCount        int64 `json:"restartCount"`
+	ConsecutiveFailures int64 `json:"consecutiveFailures"`
+
+	// LastExitCode is nil when no attempt has exited yet (still starting, or
+	// killed before any process was ever launched); non-nil is a genuine
+	// observed exit code, including 0.
+	LastExitCode *int `json:"lastExitCode"`
+
+	// LastStderr is the supervised process's most recent captured stderr
+	// tail, bounded to [maxRenderStderrBytes]. A truncated tail carries
+	// [RenderStderrTruncatedSuffix] so truncation is visible on the wire,
+	// never silent.
+	LastStderr string `json:"lastStderr"`
+
+	FramesWritten int64 `json:"framesWritten"`
+	FramesLate    int64 `json:"framesLate"`
+	FramesDropped int64 `json:"framesDropped"`
+
+	// FramesRate is the frame writer's own measured achieved output rate in
+	// frames/second (ADR-040's obligation), nil until it has completed at
+	// least one full sampling window — never a plausible-looking zero and
+	// never the surface's configured frameRate echoed back.
+	FramesRate *float64 `json:"framesRate"`
+
+	// Transport names the output transport this surface's pipeline is
+	// configured for (e.g. "ndi"); empty when not yet meaningful (seam B2a
+	// runs a test-pattern pipeline with no real output stage).
+	Transport string `json:"transport"`
+
+	// TransportAvailable is nil when the transport has not been probed,
+	// true/false when it has (internal/agent/pipeline.ProbeNDISend) — see
+	// ADR-011: nil is genuinely unknown, never defaulted to a boolean.
+	TransportAvailable *bool `json:"transportAvailable"`
+
+	// TransportReason is required whenever TransportAvailable is non-nil
+	// and false — an actionable pointer (e.g. missing NDI runtime install
+	// instructions), never a bare "unavailable." Left empty when
+	// TransportAvailable is true or nil, matching Reason's identical rule
+	// for PipelineState one field up.
+	TransportReason string `json:"transportReason"`
+
+	// ObservedAt is when the supervisor actually sampled this report, on
+	// the node's own clock — the evidence timestamp ADR-003 requires,
+	// distinct from Since (when the state itself began).
+	ObservedAt time.Time `json:"observedAt"`
+
+	// TimelineState is the multisync.Timeline state ("playing",
+	// "unsynchronized", "opened", "stopping", "stopped", "unknown") this
+	// surface's frame writer most recently sampled. "" means no frame
+	// writer is currently active for this surface (a Track B seam B2a
+	// test-pattern-only pipeline has no FSEQ and therefore no writer at
+	// all) — never inferred from PipelineState.
+	TimelineState string `json:"timelineState"`
+
+	// TimelinePositionMS is the timeline position this surface's most
+	// recent CONTENT frame (Drawing == [RenderDrawingContent]) was
+	// extracted from. nil whenever Drawing is [RenderDrawingIdle] or "":
+	// a position is only meaningful when content is actually being read
+	// from it (ADR-011: nil is genuinely inapplicable here, never a stale
+	// or zero position echoed back).
+	TimelinePositionMS *int64 `json:"timelinePositionMs"`
+
+	// Drawing is what this surface's frame writer actually wrote to the
+	// pipeline's stdin on its most recent tick: [RenderDrawingContent] or
+	// [RenderDrawingIdle]. "" means no frame writer is currently active
+	// for this surface. This is the evidence this build contract names
+	// explicitly: PipelineState=="running" alone cannot tell an operator
+	// "rendering content" from "emitting black at 40fps," and this field
+	// is what can (Track B finding 7).
+	Drawing string `json:"drawing"`
+
+	// IdleMode is the configured idle output ([RenderIdleOutputBlack],
+	// [RenderIdleOutputHold], or [RenderIdleOutputDiagnostic]) whenever
+	// Drawing is [RenderDrawingIdle]; "" otherwise, matching Reason's and
+	// TransportReason's identical required-whenever-the-flag-says-so rule.
+	IdleMode string `json:"idleMode"`
+}
+
+// RenderDrawingContent and RenderDrawingIdle are the two values
+// [RenderSurfaceReport.Drawing] can carry.
+const (
+	RenderDrawingContent = "content"
+	RenderDrawingIdle    = "idle"
+)
+
+// RenderIdleOutputBlack, RenderIdleOutputHold, and RenderIdleOutputDiagnostic
+// are this package's own copy of internal/agent/pipeline's identical
+// IdleOutputBlack/Hold/Diagnostic constants (build contract ruling 3) —
+// independently reproduced, not imported, per this codebase's standing
+// each-side-of-a-wire-boundary-decodes-independently convention
+// (internal/agent/renderops.go's surfaceIDPattern doc comment already
+// applies this once).
+const (
+	RenderIdleOutputBlack      = "black"
+	RenderIdleOutputHold       = "hold"
+	RenderIdleOutputDiagnostic = "diagnostic"
+)
+
+// RenderPayload is the payload of the showmesh.node.render/v1 schema,
+// published RETAINED to a node's observed/render topic ([ObservedTopic],
+// [ObservedDeliveryPolicy]): this node's supervised render pipeline health,
+// per surface.
+type RenderPayload struct {
+	// GstLaunchPath is the resolved gst-launch-1.0 path this node is using
+	// (from PATH, or SHOWMESH_GST_LAUNCH), or empty when unresolved.
+	GstLaunchPath string `json:"gstLaunchPath"`
+
+	// GstLaunchAvailable is false whenever the binary could not be located
+	// at all; every surface's PipelineState is then
+	// [RenderPipelineStateUnsupported], never a stale prior value, per this
+	// project's absent-evidence-is-stated rule.
+	GstLaunchAvailable bool `json:"gstLaunchAvailable"`
+
+	// Surfaces is nil-safe: this package's own encoder emits "surfaces":null
+	// for a nil slice and "surfaces":[] for an explicit empty one, matching
+	// AssetInventoryPayload.Assets's identical rule — a node holding no
+	// surface assignment reports "surfaces": [], never omits the key.
+	Surfaces []RenderSurfaceReport `json:"surfaces"`
+
+	// MultiSyncListening is true once this node's UDP 32320 MultiSync
+	// listener has successfully bound and is running, false otherwise —
+	// Track B finding 7's second half. Before this field existed, a bind
+	// failure (port in use, permission, wrong interface) was ONLY a log
+	// line: the timeline stayed StateUnknown forever, every surface's
+	// frame writer drew idle output at full configured rate, and every
+	// other reported field (PipelineState=="running", FramesWritten
+	// climbing, FramesDropped==0) looked completely healthy. This field
+	// is what makes that a stated degradation instead of a silent one.
+	MultiSyncListening bool `json:"multiSyncListening"`
+
+	// MultiSyncReason is the bind error (or "not yet attempted" before the
+	// listener's first try) whenever MultiSyncListening is false. Not
+	// enforced as required by Validate: this field was added after
+	// SchemaNodeRenderV1 first shipped, and a hard requirement here would
+	// reject every payload built before this field existed — including
+	// this package's own existing fixtures in internal/coordinator, a
+	// concurrently-developed package this fix must not collide with.
+	// Publishers should always set it when MultiSyncListening is false
+	// (see internal/agent/multisyncstatus.go); an empty reason on a
+	// non-listening node is a real gap, just not one this wire boundary
+	// can refuse without breaking additive compatibility (ADR-020).
+	MultiSyncReason string `json:"multiSyncReason"`
+
+	// MultiSyncObservedAt is the node's own clock at the moment the
+	// MultiSync listener's status (MultiSyncListening/MultiSyncReason) was
+	// last determined — a real bind attempt, success, or failure — never
+	// the moment this report happens to publish. The coordinator's
+	// noderender collector uses this as the observation's ObservedAt
+	// (evidence time), keeping CollectedAt as its own receipt time,
+	// exactly like RenderSurfaceReport.ObservedAt does one field up for
+	// pipeline state. Zero (IsZero()) means genuinely never determined yet
+	// (ADR-011: zero/nil is unknown, never defaulted to "now" or to a
+	// healthy value) — not enforced as required by Validate, for the
+	// identical additive-compatibility reason MultiSyncReason is not.
+	MultiSyncObservedAt time.Time `json:"multiSyncObservedAt"`
+}
+
+// Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
+// non-empty, Reason required whenever PipelineState is not "running",
+// TransportReason required whenever TransportAvailable is false, and
+// LastStderr bounded to [maxRenderStderrBytes] — all five exist so this
+// payload can never exceed [maxEnvelopeSize] regardless of what a caller
+// tries to put in it.
+func (p RenderPayload) Validate() error {
+	// p.Surfaces == nil covers BOTH an absent "surfaces" key and a literal
+	// JSON null — encoding/json leaves a slice field nil in both cases, so
+	// this is the only place that distinction can still be enforced (see
+	// this field's own doc comment: this package's encoder always emits
+	// "surfaces":[] for a node with none, never omits or nulls the key).
+	// Accepting nil here would treat "no assertion was made" the same as
+	// "this node affirmatively holds no surfaces", which is exactly the
+	// absent-key-as-empty-value defect this project has shipped before —
+	// see CLAUDE.md's recurring absent/null/empty lesson.
+	if p.Surfaces == nil {
+		return fmt.Errorf("%w: surfaces (a node reports \"surfaces\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
+	if len(p.Surfaces) > maxRenderSurfaces {
+		return fmt.Errorf("%w: %d surfaces, max %d", ErrPayloadTooLarge, len(p.Surfaces), maxRenderSurfaces)
+	}
+	for i, s := range p.Surfaces {
+		if s.SurfaceID == "" {
+			return fmt.Errorf("%w: surfaces[%d].surfaceId", ErrPayloadMissingField, i)
+		}
+		if s.PipelineState != RenderPipelineStateRunning && s.Reason == "" {
+			return fmt.Errorf("%w: surfaces[%d].reason (required whenever pipelineState is not %q)",
+				ErrPayloadMissingField, i, RenderPipelineStateRunning)
+		}
+		if s.TransportAvailable != nil && !*s.TransportAvailable && s.TransportReason == "" {
+			return fmt.Errorf("%w: surfaces[%d].transportReason (required whenever transportAvailable is false)",
+				ErrPayloadMissingField, i)
+		}
+		if len(s.LastStderr) > maxRenderStderrBytes {
+			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
+				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
+		}
+		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle {
+			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle)
+		}
+		if s.Drawing == RenderDrawingIdle && s.IdleMode == "" {
+			return fmt.Errorf("%w: surfaces[%d].idleMode (required whenever drawing is %q)",
+				ErrPayloadMissingField, i, RenderDrawingIdle)
+		}
+	}
+	return nil
+}
+
+// ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
+// surface's Drawing is set but is not one of [RenderDrawingContent] or
+// [RenderDrawingIdle], matching [ErrPayloadInvalidOutcome]'s identical
+// closed-vocabulary role for [ResultPayload].
+var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
+
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent
 // "payload" key, which unmarshals to a zero-length json.RawMessage) or is
@@ -700,6 +983,28 @@ func DecodeAssetInventoryPayload(env Envelope) (AssetInventoryPayload, error) {
 	return p, nil
 }
 
+// DecodeRenderPayload decodes env.Payload as a [RenderPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeRenderV1], an
+// error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
+// error wrapping [ErrPayloadMissingField] or [ErrPayloadTooLarge] (via
+// [RenderPayload.Validate]) if the payload is malformed.
+func DecodeRenderPayload(env Envelope) (RenderPayload, error) {
+	if env.Schema != SchemaNodeRenderV1 {
+		return RenderPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeRenderV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	var p RenderPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return RenderPayload{}, fmt.Errorf("mqttproto: decode render payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -782,4 +1087,21 @@ func NewAgentEchoEnvelope(now func() time.Time, nodeID string, payload AgentEcho
 // argument).
 func NewAssetInventoryEnvelope(now func() time.Time, nodeID string, payload AssetInventoryPayload) (Envelope, error) {
 	return newEnvelope(now, SchemaNodeAssetInventoryV1, nodeID, payload)
+}
+
+// NewRenderEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+//
+// Unlike newEnvelope's other callers, this constructor calls
+// payload.Validate() itself before marshalling: newEnvelope never does, so a
+// caller-built payload that DecodeRenderPayload would refuse (e.g. a
+// non-running state with an empty reason) would otherwise be published
+// as-is and only fail on the receiving end, silently and per-message. The
+// producer must not emit what its own decoder rejects.
+func NewRenderEnvelope(now func() time.Time, nodeID string, payload RenderPayload) (Envelope, error) {
+	if err := payload.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("mqttproto: build render envelope: %w", err)
+	}
+	return newEnvelope(now, SchemaNodeRenderV1, nodeID, payload)
 }

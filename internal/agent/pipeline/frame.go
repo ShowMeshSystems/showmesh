@@ -1,0 +1,617 @@
+package pipeline
+
+import (
+	"context"
+	"sync/atomic"
+	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/fseq"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
+)
+
+// FrameSource is the subset of *fseq.File the frame writer needs. An
+// interface so a test can supply a fake without building a real FSEQ file
+// on disk for every test case; [*fseq.File] satisfies it directly.
+type FrameSource interface {
+	FrameCount() int
+	StepTimeMS() byte
+	ChannelRange(frame, start, count int, dst []byte) error
+}
+
+// TimelineSource is the subset of *multisync.Timeline the frame writer
+// needs — an interface for the same fake-without-real-network-I/O reason as
+// [FrameSource].
+type TimelineSource interface {
+	Snapshot() multisync.Snapshot
+}
+
+// idleContentStates is the set of [multisync.State] values for which the
+// frame writer draws the idle output rather than content — build contract
+// ruling 3's table. Playing, Unsynchronized, and Stopping are deliberately
+// NOT here: Stopping renders the timeline's own frozen last position (see
+// this file's package doc comment on why that needs no special case), and
+// Unsynchronized is a confidence statement about the estimate, never a
+// playback halt.
+var idleContentStates = map[multisync.State]bool{
+	multisync.StateOpened:  true,
+	multisync.StateStopped: true,
+	multisync.StateUnknown: true,
+}
+
+// The three values render.settings.idleOutput can carry (build contract
+// ruling 3), independently reproduced here rather than importing
+// internal/coordinator/config — the same each-side-of-a-wire-boundary-
+// decodes-independently convention renderApplyKnownKeys' own doc comment
+// (internal/agent/renderops.go) already applies for this exact payload.
+const (
+	IdleOutputBlack      = "black"
+	IdleOutputHold       = "hold"
+	IdleOutputDiagnostic = "diagnostic"
+)
+
+// diagnosticBackgroundFill and diagnosticBarFill are the two constant byte
+// values [IdleOutputDiagnostic] draws: a constant non-black field across
+// the whole surface, and a single vertical bar swept across it. Both
+// non-zero (never equal to black) and distinct from each other, so the bar
+// reads against the background instead of vanishing into it. A prior
+// version of this mode alternated the WHOLE surface between two flat grey
+// fills once a second; on a dark wall in a dark yard that reads as "is the
+// cable connected?" rather than as a diagnostic, because a viewer has to
+// already be staring at the exact moment it changes to notice anything.
+// The moving bar's own position is a clock a bystander can read against the
+// pipeline's frame period, which a synchronized whole-field blink is not.
+const (
+	diagnosticBackgroundFill byte = 0x30
+	diagnosticBarFill        byte = 0xFF
+)
+
+// diagnosticBarWidthDivisor sets [IdleOutputDiagnostic]'s moving bar width
+// to the surface's own width divided by this, clamped to at least one
+// pixel — wide enough to read on a large canvas-resolution surface, narrow
+// enough on a small virtual-matrix surface that it stays a moving mark
+// rather than a second flat field.
+const diagnosticBarWidthDivisor = 32
+
+// diagnosticPixelPeriod is how long [IdleOutputDiagnostic]'s bar holds each
+// column before advancing exactly one pixel. RES-004/the build contract's
+// B0 spike records the reference profile at 40 fps, a 25 ms frame period;
+// one pixel per reference frame period makes the bar advance visibly on
+// every tick at that rate without outrunning what a bystander can track by
+// eye, and ties the bar's speed to the profile this project actually
+// measured rather than to an arbitrary "looks nice" duration.
+const diagnosticPixelPeriod = 25 * time.Millisecond
+
+// FrameWriter extracts one surface's channel range from a local FSEQ file,
+// frame by frame, at the position [multisync.Timeline] reports, and writes
+// each frame's raw buffer to the supervised pipeline's stdin. One
+// FrameWriter per surface assignment, for the life of that assignment (a
+// fresh render.surface.apply replaces it with a new one — see
+// internal/agent/renderops.go).
+//
+// FrameWriter never starts, stops, or restarts the pipeline process itself
+// (build contract ruling 3: sync loss changes what is drawn, never the
+// sender). A write failure — the pipeline process having died — is counted
+// as a dropped frame and left for [Supervisor]'s own crash detection (via
+// the process's Wait) to notice and restart; the very next tick simply
+// tries again, picking up whatever process is current then.
+type FrameWriter struct {
+	surfaceID string
+	sup       *Supervisor
+	logger    Logger
+
+	source   FrameSource
+	timeline TimelineSource
+
+	// channelStart is 0-BASED, already converted from the operator-facing
+	// 1-based show.surface.channelRange.startChannel — see
+	// internal/agent/renderops.go's buildFSEQAssignment, the one place that
+	// conversion happens (RES-017's own rule: do not scatter "-1").
+	channelStart int
+	channelCount int
+
+	stepTime time.Duration
+
+	// idleOutput is which buffer to draw for [idleContentStates]: one of
+	// [IdleOutputBlack] (default), [IdleOutputHold], or
+	// [IdleOutputDiagnostic]. Carried from the coordinator on the
+	// render.surface.apply assignment (build contract ruling 4) — see
+	// internal/agent/renderops.go's parseIdleOutput.
+	idleOutput string
+
+	// buf, idleBuf, and diagBuf are all reused every frame (never
+	// (re)allocated on the hot path) — see build contract's "avoid an
+	// allocation per frame" rule. idleBuf is all-zero and never written to
+	// after construction. buf is overwritten by every successful
+	// ChannelRange call and, deliberately, NOT overwritten while idle —
+	// which is what lets [IdleOutputHold] draw it directly as "the last
+	// successfully extracted content frame" with no separate hold buffer
+	// and no copy. diagBuf is filled once at construction with the
+	// background constant and then mutated IN PLACE, one bar column at a
+	// time, by idleOutputFor — never reallocated and never rewritten in
+	// full (see idleOutputFor's own comment). Every byte diagBuf ever holds
+	// is one of two constants written at a computed offset: a fill, never a
+	// render, which is what keeps this on ShowMesh's side of ADR-040's line
+	// (it locates and copies bytes; it never reads, scales, or blends one).
+	buf     []byte
+	idleBuf []byte
+	diagBuf []byte
+
+	// diagWidth, diagHeight, diagRowBytes, and diagBarWidthBytes are
+	// [IdleOutputDiagnostic]'s geometry, resolved once at construction from
+	// the surface's own width/height/channelCount (see resolveGeometry) and
+	// never touched again. diagRowBytes is one row's stride in diagBuf;
+	// diagBarWidthBytes is the moving bar's width in bytes. diagLastCol is
+	// the column (in pixels) the bar currently occupies, -1 until the first
+	// diagnostic tick has drawn one — touched only by idleOutputFor, which
+	// (like currentRate below) runs exclusively on Run's own goroutine.
+	diagWidth         int
+	diagHeight        int
+	diagRowBytes      int
+	diagBarWidthBytes int
+	diagBytesPerPixel int
+	diagLastCol       int
+
+	// Atomic because Counts reads them from a caller's goroutine while
+	// writeOneFrame is incrementing them on the frame loop's.
+	written, late, dropped atomic.Int64
+
+	// rateWindowStart and rateWindowWritten anchor the achieved-rate
+	// measurement (see writeOneFrame's rate-sampling block): the wall-clock
+	// time and written-count at the start of the current sampling window.
+	// currentRate is the most recently completed window's frames/second,
+	// nil until one full window has elapsed. All three are touched only
+	// from writeOneFrame, which runs exclusively on Run's own goroutine —
+	// reportCounts, called at the end of the same tick, reads currentRate
+	// on that same goroutine, so nothing here needs a lock or an atomic.
+	rateWindowStart   time.Time
+	rateWindowWritten int64
+	currentRate       *float64
+
+	// loggedRangeErrOnce and loggedWriteErrOnce keep this loop from log-
+	// spamming at up to 40Hz when a condition (e.g. the process is down, or
+	// the assigned range is not covered by this frame) is persistent —
+	// counted every tick regardless, logged once until it clears.
+	loggedRangeErr bool
+	loggedWriteErr bool
+
+	// lastTickTime anchors finding 13's ticker-drop detection: Go's
+	// time.Ticker silently drops ticks when the receiver falls behind
+	// (never queues them), so a gap between consecutive tickTime values
+	// wider than one stepTime means one or more ticks never arrived at all.
+	// Touched only by writeOneFrame, which runs exclusively on Run's own
+	// goroutine — same single-goroutine rule as currentRate below.
+	lastTickTime time.Time
+
+	// timelineState, timelinePositionMS, drawing, and idleModeNow are this
+	// tick's draw evidence (finding 7 — see [Supervisor.SetDrawState]),
+	// touched only by writeOneFrame for the same single-goroutine reason as
+	// currentRate.
+	timelineState      string
+	timelinePositionMS *int64
+	drawing            string
+	idleModeNow        string
+
+	stop chan struct{}
+	done chan struct{}
+}
+
+// NewFrameWriter constructs a FrameWriter and validates, once, that
+// channelStart/channelCount is actually covered by source at frame 0 —
+// rather than discovering a coverage gap only after 40 silent failed
+// frames, this fails the assignment up front with the real error (build
+// contract: "refuse, with the numbers stated, when the surface's channel
+// range is not fully covered"). It does not start the writer; call Run.
+//
+// idleOutput selects the surface's idle behaviour (build contract ruling
+// 3). Any value other than [IdleOutputHold] or [IdleOutputDiagnostic] —
+// including "" — is treated as [IdleOutputBlack], the safe default:
+// callers that resolve a concrete value (internal/agent/renderops.go)
+// already validate it against the known set before reaching here, so this
+// is defense in depth, never the place that rule is enforced.
+//
+// width and height are the surface's own show.surface.geometry — used only
+// to give [IdleOutputDiagnostic]'s moving bar row/column coordinates (see
+// resolveGeometry); every other idle mode and the content path ignore them
+// entirely and keep working from channelStart/channelCount alone exactly as
+// before.
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, idleOutput string, logger Logger) (*FrameWriter, error) {
+	probe := make([]byte, channelCount)
+	if source.FrameCount() > 0 {
+		if err := source.ChannelRange(0, channelStart, channelCount, probe); err != nil {
+			return nil, err
+		}
+	}
+
+	stepTime := time.Duration(source.StepTimeMS()) * time.Millisecond
+	if stepTime <= 0 {
+		stepTime = multisync.DefaultStepTime
+	}
+
+	if idleOutput != IdleOutputHold && idleOutput != IdleOutputDiagnostic {
+		idleOutput = IdleOutputBlack
+	}
+
+	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
+	diagBuf := make([]byte, channelCount)
+	for i := range diagBuf {
+		diagBuf[i] = diagnosticBackgroundFill
+	}
+	barWidthPx := diagW / diagnosticBarWidthDivisor
+	if barWidthPx < 1 {
+		barWidthPx = 1
+	}
+
+	fw := &FrameWriter{
+		surfaceID:         surfaceID,
+		sup:               sup,
+		logger:            logger,
+		source:            source,
+		timeline:          timeline,
+		channelStart:      channelStart,
+		channelCount:      channelCount,
+		stepTime:          stepTime,
+		idleOutput:        idleOutput,
+		buf:               make([]byte, channelCount),
+		idleBuf:           make([]byte, channelCount), // zero-valued: black for rgb/rgbw alike
+		diagBuf:           diagBuf,
+		diagWidth:         diagW,
+		diagHeight:        diagH,
+		diagRowBytes:      diagW * diagBPP,
+		diagBarWidthBytes: barWidthPx * diagBPP,
+		diagBytesPerPixel: diagBPP,
+		diagLastCol:       -1,
+		stop:              make(chan struct{}),
+		done:              make(chan struct{}),
+	}
+	return fw, nil
+}
+
+// resolveGeometry turns a surface's own width/height/channelCount into the
+// row/column geometry [IdleOutputDiagnostic]'s moving bar draws against.
+// The normal case is exact: show.surface validation
+// (internal/coordinator/config/showsurface.go) already enforces
+// width*height*channelsPerPixel == channelCount, so bytesPerPixel is
+// recovered by division with no separate pixel-format lookup needed here.
+//
+// The degenerate case (width or height absent/non-positive, or the counts
+// do not divide evenly — should not occur for a validated assignment, but
+// this is the diagnostic path and must never panic on a bad one) falls back
+// to a single row of 1-byte "pixels" spanning the whole channel range, so
+// the bar still has something to sweep across rather than the constructor
+// failing over a display mode that exists specifically to keep reporting
+// something under a misconfiguration.
+func resolveGeometry(width, height, channelCount int) (w, h, bytesPerPixel int) {
+	if width > 0 && height > 0 && channelCount > 0 && channelCount%(width*height) == 0 {
+		return width, height, channelCount / (width * height)
+	}
+	if channelCount <= 0 {
+		return 1, 1, 1
+	}
+	return channelCount, 1, 1
+}
+
+// Run drives the frame loop on the calling goroutine until Stop is called
+// or ctx is done. Intended to be started with `go fw.Run(ctx)`.
+func (fw *FrameWriter) Run(ctx context.Context) {
+	defer close(fw.done)
+
+	ticker := time.NewTicker(fw.stepTime)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-fw.stop:
+			return
+		case tick := <-ticker.C:
+			fw.writeOneFrame(tick)
+		}
+	}
+}
+
+// Stop signals Run to return and blocks until it has. Safe to call more
+// than once? No — matching [Supervisor.Shutdown]'s single-close-per-runner
+// convention, callers own calling this exactly once per FrameWriter.
+func (fw *FrameWriter) Stop() {
+	close(fw.stop)
+	<-fw.done
+}
+
+// Counts returns the writer's cumulative written/late/dropped counts.
+func (fw *FrameWriter) Counts() (written, late, dropped int64) {
+	return fw.written.Load(), fw.late.Load(), fw.dropped.Load()
+}
+
+// writeOneFrame is one tick's worth of work: detect any ticks the scheduler
+// itself dropped, sample the timeline, select content or idle output, write
+// it to the pipeline's stdin, and record what actually happened as evidence
+// (finding 7) — regardless of whether the write succeeded.
+func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
+	start := time.Now()
+
+	fw.countTickerDrops(tickTime)
+
+	snap := fw.timeline.Snapshot()
+
+	var outBuf []byte
+	var positionMS *int64
+	drawing := DrawingContent
+	idleMode := ""
+	if idleContentStates[snap.State] {
+		drawing = DrawingIdle
+		idleMode = fw.idleOutput
+		outBuf = fw.idleOutputFor(tickTime)
+	} else {
+		pos := snap.PositionMS
+		frameIdx := fw.frameIndexFor(pos)
+		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {
+			fw.dropped.Add(1)
+			if !fw.loggedRangeErr {
+				fw.loggedRangeErr = true
+				fw.logger.Warn("frame writer: channel range extraction failed; drawing idle output until this recovers",
+					"surface_id", fw.surfaceID, "frame", frameIdx, "error", err)
+			}
+			outBuf = fw.idleBuf
+			// A coverage-gap fallback is an extraction FAILURE, not a
+			// deliberate idle transition — always reported as black
+			// regardless of this surface's configured idleOutput, so a
+			// broken assignment never gets mislabelled as a normal
+			// operator-chosen idle cycle (e.g. "hold").
+			drawing = DrawingIdle
+			idleMode = IdleOutputBlack
+		} else {
+			fw.loggedRangeErr = false
+			outBuf = fw.buf
+			positionMS = &pos
+		}
+	}
+
+	fw.timelineState = string(snap.State)
+	fw.timelinePositionMS = positionMS
+	fw.drawing = drawing
+	fw.idleModeNow = idleMode
+
+	w, err := fw.sup.Stdin(fw.surfaceID)
+	if err != nil {
+		fw.dropped.Add(1)
+		fw.recordTick(start, tickTime, false)
+		return
+	}
+
+	n, werr := w.Write(outBuf)
+	if werr != nil || n != len(outBuf) {
+		// A short write or a write error means the pipeline process is
+		// gone or its stdin pipe is closed. This is handed to the
+		// supervisor only in the sense that the supervisor's own exit
+		// detection (watching the process's Wait) independently notices
+		// the same death and restarts per its policy — this loop never
+		// calls Restart/Clear itself (ruling 3). The next tick simply
+		// tries again against whatever process is current then.
+		fw.dropped.Add(1)
+		if !fw.loggedWriteErr {
+			fw.loggedWriteErr = true
+			fw.logger.Warn("frame writer: stdin write failed; pipeline process likely restarting",
+				"surface_id", fw.surfaceID, "error", werr, "bytes_written", n, "bytes_wanted", len(outBuf))
+		}
+		fw.recordTick(start, tickTime, false)
+		return
+	}
+	fw.loggedWriteErr = false
+	fw.written.Add(1)
+
+	fw.recordTick(start, tickTime, true)
+}
+
+// countTickerDrops detects ticks Run's time.Ticker itself silently dropped
+// (finding 13): a Go ticker never queues a missed tick for a slow receiver,
+// it simply never sends it, so a writer running behind schedule produces NO
+// call to writeOneFrame for the ticks it missed — nothing to measure lateness
+// on. Comparing this tick's own scheduled instant (tickTime) against the
+// previous one recovers that: a gap of more than one stepTime means at
+// least one tick never arrived. Counted as dropped frames, the same counter
+// a failed write or a missing process uses — a ticker-dropped tick never got
+// a chance to render or write either, so it belongs in the same evidence.
+func (fw *FrameWriter) countTickerDrops(tickTime time.Time) {
+	if !fw.lastTickTime.IsZero() {
+		if gap := tickTime.Sub(fw.lastTickTime); gap > fw.stepTime {
+			if missed := int64(gap/fw.stepTime) - 1; missed > 0 {
+				fw.dropped.Add(missed)
+			}
+		}
+	}
+	fw.lastTickTime = tickTime
+}
+
+// recordTick finishes one tick: lateness (delivered ticks only), the
+// achieved-rate sample, and the draw-state/counter report — called on
+// every path through writeOneFrame, success or failure, so a stalled
+// pipeline's evidence keeps moving instead of freezing at its last good
+// value (finding 8).
+func (fw *FrameWriter) recordTick(start, tickTime time.Time, delivered bool) {
+	if delivered {
+		// Scheduling lateness (finding 13): how far behind THIS TICK'S OWN
+		// scheduled instant delivery actually finished — not merely how
+		// long this call itself took to run. time.Since(start) alone is
+		// blind to a writer running at half rate, because the ticks it
+		// never got a chance to process (see countTickerDrops) never
+		// generated a call to measure in the first place; tickTime is the
+		// real scheduling reference and is handed in for exactly this.
+		if lateness := time.Since(tickTime); lateness > fw.stepTime {
+			fw.late.Add(1)
+		}
+	}
+	// Always sampled from the CUMULATIVE written counter, on every tick,
+	// not only on a successful one: a stalled pipeline stops incrementing
+	// fw.written, so the window's frame delta naturally falls to zero and
+	// the achieved rate converges to a real, measured 0.0 within one
+	// frameRateWindow — never the stale last-good value this counter used
+	// to freeze at forever (finding 8).
+	fw.sampleRate(start, fw.written.Load())
+	fw.reportCounts()
+}
+
+// idleOutputFor selects (and, for diagnostic, updates) which buffer to draw
+// for one idle tick, per fw.idleOutput.
+//
+//   - [IdleOutputBlack]: idleBuf, all-zero, never written after
+//     construction.
+//   - [IdleOutputHold]: buf, the last successfully extracted content frame
+//     (buf is never touched while idle — see the FrameWriter struct's own
+//     doc comment on buf).
+//   - [IdleOutputDiagnostic]: diagBuf, a constant background with one
+//     vertical bar column swept across it, position derived from tick
+//     (wall-clock time), never from a per-call counter — so the position is
+//     itself a clock a bystander can check, and so a missed or delayed tick
+//     can never leave the bar in the wrong place. On the hot path this
+//     touches only the bar's own O(height) worth of bytes, never the whole
+//     buffer: at a 1080p-equivalent matrix diagBuf is ~6.2MB, and RES-004's
+//     day-0 budget leaves roughly 14% of one core spare at the reference 40
+//     fps profile (build contract, ruling 5) — that is not room to spend
+//     rewriting an idle screen every tick when erasing the old column and
+//     drawing the new one is column-width * height bytes, independent of
+//     the surface's width.
+func (fw *FrameWriter) idleOutputFor(tick time.Time) []byte {
+	switch fw.idleOutput {
+	case IdleOutputHold:
+		return fw.buf
+	case IdleOutputDiagnostic:
+		col := diagnosticBarColumn(tick, fw.diagWidth)
+		if col != fw.diagLastCol {
+			fw.drawDiagnosticBarColumn(col)
+		}
+		return fw.diagBuf
+	default:
+		return fw.idleBuf
+	}
+}
+
+// diagnosticBarColumn is the pure function of wall-clock time behind
+// [IdleOutputDiagnostic]'s bar: which pixel column it occupies at tick, on
+// a surface diagWidth pixels wide. A pure function of (tick, diagWidth)
+// rather than a counter incremented per call, so a paused writer, a missed
+// tick, or two independent callers all agree on where the bar is without
+// coordinating — the same property that makes it "generated," never state
+// that can drift out of sync with itself.
+func diagnosticBarColumn(tick time.Time, diagWidth int) int {
+	if diagWidth <= 0 {
+		return 0
+	}
+	return int((tick.UnixNano() / int64(diagnosticPixelPeriod)) % int64(diagWidth))
+}
+
+// drawDiagnosticBarColumn moves [IdleOutputDiagnostic]'s bar to col:
+// erases the previously drawn column back to the background fill (skipped
+// on the very first call, fw.diagLastCol == -1), then draws col. Both steps
+// touch exactly diagHeight rows of diagBarWidthBytes each — O(height), not
+// O(width*height) — because a vertical bar's column bytes are the only
+// bytes that changed; every other byte in diagBuf is still whatever the
+// background fill (or a previous bar position, now erased) left there. See
+// idleOutputFor's own comment for why that difference is the point.
+func (fw *FrameWriter) drawDiagnosticBarColumn(col int) {
+	if fw.diagLastCol >= 0 {
+		fw.fillDiagnosticColumn(fw.diagLastCol, diagnosticBackgroundFill)
+	}
+	fw.fillDiagnosticColumn(col, diagnosticBarFill)
+	fw.diagLastCol = col
+}
+
+// fillDiagnosticColumn writes fill across the bar's width (diagBarWidthBytes,
+// clamped to the surface's own edge) in every row of diagBuf, at col — the
+// one primitive both erasing and drawing the bar reduce to.
+func (fw *FrameWriter) fillDiagnosticColumn(col int, fill byte) {
+	if fw.diagBytesPerPixel <= 0 || fw.diagRowBytes <= 0 {
+		return
+	}
+	startByte := col * fw.diagBytesPerPixel
+	endByte := startByte + fw.diagBarWidthBytes
+	if rowLimit := fw.diagRowBytes; endByte > rowLimit {
+		endByte = rowLimit
+	}
+	if endByte <= startByte {
+		return
+	}
+	for row := 0; row < fw.diagHeight; row++ {
+		base := row*fw.diagRowBytes + startByte
+		end := row*fw.diagRowBytes + endByte
+		if end > len(fw.diagBuf) {
+			break
+		}
+		for i := base; i < end; i++ {
+			fw.diagBuf[i] = fill
+		}
+	}
+}
+
+// frameRateWindow bounds how long writeOneFrame accumulates successful
+// writes before turning them into an achieved-frames/second measurement.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for the right
+// window length. Long enough that one slow frame does not dominate the
+// average (at the reference ~40fps this is dozens of samples), short
+// enough that a genuine sustained slowdown shows up on the dashboard within
+// a few seconds rather than minutes.
+const frameRateWindow = 5 * time.Second
+
+// sampleRate updates the achieved-rate measurement from a successful
+// write's own timestamp and cumulative written count. The first call after
+// construction (or after a window closes) only anchors the window; a rate
+// is reported starting from the window after that, computed strictly from
+// wall-clock elapsed time and frames actually written in it — never from
+// fw.stepTime or any other configured/target value, which is what keeps
+// this an achieved measurement rather than the target echoed back.
+func (fw *FrameWriter) sampleRate(now time.Time, written int64) {
+	if fw.rateWindowStart.IsZero() {
+		fw.rateWindowStart = now
+		fw.rateWindowWritten = written
+		return
+	}
+	elapsed := now.Sub(fw.rateWindowStart)
+	if elapsed < frameRateWindow {
+		return
+	}
+	frames := written - fw.rateWindowWritten
+	rate := float64(frames) / elapsed.Seconds()
+	fw.currentRate = &rate
+	fw.rateWindowStart = now
+	fw.rateWindowWritten = written
+}
+
+// frameIndexFor converts a timeline position (ms) to a frame index via
+// this surface's own file's step time, clamped to [0, FrameCount()-1] —
+// including holding the last frame once the file's own duration is
+// exceeded (e.g. the master is playing a longer sequence, or free-running
+// past this file's end), rather than erroring or wrapping.
+//
+// SHOWMESH HYPOTHESIS, NOT MEASURED: holding the last frame past end-of-
+// file has no measured evidence behind it; it is a defensive choice (never
+// crash, never index out of range) rather than a specified behaviour.
+func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
+	frameCount := fw.source.FrameCount()
+	if frameCount <= 0 {
+		return 0
+	}
+	stepMS := fw.stepTime.Milliseconds()
+	if stepMS <= 0 {
+		stepMS = 1
+	}
+	idx := positionMS / stepMS
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= int64(frameCount) {
+		idx = int64(frameCount) - 1
+	}
+	return int(idx)
+}
+
+func (fw *FrameWriter) reportCounts() {
+	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate)
+	fw.sup.SetDrawState(fw.surfaceID, fw.timelineState, fw.timelinePositionMS, fw.drawing, fw.idleModeNow)
+}
+
+// Compile-time check that *fseq.File satisfies FrameSource.
+var _ FrameSource = (*fseq.File)(nil)
+
+// Compile-time check that *multisync.Timeline satisfies TimelineSource.
+var _ TimelineSource = (*multisync.Timeline)(nil)

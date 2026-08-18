@@ -26,6 +26,7 @@ import type {
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigFPPMQTTPutRequest,
+  ConfigRenderSettingsPayload,
   ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
   ConfigRevisionsResponse,
@@ -43,6 +44,8 @@ import type {
   Model,
   PrincipalResponse,
   PrincipalsResponse,
+  RenderCommandResult,
+  RenderSettingsConfigResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
   ResolumeInstancesConfigResponse,
@@ -62,6 +65,7 @@ type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationRespo
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
+type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -70,7 +74,6 @@ type SchemaResolumeInstanceResponse = components['schemas']['ResolumeInstanceRes
 type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
 // Track G seam G-8: the Operator UI for Track E.
 type SchemaShowConfigResponse = components['schemas']['ShowConfigResponse']
-type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 type SchemaShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
 type SchemaAssetResponse = components['schemas']['AssetResponse']
 type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
@@ -200,6 +203,22 @@ export function restoreResolumeRecovery(): Promise<ResolumeRecoveryRestoreRespon
   return store.restoreResolumeRecovery()
 }
 
+// Track B seam B2c (ADR-039): render.settings. Same thin pass-through
+// pattern.
+export function getRenderSettingsConfig(): Promise<RenderSettingsConfigResponse> {
+  return store.getRenderSettingsConfig()
+}
+
+export function putRenderSettingsConfig(
+  payload: ConfigRenderSettingsPayload,
+): Promise<RenderSettingsConfigResponse> {
+  return store.putRenderSettingsConfig(payload)
+}
+
+export function getRenderSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getRenderSettingsConfigRevisions()
+}
+
 // Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin
 // pass-through pattern as the others above — every method here maps to
 // one row of docs/bench/fpp-command-vocabulary.md section 4's registry,
@@ -241,6 +260,24 @@ export function setFPPVolume(instanceId: string, volume: number): Promise<FPPCom
   return store.setFPPVolume(instanceId, volume)
 }
 
+// Track B seam B2b-front: the three render.* dispatch endpoints. Same
+// thin pass-through pattern.
+export function applyRenderSurface(
+  nodeId: string,
+  surfaceId: string,
+  sequenceId: string,
+): Promise<RenderCommandResult> {
+  return store.applyRenderSurface(nodeId, surfaceId, sequenceId)
+}
+
+export function clearRenderSurface(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+  return store.clearRenderSurface(nodeId, surfaceId)
+}
+
+export function restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+  return store.restartRenderPipeline(nodeId, surfaceId)
+}
+
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same
 // thin pass-through pattern as the others above.
 
@@ -265,6 +302,18 @@ export function listConfigObjects(
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)
+}
+
+// Server-side node filter (GET /config/show.surface?node=) — see
+// store.ts's listShowSurfacesForNode. Replaces the earlier
+// listConfigObjects + per-row getShowSurface fan-out RenderSurfacePanel.tsx
+// used to resolve which show.surface objects are assigned to a node.
+export function listShowSurfacesForNode(nodeId: string): Promise<SchemaConfigObjectsListResponse> {
+  return store.listShowSurfacesForNode(nodeId)
+}
+
+export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
+  return store.getShowSurface(id)
 }
 
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
@@ -421,10 +470,6 @@ export function putShow(id: string, payload: ConfigShowWrite): Promise<SchemaSho
 
 export function getShowRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowRevisions(id)
-}
-
-export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
-  return store.getShowSurface(id)
 }
 
 export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<SchemaShowSurfaceConfigResponse> {

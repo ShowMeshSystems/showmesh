@@ -3,15 +3,16 @@ import { useModelContext } from '../app/ModelContext'
 import { ControlPlaneBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
-import { CapabilityPanel } from '../components/CapabilityPanel'
+import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
+import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { formatAbsolute } from '../app/time'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
 // state with its reason, agent version, platform, boot ID, started-at,
 // first-seen, last update, and every advertised capability with its own
-// status. Each capability renders through the one generic panel this
-// build has (CapabilityPanel), individually wrapped in an error boundary
+// status. Each capability renders through resolveCapabilityPanel's lookup
+// table (CapabilityPanel.tsx), individually wrapped in an error boundary
 // so a capability with a surprising shape cannot blank the rest of the page.
 export function NodeDetail() {
   const { nodeId } = useParams<{ nodeId: string }>()
@@ -89,15 +90,25 @@ export function NodeDetail() {
             </section>
           </PanelErrorBoundary>
 
+          <PanelErrorBoundary panelLabel="Render">
+            <section className="panel">
+              <h3 className="panel__title">Render</h3>
+              <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+            </section>
+          </PanelErrorBoundary>
+
           <h3 className="section-title">Capabilities</h3>
           {node.capabilities.length === 0 ? (
             <p className="text-muted">This node advertises no capabilities.</p>
           ) : (
-            node.capabilities.map((capability) => (
-              <PanelErrorBoundary key={`${capability.id}@${capability.version}`} panelLabel={capability.id}>
-                <CapabilityPanel capability={capability} />
-              </PanelErrorBoundary>
-            ))
+            node.capabilities.map((capability) => {
+              const Panel = resolveCapabilityPanel(capability.id)
+              return (
+                <PanelErrorBoundary key={`${capability.id}@${capability.version}`} panelLabel={capability.id}>
+                  <Panel capability={capability} />
+                </PanelErrorBoundary>
+              )
+            })
           )}
         </>
       )}

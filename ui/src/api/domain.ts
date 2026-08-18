@@ -111,6 +111,13 @@ export type ConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssets
 // Step 7 seam C: the first write's own response shape, aliased for the
 // identical reason as every type above.
 export type FPPCommandResult = components['schemas']['FPPCommandResult']
+// Track B seam B2b-front: the three render.* dispatch endpoints' own
+// response shape, aliased for the identical reason.
+export type RenderCommandResult = components['schemas']['RenderCommandResult']
+// ObservationEntry is Node['render']'s element type, aliased here
+// separately so NodeDetail.tsx and the dashboard attention list can
+// import it directly rather than indexing through Node.
+export type ObservationEntry = components['schemas']['ObservationEntry']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
 // declaration. NodeDeclaration is also reachable as Node['declaration'],
 // aliased here separately for call sites (DomainBadges.tsx,
@@ -134,6 +141,12 @@ export type ConfigShowMacroStep = components['schemas']['ConfigShowMacroStep']
 export type ConfigShowMacro = components['schemas']['ConfigShowMacro']
 export type ShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 export type ConfigRevisionsResponseKind = ConfigRevisionsResponse['kind']
+// Finding 16 (Track B surface fixes): show.surface reads, so the UI can
+// discover a configured-but-not-yet-applied surface the same way
+// showmeshctl already can. Aliased for the identical reason as every
+// type above.
+export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
+export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 
 export type MacroRunSummary = components['schemas']['MacroRunSummary']
 export type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
@@ -163,6 +176,14 @@ export type ResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRe
 export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
+
+// Track B seam B2c (ADR-039): the render.settings configuration singleton.
+// Aliased for the identical reason as every type above. Not part of
+// `Model` — this data is not a resource ADR-020's change stream models,
+// matching ResolumeRecoveryConfigResponse's own reasoning just above.
+export type ConfigRenderRestartPolicy = components['schemas']['ConfigRenderRestartPolicy']
+export type ConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
+export type RenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
 
 // Track D seam D-4: Resolume as an observability resource (seam E) and the
 // seven-action vocabulary (D-3/seam B). Aliased for the identical reason
@@ -200,8 +221,6 @@ export type ConfigShowSurfaceGeometry = components['schemas']['ConfigShowSurface
 export type ConfigShowSurfaceNDIOutput = components['schemas']['ConfigShowSurfaceNDIOutput']
 export type ConfigShowSurfaceHDMI = components['schemas']['ConfigShowSurfaceHDMI']
 export type ConfigShowSurfaceOutput = components['schemas']['ConfigShowSurfaceOutput']
-export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
-export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 export type ConfigShowActive = components['schemas']['ConfigShowActive']
 export type ShowActiveConfigResponse = components['schemas']['ShowActiveConfigResponse']
 export type Asset = components['schemas']['Asset']

@@ -1,14 +1,12 @@
 // Package agent wires the node agent's config, MQTT connection (hello,
-// Last Will, health heartbeat), and clean-shutdown ordering together and
-// runs them until shutdown. Per ARCHITECTURE 4.3 the agent advertises
-// capabilities and reports health; Step 2 Task D implements nothing beyond
-// that scope — no GStreamer, no media, no command handling, no local
-// fallback cache, no real capability. The agent exists to be seen, nothing
-// more.
+// Last Will, health heartbeat), command handling (including asset sync and
+// Track B's render pipeline supervision), and clean-shutdown ordering
+// together and runs them until shutdown.
 package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,7 +17,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 // shutdownTimeout bounds the clean-shutdown path (offline publish followed
@@ -123,6 +123,72 @@ func Run() int {
 	// selecting on it yet.
 	assetFetchTrigger := make(chan struct{}, 1)
 
+	// renderTrigger is assetFetchTrigger's counterpart for render.*
+	// operations; see command.go's identical non-blocking-send reasoning.
+	renderTrigger := make(chan struct{}, 1)
+
+	// sup owns every supervised render pipeline for this node's whole
+	// process life — constructed here, outside newMQTTConn, for the same
+	// reason cmdHandler is: it must survive a broker reconnect, since a
+	// running pipeline must keep rendering through one (Track B build
+	// contract standing rule 1: the node renders, the coordinator watches,
+	// and a render node whose broker has gone away keeps rendering).
+	sup := pipeline.NewSupervisor(time.Now, nil, logger)
+	assignmentStore := pipeline.NewAssignmentStore(cfg.AssetDir)
+
+	// timeline is this node's single MultiSync-driven position estimate,
+	// shared by every surface's frame writer (ADR-026 N=1 is a renderer
+	// scope limit, not a reason to build N timelines; a future N>1 node
+	// still tracks one master's position). SetStepTime is called from a
+	// surface's own FSEQ file on every apply/resume — see renderops.go's
+	// applyTimelineStepTime, which renderOps.applySurface and
+	// ResumeAssignment both call; multisync.go's listener never calls
+	// SetStepTime itself (it has no file to read one from).
+	timeline := multisync.NewTimeline(time.Now, multisync.Config{})
+
+	// multiSyncStatus carries a bind failure (or a mid-session socket
+	// failure) into the render report as stated evidence rather than only a
+	// log line — finding 7's second half; see multisyncstatus.go.
+	multiSyncStatus := newMultiSyncStatus()
+
+	multiSyncDone := make(chan struct{})
+	go func() {
+		defer close(multiSyncDone)
+		runMultiSyncListener(sigCtx, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
+	}()
+
+	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, logger)
+
+	// Reload every persisted surface assignment and re-apply it, so a node
+	// that restarts with no coordinator reachable resumes rendering
+	// (Track B build contract ruling 4) rather than sitting idle until a
+	// coordinator reappears to resend an assignment it already sent once.
+	if persisted, err := assignmentStore.Load(); err != nil {
+		logger.Warn("failed to load persisted render assignments at startup; starting with none", "error", err)
+	} else {
+		for _, a := range persisted {
+			var params map[string]any
+			if err := json.Unmarshal(a.RawParams, &params); err != nil {
+				logger.Warn("skipping a persisted render assignment with unparseable params", "surface_id", a.SurfaceID, "error", err)
+				continue
+			}
+			if err := renderOps.ResumeAssignment(a.SurfaceID, params); err != nil {
+				logger.Warn("failed to re-apply a persisted render assignment at startup", "surface_id", a.SurfaceID, "error", err)
+				// Finding 9: the node KNOWS it holds an assignment it could
+				// not honour (FSEQ missing after a disk restore, a
+				// content-hash mismatch, unparseable persisted params); a
+				// log line alone leaves no runner for this surface, so the
+				// render report omits it entirely and the coordinator
+				// cannot distinguish "never assigned" from "assigned and
+				// broken." Report it as StateFailed instead of staying
+				// silent.
+				sup.MarkResumeFailed(a.SurfaceID, fmt.Sprintf("held a persisted assignment at boot but could not resume it: %v", err))
+				continue
+			}
+			logger.Info("resumed a persisted render assignment at startup", "surface_id", a.SurfaceID, "applied_at", a.AppliedAt)
+		}
+	}
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -130,7 +196,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
 	if err != nil {
@@ -154,6 +220,14 @@ func Run() int {
 		runAssetInventory(sigCtx, conn, cfg.NodeID, cfg.AssetDir, time.Now, ticker.C, assetFetchTrigger, logger)
 	}()
 
+	renderReportDone := make(chan struct{})
+	go func() {
+		defer close(renderReportDone)
+		ticker := time.NewTicker(cfg.RenderReportInterval)
+		defer ticker.Stop()
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, time.Now, ticker.C, renderTrigger, logger)
+	}()
+
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
@@ -164,14 +238,30 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat and asset inventory loops also select on sigCtx.Done()
-	// and exit on their own; wait for both so neither can race the final
-	// offline publish below with a publish still in flight.
+	// The heartbeat, asset inventory, render report, and MultiSync listener
+	// loops also select on sigCtx.Done() and exit on their own; wait for
+	// all four so none can race the final offline publish below with a
+	// publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
+	<-renderReportDone
+	<-multiSyncDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+
+	// Stop every surface's frame writer before its pipeline: a writer still
+	// running against a process the supervisor is about to kill would just
+	// see every write fail, so stop the source before the sink.
+	renderOps.Shutdown()
+
+	// Stop every supervised pipeline's child process before disconnecting:
+	// a clean agent shutdown must not leave an orphaned gst-launch-1.0
+	// process behind with nothing left to supervise or report on it. This
+	// is deliberately after the shutdown-signal handling above and before
+	// the MQTT offline publish, so it happens on every clean exit path.
+	sup.Shutdown(shutdownCtx)
+
 	shutdownCleanly(shutdownCtx, conn, cfg.NodeID, logger)
 
 	logger.Info("showmesh-agent exited cleanly")

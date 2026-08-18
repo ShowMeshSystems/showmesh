@@ -189,6 +189,34 @@ const (
 	// what keeps these two states from ever being produced for the same
 	// reason in the first place).
 	exitAssetsUnknown = 21
+
+	// exitRenderUnavailable: either "render status" found no SURFACE
+	// render evidence for the requested node — never published a render
+	// report at all, or published one naming no surfaces yet (a node's
+	// node.multisync.* facts, finding 7, are published as soon as it
+	// connects and do not by themselves count: they say nothing about
+	// whether any surface is rendering) — distinct from a node that HAS
+	// reported surface evidence and is simply stale/unknown/failed, which
+	// prints normally and exits 0), or
+	// "render transport" found the surface's transport unavailable —
+	// either a real probe confirmed it (Track B seam B4,
+	// [pipeline.ProbeNDISend]) or no probe evidence exists yet. All three
+	// are "cannot tell the operator this works right now," which is what
+	// an operator running either command actually wants to know; a script
+	// that needs to distinguish the exact cause should pass --output json
+	// and read the observation state directly rather than branching on
+	// this exit code alone.
+	exitRenderUnavailable = 22
+
+	// exitRenderPipelineDown: a "render apply"/"render clear"/
+	// "render restart" subcommand's own confirmation wait ended with the
+	// surface's pipeline observed in its "failed" state — distinct from
+	// [exitCommandUnconfirmed] (9), which covers every OTHER unconfirmed
+	// case (the deadline elapsed with no evidence either way, or evidence
+	// exists but is stale/unknown). This is the sharper of the two: the
+	// coordinator has DIRECT evidence the pipeline is down, not merely an
+	// absence of evidence that it came up.
+	exitRenderPipelineDown = 23
 )
 
 // cliError carries an exit code alongside a human-readable message, so

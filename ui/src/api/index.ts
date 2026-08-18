@@ -60,6 +60,13 @@ export type {
   ResolumeRecoveryRestoreResponse,
   ConfigResolumeRecoveryPayload,
   ResolumeRecoveryConfigResponse,
+  // Track B seam B2c (ADR-039): render.settings.
+  ConfigRenderRestartPolicy,
+  ConfigRenderSettingsPayload,
+  RenderSettingsConfigResponse,
+  // Track B seam B2b-front: the three render.* dispatch endpoints.
+  ObservationEntry,
+  RenderCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,
@@ -84,6 +91,10 @@ export type {
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
   ConfigObjectsListResponse,
+  // Finding 16: show.surface reads, so the UI can discover a
+  // configured-but-not-yet-applied surface the way showmeshctl already can.
+  ConfigShowSurface,
+  ShowSurfaceConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -113,8 +124,6 @@ export type {
   ConfigShowSurfaceNDIOutput,
   ConfigShowSurfaceHDMI,
   ConfigShowSurfaceOutput,
-  ConfigShowSurface,
-  ShowSurfaceConfigResponse,
   ConfigShowActive,
   ShowActiveConfigResponse,
   Asset,
@@ -156,10 +165,15 @@ export {
   nextFPPPlaylistItem,
   prevFPPPlaylistItem,
   setFPPVolume,
+  applyRenderSurface,
+  clearRenderSurface,
+  restartRenderPipeline,
   runDiscovery,
   declareNode,
   deleteNodeDeclaration,
   listConfigObjects,
+  listShowSurfacesForNode,
+  getShowSurface,
   getShowAction,
   putShowAction,
   getShowActionRevisions,
@@ -175,6 +189,9 @@ export {
   getResolumeRecoveryConfig,
   putResolumeRecoveryConfig,
   restoreResolumeRecovery,
+  getRenderSettingsConfig,
+  putRenderSettingsConfig,
+  getRenderSettingsConfigRevisions,
   listResolumeInstances,
   getResolumeInstance,
   listResolumeActions,
@@ -198,7 +215,6 @@ export {
   getShow,
   putShow,
   getShowRevisions,
-  getShowSurface,
   putShowSurface,
   getShowSurfaceRevisions,
   getShowActive,

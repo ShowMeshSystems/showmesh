@@ -107,8 +107,10 @@ extraction, and its output). Reads require show:macro:run OR
 config:write; writes require config:write.
 
 Subcommands:
-  list [--show <id>]   enumerate surface objects, optionally narrowed to
-                        one show
+  list [--show <id>] [--node <id>]
+                        enumerate surface objects, optionally narrowed to
+                        one show and/or one node (both may be given at
+                        once)
   get <id>             show one surface's full definition
   set <id>             write a new surface revision (write, full
                         replacement)
@@ -121,11 +123,13 @@ subcommand.
 
 func cmdSurfaceList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl surface list", stderr)
-	var show string
+	var show, node string
 	fs.StringVar(&show, "show", "", "narrow the list to surfaces belonging to this show id")
+	fs.StringVar(&node, "node", "", "narrow the list to surfaces assigned to this node id")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl surface list [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nEnumerate show.surface objects (GET /api/v1/config/show.surface).")
+		_, _ = fmt.Fprintln(stderr, "--show and --node may both be given; a surface must match every filter given.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -146,9 +150,15 @@ func cmdSurfaceList(args []string, stdout, stderr io.Writer, clock func() time.T
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	var query url.Values
+	query := url.Values{}
 	if show != "" {
-		query = url.Values{"show": {show}}
+		query.Set("show", show)
+	}
+	if node != "" {
+		query.Set("node", node)
+	}
+	if len(query) == 0 {
+		query = nil
 	}
 
 	var resp showConfigObjectsListResponse

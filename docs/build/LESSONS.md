@@ -580,3 +580,29 @@ Nothing in the merge output suggested a problem. `tsc --noEmit` caught it, and r
 This is a different failure from the shared-`enum` collision the previous fold hit, where two YAML mappings ended up with duplicate keys and the conformance suite caught it. Both share the same root: **git reconciles text, and two seams adding similar-shaped code to one file is exactly where text-level reconciliation produces plausible, compiling, wrong output.**
 
 **Rule:** after any merge where both sides added new code to the same file, run the type checker and the full suite before committing, and re-read the merged regions rather than trusting the absence of conflict markers. A merge that produced no conflicts in a file both sides extended is a claim to verify, not a result to accept.
+
+## A mechanism that proves a frame reached the wall can report success in the exact case it did not
+
+**Track B, full-track review, 2026-08-17.** Twenty-one findings on a 68-commit diff, plus two more in a `pkg/fseq`-focused addendum, all found after every seam's own `make check` and `make test-integration` were already green. The reviewer's own summary of the pattern is worth keeping verbatim: every mechanism this track built to prove a frame reached the wall reports success, or a plausible zero, in the exact case where it did not.
+
+Two examples carry the shape. With the MultiSync listener unable to bind UDP 32320, the timeline correctly stayed `unknown` and correctly routed to the idle output — the build contract's own ruling 3 was implemented as written. What was missing sat one layer up: the node's render report carried no field distinguishing "drawing the idle output" from "drawing the show," so the report read `pipelineState: running`, frames climbing at 40/s, zero late, zero dropped, rate 40.0 — a healthy report for a black wall, all night. Separately, the fast-failure lockout meant to catch a crash-looping pipeline reset its counter on a stdout marker `gst-launch` prints *before* attempting the state transition, so a pipeline crashing on every single restart reported `consecutiveFailures: 0` forever; reproduced by hand against real `gst-launch-1.0`, the marker printed and the process died roughly 70 ms later on every run.
+
+**Rule:** when a mechanism exists specifically to prove a positive claim (frames are arriving, a restart is not looping), ask what value it reports in the one case the claim is false, not only the case it is true. A metric that free-runs to a plausible number when its input has gone silent, or a counter that resets on a signal that precedes the outcome it is meant to gate on, will pass every test that only exercises the working path — see the earlier "verification that only exercises the success path" lesson above; this is the same shape recurring at the mechanism level rather than the test-fixture level.
+
+## `make check` does not run with the race detector
+
+**Track B, full-track review, 2026-08-17.** A data race on the frame writer's counters (`8e90d3f`, "Fix a data race on the frame writer's counters") passed every seam's own `make check` and was caught only by `go test -race ./...` run separately. `make check` is this project's fast per-seam gate and does not include `-race`; the full-track review ran it as one of the four gates listed in BUILD-LOG and BUILD-PLAN precisely because a seam's own green `make check` had already missed a real concurrency bug.
+
+**Rule:** a green `make check` is not evidence a package is race-free. `-race` has to be run explicitly and separately from the fast gate, and a track that touches concurrent code (a supervisor, a frame writer, anything with its own goroutine) should not be called done on `make check` alone.
+
+## Review can suggest a fix that is wrong about the system it is fixing
+
+**Track B, full-track review, 2026-08-17.** The review suggested requiring `RestartCount` to increase before confirming a pipeline restart, which reads as an obviously safer confirmation rule. Running it against the real agent showed the opposite: `cmdRestart` (an operator-issued restart) preserves the existing count, and only a crash-exit increments it, so the suggested fix would have made every operator-initiated restart permanently unconfirmable. The integration test, run against a real subprocess rather than a fake, is what caught it.
+
+**Rule:** review is cheap insurance on a diff; integration finds what the diff, and the review of it, were wrong about. A reviewer's suggested fix is a hypothesis about the system's actual behavior, not a substitute for running it — this is CLAUDE.md's own "when they compete for time, integrate" rule, extended to cover review findings and not only original code.
+
+## A test's name can guard a property it never exercises
+
+**Track B, `pkg/fseq` addendum, 2026-08-17.** An existing test asserted that the decode-size check correctly bounded a multi-frame zstd block, and it passed — because the test's own fixture only ever constructed single-frame blocks, and the check it was guarding read only a block's first zstd frame while the real `DecodeAll` loops over every frame in it. The test's name was a memory-safety claim ("the size check is correct against a multi-frame block") the test itself never put to the fixture it would need to fail on.
+
+**Rule:** before trusting a test that guards a safety property, check what its fixture actually constructs, not what its name claims to cover. A test named for the dangerous case and built from the easy case will pass forever without ever exercising the danger.

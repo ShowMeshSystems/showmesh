@@ -37,6 +37,27 @@ type Dependencies struct {
 	Events       EventReader
 	Collectors   CollectorStatusLister
 
+	// Render is Track B seam B2b's dependency — see [NodeRenderLister]. A
+	// nil field is replaced by [noNodeRenderLister], under which every
+	// node renders with no render evidence at all: correct for a
+	// coordinator with no render node ever attached, and for every test
+	// in this package that predates this field.
+	Render NodeRenderLister
+
+	// RenderPublisher is Track B seam B2b-front's own dependency — see
+	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
+	// replaced by [noRenderPublisher], under which every render.* dispatch
+	// fails with an internal error naming the missing wiring, matching
+	// [Dependencies.Commands]'s identical no-op default posture.
+	RenderPublisher RenderPublisher
+
+	// AssetManifests is ALSO this seam's own dependency for resolving a
+	// surface's current FSEQ asset by identity (ADR-028) — see
+	// [Dependencies.AssetManifests]'s own doc comment below (Track E seam
+	// E5). Reusing that field rather than adding a second one means the
+	// asset-resolution answer render.surface.apply gets can never
+	// disagree with what GET /assets/manifest reports for the same node.
+
 	// Identity is ADR-024's principal, session, token, bootstrap, and
 	// audit surface — internal/coordinator/identity.Service, already
 	// built (Step 6's own dependency, not this package's to define). A
@@ -419,6 +440,12 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Collectors == nil {
 		d.Collectors = noCollectorStatusLister{}
 	}
+	if d.Render == nil {
+		d.Render = noNodeRenderLister{}
+	}
+	if d.RenderPublisher == nil {
+		d.RenderPublisher = noRenderPublisher{}
+	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
 	}
@@ -577,6 +604,14 @@ func (noNodeLister) Snapshot(context.Context, time.Time) ([]inventory.NodeView, 
 	return nil, nil
 }
 
+// noNodeRenderLister is [Dependencies.Render]'s nil-safe default: every node
+// renders with no render evidence, matching every other no-op lister in
+// this package (noNodeLister, noFPPLister) — an unwired render dependency
+// is a real, honest "nothing reported", never an error.
+type noNodeRenderLister struct{}
+
+func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observation { return nil }
+
 type noFPPLister struct{}
 
 func (noFPPLister) ListInstances(context.Context) ([]FPPInstanceView, error) { return nil, nil }
@@ -632,6 +667,17 @@ func (noConfigStore) ListConfigObjects(context.Context, string) ([]store.ConfigO
 // write dependency nobody has wired in refuses loudly rather than
 // fabricating a success no state change actually backs.
 var errCommandStoreNotConfigured = errors.New("api: no CommandStore was wired into this API's Dependencies")
+
+// noRenderPublisher is [Dependencies.RenderPublisher]'s no-op default:
+// every render.* dispatch fails loudly rather than silently pretending a
+// command reached a node.
+type noRenderPublisher struct{}
+
+var errRenderPublisherNotConfigured = errors.New("api: no render command publisher is configured on this coordinator")
+
+func (noRenderPublisher) Publish(context.Context, string, byte, bool, []byte) error {
+	return errRenderPublisherNotConfigured
+}
 
 type noCommandStore struct{}
 
@@ -1073,6 +1119,22 @@ func New(deps Dependencies, opts Options) *API {
 	// fppcommand_handler.go owns everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
 
+	// Track B seam B2b-front: dispatch the three agent render.* operations
+	// (renderdispatch.go). Guarded by render:command, matching
+	// fpp:command/resolume:action's identical "reads open, this write
+	// isn't" posture.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/apply", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceApply))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/clear", h.writeGuard(&scopeRenderCommand, h.handleRenderSurfaceClear))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/restart", h.writeGuard(&scopeRenderCommand, h.handleRenderPipelineRestart))
+	// Track B seam B4: dispatch render.transport.probe — a COMMAND (it
+	// starts a real gst-launch-1.0 subprocess on the node), never reachable
+	// by GET (ADR-024: no state change is reachable by GET), same
+	// render:command scope and same evidence-confirmation discipline as
+	// apply/clear/restart above. showmeshctl render transport (a read of
+	// last-known evidence) is a different, pre-existing surface — this is
+	// the "go find out now" counterpart.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe", h.writeGuard(&scopeRenderCommand, h.handleRenderTransportProbe))
+
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
 	mux.HandleFunc("GET /api/v1/stream", h.readGuardAll(readAllScopes, hub.ServeHTTP))
@@ -1316,6 +1378,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/resolume.recovery", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfig))
 	mux.HandleFunc("PUT /api/v1/config/resolume.recovery", h.writeGuard(&scopeConfigWrite, h.handlePutResolumeRecoveryConfig))
 	mux.HandleFunc("GET /api/v1/config/resolume.recovery/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetResolumeRecoveryConfigRevisions))
+
+	// GET/PUT /api/v1/config/render.settings (Track B seam B2c, ADR-039):
+	// the idle-output/restart-policy singleton. Mirrors
+	// /config/resolume.recovery's config:write-only posture exactly
+	// (rendersettings.go) — no open read exists for this kind.
+	mux.HandleFunc("GET /api/v1/config/render.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/render.settings", h.writeGuard(&scopeConfigWrite, h.handlePutRenderSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/render.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfigRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

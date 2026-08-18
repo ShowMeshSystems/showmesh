@@ -88,6 +88,15 @@ const (
 	// principal:write — asset upload is configuration in the same sense
 	// fpp.endpoints and show.surface are, not an operator-role action.
 	ScopeAssetWrite Scope = "asset:write"
+
+	// ScopeRenderCommand is Track B seam B2b-front's own dispatch scope:
+	// render.surface.apply, render.surface.clear, and
+	// render.pipeline.restart all require it. Reads stay open by default
+	// (ADR-024) — this scope exists only because dispatching one of these
+	// operations changes what a surface renders, the identical reasoning
+	// [ScopeFPPCommand] and [ScopeResolumeAction] already carry for their
+	// own vendors.
+	ScopeRenderCommand Scope = "render:command"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -99,7 +108,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

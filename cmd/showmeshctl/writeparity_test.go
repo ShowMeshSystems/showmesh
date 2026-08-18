@@ -96,6 +96,15 @@ var dynamicWritePathCoverage = map[string]string{
 		"/api/v1/principals/<id>/<verb> with verb=enable (showmeshctl principal enable)",
 	"POST /principals/{id}/disable": "cmd_principal.go cmdPrincipalSetDisabled builds " +
 		"/api/v1/principals/<id>/<verb> with verb=disable (showmeshctl principal disable)",
+	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply": "cmd_render_command.go dispatchRenderCommand builds " +
+		"/api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=apply (showmeshctl render apply)",
+	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/clear": "cmd_render_command.go dispatchRenderCommand builds " +
+		"/api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=clear (showmeshctl render clear)",
+	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/restart": "cmd_render_command.go dispatchRenderCommand builds " +
+		"/api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=restart (showmeshctl render restart)",
+	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe": "cmd_render_command.go dispatchRenderCommand " +
+		"builds /api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=transport-probe " +
+		"(showmeshctl render probe)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

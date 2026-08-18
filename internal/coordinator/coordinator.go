@@ -21,6 +21,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -29,6 +30,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Run loads config, starts the MQTT connection manager and HTTP server, and
@@ -226,7 +228,17 @@ func Run() int {
 		}
 	}
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub))
+	// Track B seam B2b: the push cache behind
+	// internal/coordinator/collector/noderender. Constructed here,
+	// unconditionally (a render node is optional; this cache costs nothing
+	// when nothing ever publishes to it), and handed to inv below so
+	// HandleMessage's "render" case has somewhere to push a decoded report
+	// — see inventory.WithRenderSink. renderCollector (registered on
+	// fppRunner further down, once fppRunner exists) reads back out of the
+	// SAME store, on its own poll cadence.
+	renderStore := noderender.NewStore()
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore))
 
 	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
 	if err != nil {
@@ -303,6 +315,30 @@ func Run() int {
 		},
 	}
 	fppRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger)
+
+	// Track B seam B2b: renderStore (built above, already wired into inv)
+	// gets its own read side here — a Collector sharing this same
+	// fppRunner rather than a second Runner, matching how the Resolume
+	// collector joins it too (see newResolumeWiring's own doc comment for
+	// why one Runner is the standing pattern for "another observation
+	// source, no reason for its own goroutine-management copy"). Renders
+	// whatever renderStore currently holds into surface.* observations on
+	// its own cadence; see noderender's package doc comment for why this
+	// never touches the network and is unconditional (a coordinator with
+	// no render node ever attached simply Polls an empty store forever).
+	//
+	// Seeded from st's own persisted rows (seedNodeRenderKnownSurfaces)
+	// so a coordinator restart does not forget every surface a still-live
+	// node reported before the restart — without this, the FIRST poll
+	// after every restart would see nothing to diff against and could
+	// never emit the dropped-surface absence noderender.Collector.Poll
+	// depends on, turning every already-deployed surface row into a
+	// permanent ghost.
+	knownSurfaces, err := seedNodeRenderKnownSurfaces(ctx, st)
+	if err != nil {
+		logger.Warn("failed to seed node-render known-surfaces from the store; starting with none", "error", err)
+	}
+	fppRunner.Add(noderender.New(renderStore, noderender.WithKnownSurfaces(knownSurfaces)), noderender.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -415,6 +451,21 @@ func Run() int {
 		FPP:          fppInstanceLister{st: st, endpoints: fppEndpoints},
 		Observations: storeObservationLister{st: st},
 		Events:       storeEventReader{st: st},
+		// Track B seam B2b: renderStore already satisfies
+		// api.NodeRenderLister's NodeRenderObservations method directly, no
+		// adapter needed, the same "the real dependency already has this
+		// method set" pattern api.ConfigStore's own wiring below uses.
+		Render: renderStore,
+		// RenderPublisher is Track B seam B2b-front's own dependency: the
+		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
+		// built from above already satisfies api.RenderPublisher with no
+		// adapter needed, the identical property assetSync's own wiring
+		// comment notes for itself. Wiring it in is what makes
+		// POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/apply|
+		// clear|restart do anything other than always answer an internal
+		// error naming the missing wiring, against api.noRenderPublisher's
+		// no-op default.
+		RenderPublisher: bm,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
@@ -1061,6 +1112,36 @@ func logBootstrapStateIfUnclaimed(ctx context.Context, identitySvc identity.Serv
 		"the data volume (identity.BootstrapFileName under SHOWMESH_DATA_DIR) and claim it with POST /api/v1/bootstrap, " +
 		"or run `showmesh-coordinator bootstrap` directly against this coordinator's data volume, before relying on this " +
 		"coordinator for a real show.")
+}
+
+// seedNodeRenderKnownSurfaces reads back every persisted surface.pipeline.
+// state row and groups it by the node that reported it (via
+// noderender.NodeFromSource), for noderender.WithKnownSurfaces. This is
+// what lets noderender.Collector.Poll emit a dropped-surface absence on the
+// very first poll after a restart, rather than only once one more real
+// delivery has arrived to compare against — a row from a source this
+// package's SourceFor never produced (e.g. none yet, a fresh store) is
+// silently skipped, not an error.
+func seedNodeRenderKnownSurfaces(ctx context.Context, st *store.Store) (map[string]map[string]struct{}, error) {
+	rows, err := st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceSurface,
+		Signal:       noderender.SignalSurfacePipelineState,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list persisted surface.pipeline.state observations: %w", err)
+	}
+	known := make(map[string]map[string]struct{})
+	for _, o := range rows {
+		nodeID, ok := noderender.NodeFromSource(o.Source)
+		if !ok {
+			continue
+		}
+		if known[nodeID] == nil {
+			known[nodeID] = make(map[string]struct{})
+		}
+		known[nodeID][o.Resource.ID] = struct{}{}
+	}
+	return known, nil
 }
 
 func newLogger(level string) *slog.Logger {

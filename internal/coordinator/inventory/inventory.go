@@ -88,6 +88,42 @@ type Manager struct {
 	// (GET /api/v1/nodes) is unaffected and always current.
 	livenessMu   sync.Mutex
 	lastLiveness map[string]Liveness
+
+	// renderSink receives every decoded render report — see
+	// [WithRenderSink]. nil (the default) means no render ingestion at all:
+	// a "render" observed subpath is then dropped exactly like any other
+	// subpath this step does not understand (the default case below),
+	// never a startup failure.
+	renderSink RenderSink
+
+	// renderMu guards renderBaseline and renderFailed: this Manager
+	// instance's own in-memory record of each surface's last-seen restart
+	// count and failed-lockout state, backing [Manager.observeRenderSurfaces].
+	// Reset to empty on every process restart, deliberately, matching
+	// lastLiveness's identical rule one field up: comparing a freshly
+	// started process's first render report for a surface (typically a
+	// retained replay) against "nothing yet" would manufacture a restart or
+	// lockout event out of history that predates this coordinator, so the
+	// first observation of a surface is always recorded silently and only
+	// the next genuine change produces an event.
+	renderMu       sync.Mutex
+	renderBaseline map[string]int64
+	renderFailed   map[string]bool
+}
+
+// RenderSink receives a node's decoded render report as it arrives, so
+// internal/coordinator/collector/noderender's push cache can be fed without
+// this package importing that collector package directly — the same
+// "declare the interface at the consumer" convention
+// internal/coordinator/collector.Sink documents, applied here because
+// noderender.Store is the producer and this package is what has the
+// decoded payload plus the retained/live verdict to give it.
+// *noderender.Store already satisfies this with no adapter needed.
+type RenderSink interface {
+	// Put records payload as nodeID's latest render report. retained and
+	// receivedAt are exactly [Manager.classify]'s own retained flag and
+	// receipt time — see [Manager.handleRender].
+	Put(nodeID string, payload mqttproto.RenderPayload, retained bool, receivedAt time.Time)
 }
 
 // Option configures optional Manager behavior at [New]. The zero value
@@ -105,13 +141,28 @@ func WithOnChange(fn func()) Option {
 	return func(m *Manager) { m.onChange = fn }
 }
 
+// WithRenderSink registers sink to receive every decoded render report —
+// see [Manager.renderSink] and [Manager.handleRender]. Optional: the
+// default (no sink registered) drops "render" observed messages exactly
+// like any other subpath this step does not model.
+func WithRenderSink(sink RenderSink) Option {
+	return func(m *Manager) { m.renderSink = sink }
+}
+
 // New builds a Manager backed by st. logger may be nil, in which case
 // slog.Default() is used.
 func New(st *store.Store, logger *slog.Logger, opts ...Option) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	m := &Manager{store: st, logger: logger, now: time.Now, lastLiveness: make(map[string]Liveness)}
+	m := &Manager{
+		store:          st,
+		logger:         logger,
+		now:            time.Now,
+		lastLiveness:   make(map[string]Liveness),
+		renderBaseline: make(map[string]int64),
+		renderFailed:   make(map[string]bool),
+	}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -318,6 +369,8 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 			m.handleHealth(ctx, topic.NodeID, msg)
 		case "assets":
 			m.handleAssetInventory(ctx, topic.NodeID, msg)
+		case "render":
+			m.handleRender(ctx, topic.NodeID, msg)
 		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
@@ -522,6 +575,136 @@ func (m *Manager) handleAssetInventory(ctx context.Context, nodeID string, msg b
 
 	if err := m.store.ReplaceNodeAssetInventory(ctx, nodeID, items, report); err != nil {
 		m.logger.Error("failed to store asset inventory", "node_id", nodeID, "error", err)
+		return
+	}
+	m.notify()
+}
+
+// handleRender ingests a node's render pipeline health report (Track B seam
+// B2b; ADR-011, ADR-026) into m.renderSink, if one was registered — see
+// [WithRenderSink]. A nil renderSink is not an error: it means nothing has
+// wired render ingestion in yet, and the message is silently dropped
+// exactly like any subpath this step does not understand.
+//
+// Unlike handleAssetInventory, a RETAINED delivery IS stored here, not
+// skipped: [RenderSink.Put] (backed by noderender.Store) already carries
+// its own retained/unknown-age distinction all the way through to the
+// observation layer (see that package's buildValue), so there is no
+// "store.NodeAssetReportRecord.ReportedAt has no unknown-age representation"
+// gap here to work around — this payload's own model supports it directly.
+func (m *Manager) handleRender(ctx context.Context, nodeID string, msg broker.Message) {
+	if m.renderSink == nil {
+		m.logger.Debug("ignoring render report: no render sink registered", "node_id", nodeID)
+		return
+	}
+
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("render", nodeID, err)
+		return
+	}
+	render, err := mqttproto.DecodeRenderPayload(env)
+	if err != nil {
+		m.logMalformed("render", nodeID, err)
+		return
+	}
+
+	// receivedAt is this coordinator's own receipt time in BOTH branches —
+	// bookkeeping (when the message was processed), never evidence of the
+	// subject's own state. [RenderSink.Put] (backed by noderender.Store)
+	// is the one place msg.Retained decides whether that also doubles as
+	// ObservedAt (live) or is kept strictly separate from it (retained) —
+	// see that package's buildValue, ADR-011's rule applied one layer
+	// down. This deliberately does NOT go through [Manager.classify]:
+	// classify's *time.Time return is store's ObservedAt convention, and
+	// calling it here would tempt a future edit into passing that pointer
+	// through as if it were this bookkeeping timestamp.
+	m.renderSink.Put(nodeID, render, msg.Retained, m.now())
+	m.observeRenderSurfaces(ctx, nodeID, render)
+	m.notify()
+}
+
+// renderSurfaceKey identifies one surface's bookkeeping entry in
+// renderBaseline/renderFailed. Keyed by node as well as surface id because
+// [RenderSink] is keyed per node and this bookkeeping must never conflate
+// two nodes that happen to report the same show.surface configuration id.
+func renderSurfaceKey(nodeID, surfaceID string) string {
+	return nodeID + "/" + surfaceID
+}
+
+// observeRenderSurfaces compares payload against this Manager instance's
+// own record of each surface's last-seen restart count and failed-lockout
+// state (renderBaseline/renderFailed) and appends an event for a genuine
+// forward restart-count increase or a genuine transition into the failed
+// lockout state — never for the first observation of a surface this
+// process has made (see renderBaseline's doc comment on Manager) and never
+// for a restart count that goes backward. A backward count is not a bug to
+// investigate: the supervisor's RestartCount is scoped to one pipeline
+// process lifetime (internal/agent/pipeline.Supervisor's own restartState),
+// so it resets to zero whenever the agent process itself restarts, and a
+// coordinator that treated that reset as "negative restarts" would either
+// panic on an underflow or manufacture a nonsense event. The lower count is
+// simply re-baselined, silently, exactly like a first observation.
+func (m *Manager) observeRenderSurfaces(ctx context.Context, nodeID string, payload mqttproto.RenderPayload) {
+	for _, s := range payload.Surfaces {
+		key := renderSurfaceKey(nodeID, s.SurfaceID)
+
+		m.renderMu.Lock()
+		prevCount, knownCount := m.renderBaseline[key]
+		m.renderBaseline[key] = s.RestartCount
+		wasFailed, knownFailed := m.renderFailed[key]
+		nowFailed := s.PipelineState == mqttproto.RenderPipelineStateFailed
+		m.renderFailed[key] = nowFailed
+		m.renderMu.Unlock()
+
+		if knownCount && s.RestartCount > prevCount {
+			m.appendRenderEvent(ctx, nodeID, s, "warning",
+				fmt.Sprintf("render pipeline for surface %q on node %q restarted", s.SurfaceID, nodeID))
+		}
+
+		// A transition INTO the failed lockout, never merely "is failed" —
+		// matching observeLiveness's "prev == liveness" no-op check — so a
+		// surface that stays failed across many reports produces one event,
+		// not one per poll.
+		if knownFailed && !wasFailed && nowFailed {
+			m.appendRenderEvent(ctx, nodeID, s, "critical",
+				fmt.Sprintf("render pipeline for surface %q on node %q entered failed lockout", s.SurfaceID, nodeID))
+		}
+	}
+}
+
+// appendRenderEvent builds and appends one surface-scoped event, following
+// [Manager.observeLiveness]'s shape: Source "mqtt-inventory", Resource is
+// the surface (ADR-026 — a surface, not the node running it, is the thing
+// observed), Details carries enough to be useful without a second lookup:
+// which node, the new restart count, and the supervisor's own reason.
+func (m *Manager) appendRenderEvent(ctx context.Context, nodeID string, s mqttproto.RenderSurfaceReport, severity, summary string) {
+	detail := map[string]any{
+		"nodeId":              nodeID,
+		"surfaceId":           s.SurfaceID,
+		"pipelineState":       s.PipelineState,
+		"restartCount":        s.RestartCount,
+		"consecutiveFailures": s.ConsecutiveFailures,
+		"reason":              s.Reason,
+	}
+	details, err := json.Marshal(detail)
+	if err != nil {
+		// Unreachable: every value above is a plain string or number.
+		// Recorded rather than dropped, so a future bug here is visible in
+		// logs instead of silently losing the event.
+		m.logger.Error("failed to encode render event details", "node_id", nodeID, "surface_id", s.SurfaceID, "error", err)
+		details = nil
+	}
+
+	if _, err := m.store.AppendEvent(ctx, store.EventRecord{
+		Source:   "mqtt-inventory",
+		Resource: observation.ResourceRef{Kind: observation.ResourceSurface, ID: s.SurfaceID},
+		Category: "render_pipeline",
+		Severity: severity,
+		Summary:  summary,
+		Details:  json.RawMessage(details),
+	}); err != nil {
+		m.logger.Error("failed to append render event", "node_id", nodeID, "surface_id", s.SurfaceID, "error", err)
 		return
 	}
 	m.notify()

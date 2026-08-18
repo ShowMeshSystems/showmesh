@@ -40,6 +40,42 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # Track B's renderer tests drive a real gst-launch-1.0. Without it the
+      # supervisor degrades the surface to "unsupported", which is correct
+      # behavior and not a passing test, so the suite fails on timeouts.
+      # ndisink is deliberately not installed: ADR-010 forbids shipping the
+      # NDI runtime, so NDI transport stays a bench concern and only the
+      # fakesink/queue fallback runs here.
+      - name: Install GStreamer (renderer tests)
+        run: |
+          # tools + plugins-base is the whole requirement: fdsrc, queue and
+          # fakesink are core, and rawvideoparse and videotestsrc are in
+          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
+          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
+          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
+          # took this step from 3 seconds to over 300.
+          #
+          # The runner's default azure.archive.ubuntu.com mirror intermittently
+          # stops answering; apt then retries it per index file before falling
+          # back, so a high retry count makes the stall longer rather than
+          # shorter. Pin the mirrorlist to the canonical archive and keep
+          # retries low so a bad fetch fails over fast. apt sets no network
+          # timeout by default, and the timeout(1) wrapper is the outer bound
+          # so a stall fails with output instead of eating the job budget.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get update $APT_OPTS \
+            || sudo timeout 300 apt-get update $APT_OPTS
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
+            gstreamer1.0-tools gstreamer1.0-plugins-base
+          gst-launch-1.0 --version
+          gst-inspect-1.0 rawvideoparse > /dev/null
+
       - name: Vet
         run: go vet ./...
 
@@ -78,7 +114,11 @@ jobs:
     # a step in `test` above) specifically so a broker problem here is
     # distinguishable from a unit test failure at a glance, per the Step 2
     # round 2 Task E spec.
-    timeout-minutes: 10
+    #
+    # Raised from 10 when Track B landed: this job now installs GStreamer and
+    # runs render tests that drive real gst-launch-1.0 pipelines, where before
+    # they failed fast on the missing binary.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -97,6 +137,38 @@ jobs:
       # duplicating what test-integration.sh already does against the real
       # shipped config — and testing that config, not a stand-in for it, is
       # the point of this job.
+      # Same reason as the unit-test job above: Track B's render integration
+      # tests start a real gst-launch-1.0 child and assert on its pid.
+      - name: Install GStreamer (renderer tests)
+        run: |
+          # tools + plugins-base is the whole requirement: fdsrc, queue and
+          # fakesink are core, and rawvideoparse and videotestsrc are in
+          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
+          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
+          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
+          # took this step from 3 seconds to over 300.
+          #
+          # The runner's default azure.archive.ubuntu.com mirror intermittently
+          # stops answering; apt then retries it per index file before falling
+          # back, so a high retry count makes the stall longer rather than
+          # shorter. Pin the mirrorlist to the canonical archive and keep
+          # retries low so a bad fetch fails over fast. apt sets no network
+          # timeout by default, and the timeout(1) wrapper is the outer bound
+          # so a stall fails with output instead of eating the job budget.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get update $APT_OPTS \
+            || sudo timeout 300 apt-get update $APT_OPTS
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
+            gstreamer1.0-tools gstreamer1.0-plugins-base
+          gst-launch-1.0 --version
+          gst-inspect-1.0 rawvideoparse > /dev/null
+
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration
 
