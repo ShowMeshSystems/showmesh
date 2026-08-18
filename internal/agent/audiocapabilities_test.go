@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
@@ -170,6 +172,39 @@ func TestDetectAudioCapabilitiesEveryIDValidates(t *testing.T) {
 	for _, c := range set {
 		if err := capability.ID(c.ID).Validate(); err != nil {
 			t.Errorf("capability.ID(%q).Validate() = %v, want nil", c.ID, err)
+		}
+	}
+}
+
+// TestFakeAudioEngineNeverAdvertisesPlaybackCapability guards against a
+// node whose only backend is [audio.FakeEngine] ever advertising ANY
+// capability implying it can actually play audio through a session, no
+// matter how healthy its ALSA hardware detection reports.
+// detectAudioCapabilities today only ever advertises audio.engine/
+// audio.output.local/audio.output.ltc from real ALSA evidence and mints
+// no session/playback capability at all — this test pins that down so a
+// future change cannot start advertising one while a [audio.FakeEngine]
+// is still the only Engine this repository ships.
+func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
+	if ok, _ := audio.NewFakeEngine(time.Now).Available(); ok {
+		t.Fatal("audio.FakeEngine.Available() must be false")
+	}
+
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{
+				Device:      "hw:CARD=X,DEV=0",
+				ProbeResult: audio.ProbeResult{Available: true, Channels: 4, Rate: 48000, Format: "S16LE"},
+				LTCChannels: 4,
+			},
+		},
+	})
+
+	set := detectAudioCapabilities(context.Background())
+	for _, c := range set {
+		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") {
+			t.Errorf("capability set advertises %q while the only Engine is FakeEngine; this must never happen", c.ID)
 		}
 	}
 }

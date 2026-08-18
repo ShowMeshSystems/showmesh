@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -178,7 +179,7 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // operations (see renderops.go). Adding a further allowlisted operation
 // later means adding a further entry to this map, not building a second
 // enforcement path.
-func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations) map[string]OperationFunc {
+func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
@@ -193,6 +194,9 @@ func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperatio
 		ops["render.surface.clear"] = render.clearSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
 		ops["render.transport.probe"] = render.probeTransport
+	}
+	for action, op := range audioSessionOperations(audioMgr) {
+		ops[action] = op
 	}
 	return ops
 }
@@ -362,10 +366,10 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(assetDir, assetAPIToken, render),
+		ops:               newOperationRegistry(assetDir, assetAPIToken, render, audioMgr),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,

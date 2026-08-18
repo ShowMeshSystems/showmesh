@@ -72,6 +72,8 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdAudioSettings(rest, stdout, stderr, clock)
 	case "node":
 		return cmdAudioNode(rest, stdout, stderr, clock)
+	case "session":
+		return cmdAudioSession(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio: unknown subcommand %q\n\n", sub)
 		printAudioUsage(stderr)
@@ -96,6 +98,8 @@ Subcommands:
                                 "showmeshctl audio settings --help")
   node list|get|set|revisions  audio.node configuration (see
                                 "showmeshctl audio node --help")
+  session <op>                 dispatch a playback session command (see
+                                "showmeshctl audio session --help")
 
 Run "showmeshctl audio <subcommand> --help" for flags specific to one
 subcommand.

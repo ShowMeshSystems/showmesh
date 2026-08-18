@@ -56,6 +56,24 @@ type Dependencies struct {
 	// [Dependencies.Commands]'s identical no-op default posture.
 	RenderPublisher RenderPublisher
 
+	// AudioPublisher is this API's MQTT publish-and-await capability for
+	// audio.session.* commands — see [AudioSessionPublisher]'s doc
+	// comment (audiodispatch.go). A nil field is replaced by
+	// [noAudioSessionPublisher], under which every audio.session.*
+	// dispatch fails with an internal error naming the missing wiring,
+	// matching [Dependencies.RenderPublisher]'s identical no-op default
+	// posture.
+	AudioPublisher AudioSessionPublisher
+
+	// AudioSessions is the coordinator's own durable record of each
+	// playback session's last-dispatched desired state (schemaV9's
+	// audio_sessions table) — see [AudioSessionStore]. A nil field is
+	// replaced by [noAudioSessionStore], under which every dispatch still
+	// runs (this coordinator's own durable mirror is best-effort
+	// bookkeeping, never a precondition for reaching the node — ADR-024
+	// decision 7) but is never persisted coordinator-side.
+	AudioSessions AudioSessionStore
+
 	// AssetManifests is ALSO this seam's own dependency for resolving a
 	// surface's current FSEQ asset by identity (ADR-028) — see
 	// [Dependencies.AssetManifests]'s own doc comment below (Track E seam
@@ -453,6 +471,12 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.RenderPublisher == nil {
 		d.RenderPublisher = noRenderPublisher{}
+	}
+	if d.AudioPublisher == nil {
+		d.AudioPublisher = noAudioSessionPublisher{}
+	}
+	if d.AudioSessions == nil {
+		d.AudioSessions = noAudioSessionStore{}
 	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
@@ -1148,6 +1172,19 @@ func New(deps Dependencies, opts Options) *API {
 	// last-known evidence) is a different, pre-existing surface — this is
 	// the "go find out now" counterpart.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe", h.writeGuard(&scopeRenderCommand, h.handleRenderTransportProbe))
+
+	// Dispatch the nine agent audio.session.* operations
+	// (audiodispatch.go). Guarded by audio:command, matching
+	// render:command's identical "reads open, this write isn't" posture.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/apply", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionApply))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPrepare))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/start", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStart))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/pause", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPause))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/resume", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionResume))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/seek", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionSeek))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/advance", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionAdvance))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/stop", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStop))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/clear", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionClear))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))

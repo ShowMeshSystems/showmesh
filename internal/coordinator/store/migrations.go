@@ -37,6 +37,7 @@ var migrations = []migration{
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
 	{version: 8, sql: schemaV8},
+	{version: 9, sql: schemaV9},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1047,6 +1048,26 @@ CREATE TABLE node_asset_reports (
     complete    INTEGER NOT NULL,
     reason      TEXT NOT NULL
 );
+`
+
+// schemaV9 holds one durable row per audio playback session, mirroring
+// the coordinator's own view of desired state (pkg/audio.
+// SessionDesiredState) so a coordinator restart can still tell a stale
+// command replay from a fresh one without asking the node. The node's own
+// agent is a session's actual authority: a running session must survive
+// coordinator loss, so this table is the coordinator's durable RECORD of
+// what it last told a session to be, not a second engine.
+const schemaV9 = `
+CREATE TABLE audio_sessions (
+    id           TEXT PRIMARY KEY,
+    node_id      TEXT NOT NULL,
+    desired_json TEXT NOT NULL,
+    revision     INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX audio_sessions_by_node ON audio_sessions (node_id);
 `
 
 // migrate applies every pending migration inside one transaction and

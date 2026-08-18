@@ -244,6 +244,186 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.apply to a node's playback session
+         * @description Behind `audio:command`. Merges the request body onto the session's desired state, creating the session if it does not already exist — `revision` and `idempotencyKey` go through the node's own revision/idempotency ledger for this session, so a stale or replayed revision is refused rather than applied out of order. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.prepare to a node's playback session
+         * @description Behind `audio:command`. Gates readiness (a missing, changed, or undecodable asset is refused) and loads the session's current item on the node without starting playback. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionPrepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.start to a node's playback session
+         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.pause to a node's playback session
+         * @description Behind `audio:command`. Suspends the session's current item, preserving position. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionPause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.resume to a node's playback session
+         * @description Behind `audio:command`. Continues the session's current item from the position `pause` left it at. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionResume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/seek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.seek to a node's playback session
+         * @description Behind `audio:command`. Re-anchors the session's current item's position — a discontinuity, never a continuation of pre-seek timing. `params.positionMs` names the target position in milliseconds. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionSeek"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.advance to a node's playback session
+         * @description Behind `audio:command`. Forces the session to its next playlist item — the same underlying transition the node's own natural-completion watcher drives, so an item is advanced exactly once regardless of what triggered it. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionAdvance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.stop to a node's playback session
+         * @description Behind `audio:command`. Commands the session to stop — permanently distinguishable in evidence from a natural end-of-item completion. Never refused for want of node evidence: an idle or unloaded session still reports `stopped`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/sessions/{sessionId}/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.session.clear to a node's playback session
+         * @description Behind `audio:command`. Releases the session entirely on the node and removes its persisted record. Never refused for want of node evidence, matching `stop`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         */
+        post: operations["dispatchAudioSessionClear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -1923,6 +2103,43 @@ export interface components {
              * @enum {string}
              */
             idleOutput: "black" | "hold" | "diagnostic" | "";
+        };
+        /** @description The body of every POST /nodes/{nodeId}/audio/sessions/{sessionId}/{op} endpoint. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionCommandRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` — see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
+            params?: Record<string, never>;
+        };
+        /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
+        AudioSessionCommandResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["AudioSessionCommandResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) audio.session.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is decided from the node's own evidence, collected after its own dispatch. A SUCCESSFUL HTTP 200 response commonly carries `outcome: "unconfirmable"` — this is a real, expected outcome while the node's session engine has no working pipeline backend wired in, never an error and never a transport failure. Reading only the HTTP status code is not enough to know whether the command worked; read `outcome`. */
+        AudioSessionCommandResult: {
+            commandId: string;
+            idempotencyKey: string;
+            /** @enum {string} */
+            action: "audio.session.apply" | "audio.session.prepare" | "audio.session.start" | "audio.session.pause" | "audio.session.resume" | "audio.session.seek" | "audio.session.advance" | "audio.session.stop" | "audio.session.clear";
+            nodeId: string;
+            sessionId: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result. */
+            replay: boolean;
+            /**
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching FPPCommandResult.outcome's identical accepted-empty case. "refused" and "failed" carry a non-empty reason and were never dispatched to the node as a real command attempt (a bad revision, an unknown session, invalid params). "unconfirmable" WAS dispatched but the node could not corroborate it with fresh evidence — including, today, every dispatch against the shipped agent, whose session engine has no working pipeline backend. gain/fade_complete never appear here: those belong to the separate audio.gain.* dispatch surface.
+             * @enum {string}
+             */
+            outcome: "started" | "position" | "stopped" | "completed" | "refused" | "failed" | "unconfirmable" | "";
+            /** @description Required whenever outcome is "refused", "failed", or "unconfirmable"; empty for every other outcome. */
+            reason: string;
+            /** Format: date-time */
+            dispatchedAt: string;
+            /** Format: date-time */
+            resolvedAt: string | null;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
         FPPCommandResponse: {
@@ -3831,7 +4048,392 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
+        };
+    };
+    dispatchAudioSessionApply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionPrepare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionPause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionResume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionSeek: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionAdvance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioSessionClear: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSessionCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

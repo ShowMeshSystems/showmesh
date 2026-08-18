@@ -101,7 +101,7 @@ func TestApplySurfaceWithFSEQBuildsRealSpecAndStartsFrameWriter(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	params := fseqApplyParams("surface-1", "surface-1.fseq", hash, 1, channelCount, 2, 2, "rgb", 40)
@@ -157,7 +157,7 @@ func TestApplySurfaceWithFSEQRefusesContentHashMismatch(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	params := fseqApplyParams("surface-1", "surface-1.fseq", "sha256:0000000000000000000000000000000000000000000000000000000000000000", 1, 12, 2, 2, "rgb", 40)
@@ -189,7 +189,7 @@ func TestApplySurfaceWithFSEQRefusesUncoveredChannelRange(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	// startChannel 100 (1-based) is far past this 12-channel file.
@@ -228,7 +228,7 @@ func TestApplySurfaceRejectedAssignmentDoesNotClobberPersistedGoodOne(t *testing
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	goodParams := fseqApplyParams("surface-1", "good.fseq", goodHash, 1, 12, 2, 2, "rgb", 40)
@@ -529,7 +529,7 @@ func TestApplySurfaceWithFSEQPersistsIdleOutputForResume(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	params := fseqApplyParams("surface-1", "surface-1.fseq", hash, 1, 12, 2, 2, "rgb", 40)
@@ -569,7 +569,7 @@ func TestApplySurfaceWithFSEQRejectsPathInFilename(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	params := fseqApplyParams("surface-1", "../escape.fseq", "sha256:whatever", 1, 12, 2, 2, "rgb", 40)

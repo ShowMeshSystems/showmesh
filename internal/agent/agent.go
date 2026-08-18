@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/version"
@@ -26,6 +27,15 @@ import (
 // by disconnect), matching internal/coordinator.Run's own shutdown bound:
 // a hung publish or disconnect must not block process exit indefinitely.
 const shutdownTimeout = 10 * time.Second
+
+// audioSessionWatchInterval bounds how promptly a Playing session's
+// natural completion is noticed and advanced — see audio.Manager.
+// RunWatcher. SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists yet
+// for what latency a real show needs between one track ending and the
+// next starting; short enough that a two-second FakeEngine test playlist
+// (see internal/agent/audio's own tests) advances within a handful of
+// ticks.
+const audioSessionWatchInterval = 500 * time.Millisecond
 
 // Run loads config, connects to the MQTT broker with a registered Last
 // Will, publishes hello and online=true on every connect (including
@@ -189,6 +199,25 @@ func Run() int {
 		}
 	}
 
+	// audioMgr is this node's audio session engine, against
+	// [audio.FakeEngine]: the pipeline backend is an open owner decision
+	// (Linear SM-68), so every audio.session.* command this node accepts
+	// reports Unconfirmable rather than a working playback outcome — see
+	// audio.Manager.gateAvailability's doc comment. RestoreAll rebuilds
+	// every session this node held before this process last stopped,
+	// matching renderOps' identical persisted-assignment reload above.
+	audioMgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
+	if err := audioMgr.RestoreAll(sigCtx); err != nil {
+		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
+	}
+	audioWatchDone := make(chan struct{})
+	go func() {
+		defer close(audioWatchDone)
+		ticker := time.NewTicker(audioSessionWatchInterval)
+		defer ticker.Stop()
+		audioMgr.RunWatcher(sigCtx, ticker.C)
+	}()
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -196,7 +225,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
 	if err != nil {
@@ -249,14 +278,16 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat, asset inventory, render report, audio report, and
-	// MultiSync listener loops also select on sigCtx.Done() and exit on
-	// their own; wait for all five so none can race the final offline
-	// publish below with a publish still in flight.
+	// The heartbeat, asset inventory, render report, audio report, audio
+	// session watcher, and MultiSync listener loops also select on
+	// sigCtx.Done() and exit on their own; wait for all six so none can
+	// race the final offline publish below with a publish still in
+	// flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
 	<-audioReportDone
+	<-audioWatchDone
 	<-multiSyncDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

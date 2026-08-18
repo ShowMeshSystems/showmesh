@@ -485,6 +485,14 @@ func Run() int {
 		// error naming the missing wiring, against api.noRenderPublisher's
 		// no-op default.
 		RenderPublisher: bm,
+		// AudioPublisher: the SAME bm already satisfies
+		// api.AudioSessionPublisher (Publish plus AwaitResponse) with no
+		// adapter, matching RenderPublisher's identical wiring immediately
+		// above. AudioSessions is st itself — schemaV9's audio_sessions
+		// table methods already match api.AudioSessionStore's one method
+		// with no adapter either.
+		AudioPublisher: bm,
+		AudioSessions:  st,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
