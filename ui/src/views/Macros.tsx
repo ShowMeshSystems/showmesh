@@ -56,8 +56,7 @@ export function Macros() {
   // by every row's Status cell, rather than each row re-deriving it —
   // see runningRunFor's own comment.
   const runGate = evaluateScope(model.session, model.sessionFetchFailed, RUN_SCOPE)
-  // ?show=<id>, mirroring ShowSurfaces.tsx/ShowActions.tsx's own filter
-  // (E7-3, api/openapi.yaml's `GET /config/show.macro` parameter).
+  // ?show=<id>, mirroring ShowSurfaces.tsx/ShowActions.tsx's own filter.
   const [searchParams, setSearchParams] = useSearchParams()
   const showFilter = searchParams.get('show') ?? ''
 

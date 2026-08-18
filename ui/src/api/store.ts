@@ -1230,11 +1230,8 @@ export class ApiStore {
    * `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`,
    * `GET /api/v1/config/show`, or `GET /api/v1/config/show.surface` —
    * object ids, labels, and current revision only, never the full
-   * payloads (STEP-9-SPEC.md section 5.5; Track G seam G-8 extends this
-   * to `show`/`show.surface`, same shape, same read posture; E7-3 adds
-   * `?show=` to `show.action`/`show.macro` too). `show` narrows the list
-   * to that show's objects (`?show=`) — `show` itself is a namespace and
-   * does not accept it on itself.
+   * payloads. `show` narrows the list to that show's objects (`?show=`)
+   * — `show` itself is a namespace and does not accept it on itself.
    */
   async listConfigObjects(
     kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',

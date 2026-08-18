@@ -2979,9 +2979,8 @@ paths:
         Requires `config:write` (admin only). `show` must name an existing
         `show` config object (`GET /config/show`); a nonexistent show is
         refused naming the missing id. This is a write-time check only —
-        an existing revision written before this check shipped, or whose
-        show was deleted afterward, still reads, lists, and runs
-        unchanged. `safetyClass` is required and
+        an existing revision written before this check shipped still
+        reads, lists, and runs unchanged. `safetyClass` is required and
         must agree with an `fpp` target's own registered primitive safety
         class; an `mqtt` target's `broker` must name a broker this
         deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no
@@ -3255,8 +3254,7 @@ paths:
         The pre-show sweep: every show.action's own binding check, in one
         request. Never gated by any scope. `show`, when given, narrows the
         result to that show; a show id matching nothing returns an empty
-        list, never a refusal (an action's own show may have been deleted
-        — see `?show=` on `GET /config/show.action`).
+        list, never a refusal — see `?show=` on `GET /config/show.action`.
       parameters:
         - name: show
           in: query

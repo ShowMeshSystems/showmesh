@@ -607,9 +607,9 @@ func TestShowConfigValidationCodeUnrecognizedFallsBackToGeneric(t *testing.T) {
 	}
 }
 
-// TestListShowActionsFiltersByShow and TestListShowMacrosFiltersByShow are
-// E7-3 deliverable 3's own filter proof, matching
-// TestListShowSurfacesFiltersByShow's shape one file over.
+// TestListShowActionsFiltersByShow and TestListShowMacrosFiltersByShow
+// prove the ?show= filter, matching TestListShowSurfacesFiltersByShow's
+// shape one file over.
 func TestListShowActionsFiltersByShow(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -676,10 +676,10 @@ func TestListShowMacrosFiltersByShow(t *testing.T) {
 	}
 }
 
-// TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal is E7-3's own
-// named trap: a show id that once existed and was deleted, or was simply
-// mistyped, is a legitimate filter value. The correct answer is an empty
-// list, never a 400 — only "?node=" on these two kinds is refused.
+// TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal proves a
+// show id that once existed and was deleted, or was simply mistyped, is a
+// legitimate filter value. The correct answer is an empty list, never a
+// 400 — only "?node=" on these two kinds is refused.
 func TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -703,11 +703,10 @@ func TestListShowActionsUnknownShowFilterReturnsEmptyNotRefusal(t *testing.T) {
 	}
 }
 
-// TestPutShowActionRefusesUnknownShow and
-// TestPutShowMacroRefusesUnknownShow are E7-3's zero-shows-defined trap:
-// with no shows configured, writing the very first action or macro must
-// fail with a refusal naming the missing show, not a bare 400 and not
-// silent acceptance.
+// TestPutShowActionRefusesUnknownShow and TestPutShowMacroRefusesUnknownShow
+// prove the zero-shows-defined case: with no shows configured, writing
+// the very first action or macro must fail with a refusal naming the
+// missing show, not a bare 400 and not silent acceptance.
 func TestPutShowActionRefusesUnknownShow(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -761,14 +760,16 @@ func TestPutShowMacroRefusesUnknownShow(t *testing.T) {
 	}
 }
 
-// TestShowActionStaleShowReferenceStillReadsListsAndRuns is E7-3's
-// ADR-009 half: a show.action written before this existence check shipped
-// (or whose show was later deleted) must keep reading, listing, and
-// running — validation is a write-time gate only, never re-run on read.
+// TestShowActionStaleShowReferenceStillReadsAndLists proves the GET/LIST
+// half of ADR-009's own rule: a show.action written before this existence
+// check shipped (or whose show was later deleted) must keep reading and
+// listing — validation is a write-time gate only, never re-run on read.
 // Simulated here by writing the object's revision directly into the store,
 // bypassing DecodeShowActionPayload exactly as a pre-seam revision would
-// have been written under the old, more permissive decoder.
-func TestShowActionStaleShowReferenceStillReadsListsAndRuns(t *testing.T) {
+// have been written under the old, more permissive decoder. The RUN half
+// of this rule is covered separately, in macro/run_test.go's
+// TestRunExecutesWithAShowThatDoesNotExist.
+func TestShowActionStaleShowReferenceStillReadsAndLists(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)

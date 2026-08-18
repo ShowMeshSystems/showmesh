@@ -492,13 +492,9 @@ func TestReconcileMQTTStepMidFlightIsNotSkipped(t *testing.T) {
 	}
 }
 
-// TestRunExecutesWithAShowThatDoesNotExist is E7-3's own ADR-009 proof at
-// the run layer: a macro's "show" naming no configured show object must
-// still run — existence is a write-time gate on the config package's own
-// Decode functions, never re-checked here. testMacroPayload's "test-show"
-// is never created as a show config object anywhere in this package's test
-// harness, so every other test in this file already exercises this path
-// implicitly; this test names the property directly.
+// TestRunExecutesWithAShowThatDoesNotExist proves a macro's "show" naming
+// no configured show object still runs — existence is a write-time gate
+// on the config package's own Decode functions, never re-checked here.
 func TestRunExecutesWithAShowThatDoesNotExist(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	dispatch := &fakeDispatcher{dispatchFn: func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {

@@ -497,9 +497,9 @@ func TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback(t
 	})
 }
 
-// TestDecodeShowMacroPayloadShowMustExist is E7-3's own write-time
-// existence gate: a macro naming a "show" that does not resolve is refused
-// naming the missing show, not accepted on shape alone.
+// TestDecodeShowMacroPayloadShowMustExist proves a macro naming a "show"
+// that does not resolve is refused naming the missing show, not accepted
+// on shape alone.
 func TestDecodeShowMacroPayloadShowMustExist(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
 	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysFalse)
@@ -508,10 +508,10 @@ func TestDecodeShowMacroPayloadShowMustExist(t *testing.T) {
 	}
 }
 
-// TestDecodeShowMacroPayloadStepActionCrossShowRejected is E7-3 deliverable
-// 2: a macro step may not reference an action belonging to a different
-// show. A Show is a namespace; a namespace that does not contain anything
-// contains nothing.
+// TestDecodeShowMacroPayloadStepActionCrossShowRejected proves a macro
+// step may not reference an action belonging to a different show. A Show
+// is a namespace; a namespace that does not contain anything contains
+// nothing.
 func TestDecodeShowMacroPayloadStepActionCrossShowRejected(t *testing.T) {
 	resolver := resolvesInShow("other-show-action", "christmas-2026")
 	raw := validMacroJSON(validMacroStepJSON("s1", "other-show-action", ""))

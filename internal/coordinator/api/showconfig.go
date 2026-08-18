@@ -75,10 +75,8 @@ const maxShowConfigRequestBodyBytes = 256 * 1024
 // from, and a caller enumerating "what macros exist" should see only
 // what it could actually run.
 // showFilter, when non-empty, narrows the result to objects whose "show"
-// field equals it — matching listShowSurfaceSummaries' own filter, and
-// intentionally not existence-checked against the "show" kind: a show that
-// was deleted after an action was written is still a legitimate filter
-// value, and the correct answer for it is an empty list, not a refusal.
+// field equals it. Not existence-checked: an unmatched value returns an
+// empty list, never a refusal.
 func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind, showFilter string) ([]v1.ConfigObjectSummary, error) {
 	objs, err := cfg.ListConfigObjects(ctx, kind)
 	if err != nil {

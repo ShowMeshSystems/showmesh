@@ -25,8 +25,7 @@ export function ShowActions() {
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  // ?show=<id>, mirroring ShowSurfaces.tsx's own filter (E7-3,
-  // api/openapi.yaml's `GET /config/show.action` parameter).
+  // ?show=<id>, mirroring ShowSurfaces.tsx's own filter.
   const [searchParams, setSearchParams] = useSearchParams()
   const showFilter = searchParams.get('show') ?? ''
 
