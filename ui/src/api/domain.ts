@@ -199,6 +199,10 @@ export type ResolumeAction = components['schemas']['ResolumeAction']
 export type ResolumeActionsResponse = components['schemas']['ResolumeActionsResponse']
 export type ResolumeActionResult = components['schemas']['ResolumeActionResult']
 export type ResolumeActionResponse = components['schemas']['ResolumeActionResponse']
+// Track E seam E7-1/E7-2 (ADR-029): the pre-show binding check and one
+// action invocation, outside of any macro run.
+export type ActionBinding = components['schemas']['ActionBinding']
+export type ActionInvocationResult = components['schemas']['ActionInvocationResult']
 // The full stored composition id map (decks, layer groups, layers,
 // columns, clips, persistent clips) — distinct from
 // ResolumeCompositionSummary above, which is the display-only subset.

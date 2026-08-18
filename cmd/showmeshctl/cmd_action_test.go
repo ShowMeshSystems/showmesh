@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -246,4 +247,171 @@ func TestCmdActionListWithoutShowSendsNoQuery(t *testing.T) {
 	if gotQuery != "" {
 		t.Errorf("query = %q, want empty", gotQuery)
 	}
+}
+
+// --- Track E seam E7-2: "action check" ---
+
+func TestCmdActionCheckOneIDExitsOKWhenOK(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","binding":{"actionId":"start-main","label":"Start","show":"halloween-2026","state":"ok","reason":"resolves"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"check", "--server", ts.URL, "start-main"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/actions/start-main/binding" {
+		t.Errorf("path = %q, want /api/v1/actions/start-main/binding", gotPath)
+	}
+	if !strings.Contains(stdout.String(), "ok") {
+		t.Errorf("stdout = %q, want it to name the state", stdout.String())
+	}
+}
+
+// TestCmdActionCheckExitsBrokenForABrokenBinding is the exit-code half of
+// the acceptance criterion this seam names explicitly: "check reports it
+// naming the name, exits 29".
+func TestCmdActionCheckExitsBrokenForABrokenBinding(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","binding":{"actionId":"start-main","label":"Start","show":"halloween-2026","state":"broken","reason":"instance \"player-01\" is not a configured FPP endpoint"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"check", "--server", ts.URL, "start-main"}, &stdout, &stderr, time.Now)
+	if code != exitActionBindingBroken {
+		t.Fatalf("exit code = %d, want exitActionBindingBroken (29); stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "player-01") {
+		t.Errorf("stdout = %q, want it to name the missing instance", stdout.String())
+	}
+}
+
+// TestCmdActionCheckUnknownNeverExitsBroken is the seam's own explicit
+// warning: "unknown must NOT exit 29".
+func TestCmdActionCheckUnknownNeverExitsBroken(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","binding":{"actionId":"launch-main","label":"Launch","show":"halloween-2026","state":"unknown","reason":"no resolume composition has ever been uploaded"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"check", "--server", ts.URL, "launch-main"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK (unknown must never exit 29); stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCmdActionCheckWithNoIDListsWithShowFilter(t *testing.T) {
+	var gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","bindings":[
+			{"actionId":"start-main","label":"Start","show":"halloween-2026","state":"broken","reason":"gone"}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"check", "--show", "halloween-2026", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitActionBindingBroken {
+		t.Fatalf("exit code = %d, want exitActionBindingBroken; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/actions/bindings" {
+		t.Errorf("path = %q, want /api/v1/actions/bindings", gotPath)
+	}
+	if gotQuery != "show=halloween-2026" {
+		t.Errorf("query = %q, want show=halloween-2026", gotQuery)
+	}
+}
+
+// --- Track E seam E7-1: "action invoke" ---
+
+func TestCmdActionInvokeConfirmedExitsOK(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = decodeJSONBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","result":{
+			"id":"cmd-1","idempotencyKey":"k","actionId":"blackout-now","label":"Blackout","replay":false,
+			"outcome":"confirmed","outcomeReason":"went dark","attributionDegraded":false,
+			"dispatchedAt":"2026-08-18T21:00:00Z","resolvedAt":"2026-08-18T21:00:01Z"
+		}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke", "--server", ts.URL, "blackout-now"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if gotPath != "/api/v1/actions/blackout-now/invocations" {
+		t.Errorf("path = %q, want /api/v1/actions/blackout-now/invocations", gotPath)
+	}
+	if _, ok := gotBody["idempotencyKey"].(string); !ok || gotBody["idempotencyKey"] == "" {
+		t.Errorf("request body idempotencyKey = %v, want a non-empty string", gotBody["idempotencyKey"])
+	}
+	if len(gotBody) != 1 {
+		t.Errorf("request body = %v, want ONLY idempotencyKey (no protocol parameters, ADR-029 decision 3)", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "confirmed") {
+		t.Errorf("stdout = %q, want it to lead with the outcome word", stdout.String())
+	}
+}
+
+func TestCmdActionInvokeUnconfirmableExitsDistinctFromConfirmed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","result":{
+			"id":"cmd-2","idempotencyKey":"k","actionId":"relay-on","replay":false,
+			"outcome":"unconfirmable","outcomeReason":"this action declares no expected response","attributionDegraded":false,
+			"dispatchedAt":"2026-08-18T21:00:00Z","resolvedAt":"2026-08-18T21:00:01Z"
+		}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke", "--server", ts.URL, "relay-on"}, &stdout, &stderr, time.Now)
+	if code != exitActionUnconfirmable {
+		t.Fatalf("exit code = %d, want exitActionUnconfirmable (11); stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "unconfirmable:") {
+		t.Errorf("stdout = %q, want it to lead with the distinct word \"unconfirmable\", not \"confirmed\"", stdout.String())
+	}
+}
+
+func TestCmdActionInvokeRequiresExactlyOneArg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+}
+
+// decodeJSONBody reads and JSON-decodes r's body into v, failing t on
+// error — a small local helper since this file's other tests never need
+// to inspect a REQUEST body.
+func decodeJSONBody(t *testing.T, r *http.Request, v any) error {
+	t.Helper()
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("read request body: %v", err)
+	}
+	return json.Unmarshal(raw, v)
 }

@@ -217,6 +217,12 @@ const (
 	// coordinator has DIRECT evidence the pipeline is down, not merely an
 	// absence of evidence that it came up.
 	exitRenderPipelineDown = 23
+
+	// exitActionBindingBroken: "action check" found at least one checked
+	// binding "broken" — the target did not resolve, or resolved
+	// ambiguously, against current integration state. Never returned for
+	// "unknown" (the check could not be performed at all), which exits 0.
+	exitActionBindingBroken = 29
 )
 
 // cliError carries an exit code alongside a human-readable message, so

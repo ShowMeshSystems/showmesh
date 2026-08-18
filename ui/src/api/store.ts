@@ -57,6 +57,7 @@
  * instance itself (ADR-023's own scoping of that field).
  */
 import {
+  ACTION_INVOKE_REQUEST_TIMEOUT_MS,
   ApiClient,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
   RENDER_COMMAND_REQUEST_TIMEOUT_MS,
@@ -148,6 +149,12 @@ type SchemaResolumeActionsResponse = components['schemas']['ResolumeActionsRespo
 type SchemaResolumeActionRequest = components['schemas']['ResolumeActionRequest']
 type SchemaResolumeActionResponse = components['schemas']['ResolumeActionResponse']
 type SchemaResolumeActionResult = components['schemas']['ResolumeActionResult']
+// Track E seam E7-1/E7-2.
+type SchemaActionBinding = components['schemas']['ActionBinding']
+type SchemaActionBindingResponse = components['schemas']['ActionBindingResponse']
+type SchemaActionBindingsResponse = components['schemas']['ActionBindingsResponse']
+type SchemaActionInvocationResponse = components['schemas']['ActionInvocationResponse']
+type SchemaActionInvocationResult = components['schemas']['ActionInvocationResult']
 // Track G seam G-5: identity administration over the API.
 type SchemaPrincipalsResponse = components['schemas']['PrincipalsResponse']
 type SchemaPrincipalResponse = components['schemas']['PrincipalResponse']
@@ -1324,6 +1331,64 @@ export class ApiStore {
         `/config/show.action/${encodeURIComponent(id)}/revisions`,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/actions/{id}/binding` (Track E seam E7-2, ADR-029). Never
+   * gated by any scope and never dispatches anything — a read, re-resolving
+   * this action's stored target against current integration state.
+   */
+  async getActionBinding(id: string): Promise<SchemaActionBinding> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.getJson<SchemaActionBindingResponse>(
+        `/actions/${encodeURIComponent(id)}/binding`,
+        controller.signal,
+      )
+      return resp.binding
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/actions/bindings` (Track E seam E7-2): the pre-show
+   * sweep, every action's own binding check in one request. `show`
+   * narrows the result to that show; unmatched returns an empty list,
+   * never a refusal.
+   */
+  async listActionBindings(show?: string): Promise<SchemaActionBinding[]> {
+    const controller = this.beginSideCall()
+    try {
+      const query = show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
+      const resp = await this.client.getJson<SchemaActionBindingsResponse>(`/actions/bindings${query}`, controller.signal)
+      return resp.bindings
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/actions/{id}/invocations` (Track E seam E7-1,
+   * ADR-037 decision 8). Mints its own idempotency key; uses
+   * ACTION_INVOKE_REQUEST_TIMEOUT_MS, not the instance-wide default.
+   * Returns `result.outcome` as-is, never inferred from this call's HTTP
+   * success (ADR-029) — the action's own stored target supplies every
+   * parameter, so this method takes none.
+   */
+  async invokeAction(id: string): Promise<SchemaActionInvocationResult> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaActionInvocationResponse>(
+        `/actions/${encodeURIComponent(id)}/invocations`,
+        { idempotencyKey: randomUUIDv4() },
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
     } finally {
       this.endSideCall(controller)
     }

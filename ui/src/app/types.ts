@@ -47,6 +47,10 @@ export type {
   ResolumeActionParam,
   ResolumeAction,
   ResolumeActionResult,
+  // Track E seam E7-1/E7-2 (ADR-029): the pre-show binding check and one
+  // action invocation, outside of any macro run.
+  ActionBinding,
+  ActionInvocationResult,
   ResolumeCompositionResponse,
   ResolumeCompositionSummary,
   ResolumeCompositionDeckSummary,
@@ -119,6 +123,7 @@ import type {
   MacroRunStepCommand as MacroRunStepCommandType,
   ResolumeInstance as ResolumeInstanceType,
   ResolumeActionResult as ResolumeActionResultType,
+  ActionBinding as ActionBindingType,
   ResolumeRecoveryRecordEntry as ResolumeRecoveryRecordEntryType,
   ResolumeRecoveryRestoreLayer as ResolumeRecoveryRestoreLayerType,
   ConfigShowSurfaceGeometry as ConfigShowSurfaceGeometryType,
@@ -152,6 +157,7 @@ export type MacroRunStepCommandState = MacroRunStepCommandType['state']
 // above.
 export type ResolumeHealth = ResolumeInstanceType['health']
 export type ResolumeActionOutcome = ResolumeActionResultType['outcome']
+export type ActionBindingState = ActionBindingType['state']
 export type ResolumeRecoveryLayerState = ResolumeRecoveryRecordEntryType['state']
 export type ResolumeRecoveryRestoreResult = ResolumeRecoveryRestoreLayerType['result']
 // Track G seam G-8: same derived-not-duplicated pattern as every alias

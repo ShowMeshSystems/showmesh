@@ -265,3 +265,53 @@ type createMacroRunRequest struct {
 	// at the route.
 	Trigger string `json:"trigger"`
 }
+
+// actionBinding mirrors v1.ActionBinding (Track E seam E7-2): state is
+// "ok", "broken", or "unknown", reason always non-empty.
+type actionBinding struct {
+	ActionID string `json:"actionId"`
+	Label    string `json:"label"`
+	Show     string `json:"show"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
+}
+
+// actionBindingResponse is the body of GET /actions/{id}/binding.
+type actionBindingResponse struct {
+	ServerTime time.Time     `json:"serverTime"`
+	Binding    actionBinding `json:"binding"`
+}
+
+// actionBindingsResponse is the body of GET /actions/bindings.
+type actionBindingsResponse struct {
+	ServerTime time.Time       `json:"serverTime"`
+	Bindings   []actionBinding `json:"bindings"`
+}
+
+// actionInvocationRequest is the body of POST /actions/{id}/invocations
+// (Track E seam E7-1).
+type actionInvocationRequest struct {
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// actionInvocationResult mirrors v1.ActionInvocationResult field for
+// field.
+type actionInvocationResult struct {
+	ID                  string     `json:"id"`
+	IdempotencyKey      string     `json:"idempotencyKey"`
+	ActionID            string     `json:"actionId"`
+	Label               string     `json:"label"`
+	Replay              bool       `json:"replay"`
+	Outcome             string     `json:"outcome"`
+	OutcomeReason       string     `json:"outcomeReason"`
+	AttributionDegraded bool       `json:"attributionDegraded"`
+	DispatchedAt        *time.Time `json:"dispatchedAt"`
+	ResolvedAt          *time.Time `json:"resolvedAt"`
+}
+
+// actionInvocationResponse is the body of a successful POST
+// /actions/{id}/invocations.
+type actionInvocationResponse struct {
+	ServerTime time.Time              `json:"serverTime"`
+	Result     actionInvocationResult `json:"result"`
+}

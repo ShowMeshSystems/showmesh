@@ -1,24 +1,34 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ShowActions } from './ShowActions'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-// Same isolation pattern as Macros.test.tsx: mock the one API call this
-// view makes.
-const { listConfigObjects } = vi.hoisted(() => ({ listConfigObjects: vi.fn() }))
+// Same isolation pattern as Macros.test.tsx: mock the API calls this view
+// makes.
+const { listConfigObjects, listActionBindings } = vi.hoisted(() => ({
+  listConfigObjects: vi.fn(),
+  listActionBindings: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, listConfigObjects }
+  return { ...actual, listConfigObjects, listActionBindings }
+})
+
+beforeEach(() => {
+  // Best-effort by default — most sub-tests below care only about the
+  // action list, not the binding sweep; see the dedicated binding test.
+  listActionBindings.mockResolvedValue([])
 })
 
 afterEach(() => {
   cleanup()
   listConfigObjects.mockReset()
+  listActionBindings.mockReset()
 })
 
 function renderShowActions(model: Model) {
@@ -63,5 +73,16 @@ describe('ShowActions', () => {
     await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined))
     await user.type(screen.getByLabelText('Narrow by show'), 'halloween-2026')
     await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026'))
+  })
+
+  // Track E seam E7-2: the pre-show binding check renders per row.
+  it('renders a broken-binding badge for an action whose target no longer resolves', async () => {
+    listConfigObjects.mockResolvedValue(listResponse)
+    listActionBindings.mockResolvedValue([
+      { actionId: 'projectors-on', label: 'Projectors on', show: 'halloween-2026', state: 'broken', reason: 'instance "player-01" is not a configured FPP endpoint' },
+    ])
+    renderShowActions(makeModel({ session: operatorSession }))
+
+    await waitFor(() => expect(screen.getByText('broken')).toBeVisible())
   })
 })

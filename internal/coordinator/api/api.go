@@ -1250,6 +1250,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
 
+	// Track E seam E7-2 (ADR-029's own Consequences section): a pre-show
+	// binding check, re-resolving a stored show.action's target against
+	// current integration state. Never gated by any scope — this is a
+	// read, dispatches nothing, and must be reachable with no credential
+	// (ADR-024 constraint 23) — see actionbinding.go.
+	mux.HandleFunc("GET /api/v1/actions/{id}/binding", h.handleGetActionBinding)
+	mux.HandleFunc("GET /api/v1/actions/bindings", h.handleListActionBindings)
+
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an
 	// admin who has never been granted show:macro:run must not be able to

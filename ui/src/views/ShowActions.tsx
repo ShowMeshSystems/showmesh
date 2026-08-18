@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { listConfigObjects } from '../api'
+import { listActionBindings, listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
-import type { ConfigObjectSummary } from '../app/types'
+import type { ActionBinding, ConfigObjectSummary } from '../app/types'
+import { ActionBindingBadge } from '../components/DomainBadges'
+import { ActionInvokeButton } from '../components/ActionInvokeButton'
 
 // Same read posture as Macros.tsx (STEP-9-SPEC.md section 5.5: "Same
 // read posture as GET /config/show.action"): show:macro:run OR
@@ -29,6 +31,13 @@ export function ShowActions() {
   const showFilter = searchParams.get('show') ?? ''
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  // Binding-check results (Track E seam E7-2), keyed by action id. A
+  // SEPARATE fetch from the list above: the binding sweep requires no
+  // credential at all (ADR-024 constraint 23), so it must not be gated on
+  // readGate, and a failure to fetch it must not blank the list itself —
+  // an action row with no binding entry yet renders with no badge, never
+  // an error for the whole table.
+  const [bindings, setBindings] = useState<Map<string, ActionBinding>>(new Map())
 
   useEffect(() => {
     if (!readGate.allowed) return
@@ -47,6 +56,21 @@ export function ShowActions() {
       cancelled = true
     }
   }, [readGate.allowed, showFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    listActionBindings(showFilter === '' ? undefined : showFilter)
+      .then((list) => {
+        if (cancelled) return
+        setBindings(new Map(list.map((b) => [b.actionId, b])))
+      })
+      .catch(() => {
+        // Best-effort: the list itself still renders with no badges.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showFilter])
 
   return (
     <div>
@@ -120,21 +144,36 @@ export function ShowActions() {
                     <th>Show</th>
                     <th>Revision</th>
                     <th>Updated</th>
+                    <th>Binding</th>
+                    <th>Invoke</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <td>
-                        <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
-                          {obj.label}
-                        </Link>
-                      </td>
-                      <td>{obj.show}</td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
-                    </tr>
-                  ))}
+                  {state.objects.map((obj) => {
+                    const binding = bindings.get(obj.id)
+                    return (
+                      <tr key={obj.id}>
+                        <td>
+                          <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
+                            {obj.label}
+                          </Link>
+                        </td>
+                        <td>{obj.show}</td>
+                        <td>{obj.currentRevision}</td>
+                        <td>{formatAbsolute(obj.updatedAt)}</td>
+                        <td>
+                          {binding ? (
+                            <ActionBindingBadge state={binding.state} reason={binding.reason} />
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td>
+                          <ActionInvokeButton actionId={obj.id} label="Go" />
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

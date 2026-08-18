@@ -78,6 +78,10 @@ export type {
   ResolumeActionsResponse,
   ResolumeActionResult,
   ResolumeActionResponse,
+  // Track E seam E7-1/E7-2 (ADR-029): the pre-show binding check and one
+  // action invocation, outside of any macro run.
+  ActionBinding,
+  ActionInvocationResult,
   ResolumeCompositionDeckSummary,
   ResolumeCompositionLayerGroup,
   ResolumeCompositionLayer,
@@ -177,6 +181,9 @@ export {
   getShowAction,
   putShowAction,
   getShowActionRevisions,
+  getActionBinding,
+  listActionBindings,
+  invokeAction,
   getShowMacro,
   putShowMacro,
   getShowMacroRevisions,
