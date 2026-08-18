@@ -634,3 +634,15 @@ This is not an argument against the CI coverage added in the same session. CI no
 The one change made for the wrong reason that did earn its keep was wrapping each call in `timeout`, which converted a silent 15 minute job-timeout kill into a 5 minute failure with readable output. That output is what made the real cause visible.
 
 **Rule:** before adding a mitigation, confirm the diagnosis against evidence from the failure itself, and prefer a change that makes the failure legible over one that makes it less frequent. A retry, a longer timeout, or an extra dependency added on a guess can lengthen the failure, hide it, or become its cause, and each one costs a full cycle to disprove.
+
+## A write payload has to survive its own round trip
+
+**Track F seam F1 and Track C seam C0a-2, both 2026-08-18, both found by review after the seam's own gates were already green.**
+
+Track F's `night.session` configuration kind: `crossfadeMs` carried `json:"crossfadeMs,omitempty"` while the validator required the key present whenever `itemTransition` was `"crossfade"`, and treated `0` as a valid value. Measured through the real route: a PUT carrying `crossfadeMs: 0` returned 200; the stored payload and the 200 response body both omitted the key; re-PUTting the exact body the API had just handed back was a 400 citing a field the operator never removed and cannot see. That breaks the ordinary `showmeshctl night get -o json`, edit a label, `night set` loop, and the export/import path the seam exists to provide. The existing round-trip test round-tripped through plain `json.Unmarshal` rather than the real decoder, so it passed whether or not the bug was present.
+
+Track C's pinned `pkg/audio` session command contract: the tri-state `Field[T]`'s decode side was correct and its encode side emitted `null` for a key the caller never mentioned. An apply meant only to raise gain would have wiped the pinned playlist, the gain ceiling, the mix policy and the output set, and returned success.
+
+Same root, opposite directions. One made a present zero disappear on the way out; the other made an absent field assert emptiness on the way in. Both are the project's standing "absent, null, and explicitly empty are three different things" rule, but located at the encode side rather than the decode side, which is where the rule had always been applied and tested before. Neither was visible to code reading, and neither test exercised both directions at once.
+
+**Rule:** for every write payload, test the full round trip through the real encoder and the real decoder, not a generic JSON unmarshal, and assert that the exact bytes the API returns are accepted back unchanged. An encode-side defect is as real as a decode-side one, and the absent/null/empty discipline has to be tested on both sides of the wire, not just the side it was first found on. A round-trip test that does not use the production decoder proves nothing.
