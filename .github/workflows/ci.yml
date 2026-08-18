@@ -49,8 +49,13 @@ jobs:
       # plugins-bad.
       - name: Install GStreamer (renderer tests)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # DPkg::Lock::Timeout bounds the wait for the dpkg lock that the
+          # runner's own unattended-upgrades holds at boot. Without it apt
+          # waits forever and the job dies on its timeout with no output:
+          # the identical step took 26s in one job and hung past 10m in
+          # another on the same run.
+          sudo apt-get update -o DPkg::Lock::Timeout=300
+          sudo apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=300 \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
           gst-launch-1.0 --version
 
@@ -92,7 +97,11 @@ jobs:
     # a step in `test` above) specifically so a broker problem here is
     # distinguishable from a unit test failure at a glance, per the Step 2
     # round 2 Task E spec.
-    timeout-minutes: 10
+    #
+    # Raised from 10 when Track B landed: this job now installs GStreamer and
+    # runs render tests that drive real gst-launch-1.0 pipelines, where before
+    # they failed fast on the missing binary.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -115,8 +124,13 @@ jobs:
       # tests start a real gst-launch-1.0 child and assert on its pid.
       - name: Install GStreamer (renderer tests)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # DPkg::Lock::Timeout bounds the wait for the dpkg lock that the
+          # runner's own unattended-upgrades holds at boot. Without it apt
+          # waits forever and the job dies on its timeout with no output:
+          # the identical step took 26s in one job and hung past 10m in
+          # another on the same run.
+          sudo apt-get update -o DPkg::Lock::Timeout=300
+          sudo apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=300 \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
           gst-launch-1.0 --version
 
