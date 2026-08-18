@@ -64,10 +64,20 @@ taken silently.
 | 26 | `exitNightNotReady` | reserved (Track F seam F2) |
 | 27 | `exitNightStateRejected` | reserved (Track F seam F2) |
 | 28 | `exitNightAmbiguous` | reserved (Track F seam F2) |
-| 29+ | unallocated | free |
+| 29 | `exitActionBindingBroken` | reserved (Track E seam E7) |
+| 30+ | unallocated | free |
 
 **16 to 19 are deliberately free.** The asset codes were placed at 20 to
 leave room below them; do not close that gap without a reason.
+
+**`exitActionBindingBroken` is a distinct code because a broken binding is
+not an action that failed.** Codes 11 to 13 say a dispatched action did not
+confirm, could not be confirmed, or was refused; 29 says the action was
+never dispatchable, because what it names no longer exists in the
+integration (ADR-029's own consequence: an action bound to a deleted clip).
+A pre-show script wants to branch on that difference. Track E seam E7's
+invoke verb reuses 9 and 11 to 13 unchanged — the ADR-020 outcome vocabulary
+does not fork per surface.
 
 ## Configuration kinds
 
@@ -132,6 +142,19 @@ validation rejecting one is part of the kind rather than a later check.
 reference turns out to be sufficient to resolve the session; it is reserved
 now because releasing an unused reservation is free and colliding is not.
 
+**Track E seam E7 mints no configuration kind, no schema version, no change
+stream event kind and no observation signal, and that is the finding rather
+than an omission.** ADR-029's logical action and its binding are already
+`show.action` and `show.macro.steps[].action`, shipped in Step 9 and
+extended by Track D seam C. E7 is the part of ADR-029 that was never built
+on top of them: invoking one action outside a macro, checking a binding
+still resolves before a show rather than at showtime, and enforcing the
+ADR-027 show namespace those objects have only ever range-checked. A
+binding check is derived from configuration the coordinator already holds,
+so it is a computed read on the asset-manifest precedent, not an observation
+with provenance and freshness. If a builder finds itself wanting a new kind
+here, the design has drifted and the orchestrator decides, not the builder.
+
 Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
@@ -160,6 +183,7 @@ bundles of these (ADR-024).
 | `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
 | `night:override` | reserved | Track F seam F6: interlock override where a rule declares `authorized-operator` |
+| `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -172,6 +196,18 @@ the lifecycle state.
 
 `principal:write` sat in the admin bundle unchecked from Step 6 until Track
 G seam G-5 landed its first callers (merged 2026-08-17).
+
+**`show:action:invoke` is separate from `show:macro:run` deliberately, and
+from the per-integration scopes as well.** A macro run is a submission of a
+reviewed, revision-pinned sequence; invoking one action is an operator
+pressing a button on the wall right now, and the two want to be grantable
+independently. It is also not `resolume:action` or `fpp:command`: the whole
+point of ADR-029 is that the caller names an action and never learns which
+protocol it reaches, so a scope named after a protocol would leak the
+binding back into the authorization model. The **dispatch path underneath
+still checks the per-integration scope it always did**, so this scope widens
+nothing; it gates the logical surface only. Reads of an action, its
+bindings, and their validation stay open per ADR-024 constraint 23.
 
 ## Collector source ids
 
