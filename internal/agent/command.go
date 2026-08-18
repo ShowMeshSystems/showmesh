@@ -167,9 +167,9 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a), and
-// Track B's four render.* operations (seam B2a's apply/clear/restart, seam
-// B4's transport.probe). Per
+// "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
+// "audio.media.probe" (Track C seam C2), and Track B's four render.*
+// operations (seam B2a's apply/clear/restart, seam B4's transport.probe). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism — [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
@@ -181,10 +181,12 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
+	mediaProbe := mediaProbeOperation{dir: assetDir}
 	ops := map[string]OperationFunc{
 		"agent.echo":         state.apply,
 		"asset.fetch":        fetch.run,
 		"audio.device.probe": probeAudioDevice,
+		"audio.media.probe":  mediaProbe.run,
 	}
 	if render != nil {
 		ops["render.surface.apply"] = render.applySurface

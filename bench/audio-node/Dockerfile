@@ -21,6 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ALSA plugin: gives R6 a real ALSA element (alsasink) to run against
     # a userspace null device inside the container.
     gstreamer1.0-alsa \
+    # gst-discoverer-1.0: Track C seam C2's primary media-metadata source
+    # (duration, codec, channels, rate from container metadata, MEASURED at
+    # 11 ms against a 10-minute FLAC — orders of magnitude cheaper than a
+    # full decode).
+    gstreamer1.0-plugins-base-apps \
     libasound2t64 \
     alsa-utils \
     # R4's click-free ramp is driven by the GstController API from Python
