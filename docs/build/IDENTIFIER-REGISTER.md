@@ -271,6 +271,71 @@ are properties of the session being applied: an announcement is
 separate `audio.session.duck` would be a second way to reach the same state
 with no way to say which one won.
 
+## Audit action strings
+
+The `Action` field of an `identity.AuditEntry`, written into the audit
+table and read back by `GET /api/v1/audit`, the `showmeshctl audit` verb,
+and the Operator UI's audit view.
+
+**This section exists because the register had no place for these until
+2026-08-18**, when a review of Track E's asset rollback asked where its new
+`asset.rollback` string had been reserved. The answer was nowhere. The
+"Agent operation names" section above already states the reason this
+matters, and it applies here word for word: the value **is recorded in the
+audit trail, which makes a rename after shipping a breaking change to
+stored history.** An operator asking what happened on the night of the 17th
+is reading strings minted months earlier.
+
+**There is no central constant.** Every call site passes a literal, so
+nothing collides at compile time and nothing would catch two branches
+minting one name with different meanings. That is the same condition that
+produced the exit code 11 and 12 collision, minus the crash.
+
+Written from the code on 2026-08-18 by enumerating `identity.AuditEntry`
+construction sites, following this file's own correction rule that a
+register entry comes from the code and never from a plan.
+
+| Action | Status | Owner |
+|---|---|---|
+| `bootstrap.claim` | shipped | Step 6 |
+| `session.create` | shipped | Step 6 |
+| `session.revoke` | shipped | Step 6 |
+| `credential.resolve` | shipped | Step 6 |
+| `credential_in_url` | shipped | Step 6 |
+| `principal.create` | shipped | Step 6 |
+| `principal.enable` | shipped | Track G seam G-5 |
+| `principal.disable` | shipped | Track G seam G-5 |
+| `principal.set_role` | shipped | Track G seam G-5 |
+| `principal.reset_password` | shipped | Track G seam G-5 |
+| `config.write` | shipped | Step 7 |
+| `config.migrate` | shipped | Step 7 |
+| `node.declare` | shipped | Step 7 |
+| `node.declaration.delete` | shipped | Step 7 |
+| `discovery.run.start` | shipped | Step 7 |
+| `fpp.start_playlist` and the seven other `fpp.<primitive>` names | shipped | Step 8 |
+| `macro.run.submit` | shipped | Step 9 |
+| `mqtt.publish` | shipped | Step 9 |
+| `resolume.<action>` (seven, via `resolumeActionAuditAction`) | shipped | Track D seam D-3 |
+| `resolume.recovery_restore` | shipped | Track D seam D-3a |
+| `render.surface.apply` / `render.surface.clear` / `render.pipeline.restart` / `render.transport.probe` | shipped | Track B |
+| `asset.upload` | shipped | Track E |
+| `asset.fetch` | shipped | Track E |
+| `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+
+**Two naming conventions are in use and neither is being changed
+retroactively.** Most names are `<noun>.<verb>` with an underscore inside
+the verb (`principal.reset_password`, `fpp.stop_playlist_gracefully`).
+`credential_in_url` has no noun segment at all. Renaming any of them
+rewrites the meaning of history that is already stored, so the rule going
+forward is `<noun>.<verb>`, and the existing outliers stay.
+
+**Three of these names are shared with other namespaces, deliberately and
+harmlessly.** `asset.fetch` and the four `render.*` names are also agent
+operation names, and the `fpp.*` and `resolume.*` audit actions echo their
+primitive and action names. They are different tables reached by different
+code, and an audit action that matched its operation is easier to read than
+one that did not. Do not "fix" the duplication.
+
 ## Observation resource kinds and signal namespaces
 
 `observation.ResourceKind` in `pkg/observation/observation.go:64`, and the
