@@ -32,11 +32,16 @@ func TestBuildSurfaceSpecNDIOutputReplacesSinkWithNDISink(t *testing.T) {
 			sawQueue = true
 		}
 		if st.Label == "sink" {
-			if len(st.Elements) != 1 {
-				t.Fatalf("sink stage has %d elements, want 1", len(st.Elements))
+			// videoconvert then ndisink: ndisink advertises no packed
+			// 24-bit RGB, so the conversion is required to negotiate.
+			if len(st.Elements) != 2 {
+				t.Fatalf("sink stage has %d elements, want 2 (videoconvert, ndisink)", len(st.Elements))
 			}
-			sinkFactory = st.Elements[0].Factory
-			for _, p := range st.Elements[0].Properties {
+			if got := st.Elements[0].Factory; got != "videoconvert" {
+				t.Fatalf("sink stage element 0 = %q, want videoconvert", got)
+			}
+			sinkFactory = st.Elements[1].Factory
+			for _, p := range st.Elements[1].Properties {
 				if p.Key == "ndi-name" {
 					ndiName = p.Value
 				}
