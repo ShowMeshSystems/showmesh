@@ -40,6 +40,20 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # Track B's renderer tests drive a real gst-launch-1.0. Without it the
+      # supervisor degrades the surface to "unsupported", which is correct
+      # behavior and not a passing test, so the suite fails on timeouts.
+      # ndisink is deliberately not installed: ADR-010 forbids shipping the
+      # NDI runtime, so NDI transport stays a bench concern and only the
+      # fakesink/queue fallback runs here. rawvideoparse lives in
+      # plugins-bad.
+      - name: Install GStreamer (renderer tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+          gst-launch-1.0 --version
+
       - name: Vet
         run: go vet ./...
 
@@ -97,6 +111,15 @@ jobs:
       # duplicating what test-integration.sh already does against the real
       # shipped config — and testing that config, not a stand-in for it, is
       # the point of this job.
+      # Same reason as the unit-test job above: Track B's render integration
+      # tests start a real gst-launch-1.0 child and assert on its pid.
+      - name: Install GStreamer (renderer tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+          gst-launch-1.0 --version
+
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration
 
