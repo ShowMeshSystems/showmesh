@@ -97,6 +97,18 @@ const (
 	// [ScopeFPPCommand] and [ScopeResolumeAction] already carry for their
 	// own vendors.
 	ScopeRenderCommand Scope = "render:command"
+
+	// ScopeShowActionInvoke is Track E seam E7-1's own scope
+	// (POST /api/v1/actions/{id}/invocations): invoke one stored
+	// show.action by id, outside of a macro run. Reads stay open by
+	// default (ADR-024) — this scope exists only because invoking an
+	// action changes what the show does, the identical reasoning
+	// [ScopeFPPCommand], [ScopeResolumeAction], and [ScopeRenderCommand]
+	// already carry for their own dispatch surfaces. It gates the
+	// logical-action surface only; the per-integration dispatch
+	// underneath still checks whatever scope that dispatch already
+	// checks (fpp:command, resolume:action).
+	ScopeShowActionInvoke Scope = "show:action:invoke"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -108,7 +120,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

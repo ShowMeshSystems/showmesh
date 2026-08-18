@@ -359,6 +359,19 @@ type Dependencies struct {
 	// dependency is not this API failing" posture.
 	ResolumeReferences config.ResolumeReferenceResolver
 
+	// MQTTBrokers is Track E seam E7-1's own dispatch dependency: the
+	// deployment's live integration broker registry, reached only through
+	// [MQTTBrokerRegistry] (mqttactiondispatch.go). The real value is the
+	// SAME *broker.Registry internal/coordinator/macro's own executor
+	// dispatches an mqtt-integration show.macro step through, wired twice
+	// against one shared registry the identical way
+	// [NewFPPCommandDispatcher]'s doc comment explains is safe for
+	// *handlers. A nil field is replaced by [noMQTTBrokerRegistry]: every
+	// method refuses loudly rather than fabricating success — this
+	// struct's standing "an unwired dependency is not this API failing"
+	// posture.
+	MQTTBrokers MQTTBrokerRegistry
+
 	// ResolumeRecovery is Track D seam D-3a's own recovery controller
 	// (internal/coordinator/collector/resolume.Recovery), reached only
 	// through [ResolumeRecoveryProvider]. A nil field is replaced by
@@ -484,6 +497,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.ResolumeReferences == nil {
 		d.ResolumeReferences = noResolumeReferenceResolver{}
+	}
+	if d.MQTTBrokers == nil {
+		d.MQTTBrokers = noMQTTBrokerRegistry{}
 	}
 	if d.ResolumeRecovery == nil {
 		d.ResolumeRecovery = noResolumeRecoveryProvider{}
@@ -1257,6 +1273,13 @@ func New(deps Dependencies, opts Options) *API {
 	// (ADR-024 constraint 23) — see actionbinding.go.
 	mux.HandleFunc("GET /api/v1/actions/{id}/binding", h.handleGetActionBinding)
 	mux.HandleFunc("GET /api/v1/actions/bindings", h.handleListActionBindings)
+
+	// Track E seam E7-1: invoke one stored show.action by id, outside of
+	// a macro run (ADR-037 decision 8's controller surface). Gated on
+	// show:action:invoke specifically — the per-integration dispatch
+	// underneath still checks whatever scope it already checks. No state
+	// change here is reachable by GET — see actioninvoke.go.
+	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

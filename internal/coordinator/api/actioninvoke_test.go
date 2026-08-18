@@ -1,0 +1,325 @@
+package api
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+)
+
+// fakeMQTTBrokerRegistry is a minimal [MQTTBrokerRegistry] fake: publish
+// calls are recorded, and AwaitResponse answers with a preconfigured
+// message or error per broker id.
+type fakeMQTTBrokerRegistry struct {
+	mu        sync.Mutex
+	publishes int
+	msg       broker.Message
+	err       error
+}
+
+func (f *fakeMQTTBrokerRegistry) Publish(context.Context, string, string, byte, bool, []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishes++
+	return f.err
+}
+
+func (f *fakeMQTTBrokerRegistry) AwaitResponse(context.Context, string, broker.ResponseRequest) (broker.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishes++
+	if f.err != nil {
+		return broker.Message{}, f.err
+	}
+	return f.msg, nil
+}
+
+func mustPutAction(t *testing.T, api *API, token, id, body string) {
+	t.Helper()
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/"+id, body,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action/%s: status = %d; body: %s", id, resp.StatusCode, respBody)
+	}
+}
+
+func invokeActionRequest(id, idempotencyKey, bearerToken string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions/"+id+"/invocations",
+		strings.NewReader(`{"idempotencyKey":"`+idempotencyKey+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
+	return req
+}
+
+// TestInvokeActionRequiresShowActionInvokeScope proves the scope gate: a
+// viewer (no show:action:invoke) is refused 403; an operator (which holds
+// it) is not.
+func TestInvokeActionRequiresShowActionInvokeScope(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	viewer := mustCreatePrincipal(t, svc, "viewer-1", identity.RoleViewer)
+	viewerToken := mustIssueToken(t, svc, viewer.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.ResolumeActions = &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, adminToken, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/actions/blackout-now/invocations",
+		`{"idempotencyKey":"key-viewer"}`, map[string]string{"Authorization": "Bearer " + viewerToken})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer: status = %d, want 403; body: %s", resp.StatusCode, body)
+	}
+
+	req2 := newJSONRequest(t, http.MethodPost, "/api/v1/actions/blackout-now/invocations",
+		`{"idempotencyKey":"key-admin"}`, map[string]string{"Authorization": "Bearer " + adminToken})
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin: status = %d, want 200; body: %s", resp2.StatusCode, body2)
+	}
+}
+
+// TestInvokeActionResolumeConfirmed proves the resolume branch dispatches
+// through [Dependencies.ResolumeActions].Dispatch — the same seam
+// resolumeaction.go's own HTTP handler and macro's step both use — and
+// reports the outcome honestly.
+func TestInvokeActionResolumeConfirmed(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "every layer went dark"},
+	}}
+	deps.ResolumeActions = dispatcher
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "key-1", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if result["outcome"] != "confirmed" {
+		t.Errorf("outcome = %v, want confirmed; body: %s", result["outcome"], body)
+	}
+	if result["actionId"] != "blackout-now" {
+		t.Errorf("actionId = %v, want blackout-now", result["actionId"])
+	}
+	if dispatcher.callCount() != 1 {
+		t.Errorf("resolume dispatch calls = %d, want exactly 1", dispatcher.callCount())
+	}
+}
+
+// TestInvokeActionReplayReturnsOriginalResultWithoutRedispatching proves
+// idempotency: the same key against the same action answers with the
+// original result and dispatches nothing a second time.
+func TestInvokeActionReplayReturnsOriginalResultWithoutRedispatching(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	dispatcher := &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	deps.ResolumeActions = dispatcher
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	resp1, body1 := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "replay-key", token))
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first: status = %d; body: %s", resp1.StatusCode, body1)
+	}
+	resp2, body2 := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "replay-key", token))
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second: status = %d; body: %s", resp2.StatusCode, body2)
+	}
+	m2 := decodeMap(t, body2)
+	result2 := m2["result"].(map[string]any)
+	if replay, _ := result2["replay"].(bool); !replay {
+		t.Errorf("second request's replay = %v, want true", result2["replay"])
+	}
+	if dispatcher.callCount() != 1 {
+		t.Errorf("resolume dispatch calls = %d, want exactly 1 (replay must not re-dispatch)", dispatcher.callCount())
+	}
+}
+
+// TestInvokeActionIdempotencyKeyReusedForDifferentActionIs409 proves the
+// same key against a DIFFERENT action id is refused as a conflict, not
+// silently treated as a replay.
+func TestInvokeActionIdempotencyKeyReusedForDifferentActionIs409(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.ResolumeActions = &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+	mustPutAction(t, api, token, "blackout-again", validShowActionResolumeBlackoutBody)
+
+	if resp, body := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "shared-key", token)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first: status = %d; body: %s", resp.StatusCode, body)
+	}
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("blackout-again", "shared-key", token))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestInvokeActionMQTTConfirmedAndUnconfirmable proves the mqtt branch
+// dispatches through [DispatchMQTTAction] over [Dependencies.MQTTBrokers]:
+// a "none" expect kind reports unconfirmable, never success dressed up as
+// confirmed.
+func TestInvokeActionMQTTConfirmedAndUnconfirmable(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	brokers := &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "relay-on", validShowActionMQTTNoneBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("relay-on", "mqtt-key-1", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if result["outcome"] != "unconfirmable" {
+		t.Errorf("outcome = %v, want unconfirmable; body: %s", result["outcome"], body)
+	}
+	if brokers.publishes == 0 {
+		t.Errorf("expected the mqtt broker to have been published to")
+	}
+}
+
+// TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches proves
+// ADR-024 decision 11's boundary read straight off the stored action's
+// own safetyClass: a "stop"-classed FPP action still dispatches when the
+// audit store is unwritable, with degraded attribution reported rather
+// than refused.
+func TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches(t *testing.T) {
+	fppSrv, fppFake := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs(nil)
+
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, setup.svc, admin.ID)
+	deps := setup.deps()
+	deps.Config = setup.st
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 20 * 1e6, // 20ms: this test does not care about confirmation, only dispatch.
+	})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "stop-now", validShowActionFPPStopBody)
+
+	installFailAuditTrigger(t, setup.storeDir)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("stop-now", "stop-key-1", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (stop is exempt from the audit fail-closed rule); body: %s", resp.StatusCode, body)
+	}
+	if fppFake.hitCount() != 1 {
+		t.Errorf("fpp hits = %d, want exactly 1 (the exemption must still dispatch)", fppFake.hitCount())
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
+		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
+	}
+}
+
+// TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch proves
+// the fail-closed default: an FPP action whose safetyClass is "none" is
+// refused before anything reaches FPP when the audit store is
+// unwritable.
+func TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch(t *testing.T) {
+	fppSrv := newFailIfHitFPPCommandServer(t)
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs(nil)
+
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, setup.svc, admin.ID)
+	deps := setup.deps()
+	deps.Config = setup.st
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "start-now", validShowActionFPPStartOnBenchBody)
+
+	installFailAuditTrigger(t, setup.storeDir)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-now", "start-key-1", token))
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(strings.ToLower(string(body)), "audit") {
+		t.Errorf("problem detail = %s, want it to name the audit store", body)
+	}
+}
+
+const validShowActionResolumeBlackoutBody = `{
+	"show": "halloween-2026",
+	"label": "Blackout everything",
+	"safetyClass": "blackout",
+	"target": {
+		"integration": "resolume",
+		"action": "blackout"
+	}
+}`
+
+const validShowActionMQTTNoneBody = `{
+	"show": "halloween-2026",
+	"label": "Turn the relay on",
+	"safetyClass": "none",
+	"target": {
+		"integration": "mqtt",
+		"broker": "home-automation",
+		"publish": {"topic": "relay/on", "payload": "1", "qos": 1, "retain": false},
+		"expect": {"kind": "none"}
+	}
+}`
+
+const validShowActionFPPStartOnBenchBody = `{
+	"show": "halloween-2026",
+	"label": "Start the main show",
+	"safetyClass": "none",
+	"target": {
+		"integration": "fpp",
+		"instanceId": "bench-fpp",
+		"primitive": "startPlaylist",
+		"params": {"playlist": "Halloween Main", "ifBusy": "refuse"}
+	}
+}`
+
+const validShowActionFPPStopBody = `{
+	"show": "halloween-2026",
+	"label": "Stop the main show",
+	"safetyClass": "stop",
+	"target": {
+		"integration": "fpp",
+		"instanceId": "bench-fpp",
+		"primitive": "stopPlaylist",
+		"params": {}
+	}
+}`

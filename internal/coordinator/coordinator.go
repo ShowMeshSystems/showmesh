@@ -654,6 +654,12 @@ func Run() int {
 		// never disagree about which identifiers exist, because both
 		// read the identical field.
 		IntegrationBrokers: cfg.IntegrationBrokers,
+		// Track E seam E7-1: the SAME *broker.Registry macro.Dependencies.Brokers
+		// (below) dispatches an mqtt-integration show.macro step through —
+		// see [api.Dependencies.MQTTBrokers]'s own doc comment for why
+		// wiring one registry into two independently-constructed
+		// Dependencies values is safe.
+		MQTTBrokers: integrationBrokers,
 	}
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
