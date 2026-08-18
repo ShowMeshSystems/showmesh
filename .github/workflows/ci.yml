@@ -49,12 +49,16 @@ jobs:
       # plugins-bad.
       - name: Install GStreamer (renderer tests)
         run: |
-          # apt has no default network timeout, and the runner carries
-          # several third-party repos; a stalled index fetch otherwise hangs
-          # until the job's own timeout kills it with no error. Measured: the
-          # identical step took 31s in one job and stalled mid-fetch past 15m
-          # in another on the same run. The lock timeout covers the separate
-          # case of the runner's unattended-upgrades holding dpkg.
+          # tools + plugins-base is the whole requirement: fdsrc, queue and
+          # fakesink are core, and rawvideoparse and videotestsrc are in
+          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
+          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
+          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
+          # took this step from 3 seconds to over 300.
+          #
+          # apt has no default network timeout, so the timeouts and the
+          # timeout(1) wrapper keep a stalled fetch from silently consuming
+          # the job's whole budget instead of failing with something to read.
           APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
           # shellcheck disable=SC2086
@@ -62,8 +66,9 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+            gstreamer1.0-tools gstreamer1.0-plugins-base
           gst-launch-1.0 --version
+          gst-inspect-1.0 rawvideoparse > /dev/null
 
       - name: Vet
         run: go vet ./...
@@ -130,12 +135,16 @@ jobs:
       # tests start a real gst-launch-1.0 child and assert on its pid.
       - name: Install GStreamer (renderer tests)
         run: |
-          # apt has no default network timeout, and the runner carries
-          # several third-party repos; a stalled index fetch otherwise hangs
-          # until the job's own timeout kills it with no error. Measured: the
-          # identical step took 31s in one job and stalled mid-fetch past 15m
-          # in another on the same run. The lock timeout covers the separate
-          # case of the runner's unattended-upgrades holding dpkg.
+          # tools + plugins-base is the whole requirement: fdsrc, queue and
+          # fakesink are core, and rawvideoparse and videotestsrc are in
+          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
+          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
+          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
+          # took this step from 3 seconds to over 300.
+          #
+          # apt has no default network timeout, so the timeouts and the
+          # timeout(1) wrapper keep a stalled fetch from silently consuming
+          # the job's whole budget instead of failing with something to read.
           APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
           # shellcheck disable=SC2086
@@ -143,8 +152,9 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+            gstreamer1.0-tools gstreamer1.0-plugins-base
           gst-launch-1.0 --version
+          gst-inspect-1.0 rawvideoparse > /dev/null
 
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration
