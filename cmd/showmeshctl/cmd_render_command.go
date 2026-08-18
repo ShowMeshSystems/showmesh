@@ -98,7 +98,7 @@ type renderCommandResponse struct {
 }
 
 // dispatchRenderCommand is the request/response core shared by "render
-// apply", "render clear", and "render restart": build a client on this
+// apply", "clear", "restart" and "probe": build a client on this
 // command's own timeout floor, mint a fresh idempotency key, POST to
 // /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/{verb}, and report
 // the outcome honestly (ADR-003).

@@ -1268,7 +1268,8 @@ export class ApiStore {
   }
 
   /**
-   * `GET /api/v1/config/show.surface/{id}`.
+   * `GET /api/v1/config/show.surface/{id}`. Throws (404) when no such
+   * surface exists.
    */
   async getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
     const controller = this.beginSideCall()

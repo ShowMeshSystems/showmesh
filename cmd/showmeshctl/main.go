@@ -97,34 +97,30 @@ control API. Reads and the audit log are gated by an authenticated
 principal's scopes rather than by one shared secret; see --token below
 and "showmeshctl session --help".
 
-Step 7 gave this program its first writes; Step 8 gave it seven more, all
-under "fpp". "config set", "discover", "declare" and "undeclare" change
-this coordinator's own configuration and inventory and need the
-config:write scope. Every "fpp <verb>" subcommand dispatches one of eight
-primitive FPP commands and needs fpp:command; none of them ever reports
-success on an HTTP 200 alone — evidence that observed state actually
-moved is required before this program calls anything confirmed.
+Writes are grouped by the scope they need. "config set", "discover",
+"declare" and "undeclare" change this coordinator's own configuration and
+inventory, and need config:write. Each "fpp <verb>" dispatches one
+primitive FPP command and needs fpp:command. "render apply", "clear",
+"restart" and "probe" drive one node's render surfaces and need
+render:command. "macro run" and "run show" submit a show macro run and
+need show:macro:run. "principal" and "token" administer identity: reads
+need principal:read, writes need principal:write and are audited.
 
-Step 9 gave this program "macro", "run" and "action": reading show.macro
-and show.action definitions, and submitting a macro run. "macro run" needs
-show:macro:run; every other new subcommand is a read (show:macro:run OR
-config:write). A macro run is accepted asynchronously (202): "macro run"
-and "run show" never wait for a run to finish unless given --follow, and
---follow itself times out on IDLE silence, never on total duration — see
+No subcommand reports success on an HTTP 200 alone. Evidence that observed
+state actually moved is required before this program calls anything
+confirmed.
+
+A macro run is accepted asynchronously (202), so "macro run" and "run
+show" never wait for a run to finish unless given --follow, and --follow
+itself times out on IDLE silence, never on total duration; see
 "showmeshctl macro run --help".
 
-Track G seam G-5 gave this program "principal" and "token": identity
-administration that previously required container/host exec access to the
-coordinator's own distroless image. Reads need principal:read; writes need
-principal:write and are audited. Disabling the coordinator's last enabled
-administrator, changing its role away from one that holds principal:write,
-or revoking the last credential able to reach that scope, is refused with
-409 (ADR-039 decision 8) — a deliberate refusal, not a bug: it costs an
-administrative retry rather than an unrecoverable coordinator with no shell
-to recover it from. The coordinator's own host subcommands
-("showmesh-coordinator list-principals", "create-principal", and friends)
-remain the break-glass path for a coordinator with no reachable
-administrator at all.
+Disabling the coordinator's last enabled administrator, changing its role
+away from one that holds principal:write, or revoking the last credential
+able to reach that scope, is refused with 409 (ADR-039 decision 8). The
+coordinator's own host subcommands ("showmesh-coordinator
+list-principals", "create-principal", and friends) remain the break-glass
+path for a coordinator with no reachable administrator at all.
 
 Usage:
   showmeshctl <command> [flags] [args]
@@ -206,6 +202,10 @@ Commands:
                                         (write, requires render:command)
   render restart <nodeId> <surfaceId>  dispatch render.pipeline.restart and confirm by evidence
                                         (write, requires render:command)
+  render probe <nodeId> <surfaceId>    dispatch render.transport.probe and confirm by evidence
+                                        (write, requires render:command)
+  render transport <surfaceId>         read the most recently probed output-transport
+                                        evidence already on file (read; never probes)
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields

@@ -57,8 +57,8 @@ taken silently.
 | 16 to 19 | unallocated | free |
 | 20 | `exitAssetsNotReady` | shipped |
 | 21 | `exitAssetsUnknown` | shipped |
-| 22 | `exitRenderUnavailable` | **reserved** (Track B seam B4) |
-| 23 | `exitRenderPipelineDown` | **reserved** (Track B seam B2) |
+| 22 | `exitRenderUnavailable` | shipped (Track B seam B4) |
+| 23 | `exitRenderPipelineDown` | shipped (Track B seam B2) |
 | 24+ | unallocated | free |
 
 **16 to 19 are deliberately free.** The asset codes were placed at 20 to
@@ -82,7 +82,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `resolume.instances` | `default` singleton | shipped | Track G seam G-2 |
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
-| `render.settings` | `default` singleton | **reserved** | Track B seam B2 |
+| `render.settings` | `default` singleton | shipped | Track B seam B2 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -116,7 +116,7 @@ bundles of these (ADR-024).
 | `audit:read` | shipped | audit log reads |
 | `resolume:action` | shipped | the seven Resolume actions |
 | `asset:write` | shipped | asset upload |
-| `render:command` | **reserved** | Track B seam B2: surface apply/clear, pipeline restart |
+| `render:command` | shipped | Track B seam B2: surface apply/clear, pipeline restart |
 | `principal:write` | shipped | the nine principal/token administration writes (Track G seam G-5) |
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 
@@ -136,7 +136,7 @@ the wrong device, because every collector shares one
 | `fpp-mqtt` | shipped | `collector/fppmqtt` |
 | `resolume-rest` | shipped | `collector/resolume` |
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
-| `node-render` | **reserved** | Track B seam B2 (`collector/noderender`) |
+| `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -155,10 +155,10 @@ after shipping a breaking change to stored history.
 |---|---|---|
 | `agent.echo` | shipped | Track B seam B1 |
 | `asset.fetch` | shipped | Track E |
-| `render.surface.apply` | **reserved** | Track B seam B2 |
-| `render.surface.clear` | **reserved** | Track B seam B2 |
-| `render.pipeline.restart` | **reserved** | Track B seam B2 |
-| `render.transport.probe` | **reserved** | Track B seam B4 |
+| `render.surface.apply` | shipped | Track B seam B2 |
+| `render.surface.clear` | shipped | Track B seam B2 |
+| `render.pipeline.restart` | shipped | Track B seam B2 |
+| `render.transport.probe` | shipped | Track B seam B4 |
 
 ## Observation resource kinds and signal namespaces
 
@@ -171,7 +171,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `fpp` | `fpp.*` | shipped | Step 3 |
 | `coordinator` | `coordinator.*` | shipped | Step 3 |
 | `resolume` | `resolume.*` | shipped | Track D |
-| `surface` | `surface.*` | **reserved** | Track B seam B2 |
+| `surface` | `surface.*` | shipped | Track B seam B2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -195,12 +195,12 @@ listed because the last row was minted after the others had shipped:
 | `surface.frames.rate` | shipped | Track B seam B5 (ADR-040's measurement obligation) |
 | `surface.transport.available` | shipped | Track B seam B4 |
 | `surface.transport.reason` | shipped | Track B seam B4 |
-| `surface.timeline.state` | **reserved** | Track B review fix, finding 7 |
-| `surface.timeline.position_ms` | **reserved** | Track B review fix, finding 7 |
-| `surface.output.mode` | **reserved** | Track B review fix, finding 7 |
-| `surface.output.idle_mode` | **reserved** | Track B review fix, finding 7 |
-| `node.multisync.listening` | **reserved** | Track B review fix, finding 7 (node-level, not surface) |
-| `node.multisync.reason` | **reserved** | Track B review fix, finding 7 (node-level, not surface) |
+| `surface.timeline.state` | shipped | Track B review fix, finding 7 |
+| `surface.timeline.position_ms` | shipped | Track B review fix, finding 7 |
+| `surface.output.mode` | shipped | Track B review fix, finding 7 |
+| `surface.output.idle_mode` | shipped | Track B review fix, finding 7 |
+| `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
+| `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 
 **Four rows above were wrong until 2026-08-17 and the review caught it.** The
 register recorded `surface.reason`, `surface.restart.count` and
@@ -244,7 +244,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/agent/echo` (retained) | shipped | Track B seam B1 |
 | `showmesh/nodes/<id>/cmd` | shipped | Step 2 |
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
-| `showmesh/nodes/<id>/observed/render` (retained) | **reserved** | Track B seam B2 |
+| `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -275,14 +275,13 @@ The store schema version, bumped by migrations in
 | Version | Status | Introduced by |
 |---|---|---|
 | v6 | shipped | Step 7 seam 0 (atomic audit variant, strict login CSRF) |
-| v7 | **reserved** | Track B seam B2 (node render state), if a migration proves necessary |
-| later versions | see `store/` migrations | |
+| v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
+| v8 | shipped | Track E (asset store tables, ADR-028) |
+| v9+ | unallocated | free |
 
-**v7 is reserved but may go unused.** Track B's first choice is to carry
-render state through the existing observations table via a collector `Sink`,
-which needs no migration. The reservation exists so that if the node render
-report needs its own table, no second branch mints v7 in parallel. If Track B
-folds without a migration, release v7 rather than leaving it reserved.
+**Track B took no schema version.** Its render state travels through the
+existing observations table via a collector `Sink`, so the v7 it had reserved
+was released and went to Step 9.
 
 A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
