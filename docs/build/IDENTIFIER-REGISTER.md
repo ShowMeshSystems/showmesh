@@ -476,6 +476,19 @@ authoritative session state rather than reconstructing it from a sequence of
 transition events; a per-transition kind would invite exactly the
 reconstruction the non-resumable rule forbids.
 
+## Research record numbers
+
+`docs/research/RES-NNN-*.md`, tracked in
+[`docs/research/README.md`](../research/README.md). Not previously in this
+register, which is how ADR numbers came to collide, and there are three
+sessions running.
+
+| Number | Status | Subject |
+|---|---|---|
+| RES-001 to RES-017 | shipped | see the research tracker |
+| RES-018 | reserved | FPP brightness control and the ADR-038 / RESTING-MODE §7.3 composition seam (Track F) |
+| RES-019+ | unallocated | free |
+
 ## API paths
 
 Not enumerated here, because `api/openapi.yaml` is the machine-readable
