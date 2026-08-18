@@ -59,7 +59,9 @@ taken silently.
 | 21 | `exitAssetsUnknown` | shipped |
 | 22 | `exitRenderUnavailable` | shipped (Track B seam B4) |
 | 23 | `exitRenderPipelineDown` | shipped (Track B seam B2) |
-| 24+ | unallocated | free |
+| 24 | `exitAudioDeviceUnavailable` | reserved (Track C seam C1) |
+| 25 | `exitAudioSessionFailed` | reserved (Track C seam C3) |
+| 26+ | unallocated | free |
 
 **16 to 19 are deliberately free.** The asset codes were placed at 20 to
 leave room below them; do not close that gap without a reason.
@@ -83,6 +85,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
 | `render.settings` | `default` singleton | shipped | Track B seam B2 |
+| `audio.settings` | `default` singleton | reserved | Track C seam C1 |
+| `audio.node` | operator-chosen (the node id) | reserved | Track C seam C1 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -93,6 +97,21 @@ Operator UI in a parallel worktree, and an additive payload field plus a new
 UI over the same object is the collision this register exists to prevent.
 A per-surface override of the renderer default is future work, sequenced
 after G-8 folds.
+
+**Track C's two kinds split engine-wide defaults from per-node physical
+binding.** `audio.settings` holds what is engine-wide and operator-settable
+(drift ignore threshold, LTC frame rate, default fade curve and duration,
+default background gain ceiling). `audio.node` holds what is true of one
+node's installed interface: which discovered output route carries program,
+which carries LTC, and the declared clock domain. Both are store-backed
+because ADR-039's test is temporal — the coordinator reads them from its own
+store, so they may not be environment variables, and "which output is LTC"
+is exactly the class of value that shipped as an environment variable in the
+Resolume case and left the subsystem unconnectable from every operator
+surface. **Track C mints no audio-playlist configuration kind**: Track F's
+Night Session configuration embeds the ordered audio slots (TRACK-F F1), and
+a second authoring path for the same list is the collision this register
+exists to prevent.
 
 Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
@@ -119,6 +138,7 @@ bundles of these (ADR-024).
 | `render:command` | shipped | Track B seam B2: surface apply/clear, pipeline restart |
 | `principal:write` | shipped | the nine principal/token administration writes (Track G seam G-5) |
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
+| `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
 
 `principal:write` sat in the admin bundle unchecked from Step 6 until Track
 G seam G-5 landed its first callers (merged 2026-08-17).
@@ -137,6 +157,7 @@ the wrong device, because every collector shares one
 | `resolume-rest` | shipped | `collector/resolume` |
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
+| `node-audio` | reserved | Track C seam C6 (`collector/nodeaudio`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -159,6 +180,30 @@ after shipping a breaking change to stored history.
 | `render.surface.clear` | shipped | Track B seam B2 |
 | `render.pipeline.restart` | shipped | Track B seam B2 |
 | `render.transport.probe` | shipped | Track B seam B4 |
+| `audio.session.apply` | reserved | Track C seam C3 |
+| `audio.session.prepare` | reserved | Track C seam C3 |
+| `audio.session.start` | reserved | Track C seam C3 |
+| `audio.session.pause` | reserved | Track C seam C3 |
+| `audio.session.resume` | reserved | Track C seam C3 |
+| `audio.session.seek` | reserved | Track C seam C3 |
+| `audio.session.advance` | reserved | Track C seam C3 |
+| `audio.session.stop` | reserved | Track C seam C3 |
+| `audio.session.clear` | reserved | Track C seam C3 |
+| `audio.gain.set` | reserved | Track C seam C4 |
+| `audio.gain.fade` | reserved | Track C seam C4 |
+| `audio.output.mute` | reserved | Track C seam C4 |
+| `audio.output.unmute` | reserved | Track C seam C4 |
+| `audio.device.probe` | reserved | Track C seam C1 |
+| `audio.media.probe` | reserved | Track C seam C2 |
+
+**AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
+`announce` and `duck` mint no operation of their own.** §14 permits combining
+operations where confirmation and idempotency stay unambiguous, and all five
+are properties of the session being applied: an announcement is
+`audio.session.apply` with source role `announcement` and a declared
+`mix`/`duck`/`interrupt` policy, followed by `audio.session.start`. A
+separate `audio.session.duck` would be a second way to reach the same state
+with no way to say which one won.
 
 ## Observation resource kinds and signal namespaces
 
@@ -172,6 +217,8 @@ dotted `SignalID` namespace that hangs off each one.
 | `coordinator` | `coordinator.*` | shipped | Step 3 |
 | `resolume` | `resolume.*` | shipped | Track D |
 | `surface` | `surface.*` | shipped | Track B seam B2 |
+| `node` | `node.audio.*` | reserved | Track C seam C6 (engine, device, buses) |
+| `audio_session` | `audio_session.*` | reserved | Track C seam C6 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -179,6 +226,21 @@ cannot address one of them. Minting the kind now costs a constant and a
 validation case; minting it after `N=1` has spread through the signal names
 is the latent defect ADR-026 decision 3 warns about. The resource id is the
 `show.surface` configuration object id.
+
+**Track C splits its signals across two kinds, on the `node.multisync.*`
+precedent above.** One audio engine, one installed interface, and two logical
+buses (AUDIO-ENGINE §6) exist per node, so engine, device, program-bus,
+LTC-bus and program-to-LTC-alignment signals are node-level: attributing them
+to a session would report the same fact once per session and imply that many
+independent faults. A **session** is a distinct observed thing with its own
+lifecycle, exactly as a surface is, so it gets its own kind and its resource
+id is the session id. The namespace carries no dynamic segment: the two buses
+are `node.audio.program.*` and `node.audio.ltc.*` by name, never
+`node.audio.output.<id>.*`.
+
+Adding a resource kind is not only a constant: `internal/coordinator/api/
+handlers.go:301` switches over the allowed kinds and silently rejects any
+kind not listed there.
 
 **Individual `surface.*` signals**, all inside the namespace reserved above,
 listed because the last row was minted after the others had shipped:
@@ -245,6 +307,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/cmd` | shipped | Step 2 |
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
+| `showmesh/nodes/<id>/observed/audio` (retained) | reserved | Track C seam C6 |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -277,7 +340,8 @@ The store schema version, bumped by migrations in
 | v6 | shipped | Step 7 seam 0 (atomic audit variant, strict login CSRF) |
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
-| v9+ | unallocated | free |
+| v9 | reserved | Track C (audio session desired state) |
+| v10+ | unallocated | free |
 
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
