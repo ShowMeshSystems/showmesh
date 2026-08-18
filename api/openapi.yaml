@@ -8544,15 +8544,21 @@ components:
           description: True exactly when supersededAt is null.
     AssetResponse:
       type: object
-      description: The body of POST /assets and GET /assets/{id}.
+      description: >-
+        The body of POST /assets and GET /assets/{id}. `rolledBack` is true
+        only when a POST matched a SUPERSEDED identity and performed
+        ADR-028 decision 10's rollback (un-superseding `asset` and
+        superseding whatever was current); it is always false on GET.
       additionalProperties: false
-      required: [serverTime, asset]
+      required: [serverTime, asset, rolledBack]
       properties:
         serverTime:
           type: string
           format: date-time
         asset:
           $ref: "#/components/schemas/Asset"
+        rolledBack:
+          type: boolean
     AssetsListResponse:
       type: object
       description: The body of GET /assets.

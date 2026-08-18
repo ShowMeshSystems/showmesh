@@ -1013,3 +1013,172 @@ func TestAssetSyncIsNudgedOnUploadAndOnActivation(t *testing.T) {
 		t.Fatalf("nudges after activation = %d, want 2: every node's expected set just changed", nudger.n)
 	}
 }
+
+// --- rollback (ADR-028 decision 10) ---
+
+// TestPostAssetUploadRollback proves the owner's ruling verbatim: uploading
+// A, then B (superseding A), then A again un-supersedes A and supersedes B
+// in one call, the response states rolledBack=true as its own field (not
+// inferred from `current`), a distinct audit action is recorded, the sync
+// nudger fires, and the manifest now expects A's content hash again.
+func TestPostAssetUploadRollback(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	nudger := &countingNudger{}
+	deps := assetsTestDeps(t, svc, st)
+	deps.AssetSyncNudger = nudger
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	bytesA := []byte("version A")
+	bytesB := []byte("version B, different bytes")
+
+	respA1, bodyA1 := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesA, auth)
+	if respA1.StatusCode != http.StatusOK {
+		t.Fatalf("upload A: status = %d, body: %s", respA1.StatusCode, bodyA1)
+	}
+	var firstA v1AssetResponseForTest
+	_ = json.Unmarshal(bodyA1, &firstA)
+
+	respB, bodyB := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesB, auth)
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("upload B: status = %d, body: %s", respB.StatusCode, bodyB)
+	}
+
+	if nudger.n != 2 {
+		t.Fatalf("nudges before rollback = %d, want 2 (one per upload so far)", nudger.n)
+	}
+
+	// Re-upload A: the rollback.
+	respRollback, bodyRollback := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesA, auth)
+	if respRollback.StatusCode != http.StatusOK {
+		t.Fatalf("rollback upload: status = %d, body: %s", respRollback.StatusCode, bodyRollback)
+	}
+
+	var rollbackResp struct {
+		ServerTime string         `json:"serverTime"`
+		Asset      v1AssetForTest `json:"asset"`
+		RolledBack bool           `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(bodyRollback, &rollbackResp); err != nil {
+		t.Fatalf("decode rollback response: %v\nbody: %s", err, bodyRollback)
+	}
+	if !rollbackResp.RolledBack {
+		t.Errorf("rolledBack = false, want true: the response must say a rollback occurred as its own field")
+	}
+	if rollbackResp.Asset.ID != firstA.Asset.ID {
+		t.Errorf("rollback asset id = %q, want the original A id %q (no new row)", rollbackResp.Asset.ID, firstA.Asset.ID)
+	}
+	if !rollbackResp.Asset.Current {
+		t.Error("rollback asset current = false, want true")
+	}
+
+	if nudger.n != 3 {
+		t.Fatalf("nudges after rollback = %d, want 3: the manifest's expectation just changed", nudger.n)
+	}
+
+	// The store holds exactly two rows: A current, B superseded.
+	recs, err := st.ListAssets(context.Background(), store.AssetFilter{ShowID: "halloween-2026", SequenceID: "opening"})
+	if err != nil {
+		t.Fatalf("list assets: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("row count after rollback = %d, want 2 (no third row)", len(recs))
+	}
+
+	// A distinct, auditable action was recorded for the rollback.
+	audit, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	foundRollback := false
+	for _, e := range audit {
+		if e.Action == "asset.rollback" && e.Target == rollbackResp.Asset.ID {
+			foundRollback = true
+		}
+		if e.Action == "asset.rollback" && e.Kind != string(identity.AuditAdmin) {
+			t.Errorf("asset.rollback audit kind = %q, want %q", e.Kind, identity.AuditAdmin)
+		}
+	}
+	if !foundRollback {
+		t.Errorf("no asset.rollback audit entry found for %s among %+v", rollbackResp.Asset.ID, audit)
+	}
+
+	// The manifest expects A's content hash again, through the existing
+	// mechanism — no second sync path.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config/show.active",
+		bytes.NewReader([]byte(`{"show":"halloween-2026"}`)))
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("activate show: status = %d, body: %s", resp.StatusCode, body)
+	}
+
+	current, err := st.ListCurrentAssetsForTarget(context.Background(), "halloween-2026", store.AssetTargetKindNode, "render-01")
+	if err != nil {
+		t.Fatalf("list current for target: %v", err)
+	}
+	if len(current) != 1 || current[0].ContentHash != contentHashOf(bytesA) {
+		t.Fatalf("current assets for render-01 = %+v, want exactly A's content hash %q", current, contentHashOf(bytesA))
+	}
+
+	// A plain GET never reports a rollback that did not just happen.
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/assets/"+rollbackResp.Asset.ID, auth)
+	var getResp struct {
+		RolledBack bool `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(getBody, &getResp); err != nil {
+		t.Fatalf("decode get response: %v\nbody: %s", err, getBody)
+	}
+	if getResp.RolledBack {
+		t.Error("GET /assets/{id} rolledBack = true, want false always")
+	}
+}
+
+// TestPostAssetUploadIdenticalCurrentBytesIsNotARollback proves the true
+// idempotent case (re-uploading bytes that are STILL current) is NOT
+// reported as a rollback and writes no new audit entry.
+func TestPostAssetUploadIdenticalCurrentBytesIsNotARollback(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	content := []byte("identical bytes")
+	_, _ = doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", content, auth)
+
+	before, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit before: %v", err)
+	}
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", content, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+	var got struct {
+		RolledBack bool `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v\nbody: %s", err, body)
+	}
+	if got.RolledBack {
+		t.Error("rolledBack = true for a re-upload of identical CURRENT bytes, want false")
+	}
+
+	after, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("audit entry count changed from %d to %d on a true no-op re-upload", len(before), len(after))
+	}
+}

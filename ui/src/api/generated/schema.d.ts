@@ -3068,11 +3068,12 @@ export interface components {
             /** @description True exactly when supersededAt is null. */
             current: boolean;
         };
-        /** @description The body of POST /assets and GET /assets/{id}. */
+        /** @description The body of POST /assets and GET /assets/{id}. `rolledBack` is true only when a POST matched a SUPERSEDED identity and performed ADR-028 decision 10's rollback (un-superseding `asset` and superseding whatever was current); it is always false on GET. */
         AssetResponse: {
             /** Format: date-time */
             serverTime: string;
             asset: components["schemas"]["Asset"];
+            rolledBack: boolean;
         };
         /** @description The body of GET /assets. */
         AssetsListResponse: {

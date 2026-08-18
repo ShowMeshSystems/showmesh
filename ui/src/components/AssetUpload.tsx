@@ -23,7 +23,11 @@ interface UploadError {
   message: string
 }
 
-type UploadState = { kind: 'idle' } | { kind: 'uploading'; progress: UploadProgress } | { kind: 'error'; error: UploadError }
+type UploadState =
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: UploadProgress }
+  | { kind: 'error'; error: UploadError }
+  | { kind: 'rolledBack'; assetId: string }
 
 /**
  * Dispatches a thrown upload error onto a DISTINGUISHABLE failure state —
@@ -58,8 +62,13 @@ function formatBytes(bytes: number): string {
 }
 
 export interface AssetUploadProps {
-  /** Called with the registered (or idempotently pre-existing) asset once the coordinator confirms it — never optimistically before that. */
-  onUploaded: (asset: Asset) => void
+  /**
+   * Called with the registered (or idempotently pre-existing) asset once
+   * the coordinator confirms it — never optimistically before that.
+   * `rolledBack` is ADR-028 decision 10's own field: true only when this
+   * upload matched a SUPERSEDED identity and un-superseded it.
+   */
+  onUploaded: (asset: Asset, rolledBack: boolean) => void
 }
 
 /**
@@ -118,12 +127,14 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           setUploadState({ kind: 'uploading', progress })
         },
       )
-      setUploadState({ kind: 'idle' })
-      if (fileInputRef.current) fileInputRef.current.value = ''
       // The coordinator's own confirmed response is what registers this
       // asset — never an optimistic guess rendered before this resolves
-      // (ADR-030: "a partial upload registers nothing").
-      onUploaded(resp.asset)
+      // (ADR-030: "a partial upload registers nothing"). A rollback is
+      // stated as its own state, not left for the operator to infer from
+      // the reloaded list (ADR-028 decision 10, ADR-030 decision 5).
+      setUploadState(resp.rolledBack ? { kind: 'rolledBack', assetId: resp.asset.id } : { kind: 'idle' })
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      onUploaded(resp.asset, resp.rolledBack)
     } catch (err) {
       // Deliberately does not touch anything else on screen: a rejected
       // upload registers no asset (ADR-028's own transaction rule) and
@@ -227,6 +238,13 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
               : `Uploading… ${formatBytes(uploadState.progress.loaded)} sent so far.`}
           </p>
         </div>
+      )}
+
+      {uploadState.kind === 'rolledBack' && (
+        <p role="status" className="panel panel--warning" style={{ marginTop: '0.5rem' }}>
+          Rollback: the re-uploaded bytes matched a superseded asset. {uploadState.assetId} is current again, and the
+          asset that superseded it is now superseded.
+        </p>
       )}
 
       {uploadState.kind === 'error' && (

@@ -963,12 +963,11 @@ CREATE TABLE macro_run_steps (
 //
 // assets_identity (ADR-028 decision 1: "identity is show plus logical
 // sequence plus target plus content hash") is the permanent, never-pruned
-// identity of an artifact — it has no WHERE clause, so it also blocks
-// re-registering a hash that was already used and later superseded, which
-// is correct: that exact identity already has a row, and a caller finding
-// one via this index gets the idempotent "already exists" answer
-// (assets.go's ErrAssetExists) rather than a second row for content this
-// store has already seen under that identity.
+// identity of an artifact — it has no WHERE clause, so re-registering a
+// hash already seen under that identity never inserts a second row.
+// assets.go's createAsset resolves the hit two ways: still current is the
+// idempotent no-op (ErrAssetExists); superseded is ADR-028 decision 10's
+// rollback, which un-supersedes that row instead of inserting a new one.
 //
 // assets_current is the structural half of that same decision: at most one
 // row per (show_id, sequence_id, target_kind, target_id) may have

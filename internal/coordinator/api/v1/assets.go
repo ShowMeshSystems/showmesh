@@ -29,9 +29,13 @@ type Asset struct {
 }
 
 // AssetResponse is the body of POST /assets and GET /assets/{id}.
+// RolledBack is true only when this POST matched a SUPERSEDED identity and
+// performed ADR-028 decision 10's rollback (un-superseding Asset and
+// superseding whatever was current); it is always false on GET.
 type AssetResponse struct {
 	ServerTime string `json:"serverTime"`
 	Asset      Asset  `json:"asset"`
+	RolledBack bool   `json:"rolledBack"`
 }
 
 // AssetsListResponse is the body of GET /assets.
