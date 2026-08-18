@@ -49,13 +49,19 @@ jobs:
       # plugins-bad.
       - name: Install GStreamer (renderer tests)
         run: |
-          # DPkg::Lock::Timeout bounds the wait for the dpkg lock that the
-          # runner's own unattended-upgrades holds at boot. Without it apt
-          # waits forever and the job dies on its timeout with no output:
-          # the identical step took 26s in one job and hung past 10m in
-          # another on the same run.
-          sudo apt-get update -o DPkg::Lock::Timeout=300
-          sudo apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=300 \
+          # apt has no default network timeout, and the runner carries
+          # several third-party repos; a stalled index fetch otherwise hangs
+          # until the job's own timeout kills it with no error. Measured: the
+          # identical step took 31s in one job and stalled mid-fetch past 15m
+          # in another on the same run. The lock timeout covers the separate
+          # case of the runner's unattended-upgrades holding dpkg.
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get update $APT_OPTS \
+            || sudo timeout 300 apt-get update $APT_OPTS
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
           gst-launch-1.0 --version
 
@@ -124,13 +130,19 @@ jobs:
       # tests start a real gst-launch-1.0 child and assert on its pid.
       - name: Install GStreamer (renderer tests)
         run: |
-          # DPkg::Lock::Timeout bounds the wait for the dpkg lock that the
-          # runner's own unattended-upgrades holds at boot. Without it apt
-          # waits forever and the job dies on its timeout with no output:
-          # the identical step took 26s in one job and hung past 10m in
-          # another on the same run.
-          sudo apt-get update -o DPkg::Lock::Timeout=300
-          sudo apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=300 \
+          # apt has no default network timeout, and the runner carries
+          # several third-party repos; a stalled index fetch otherwise hangs
+          # until the job's own timeout kills it with no error. Measured: the
+          # identical step took 31s in one job and stalled mid-fetch past 15m
+          # in another on the same run. The lock timeout covers the separate
+          # case of the runner's unattended-upgrades holding dpkg.
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get update $APT_OPTS \
+            || sudo timeout 300 apt-get update $APT_OPTS
+          # shellcheck disable=SC2086
+          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
           gst-launch-1.0 --version
 
