@@ -98,8 +98,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
 | `render.settings` | `default` singleton | shipped | Track B seam B2 |
-| `audio.settings` | `default` singleton | reserved | Track C seam C1 |
-| `audio.node` | operator-chosen (the node id) | reserved | Track C seam C1 |
+| `audio.settings` | `default` singleton | shipped | Track C seam C1b |
+| `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
 
@@ -223,7 +223,7 @@ the wrong device, because every collector shares one
 | `resolume-rest` | shipped | `collector/resolume` |
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
-| `node-audio` | reserved | Track C seam C6 (`collector/nodeaudio`) |
+| `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -259,7 +259,7 @@ after shipping a breaking change to stored history.
 | `audio.gain.fade` | reserved | Track C seam C4 |
 | `audio.output.mute` | reserved | Track C seam C4 |
 | `audio.output.unmute` | reserved | Track C seam C4 |
-| `audio.device.probe` | reserved | Track C seam C1 |
+| `audio.device.probe` | shipped | Track C seam C1a |
 | `audio.media.probe` | reserved | Track C seam C2 |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
@@ -283,8 +283,8 @@ dotted `SignalID` namespace that hangs off each one.
 | `coordinator` | `coordinator.*` | shipped | Step 3 |
 | `resolume` | `resolume.*` | shipped | Track D |
 | `surface` | `surface.*` | shipped | Track B seam B2 |
-| `node` | `node.audio.*` | reserved | Track C seam C6 (engine, device, buses) |
-| `audio_session` | `audio_session.*` | reserved | Track C seam C6 |
+| `node` | `node.audio.*` | shipped | Track C seam C1a (engine, device, buses) |
+| `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
@@ -368,14 +368,27 @@ kind, resource id the session id:
 | `audio_session.last_outcome` | reserved | Track C seam C3 |
 | `audio_session.last_outcome_reason` | reserved | Track C seam C3 |
 
-**Two more `node.audio.*` signals, reserved 2026-08-18** after review found
+**The eleven `node.audio.*` signals as shipped.** Two of them were added 2026-08-18 after review found
 that C1a's truncation and enumeration facts reached the wire payload and
 were then dropped before every operator surface:
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.outputs.enumerated` | reserved | Track C seam C1a fix pass |
-| `node.audio.outputs.truncated` | reserved | Track C seam C1a fix pass |
+| `node.audio.engine.state` | shipped | Track C seam C1a |
+| `node.audio.engine.reason` | shipped | Track C seam C1a |
+| `node.audio.device.state` | shipped | Track C seam C1a |
+| `node.audio.device.reason` | shipped | Track C seam C1a |
+| `node.audio.outputs.count` | shipped | Track C seam C1a |
+| `node.audio.outputs.enumerated` | shipped | Track C seam C1a fix pass |
+| `node.audio.outputs.truncated` | shipped | Track C seam C1a fix pass |
+| `node.audio.program.state` | shipped | Track C seam C1a |
+| `node.audio.ltc.state` | shipped | Track C seam C1a |
+| `node.audio.clock.domain` | shipped | Track C seam C1a fix pass (coordinator-sourced) |
+| `node.audio.clock.provenance` | shipped | Track C seam C1a fix pass (coordinator-sourced) |
+
+All eleven are written from `internal/coordinator/collector/nodeaudio/signals.go`
+after the fix pass, not from the plan, and the orchestrator checked the
+spelling of each against that file.
 
 **`node.audio.clock.domain` and `node.audio.clock.provenance` change
 producer, not name.** They were emitted from a hardcoded constant in the
@@ -442,7 +455,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/cmd` | shipped | Step 2 |
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
-| `showmesh/nodes/<id>/observed/audio` (retained) | reserved | Track C seam C6 |
+| `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -522,7 +535,7 @@ sessions running.
 | Number | Status | Subject |
 |---|---|---|
 | RES-001 to RES-017 | shipped | see the research tracker |
-| RES-018 | reserved | FPP brightness control and the ADR-038 / RESTING-MODE §7.3 composition seam (Track F) |
+| RES-018 | issued | FPP brightness control and the ADR-038 / RESTING-MODE §7.3 composition seam (Track F) |
 | RES-019+ | unallocated | free |
 
 ## API paths
