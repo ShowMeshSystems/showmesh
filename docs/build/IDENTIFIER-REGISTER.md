@@ -332,6 +332,25 @@ kind, resource id the session id:
 | `audio_session.last_outcome` | reserved | Track C seam C3 |
 | `audio_session.last_outcome_reason` | reserved | Track C seam C3 |
 
+**Two more `node.audio.*` signals, reserved 2026-08-18** after review found
+that C1a's truncation and enumeration facts reached the wire payload and
+were then dropped before every operator surface:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.outputs.enumerated` | reserved | Track C seam C1a fix pass |
+| `node.audio.outputs.truncated` | reserved | Track C seam C1a fix pass |
+
+**`node.audio.clock.domain` and `node.audio.clock.provenance` change
+producer, not name.** They were emitted from a hardcoded constant in the
+agent while the `audio.node` configuration kind that exists to supply them
+had no reader anywhere, which is ADR-039's store-and-stop failure with
+every surface reporting success. The declaration is operator configuration
+living in the coordinator's own store, so the coordinator emits both
+signals from that configuration, and the node stops claiming a clock
+domain it cannot know. Where no declaration exists the signals are
+`not_collected` with a reason, never `undeclared` presented as a reading.
+
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
 signal exists so the threshold can be set from measurement, and a future
