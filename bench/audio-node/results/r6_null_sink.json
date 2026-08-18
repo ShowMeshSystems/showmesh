@@ -1,0 +1,10 @@
+{
+  "run": "r6_null_sink",
+  "alsa_devices_reported": [
+    "null",
+    "default"
+  ],
+  "pipeline_reached_playing_and_eos": true,
+  "pipeline_exit_code": 0,
+  "full_log": "r6_null_sink.log"
+}

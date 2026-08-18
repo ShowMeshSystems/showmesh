@@ -1,0 +1,106 @@
+=== gst-inspect-1.0 version ===
+gst-inspect-1.0 version 1.26.2
+GStreamer 1.26.2
+https://tracker.debian.org/pkg/gstreamer1.0
+
+=== (a) native GStreamer LTC-audio-generating element? full plugin
+    list grepped for ltc/timecode/smpte ===
+rtpmanager:  rtpst2022-1-fecdec: SMPTE 2022-1 FEC decoder
+rtpmanager:  rtpst2022-1-fecenc: SMPTE 2022-1 FEC encoder
+smpte:  smpte: SMPTE transitions
+smpte:  smptealpha: SMPTE transitions
+timecode:  avwait: Timecode Wait
+timecode:  timecodestamper: Timecode stamper
+
+--- timecodestamper detail: does it generate LTC AUDIO, or does it
+    stamp GstVideoTimeCode metadata onto video buffers? ---
+Factory Details:
+  Rank                     none (0)
+  Long-name                Timecode stamper
+  Klass                    Filter/Video
+  Description              Attaches a timecode meta into each video frame
+  Author                   Vivia Nikolaidou <vivia@toolsonair.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/timecode/timecodestamper.html
+
+Plugin Details:
+  Name                     timecode
+  Description              Timecode-related elements
+  Filename                 /usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgsttimecode.so
+  Version                  1.26.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/timecode/
+  Source release date      2025-05-29
+  Binary package           GStreamer Bad Plugins (Debian)
+  Origin URL               https://tracker.debian.org/pkg/gst-plugins-bad1.0
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstBaseTransform
+
+--- avwait detail ---
+Factory Details:
+  Rank                     none (0)
+  Long-name                Timecode Wait
+  Klass                    Filter/Audio/Video
+  Description              Drops all audio/video until a specific timecode or running time has been reached
+  Author                   Vivia Nikolaidou <vivia@toolsonair.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/timecode/avwait.html
+
+Plugin Details:
+  Name                     timecode
+  Description              Timecode-related elements
+  Filename                 /usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgsttimecode.so
+  Version                  1.26.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+
+CONCLUSION (a): timecodestamper embeds SMPTE timecode as video
+buffer metadata (GstVideoTimeCode), and avwait consumes that
+metadata to gate playback. Neither touches an audio buffer or
+produces an LTC audio signal. No installed plugin (base/good/bad)
+generates LTC audio. Candidate (a) is REJECTED on this image.
+
+=== (b)/(c): is there a packaged LTC generator binary? ===
+--- apt-cache search ltc (after apt-get update) ---
+libltc-dev - Development files for libltc
+libltc-doc - Documentation for libltc
+libltc11 - linear timecode library
+libxsltc-java - XSL Transformations (XSLT) compiler from Xalan-Java
+r-cran-multcomp - GNU R package for multiple comparison procedures
+mysqltcl - interface to the MySQL database for the Tcl language
+postgresql-pltcl-17 - PL/Tcl procedural language for PostgreSQL 17
+puppet-module-michaeltchapman-galera - Michaelt Chapman's Galera Puppet module
+r-bioc-altcdfenvs - BioConductor alternative CDF environments
+r-cran-multcompview - GNU R visualizations of paired comparisons
+tcl-yajltcl - Tcl binding to libyajl, a JSON parser and generator
+
+--- is there an ltc-tools package on Debian 13? ---
+E: No packages found
+(ltc-tools: no such package on this suite)
+
+--- is there a real LTC encoding library? ---
+Package: libltc11
+Source: libltc (1.3.2-1)
+Version: 1.3.2-1+b2
+Installed-Size: 85
+Maintainer: Debian Multimedia Maintainers <debian-multimedia@lists.debian.org>
+Architecture: arm64
+Depends: libc6 (>= 2.29)
+Description: linear timecode library
+Description-md5: 0c3e518ac9ebfefd908e0a00c7bd1add
+Multi-Arch: same
+
+CONCLUSION (b)/(c): Debian 13 ships libltc11/libltc-dev (the real
+Manchester-biphase LTC encoder library, upstream x42/libltc), but no
+prebuilt ltcgen/ltc-tools binary. This image compiles ltcgen.c
+(candidate c: an external generator feeding the pipeline through
+filesrc/fdsrc, built against libltc, not hand-rolled bit math) and
+uses its output as candidate (b): a pre-rendered LTC file played
+back as an ordinary source in the same pipeline as program. See
+ltcgen.c and r2_alignment.sh / r3_ltc_generation.sh.
+
+=== (d) anything else the survey turned up? ===
+No other candidate found in the installed plugin set or apt.

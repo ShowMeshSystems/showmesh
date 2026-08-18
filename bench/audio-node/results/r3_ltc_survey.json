@@ -1,0 +1,9 @@
+{
+  "run": "r3_ltc_survey",
+  "candidate_a_native_element": "rejected: no installed base/good/bad plugin generates LTC audio; timecodestamper/avwait operate on video-buffer timecode metadata, never an audio sample",
+  "candidate_b_prerendered_wav": "viable: exercised by r2_baseline.sh, r2_trackchange.sh, r3_ltc_wrap.sh",
+  "candidate_c_external_generator": "viable: ltcgen.c, built against the real libltc11/libltc-dev encoder (upstream x42/libltc), not hand-rolled bit math; Debian 13 ships the library but no prebuilt ltcgen binary",
+  "candidate_d_other": "none found",
+  "answer": "b and c together: a pre-rendered LTC file (b), produced by an external generator built against libltc (c), played back as an ordinary filesrc/rawaudioparse source in the same pipeline as program",
+  "full_survey_log": "r3_ltc_survey.log"
+}

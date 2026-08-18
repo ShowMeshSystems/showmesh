@@ -387,3 +387,19 @@ verify-fpp-plugin-reproducible:
 .PHONY: clean-fpp-plugin-dist
 clean-fpp-plugin-dist:
 	rm -rf $(FPP_PLUGIN_DIST)
+
+# bench-audio builds and runs bench/audio-node's Track C seam C0a-1
+# measurement bench (RES-007): a real Debian 13 GStreamer image, all
+# runs against virtual/null devices and captured files, never against
+# this host's own audio hardware. Bench scaffolding only, exactly like
+# bench/fpp-multisync — not part of `make check` or CI, and not imported
+# by internal/ or pkg/. See bench/audio-node/README.md.
+.PHONY: bench-audio
+bench-audio:
+	docker build -t showmesh-bench-audio:dev bench/audio-node
+	mkdir -p bench/audio-node/results
+	docker run --rm \
+		-v $(CURDIR)/bench/audio-node:/work \
+		-v audio-bench-scratch:/tmp/audio-bench-scratch \
+		-w /work \
+		showmesh-bench-audio:dev -c "bash run_all.sh"
