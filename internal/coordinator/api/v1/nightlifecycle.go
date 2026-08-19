@@ -106,10 +106,28 @@ type NightSessionState struct {
 
 	// AttributionDegraded is true when this session's most recent command
 	// applied despite its audit entry failing to write (ADR-024 decision
-	// 11's exemption). Never cleared once true.
+	// 11's exemption), or when an autonomous dispatch ran with no
+	// authorizing principal recorded. Never cleared once true.
 	AttributionDegraded bool `json:"attributionDegraded"`
 
+	// Authorization is who authorized this session, for provenance. The
+	// night controller dispatches as its own system actor, never as this
+	// principal, so this is a record of authority and not a live
+	// credential.
+	Authorization NightAuthorization `json:"authorization"`
+
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// NightAuthorization states the authorizing principal or the explicit
+// absence of one (ADR-020: absent evidence carries a state and a reason).
+type NightAuthorization struct {
+	State         NightEvidenceState `json:"state"`
+	Reason        string             `json:"reason,omitempty"`
+	PrincipalID   string             `json:"principalId,omitempty"`
+	PrincipalName string             `json:"principalName,omitempty"`
+	Command       string             `json:"command,omitempty"`
+	RecordedAt    *string            `json:"recordedAt"`
 }
 
 // NightSessionResponse is the body of GET /api/v1/night/session and

@@ -10,11 +10,9 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// Track F seam F7a: mapNightCue/mapNightCues unit coverage. SM-98's own
-// gap was "nothing can read the outbox at all"; these defend that a cue
-// with no outbox row yet is told apart from one that ran, and that a
-// resolved row's own state/outcome/reason/timestamps/revision reach the
-// wire unchanged.
+// mapNightCue/mapNightCues coverage: a cue with no outbox row yet is told
+// apart from one that ran, and a resolved row's own state, outcome,
+// reason, timestamps and revision reach the wire unchanged.
 
 // TestMapNightCue_NoRowIsNotDispatched: a cue the current cycle has not
 // reached yet must never be reported with a pending/failed/any

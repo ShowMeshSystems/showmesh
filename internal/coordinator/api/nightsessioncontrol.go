@@ -213,15 +213,6 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Attribute the night loop's own autonomous FPP dispatches to the
-	// principal who authorized this session (nightissuer.go); an ended
-	// session's attribution must not leak onto whatever id is reused next.
-	if cmd == nightCommandEndSession {
-		forgetNightIssuer(out.result.ID)
-	} else {
-		recordNightIssuer(out.result.ID, nightIssuerFromAudit(issuer))
-	}
-
 	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge)
 	state.AttributionDegraded = attributionDegraded
 
@@ -302,8 +293,10 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 		}
 		switch out.persist {
 		case "create":
+			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
 			return tx.CreateNightSession(ctx, out.result, now)
 		case "update":
+			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
 			return tx.UpdateNightSession(ctx, out.result, now)
 		}
 		return nil
@@ -369,10 +362,12 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		}
 		switch out.persist {
 		case "create":
+			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
 			if err := tx.CreateNightSession(ctx, out.result, now); err != nil {
 				return identity.AuditEntry{}, err
 			}
 		case "update":
+			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
 			if err := tx.UpdateNightSession(ctx, out.result, now); err != nil {
 				return identity.AuditEntry{}, err
 			}
@@ -912,6 +907,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 		out.UpdatedAt = formatTime(now)
 	}
 
+	out.Authorization = mapNightAuthorization(rec)
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
@@ -992,6 +988,22 @@ func mapNightCue(phase string, cue config.NightSessionCue, row store.NightCueOut
 	out.DispatchedAt = formatTimePtr(row.DispatchedAt)
 	out.ResolvedAt = formatTimePtr(row.ResolvedAt)
 	return out
+}
+
+func mapNightAuthorization(rec store.NightSessionRecord) v1.NightAuthorization {
+	if rec.Issuer.IsZero() {
+		return v1.NightAuthorization{
+			State:  v1.NightEvidenceUnknown,
+			Reason: "no lifecycle command has been attributed to this session; autonomous actions still run, as the night controller, and are recorded as attribution-degraded",
+		}
+	}
+	return v1.NightAuthorization{
+		State:         v1.NightEvidenceRecorded,
+		PrincipalID:   rec.Issuer.PrincipalID,
+		PrincipalName: rec.Issuer.PrincipalName,
+		Command:       rec.Issuer.Command,
+		RecordedAt:    formatTimePtr(rec.Issuer.RecordedAt),
+	}
 }
 
 // mapNightPowerPhase: a power-down whose phase has not resolved yet must
@@ -1075,11 +1087,12 @@ func nightAmbiguousProblem(detail string) v1.Problem {
 	return v1.Problem{Type: ProblemTypeNightAmbiguous, Title: "Night session is degraded", Status: http.StatusConflict, Detail: detail}
 }
 
-// ReconcileNightSessionOnStartup is invariant 4's mechanism: called once,
-// synchronously, before the coordinator starts serving requests (see
-// [ReconcileStrandedFPPCommands] for the identical timing rationale). A
-// session left in a state this build cannot confirm safe to resume is
-// marked degraded rather than resumed by guess.
+// ReconcileNightSessionOnStartup runs once, synchronously, before the
+// coordinator starts serving requests (see [ReconcileStrandedFPPCommands]
+// for the identical timing rationale). Pending cue outbox rows are
+// resolved first, then the session's own state is reconciled against fresh
+// FPP evidence. A state this build cannot confirm safe to resume is marked
+// degraded rather than resumed by guess; end-session remains the way out.
 func ReconcileNightSessionOnStartup(ctx context.Context, deps Dependencies, now func() time.Time, logger *slog.Logger) error {
 	deps = deps.withDefaults()
 	rec, ok, err := deps.NightSessions.GetCurrentNightSession(ctx)
@@ -1089,17 +1102,142 @@ func ReconcileNightSessionOnStartup(ctx context.Context, deps Dependencies, now 
 	if !ok || rec.Degraded {
 		return nil
 	}
+	h := &handlers{deps: deps, clock: now, logger: logger}
+	at := now()
+
+	if err := h.nightReconcileCueOutbox(ctx, at, rec); err != nil {
+		return fmt.Errorf("api: reconcile night session on startup: %w", err)
+	}
+
+	reason := h.nightStartupDegradeReason(ctx, at, rec)
+	if reason == "" {
+		return nil
+	}
+	rec.Degraded = true
+	rec.DegradedReason = reason
+	if err := deps.NightSessions.UpdateNightSession(ctx, rec, at); err != nil {
+		return fmt.Errorf("api: reconcile night session on startup: mark degraded: %w", err)
+	}
+	if logger != nil {
+		logger.Warn("night session reconciliation: session marked degraded on startup", "sessionId", rec.ID, "state", rec.State, "reason", reason)
+	}
+	return nil
+}
+
+// nightStartupDegradeReason returns "" when rec may resume, or the reason
+// it may not. RESTING-MODE.md §11's three resumable cases are live
+// playback, the exact one-shot resting item, and end-of-night repeat; a
+// session caught mid-transition is not among them.
+func (h *handlers) nightStartupDegradeReason(ctx context.Context, now time.Time, rec store.NightSessionRecord) string {
 	switch rec.State {
-	case nightStateTransitionToShow, nightStateTransitionToResting, nightStateLive, nightStateRestingIntershow, nightStateEndOfNightResting:
-		rec.Degraded = true
-		rec.DegradedReason = fmt.Sprintf(
-			"coordinator restarted while the session was in %q with no evidence this build can use to confirm it is safe to resume; run end-session, then prepare-site, to recover",
+	case nightStateLive:
+		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeShow,
+			"the show playlist this session was playing")
+	case nightStateRestingIntershow:
+		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingOneShot,
+			"the one-shot resting item this session was playing")
+	case nightStateEndOfNightResting:
+		return h.nightStartupReconcilePlayback(ctx, now, rec, nightAnchorPurposeRestingRepeat,
+			"the repeating end-of-night resting playlist")
+	case nightStateTransitionToShow, nightStateTransitionToResting:
+		return fmt.Sprintf(
+			"coordinator restarted while the session was in %q, mid-transition, where this build cannot confirm what is safe to resume; run end-session, then prepare-site, to recover",
 			rec.State)
-		if err := deps.NightSessions.UpdateNightSession(ctx, rec, now()); err != nil {
-			return fmt.Errorf("api: reconcile night session on startup: mark degraded: %w", err)
+	}
+	return ""
+}
+
+// nightStartupReconcilePlayback checks rec's persisted anchor against fresh
+// FPP evidence. Agreement resumes observation and launches nothing;
+// disagreement, or evidence this coordinator cannot read at all, degrades
+// with a stated reason.
+func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, subject string) string {
+	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	if !has || anchor.Purpose != purpose {
+		return fmt.Sprintf(
+			"coordinator restarted in %q with no usable content anchor for %s; run end-session, then prepare-site, to recover",
+			rec.State, subject)
+	}
+	if anchor.ObservedAt.IsZero() {
+		// Dispatched but never confirmed before the restart: the loop's own
+		// pending-observation path re-derives it from fresh evidence.
+		return ""
+	}
+
+	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
+	if !obs.Current {
+		return fmt.Sprintf(
+			"coordinator restarted in %q and no current fpp.status evidence for instance %q is available to confirm %s; run end-session, then prepare-site, to recover",
+			rec.State, anchor.FPPInstanceID, subject)
+	}
+
+	// Completion after a restart is normal, not a contradiction: the loop's
+	// own completion check advances the session on its next tick.
+	if obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == "" {
+		return ""
+	}
+	if bad, reason := nightBoundaryContradicted(anchor, obs); bad {
+		return fmt.Sprintf(
+			"coordinator restarted in %q and fresh evidence contradicts %s (%s); run end-session, then prepare-site, to recover",
+			rec.State, subject, reason)
+	}
+	return ""
+}
+
+// nightCueActionIDs maps every configured cue's phase and name to the
+// show.action it invokes. The fade-out phase replays the enterShow list.
+func nightCueActionIDs(payload config.NightSessionPayload) map[string]string {
+	out := make(map[string]string, 2*len(payload.EnterShow.Cues)+len(payload.EnterResting.Cues))
+	for _, cue := range payload.EnterShow.Cues {
+		out[nightPhaseEnterShow+"\x00"+cue.Name] = cue.Action
+		out[nightPhaseFadeOut+"\x00"+cue.Name] = cue.Action
+	}
+	for _, cue := range payload.EnterResting.Cues {
+		out[nightPhaseEnterResting+"\x00"+cue.Name] = cue.Action
+	}
+	return out
+}
+
+// nightReconcileCueOutbox resolves the current cycle's outbox before any
+// boundary is reconstructed: a row left mid-dispatch by the restart, whose
+// action carries no stable retry identity, becomes terminally ambiguous
+// rather than being retried into a possible duplicate.
+func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, rec store.NightSessionRecord) error {
+	if rec.ID == "" {
+		return nil
+	}
+	rows, err := h.deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
+	if err != nil {
+		return fmt.Errorf("list night cue outbox rows: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("read the pinned night.session revision: %w", err)
+	}
+	actionByCue := nightCueActionIDs(payload)
+
+	for _, row := range rows {
+		if row.State != nightCueStateDispatched {
+			continue
 		}
-		if logger != nil {
-			logger.Warn("night session reconciliation: session marked degraded on startup", "sessionId", rec.ID, "state", rec.State)
+		actionID, known := actionByCue[row.Phase+"\x00"+row.CueName]
+		if !known {
+			continue
+		}
+		action, aerr := nightResolveShowActionRevision(ctx, h.deps.Config, actionID, row.ActionRevision)
+		if aerr != nil || nightCueRetryableByIdentity(action.Target) {
+			continue
+		}
+		row.State = nightCueStateAmbiguous
+		row.Outcome = nightCueOutcomeAmbiguous
+		row.OutcomeReason = "the coordinator restarted after this cue was dispatched and before its outcome was recorded, and this action has no stable retry identity; end-session and prepare-site again to recover"
+		resolvedAt := now
+		row.ResolvedAt = &resolvedAt
+		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
+			return fmt.Errorf("resolve stranded night cue row: %w", uerr)
 		}
 	}
 	return nil

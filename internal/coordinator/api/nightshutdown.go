@@ -114,7 +114,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 		InstanceID:                  instanceID,
 		Action:                      fppActionStopPlaylist,
 		IdempotencyKey:              nightShutdownStopIdempotencyKey(rec),
-		Issuer:                      nightSafetyIssuer(rec.ID),
+		Issuer:                      nightControllerIssuer(rec),
 		NeverWithholdOnAuditFailure: true,
 	})
 	if err != nil {

@@ -336,20 +336,16 @@ func sortedNightCues(cues []config.NightSessionCue) []config.NightSessionCue {
 // launch barrier; enterResting and fadeOut are fire-and-forget.
 func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue) (barrierSatisfied bool, blockedReason string) {
 	isEnterShow := phase == nightPhaseEnterShow
-	issuer := nightIssuerFor(rec.ID)
+	issuer := nightControllerIssuer(rec)
+	if nightAttributionMissing(rec) && len(cues) > 0 {
+		h.nightMarkAttributionDegraded(ctx, now, rec)
+	}
 	firstCommitted := !isEnterShow || rec.ShowCommitted
 
 	for _, cue := range sortedNightCues(cues) {
 		if now.Sub(referenceE) < time.Duration(cue.OffsetMs)*time.Millisecond {
 			continue
 		}
-		if issuer.PrincipalID == "" {
-			// ADR-024: an autonomous dispatch with no attributed
-			// principal refuses rather than running unattributed.
-			h.logWarn("night loop: refusing to dispatch cue with no attributed principal", "sessionId", rec.ID, "cue", cue.Name)
-			continue
-		}
-
 		isFirst := isEnterShow && !firstCommitted
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {

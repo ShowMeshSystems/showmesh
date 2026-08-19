@@ -535,9 +535,8 @@ func TestFinding1_EndSessionReachableFromDegradedSession(t *testing.T) {
 	}
 }
 
-// TestFinding1_EndSessionReachableFromFadingOut proves reachability from
-// fading-out too (seeded directly: no command in this seam produces that
-// state, since finding 3 makes fade-out-night reach stopped directly).
+// End-session must also be reachable from fading-out, where a session sits
+// while its stop is unconfirmed.
 func TestFinding1_EndSessionReachableFromFadingOut(t *testing.T) {
 	_, st, token, api := newSeededNightFixture(t, "fading-out")
 	out := mustNightCommand(t, api, token, "end-session")

@@ -310,6 +310,20 @@ func nightEnterShowLeadMs(cues []config.NightSessionCue) int64 {
 // not progress, and must not satisfy the hold and barrier deadline at once.
 const nightClockForwardJumpTolerance = 30 * time.Second
 
+// nightMarkAttributionDegraded records that an autonomous dispatch ran
+// with no authorizing principal on the session. It never blocks the
+// dispatch; it makes the gap visible to the operator.
+func (h *handlers) nightMarkAttributionDegraded(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if rec.AttributionDegraded {
+		return
+	}
+	h.logWarn("night loop: dispatching with no authorizing principal recorded on the session", "sessionId", rec.ID)
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.AttributionDegraded = true
+		return cur
+	})
+}
+
 // nightDegradeSession marks rec degraded with reason and stops advancing
 // it (nightTick's own top-level guard skips a degraded session) — used
 // where an assumption this state depends on (its own boundary, or the
@@ -584,19 +598,11 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		return cur, false, false
 	}
 
-	issuer := nightIssuerFor(rec.ID)
-	if issuer.PrincipalID == "" {
-		// No principal is attributed to this session (a restart mid-preshow
-		// leaves the in-memory issuer map empty — see nightissuer.go). An
-		// autonomous dispatch with a zero issuer would be unattributable in
-		// exactly the way ADR-024 exists to prevent, so this refuses rather
-		// than dispatching. An operator re-issuing the (idempotent)
-		// lifecycle command that started this session re-establishes it.
-		h.logWarn("night loop: refusing to dispatch startPlaylist with no attributed principal", "sessionId", rec.ID, "instanceId", instanceID)
-		return nightContentAnchor{
-			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist, DurationMS: durationMS, RepeatMode: repeat,
-			Source: "no principal is attributed to this session; re-issue the lifecycle command that started it to establish one",
-		}, false, true
+	issuer := nightControllerIssuer(rec)
+	if nightAttributionMissing(rec) {
+		// The dispatch still happens: refusing it would leave the show in
+		// whatever state a restart found. The gap is recorded instead.
+		h.nightMarkAttributionDegraded(ctx, now, rec)
 	}
 
 	// idemKey mints a fresh key per tick that reaches this branch (which

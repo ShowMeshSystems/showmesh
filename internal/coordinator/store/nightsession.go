@@ -38,9 +38,27 @@ type NightSessionRecord struct {
 	DegradedReason            string
 	PrepareSiteIdempotencyKey string
 	AttributionDegraded       bool
+	Issuer                    NightSessionIssuer
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 }
+
+// NightSessionIssuer is the principal who authorized this session and the
+// lifecycle command that did it. It is audit provenance, not a credential:
+// the night controller dispatches as its own system actor and never as
+// this principal. A zero value means no lifecycle command has been
+// attributed to the session yet.
+type NightSessionIssuer struct {
+	PrincipalID   string
+	PrincipalName string
+	Form          string
+	CredentialID  string
+	Command       string
+	RecordedAt    *time.Time
+}
+
+// IsZero reports whether any principal has been attributed at all.
+func (i NightSessionIssuer) IsZero() bool { return i.PrincipalID == "" }
 
 // ErrNightSessionNotFound is returned when no row matches.
 var ErrNightSessionNotFound = errors.New("store: night session not found")
@@ -50,7 +68,8 @@ const nightSessionColumns = `
 	final_show_requested, final_show_requested_at, admission_closed, admission_closed_at,
 	shutdown_intent, cycle, content_anchor_json, boundary_json, armed_show_id,
 	show_committed, power_phase, degraded, degraded_reason, prepare_site_idempotency_key,
-	attribution_degraded, created_at, updated_at
+	attribution_degraded, issuer_principal_id, issuer_principal_name, issuer_form,
+	issuer_credential_id, issuer_command, issuer_recorded_at, created_at, updated_at
 `
 
 func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRecord, error) {
@@ -58,6 +77,7 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 		rec                                           NightSessionRecord
 		stateEnteredAt, createdAt, updatedAt          string
 		finalShowRequestedAt, admissionClosedAt       sql.NullString
+		issuerRecordedAt                              sql.NullString
 		finalShowRequested, admissionClosed, degraded int64
 		showCommitted, attributionDegraded            int64
 	)
@@ -66,7 +86,8 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 		&finalShowRequested, &finalShowRequestedAt, &admissionClosed, &admissionClosedAt,
 		&rec.ShutdownIntent, &rec.Cycle, &rec.ContentAnchorJSON, &rec.BoundaryJSON, &rec.ArmedShowID,
 		&showCommitted, &rec.PowerPhase, &degraded, &rec.DegradedReason, &rec.PrepareSiteIdempotencyKey,
-		&attributionDegraded, &createdAt, &updatedAt,
+		&attributionDegraded, &rec.Issuer.PrincipalID, &rec.Issuer.PrincipalName, &rec.Issuer.Form,
+		&rec.Issuer.CredentialID, &rec.Issuer.Command, &issuerRecordedAt, &createdAt, &updatedAt,
 	); err != nil {
 		return NightSessionRecord{}, err
 	}
@@ -86,6 +107,9 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 	if rec.AdmissionClosedAt, err = dbToTimePtr(admissionClosedAt); err != nil {
 		return NightSessionRecord{}, fmt.Errorf("store: parse night session admission_closed_at: %w", err)
 	}
+	if rec.Issuer.RecordedAt, err = dbToTimePtr(issuerRecordedAt); err != nil {
+		return NightSessionRecord{}, fmt.Errorf("store: parse night session issuer_recorded_at: %w", err)
+	}
 	if rec.CreatedAt, err = dbToTime(createdAt); err != nil {
 		return NightSessionRecord{}, fmt.Errorf("store: parse night session created_at: %w", err)
 	}
@@ -98,13 +122,14 @@ func scanNightSession(row interface{ Scan(dest ...any) error }) (NightSessionRec
 func insertNightSession(ctx context.Context, q querier, rec NightSessionRecord, now time.Time) error {
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO night_sessions (`+nightSessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		rec.ID, rec.ConfigObjectID, rec.ConfigRevision, rec.State, timeToDB(rec.StateEnteredAt), rec.ReadinessID,
 		boolToDB(rec.FinalShowRequested), timePtrToDB(rec.FinalShowRequestedAt), boolToDB(rec.AdmissionClosed), timePtrToDB(rec.AdmissionClosedAt),
 		rec.ShutdownIntent, rec.Cycle, rec.ContentAnchorJSON, rec.BoundaryJSON, rec.ArmedShowID,
 		boolToDB(rec.ShowCommitted), rec.PowerPhase, boolToDB(rec.Degraded), rec.DegradedReason, rec.PrepareSiteIdempotencyKey,
-		boolToDB(rec.AttributionDegraded), timeToDB(now), timeToDB(now),
+		boolToDB(rec.AttributionDegraded), rec.Issuer.PrincipalID, rec.Issuer.PrincipalName, rec.Issuer.Form,
+		rec.Issuer.CredentialID, rec.Issuer.Command, timePtrToDB(rec.Issuer.RecordedAt), timeToDB(now), timeToDB(now),
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert night session %q: %w", rec.ID, err)
@@ -203,14 +228,18 @@ func updateNightSession(ctx context.Context, q querier, rec NightSessionRecord, 
 			final_show_requested = ?, final_show_requested_at = ?, admission_closed = ?, admission_closed_at = ?,
 			shutdown_intent = ?, cycle = ?, content_anchor_json = ?, boundary_json = ?, armed_show_id = ?,
 			show_committed = ?, power_phase = ?, degraded = ?, degraded_reason = ?,
-			prepare_site_idempotency_key = ?, attribution_degraded = ?, updated_at = ?
+			prepare_site_idempotency_key = ?, attribution_degraded = ?,
+			issuer_principal_id = ?, issuer_principal_name = ?, issuer_form = ?,
+			issuer_credential_id = ?, issuer_command = ?, issuer_recorded_at = ?, updated_at = ?
 		WHERE id = ?
 	`,
 		rec.ConfigObjectID, rec.ConfigRevision, rec.State, timeToDB(rec.StateEnteredAt), rec.ReadinessID,
 		boolToDB(rec.FinalShowRequested), timePtrToDB(rec.FinalShowRequestedAt), boolToDB(rec.AdmissionClosed), timePtrToDB(rec.AdmissionClosedAt),
 		rec.ShutdownIntent, rec.Cycle, rec.ContentAnchorJSON, rec.BoundaryJSON, rec.ArmedShowID,
 		boolToDB(rec.ShowCommitted), rec.PowerPhase, boolToDB(rec.Degraded), rec.DegradedReason,
-		rec.PrepareSiteIdempotencyKey, boolToDB(rec.AttributionDegraded), timeToDB(now),
+		rec.PrepareSiteIdempotencyKey, boolToDB(rec.AttributionDegraded),
+		rec.Issuer.PrincipalID, rec.Issuer.PrincipalName, rec.Issuer.Form,
+		rec.Issuer.CredentialID, rec.Issuer.Command, timePtrToDB(rec.Issuer.RecordedAt), timeToDB(now),
 		rec.ID,
 	)
 	if err != nil {

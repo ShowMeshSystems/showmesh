@@ -1113,6 +1113,16 @@ CREATE TABLE night_sessions (
     degraded_reason          TEXT NOT NULL DEFAULT '',
     prepare_site_idempotency_key TEXT NOT NULL DEFAULT '',
     attribution_degraded     INTEGER NOT NULL DEFAULT 0,
+    -- The principal who authorized this session and the lifecycle command
+    -- that did it: provenance for the controller's own autonomous
+    -- dispatches, surviving a restart. The controller never dispatches AS
+    -- this principal; it dispatches as a system actor tied to the session.
+    issuer_principal_id      TEXT NOT NULL DEFAULT '',
+    issuer_principal_name    TEXT NOT NULL DEFAULT '',
+    issuer_form              TEXT NOT NULL DEFAULT '',
+    issuer_credential_id     TEXT NOT NULL DEFAULT '',
+    issuer_command           TEXT NOT NULL DEFAULT '',
+    issuer_recorded_at       TEXT,
     created_at               TEXT NOT NULL,
     updated_at               TEXT NOT NULL
 );

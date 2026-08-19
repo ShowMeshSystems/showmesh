@@ -241,8 +241,6 @@ func TestNightAdvancePreshow_StartsRestingWithRepeatEnabled(t *testing.T) {
 	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show:         "halloween-2026",
@@ -347,8 +345,6 @@ func setupTransitionToShowTest(t *testing.T, obsRecords []observation.Observatio
 	if err := storeInst.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show:         "halloween-2026",
@@ -614,9 +610,11 @@ func TestNightAdvanceLive_Rule4_AbsentPlaylistEvidenceIsNotCompletion(t *testing
 	}
 }
 
-// Finding 7 (blocking): an autonomous dispatch with no attributed
-// principal must be refused, not sent with a zero issuer.
-func TestNightEnsureAnchor_RefusesDispatchWithNoAttributedPrincipal(t *testing.T) {
+// A session with no authorizing principal recorded still dispatches, as
+// the constrained night-controller actor, and records the gap: refusing
+// would leave the show wherever a restart found it, and a silently skipped
+// cue is worse than a visible attribution warning.
+func TestNightEnsureAnchor_DispatchesAsControllerAndRecordsMissingAttribution(t *testing.T) {
 	var dispatched bool
 	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dispatched = true
@@ -639,18 +637,45 @@ func TestNightEnsureAnchor_RefusesDispatchWithNoAttributedPrincipal(t *testing.T
 		deps: deps, clock: func() time.Time { return now }, logger: testLogger(),
 		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline, fppCommandPollInterval: opts.FPPCommandPollInterval,
 	}
-	rec := store.NightSessionRecord{ID: "no-issuer-sess", State: nightStatePreshow, StateEnteredAt: now}
-	// Deliberately never call recordNightIssuer for this session id.
+	// A session record carrying no Issuer at all: nothing authorized it.
+	rec := store.NightSessionRecord{
+		ID: "no-issuer-sess", ConfigObjectID: "halloween-main", ConfigRevision: 1,
+		State: nightStatePreshow, StateEnteredAt: now,
+	}
+	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
+		t.Fatalf("create night session: %v", err)
+	}
 
-	anchor, ready, changed := h.nightEnsureAnchor(context.Background(), now, rec, nightAnchorPurposeRestingRepeat, "player-01", "halloween-resting", true, 0, fppIfBusyRefuse)
-	if dispatched {
-		t.Fatal("dispatched startPlaylist with no attributed principal")
+	anchor, _, changed := h.nightEnsureAnchor(context.Background(), now, rec, nightAnchorPurposeRestingRepeat, "player-01", "halloween-resting", true, 0, fppIfBusyRefuse)
+	if !dispatched {
+		t.Fatal("the playlist start was silently skipped; it must dispatch as the night-controller actor")
 	}
-	if ready || !changed {
-		t.Fatalf("ready=%v changed=%v, want ready=false changed=true (refused, recorded)", ready, changed)
+	if !changed {
+		t.Fatal("changed = false, want the dispatch to be recorded")
 	}
-	if anchor.Source == "" {
-		t.Fatal("expected a stated refusal reason")
+	if anchor.Purpose != nightAnchorPurposeRestingRepeat {
+		t.Fatalf("anchor.Purpose = %q, want %q", anchor.Purpose, nightAnchorPurposeRestingRepeat)
+	}
+	if got := mustGetCurrentSession(t, st); !got.AttributionDegraded {
+		t.Fatal("attributionDegraded = false; a dispatch with no authorizing principal must be visible")
+	}
+}
+
+// The controller actor names the session it is tied to, never a user
+// credential that may have expired since the night began.
+func TestNightControllerIssuer_IsSessionScopedAndNeverZero(t *testing.T) {
+	rec := store.NightSessionRecord{ID: "sess-9"}
+	issuer := nightControllerIssuer(rec)
+	if issuer.PrincipalID != nightControllerPrincipalPrefix+"sess-9" {
+		t.Fatalf("PrincipalID = %q, want the session-scoped controller actor", issuer.PrincipalID)
+	}
+	if issuer.CredentialID != "" || issuer.Form != "" {
+		t.Fatalf("the controller actor carries a credential: %+v", issuer)
+	}
+
+	rec.Issuer = store.NightSessionIssuer{PrincipalID: "p-1", PrincipalName: "operator-1"}
+	if got := nightControllerIssuer(rec); got.PrincipalID == "p-1" {
+		t.Fatal("the controller dispatched as the authorizing principal; it must use its own actor")
 	}
 }
 
@@ -694,8 +719,6 @@ func TestNightAdvanceTransitionToResting_RespectsEndOfNightRepeatFalse(t *testin
 	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show: "halloween-2026", Label: "test",

@@ -262,8 +262,6 @@ func TestNightTransitionToResting_WithoutShutdownStillStartsEndOfNightRepeat(t *
 	}
 	f := newNightShutdownFixture(t, &now, nightShutdownPayload(), rec)
 	f.obs.set([]observation.Observation{statusObservation("player-01", fppStatusValueIdle, now)})
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	f.h.nightAdvanceTransitionToResting(context.Background(), now, mustGetCurrentSession(t, f.store))
 

@@ -157,8 +157,6 @@ func TestNightAdvanceTransitionToShow_CueAndLaunchAreRelativeToE_NotEntryTime(t 
 	if err := storeInst.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show: "halloween-2026", Label: "test",
@@ -297,8 +295,6 @@ func stalledFPPBarrierTest(t *testing.T, onFailure string) (h *handlers, storeIn
 	if err := storeInst.CreateNightSession(context.Background(), rec, *now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show: "halloween-2026", Label: "test",
@@ -459,8 +455,6 @@ func contradictionSupervisionTest(t *testing.T, showCommitted bool) (h *handlers
 	if err := storeInst.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show: "halloween-2026", Label: "test",
@@ -577,8 +571,6 @@ func TestNightAdvanceTransitionToShow_ClockJumpResyncsInsteadOfActingEarly(t *te
 	if err := storeInst.CreateNightSession(context.Background(), rec, e); err != nil {
 		t.Fatalf("create night session: %v", err)
 	}
-	recordNightIssuer("sess-1", FPPCommandIssuer{PrincipalID: "operator-1", PrincipalName: "operator-1"})
-	t.Cleanup(func() { forgetNightIssuer("sess-1") })
 
 	payload := config.NightSessionPayload{
 		Show: "halloween-2026", Label: "test",

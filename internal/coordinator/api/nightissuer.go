@@ -1,79 +1,60 @@
 package api
 
 import (
-	"sync"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// nightIssuerRegistry attributes the night loop's own autonomous FPP
-// dispatches to the principal who most recently authorized this session
-// through an authenticated lifecycle command. In-memory only, never a
-// stored column: nightEnsureAnchor (nightloop.go) refuses to dispatch
-// when no entry exists (a zero issuer must never reach a command
-// envelope or an audit entry), so losing this map on restart degrades to
-// a refusal, never a false attribution.
-var nightIssuerRegistry sync.Map // sessionID string -> FPPCommandIssuer
-
-// recordNightIssuer stores issuer as the current attribution for
-// sessionID. Called once per successful gated lifecycle command.
-func recordNightIssuer(sessionID string, issuer FPPCommandIssuer) {
-	if sessionID == "" {
-		return
-	}
-	nightIssuerRegistry.Store(sessionID, issuer)
-}
-
-// forgetNightIssuer removes sessionID's attribution. Called on
-// end-session: an ended session must not leave a stale principal
-// attributed to whatever session id a later prepare-site reuses.
-func forgetNightIssuer(sessionID string) {
-	nightIssuerRegistry.Delete(sessionID)
-}
-
-// nightIssuerFromAudit adapts an identity.AuditEntry into the
-// FPPCommandIssuer shape dispatchFPPCommand expects — a pure relabeling,
-// the two types mirror each other field-for-field.
-func nightIssuerFromAudit(e identity.AuditEntry) FPPCommandIssuer {
-	return FPPCommandIssuer{
-		PrincipalID:   e.PrincipalID,
-		PrincipalName: e.PrincipalName,
-		Form:          e.Form,
-		CredentialID:  e.CredentialID,
-		ClientAddr:    e.ClientAddr,
-	}
-}
-
-// nightIssuerFor returns the last-recorded issuer for sessionID, or the
-// zero FPPCommandIssuer if none is recorded — the caller
-// (nightEnsureAnchor) is responsible for refusing to dispatch on a zero
-// issuer rather than treating it as usable.
-func nightIssuerFor(sessionID string) FPPCommandIssuer {
-	v, ok := nightIssuerRegistry.Load(sessionID)
-	if !ok {
-		return FPPCommandIssuer{}
-	}
-	issuer, _ := v.(FPPCommandIssuer)
-	return issuer
-}
+// Attribution for the night controller's own autonomous dispatches.
+//
+// The principal who authorized the session is persisted on the session row
+// as provenance and survives a restart. The controller itself dispatches as
+// a constrained system actor tied to that session, never as a still-live
+// user token, so no autonomous action depends on a credential outliving the
+// command that started the night.
 
 // nightControllerPrincipalPrefix names the constrained system actor the
-// night controller dispatches its own safety actions as. It is not a
-// principal in the identity store and can hold no credential; it exists so
-// a stop, blackout, or power-off is attributable to a specific session
-// rather than being refused for want of a user identity.
+// night controller dispatches as. It is not a principal in the identity
+// store and can hold no credential.
 const nightControllerPrincipalPrefix = "night-controller:"
 
-// nightSafetyIssuer never returns a zero issuer: a stop or blackout that
-// refuses because attribution is unavailable is strictly worse than the
-// coordinator being switched off. Non-safety autonomous dispatch keeps
-// using nightIssuerFor and its refusal.
-func nightSafetyIssuer(sessionID string) FPPCommandIssuer {
-	if issuer := nightIssuerFor(sessionID); issuer.PrincipalID != "" {
-		return issuer
-	}
+// nightControllerIssuer is the issuer every autonomous night dispatch
+// uses. It is never zero, so a cue is never silently skipped for want of
+// attribution; nightAttributionMissing reports separately whether the
+// authorizing principal is recorded.
+func nightControllerIssuer(rec store.NightSessionRecord) FPPCommandIssuer {
 	return FPPCommandIssuer{
-		PrincipalID:   nightControllerPrincipalPrefix + sessionID,
-		PrincipalName: "night controller",
+		PrincipalID:   nightControllerPrincipalPrefix + rec.ID,
+		PrincipalName: nightControllerPrincipalName(rec),
+	}
+}
+
+func nightControllerPrincipalName(rec store.NightSessionRecord) string {
+	if rec.Issuer.PrincipalName == "" {
+		return "night controller (no authorizing principal recorded)"
+	}
+	return "night controller for " + rec.Issuer.PrincipalName
+}
+
+// nightAttributionMissing reports a session whose authorizing principal was
+// never recorded. Its dispatches still run; the session carries
+// attributionDegraded so the gap is visible rather than silent.
+func nightAttributionMissing(rec store.NightSessionRecord) bool {
+	return rec.Issuer.IsZero()
+}
+
+// nightIssuerFromAudit adapts an identity.AuditEntry into the persisted
+// provenance shape.
+func nightIssuerFromAudit(e identity.AuditEntry, command string, now time.Time) store.NightSessionIssuer {
+	recordedAt := now
+	return store.NightSessionIssuer{
+		PrincipalID:   e.PrincipalID,
+		PrincipalName: e.PrincipalName,
+		Form:          string(e.Form),
+		CredentialID:  e.CredentialID,
+		Command:       command,
+		RecordedAt:    &recordedAt,
 	}
 }

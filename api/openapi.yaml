@@ -11272,7 +11272,7 @@ components:
          finalShowRequested, finalShowRequestedAt, admissionClosed,
          admissionClosedAt, shutdownIntent, armedShowId, showCommitted,
          readiness, powerPhase, transition, cues, degraded,
-         attributionDegraded, updatedAt]
+         attributionDegraded, authorization, updatedAt]
       properties:
         id:
           type: string
@@ -11332,10 +11332,40 @@ components:
           type: boolean
           description: >-
             True when this session's most recent command applied despite
-            its audit entry failing to write (ADR-024 decision 11). Never
-            cleared once true.
+            its audit entry failing to write (ADR-024 decision 11), or when
+            an autonomous dispatch ran with no authorizing principal
+            recorded. Never cleared once true.
+        authorization:
+          $ref: "#/components/schemas/NightAuthorization"
         updatedAt:
           type: string
+          format: date-time
+    NightAuthorization:
+      type: object
+      description: >-
+        Who authorized this session, recorded for provenance and surviving
+        a coordinator restart. The night controller performs autonomous
+        actions as its own session-scoped system actor and never as this
+        principal, so this is a record of authority rather than a live
+        credential. State is "unknown" when nothing has been attributed
+        yet; autonomous actions still run in that case, and the session
+        carries attributionDegraded.
+      required: [state, recordedAt]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown]
+        reason:
+          type: string
+        principalId:
+          type: string
+        principalName:
+          type: string
+        command:
+          type: string
+          description: The lifecycle command that established this attribution.
+        recordedAt:
+          type: [string, "null"]
           format: date-time
     NightSessionResponse:
       type: object
