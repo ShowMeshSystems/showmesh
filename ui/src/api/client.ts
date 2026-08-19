@@ -171,6 +171,23 @@ export const MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS =
   SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
+ * The request budget for `POST /actions/{id}/invocations` — the
+ * coordinator's own write deadline
+ * (`actionInvokeHTTPWriteDeadline`, internal/coordinator/api/actioninvoke.go
+ * — 150s, dominated by mqtt's 120s `expect.deadlineSeconds` cap) plus
+ * margin. Duplicated by value against `cmd/showmeshctl`'s own
+ * `minActionInvokeClientTimeout`, matching every other client-timeout pair
+ * in this file.
+ */
+const SERVER_ACTION_INVOKE_WRITE_DEADLINE_MS = 150_000 // internal/coordinator/api/actioninvoke.go actionInvokeHTTPWriteDeadline
+const ACTION_INVOKE_CLIENT_MARGIN_MS = 20_000
+export const ACTION_INVOKE_REQUEST_TIMEOUT_MS =
+  SERVER_ACTION_INVOKE_WRITE_DEADLINE_MS + ACTION_INVOKE_CLIENT_MARGIN_MS
+/** Reconciliation target for [ACTION_INVOKE_REQUEST_TIMEOUT_MS]. */
+export const MIN_ACTION_INVOKE_CLIENT_TIMEOUT_MS =
+  SERVER_ACTION_INVOKE_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
+
+/**
  * The manual restore (`POST /resolume/recovery/restore`) can dispatch up
  * to `resolumeRecoveryMaxLayers` (30, internal/coordinator/api/resolumerecovery.go)
  * sequential per-layer actions before answering, so its own write deadline

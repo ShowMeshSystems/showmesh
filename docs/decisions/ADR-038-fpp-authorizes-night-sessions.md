@@ -1,6 +1,6 @@
 # ADR-038: FPP Authorizes Night Sessions; ShowMesh Advances Them
 
-Status: Accepted  
+Status: Accepted (decision 2's "closed command vocabulary" narrowed by [ADR-041](ADR-041-operator-recovery-is-not-a-calendar-intent.md))  
 Date: 2026-08-16
 
 ## Context

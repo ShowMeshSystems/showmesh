@@ -33,6 +33,10 @@ you write from evidence, so these rules are absolute:
    issue and its comments/relations before documenting it. When the evidence exposes new
    durable work, return an issue-ready title, evidence, acceptance criteria, labels, and
    relationships to the orchestrator; the orchestrator owns creating or updating Linear.
+   An open owner decision keeps the `Needs decision` label and is never `Ready for work`.
+   After the owner rules, the orchestrator records the ruling, removes that label, and
+   moves the issue to `Ready for work` only if implementation remains; the docs agent
+   must never infer or perform that transition from a recommendation or draft decision.
    Use the `Punch List` label only for owner- or real-hardware-dependent verification.
    `docs/private/DECISION-QUEUE.md` and `docs/private/PUNCH-LIST.md` are legacy context,
    not active trackers; do not add items to them or infer current status from them.

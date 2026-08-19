@@ -68,6 +68,28 @@ func installFailAuditTrigger(t *testing.T, storeDir string) {
 	}
 }
 
+// installFailDispatchAuditTrigger is [installFailAuditTrigger] narrowed to
+// only the pre-dispatch DISPATCH audit entry (kind='dispatch'): the
+// post-dispatch OUTCOME entry (kind='outcome') still writes successfully.
+func installFailDispatchAuditTrigger(t *testing.T, storeDir string) {
+	t.Helper()
+	dbPath := filepath.Join(storeDir, "showmesh.db")
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw connection to %q: %v", dbPath, err)
+	}
+	defer func() { _ = raw.Close() }()
+
+	_, err = raw.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_dispatch_audit BEFORE INSERT ON audit_log
+		WHEN NEW.kind = 'dispatch'
+		BEGIN SELECT RAISE(ABORT, 'injected dispatch-only audit failure'); END;
+	`)
+	if err != nil {
+		t.Fatalf("install fail_dispatch_audit trigger: %v", err)
+	}
+}
+
 // configTestDeps mirrors authTestDeps, additionally wiring Config against
 // st (see [ConfigStore]'s doc comment: *store.Store already satisfies it
 // directly, no adapter needed).

@@ -13,6 +13,8 @@ import {
 } from '../app/resolumeComposition'
 import { resolumeCompositionOrNull, useResolumeComposition } from '../app/useResolumeComposition'
 import { ScopedButton } from '../components/ScopedButton'
+import { ActionBindingCheck } from '../components/ActionBindingCheck'
+import { ActionInvokeButton } from '../components/ActionInvokeButton'
 import type { ActionIntegration, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
 
 // Authoring surface #1 of 2 for this wave (STEP-9-SPEC.md section 5.3):
@@ -588,6 +590,13 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
   return (
     <div>
       <h2 className="panel__title">{isNew ? 'New show action' : form.label || existingId}</h2>
+
+      {!isNew && existingId && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <ActionBindingCheck actionId={existingId} />
+          <ActionInvokeButton actionId={existingId} label="Invoke now" />
+        </div>
+      )}
 
       {!editable && (
         <p className="text-muted" role="status">

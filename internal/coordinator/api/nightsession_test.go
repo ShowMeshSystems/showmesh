@@ -38,7 +38,7 @@ func nightSessionTestDeps(svc identity.Service, st *store.Store) Dependencies {
 
 func mustCreateNightSessionAsset(t *testing.T, st *store.Store, show, sequence, target string) {
 	t.Helper()
-	_, err := st.CreateAsset(context.Background(), store.AssetRecord{
+	_, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: show + "-" + sequence + "-" + target, ShowID: show, SequenceID: sequence,
 		TargetKind: store.AssetTargetKindNode, TargetID: target,
 		MediaType: "fseq", ContentHash: "sha256:" + sequence, RuntimeFilename: sequence + ".fseq",

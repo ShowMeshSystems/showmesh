@@ -44,6 +44,18 @@ func TestOpenAPIAssetsResponsesMatchRealResponses(t *testing.T) {
 	_, listBody := doRequest(t, api.Handler, "GET", "/api/v1/assets", auth)
 	assertMatchesSchema(t, c, "AssetsListResponse", listBody)
 
+	// A rollback response (ADR-028 decision 10) against its own schema:
+	// different bytes supersede the first upload, then re-uploading the
+	// first upload's own bytes rolls it back.
+	fields := validAssetFields()
+	_, supersedeBody := doAssetUpload(t, api.Handler, fields, "Thriller.fseq", []byte("different bytes"), auth)
+	assertMatchesSchema(t, c, "AssetResponse", supersedeBody)
+	rollbackResp, rollbackBody := doAssetUpload(t, api.Handler, fields, "Thriller.fseq", []byte("fseq content"), auth)
+	if rollbackResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /assets (rollback): status = %d, want 200; body: %s", rollbackResp.StatusCode, rollbackBody)
+	}
+	assertMatchesSchema(t, c, "AssetResponse", rollbackBody)
+
 	// A validation-error sample, to prove the shared Problem shape one
 	// more time on this seam's own refusal path.
 	badFields := validAssetFields()

@@ -78,6 +78,10 @@ export type {
   ResolumeActionsResponse,
   ResolumeActionResult,
   ResolumeActionResponse,
+  // The pre-show binding check and one action invocation, outside of any
+  // macro run (ADR-029).
+  ActionBinding,
+  ActionInvocationResult,
   ResolumeCompositionDeckSummary,
   ResolumeCompositionLayerGroup,
   ResolumeCompositionLayer,
@@ -177,6 +181,9 @@ export {
   getShowAction,
   putShowAction,
   getShowActionRevisions,
+  getActionBinding,
+  listActionBindings,
+  invokeAction,
   getShowMacro,
   putShowMacro,
   getShowMacroRevisions,

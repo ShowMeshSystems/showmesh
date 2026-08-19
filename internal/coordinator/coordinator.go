@@ -661,6 +661,12 @@ func Run() int {
 		// never disagree about which identifiers exist, because both
 		// read the identical field.
 		IntegrationBrokers: cfg.IntegrationBrokers,
+		// The SAME *broker.Registry macro.Dependencies.Brokers (below)
+		// dispatches an mqtt-integration show.macro step through — see
+		// [api.Dependencies.MQTTBrokers]'s own doc comment for why wiring
+		// one registry into two independently-constructed Dependencies
+		// values is safe.
+		MQTTBrokers: integrationBrokers,
 	}
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
@@ -767,6 +773,25 @@ func Run() int {
 		logger.Warn("resolved resolume actions left stranded by a prior process", "count", n)
 	}
 
+	// The action-invocation sibling of the two sweeps immediately above,
+	// closing the identical gap for a third command family — see
+	// api.ReconcileStrandedActionInvocations' own doc comment
+	// (actioninvoke_reconcile.go).
+	if n, rerr := api.ReconcileStrandedActionInvocations(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile stranded action invocations at startup", "error", rerr)
+	} else if n > 0 {
+		logger.Warn("resolved action invocations left stranded by a prior process", "count", n)
+	}
+
+	// SM-102 finding 4: the one-shot sweep above cannot self-heal a row
+	// that becomes stranded AFTER it ran (actioninvoke.go's own
+	// persistErr branch — a commands-table write failing right after a
+	// successful dispatch). This loop retries it periodically for the
+	// rest of this process's life; it is safe to run alongside live
+	// requests because it only ever touches rows older than
+	// actionInvokeReconcileMinAge — see that constant's own doc comment.
+	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
+
 	// Track F seam F2 invariant 4: an ambiguous restart never launches a
 	// show by guess — see api.ReconcileNightSessionOnStartup's own doc
 	// comment. Same synchronous, non-fatal, before-ListenAndServe shape as
@@ -774,7 +799,6 @@ func Run() int {
 	if rerr := api.ReconcileNightSessionOnStartup(ctx, apiDeps, time.Now, logger); rerr != nil {
 		logger.Warn("failed to reconcile night session at startup", "error", rerr)
 	}
-
 	// fppHTTPClient and fppRunner were already constructed above (before
 	// apiDeps), one shared *http.Client per contract/Task C's own guidance
 	// ("callers SHOULD construct one *http.Client and pass it to every

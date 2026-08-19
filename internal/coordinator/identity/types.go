@@ -108,6 +108,20 @@ const (
 	// already carry: a credential problem must never cost the operator
 	// sight of the lifecycle state.
 	ScopeNightCommand Scope = "night:command"
+
+	// ScopeShowActionInvoke gates POST /api/v1/actions/{id}/invocations:
+	// invoke one stored show.action by id, outside of a macro run. Reads
+	// stay open by default (ADR-024) — this scope exists only because
+	// invoking an action changes what the show does, the identical
+	// reasoning [ScopeFPPCommand], [ScopeResolumeAction], and
+	// [ScopeRenderCommand] already carry for their own dispatch surfaces.
+	// It is the ONLY scope check on that route: the per-integration
+	// dispatch underneath (dispatchFPPCommand, ResolumeActions.Dispatch)
+	// authorizes nothing of its own for an in-process caller — a
+	// principal holding only this scope can dispatch fpp and resolume
+	// actions alike, matching how show:macro:run already authorizes a
+	// macro's own steps across every integration with one scope.
+	ScopeShowActionInvoke Scope = "show:action:invoke"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -119,7 +133,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeNightCommand}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeNightCommand}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

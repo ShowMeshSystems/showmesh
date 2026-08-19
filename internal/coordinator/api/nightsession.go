@@ -102,7 +102,7 @@ func (h *handlers) handleListNightSessions(w http.ResponseWriter, r *http.Reques
 		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.NightSessionConfigKind))
 		return
 	}
-	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.NightSessionConfigKind)
+	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.NightSessionConfigKind, r.URL.Query().Get("show"))
 	if err != nil {
 		h.writeInternalError(w, now, "list night.session config objects", err)
 		return

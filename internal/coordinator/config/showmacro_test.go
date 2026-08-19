@@ -5,19 +5,24 @@ import (
 	"testing"
 )
 
-func alwaysResolves(string) (string, bool) { return ShowActionIntegrationFPP, true }
-func neverResolves(string) (string, bool)  { return "", false }
+// Every fake resolveAction below resolves into "halloween-2026", matching
+// validMacroJSON's own "show" value, so the cross-show guard never fires on
+// tests that are not exercising it (see resolvesInShow for the one that is).
+func alwaysResolves(string) (string, string, bool) {
+	return ShowActionIntegrationFPP, "halloween-2026", true
+}
+func neverResolves(string) (string, string, bool) { return "", "", false }
 
-func resolvesOnly(ids ...string) func(string) (string, bool) {
+func resolvesOnly(ids ...string) func(string) (string, string, bool) {
 	set := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		set[id] = true
 	}
-	return func(id string) (string, bool) {
+	return func(id string) (string, string, bool) {
 		if set[id] {
-			return ShowActionIntegrationFPP, true
+			return ShowActionIntegrationFPP, "halloween-2026", true
 		}
-		return "", false
+		return "", "", false
 	}
 }
 
@@ -25,12 +30,24 @@ func resolvesOnly(ids ...string) func(string) (string, bool) {
 // reporting a caller-chosen integration — used by the Resolume localFallback
 // test (TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback)
 // to prove section 2.3's rule without a real show.action store.
-func resolvesAsIntegration(id, integration string) func(string) (string, bool) {
-	return func(actionID string) (string, bool) {
+func resolvesAsIntegration(id, integration string) func(string) (string, string, bool) {
+	return func(actionID string) (string, string, bool) {
 		if actionID == id {
-			return integration, true
+			return integration, "halloween-2026", true
 		}
-		return "", false
+		return "", "", false
+	}
+}
+
+// resolvesInShow is [resolvesAsIntegration] with a caller-chosen show,
+// for the cross-show guard test
+// (TestDecodeShowMacroPayloadStepActionCrossShowRejected).
+func resolvesInShow(id, show string) func(string) (string, string, bool) {
+	return func(actionID string) (string, string, bool) {
+		if actionID == id {
+			return ShowActionIntegrationFPP, show, true
+		}
+		return "", "", false
 	}
 }
 
@@ -44,7 +61,7 @@ func validMacroJSON(steps string) string {
 
 func TestDecodeShowMacroPayloadValid(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("projectors", "projectors-on", ""))
-	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	p, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -55,7 +72,7 @@ func TestDecodeShowMacroPayloadValid(t *testing.T) {
 
 func TestEncodeShowMacroPayloadRoundTrips(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("projectors", "projectors-on", ""))
-	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	p, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -63,7 +80,7 @@ func TestEncodeShowMacroPayloadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	p2, verr := DecodeShowMacroPayload(out, alwaysResolves)
+	p2, verr := DecodeShowMacroPayload(out, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("re-decode: %+v", verr)
 	}
@@ -83,7 +100,7 @@ func TestEncodeShowMacroPayloadRoundTrips(t *testing.T) {
 // happens to be.
 func TestDecodeShowMacroPayloadOnFailureDefault(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
-	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	p, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -108,7 +125,7 @@ func TestDecodeShowMacroPayloadOnFailureDefault(t *testing.T) {
 // assertion was aimed at, and it still catches it today.
 func TestDecodeShowMacroPayloadOnUnconfirmedDefault(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
-	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	p, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -116,7 +133,7 @@ func TestDecodeShowMacroPayloadOnUnconfirmedDefault(t *testing.T) {
 		t.Fatalf("expected onUnconfirmed to default to %q, got %q", ShowMacroOnUnconfirmedContinue, p.Steps[0].OnUnconfirmed)
 	}
 	// Independence, proved by moving one axis at a time.
-	onlyFailure, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onFailure": "abort"`)), alwaysResolves)
+	onlyFailure, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onFailure": "abort"`)), alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -127,7 +144,7 @@ func TestDecodeShowMacroPayloadOnUnconfirmedDefault(t *testing.T) {
 		t.Fatalf("setting onFailure moved onUnconfirmed to %q; the two policy axes must be independent", onlyFailure.Steps[0].OnUnconfirmed)
 	}
 
-	onlyUnconfirmed, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onUnconfirmed": "abort"`)), alwaysResolves)
+	onlyUnconfirmed, verr := DecodeShowMacroPayload(validMacroJSON(validMacroStepJSON("s1", "a1", `, "onUnconfirmed": "abort"`)), alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -144,7 +161,7 @@ func TestDecodeShowMacroPayloadOnFailureValues(t *testing.T) {
 		return validMacroJSON(validMacroStepJSON("s1", "a1", extra))
 	}
 	t.Run("explicit-abort", func(t *testing.T) {
-		p, verr := DecodeShowMacroPayload(mk(`, "onFailure": "abort"`), alwaysResolves)
+		p, verr := DecodeShowMacroPayload(mk(`, "onFailure": "abort"`), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -153,7 +170,7 @@ func TestDecodeShowMacroPayloadOnFailureValues(t *testing.T) {
 		}
 	})
 	t.Run("explicit-continue", func(t *testing.T) {
-		p, verr := DecodeShowMacroPayload(mk(`, "onFailure": "continue"`), alwaysResolves)
+		p, verr := DecodeShowMacroPayload(mk(`, "onFailure": "continue"`), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -162,7 +179,7 @@ func TestDecodeShowMacroPayloadOnFailureValues(t *testing.T) {
 		}
 	})
 	t.Run("invalid-value", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": "retry"`), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": "retry"`), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldInvalid {
 			t.Fatalf("expected field-invalid error, got %+v", verr)
 		}
@@ -177,7 +194,7 @@ func TestDecodeShowMacroPayloadOnFailureAbsentVsNullVsEmpty(t *testing.T) {
 		return validMacroJSON(validMacroStepJSON("s1", "a1", extra))
 	}
 	t.Run("absent-gives-default", func(t *testing.T) {
-		p, verr := DecodeShowMacroPayload(mk(""), alwaysResolves)
+		p, verr := DecodeShowMacroPayload(mk(""), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -186,13 +203,13 @@ func TestDecodeShowMacroPayloadOnFailureAbsentVsNullVsEmpty(t *testing.T) {
 		}
 	})
 	t.Run("null-errors", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": null`), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": null`), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldNull {
 			t.Fatalf("expected field-null error, got %+v", verr)
 		}
 	})
 	t.Run("empty-string-errors", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": ""`), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk(`, "onFailure": ""`), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldEmpty {
 			t.Fatalf("expected field-empty error, got %+v", verr)
 		}
@@ -204,7 +221,7 @@ func TestDecodeShowMacroPayloadOnUnconfirmedAbsentVsNullVsEmpty(t *testing.T) {
 		return validMacroJSON(validMacroStepJSON("s1", "a1", extra))
 	}
 	t.Run("absent-gives-default", func(t *testing.T) {
-		p, verr := DecodeShowMacroPayload(mk(""), alwaysResolves)
+		p, verr := DecodeShowMacroPayload(mk(""), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -213,13 +230,13 @@ func TestDecodeShowMacroPayloadOnUnconfirmedAbsentVsNullVsEmpty(t *testing.T) {
 		}
 	})
 	t.Run("null-errors", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk(`, "onUnconfirmed": null`), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk(`, "onUnconfirmed": null`), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldNull {
 			t.Fatalf("expected field-null error, got %+v", verr)
 		}
 	})
 	t.Run("empty-string-errors", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk(`, "onUnconfirmed": ""`), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk(`, "onUnconfirmed": ""`), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldEmpty {
 			t.Fatalf("expected field-empty error, got %+v", verr)
 		}
@@ -228,7 +245,7 @@ func TestDecodeShowMacroPayloadOnUnconfirmedAbsentVsNullVsEmpty(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepsEmpty(t *testing.T) {
 	raw := validMacroJSON("")
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeStepsEmpty {
 		t.Fatalf("expected steps-empty error, got %+v", verr)
 	}
@@ -243,7 +260,7 @@ func TestDecodeShowMacroPayloadStepsTooMany(t *testing.T) {
 		stepsJSON += validMacroStepJSON(fmt.Sprintf("s%d", i), "a", "")
 	}
 	raw := validMacroJSON(stepsJSON)
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeStepsTooMany {
 		t.Fatalf("expected steps-too-many error, got %+v", verr)
 	}
@@ -258,7 +275,7 @@ func TestDecodeShowMacroPayloadStepsAtCapAccepted(t *testing.T) {
 		stepsJSON += validMacroStepJSON(fmt.Sprintf("s%d", i), "a", "")
 	}
 	raw := validMacroJSON(stepsJSON)
-	p, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	p, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error at the cap: %+v", verr)
 	}
@@ -269,7 +286,7 @@ func TestDecodeShowMacroPayloadStepsAtCapAccepted(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepIDDuplicate(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("dup", "a1", "") + "," + validMacroStepJSON("dup", "a2", ""))
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeStepIDDuplicate {
 		t.Fatalf("expected step-id-duplicate error, got %+v", verr)
 	}
@@ -277,7 +294,7 @@ func TestDecodeShowMacroPayloadStepIDDuplicate(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepIDRequired(t *testing.T) {
 	raw := validMacroJSON(`{"action": "a1", "localFallback": {"class": "none", "reason": "r"}}`)
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Field != "steps[0].id" {
 		t.Fatalf("expected steps[0].id-required error, got %+v", verr)
 	}
@@ -285,7 +302,7 @@ func TestDecodeShowMacroPayloadStepIDRequired(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepActionRequired(t *testing.T) {
 	raw := validMacroJSON(`{"id": "s1", "localFallback": {"class": "none", "reason": "r"}}`)
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Field != "steps[0].action" {
 		t.Fatalf("expected steps[0].action-required error, got %+v", verr)
 	}
@@ -293,7 +310,7 @@ func TestDecodeShowMacroPayloadStepActionRequired(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepActionMustResolve(t *testing.T) {
 	raw := validMacroJSON(validMacroStepJSON("s1", "nonexistent-action", ""))
-	_, verr := DecodeShowMacroPayload(raw, neverResolves)
+	_, verr := DecodeShowMacroPayload(raw, neverResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "steps[0].action" {
 		t.Fatalf("expected step action unknown-reference error, got %+v", verr)
 	}
@@ -302,12 +319,12 @@ func TestDecodeShowMacroPayloadStepActionMustResolve(t *testing.T) {
 func TestDecodeShowMacroPayloadStepActionResolvesSelectively(t *testing.T) {
 	resolver := resolvesOnly("known-action")
 	raw := validMacroJSON(validMacroStepJSON("s1", "known-action", ""))
-	_, verr := DecodeShowMacroPayload(raw, resolver)
+	_, verr := DecodeShowMacroPayload(raw, resolver, alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error for a known action: %+v", verr)
 	}
 	raw = validMacroJSON(validMacroStepJSON("s1", "unknown-action", ""))
-	_, verr = DecodeShowMacroPayload(raw, resolver)
+	_, verr = DecodeShowMacroPayload(raw, resolver, alwaysTrueShowExists)
 	if verr == nil {
 		t.Fatal("expected an error for an action the resolver does not know")
 	}
@@ -318,7 +335,7 @@ func TestDecodeShowMacroPayloadStepActionResolvesSelectively(t *testing.T) {
 // (acceptance criterion 10).
 func TestDecodeShowMacroPayloadLocalFallbackRequired(t *testing.T) {
 	raw := validMacroJSON(`{"id": "s1", "action": "a1"}`)
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Field != "steps[0].localFallback" {
 		t.Fatalf("expected localFallback-required error, got %+v", verr)
 	}
@@ -329,19 +346,19 @@ func TestDecodeShowMacroPayloadLocalFallbackClasses(t *testing.T) {
 		return validMacroJSON(fmt.Sprintf(`{"id": "s1", "action": "a1", "localFallback": {"class": %q, "reason": "because"}}`, class))
 	}
 	t.Run("none-accepted", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("none"), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk("none"), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
 	})
 	t.Run("coordinator-required-accepted", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("coordinator-required"), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk("coordinator-required"), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
 	})
 	t.Run("silence-accepted", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("silence"), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk("silence"), alwaysResolves, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -350,7 +367,7 @@ func TestDecodeShowMacroPayloadLocalFallbackClasses(t *testing.T) {
 	// dedicated required break-and-confirm test for "reduced"; this table
 	// also covers an arbitrary unrecognized class for completeness.
 	t.Run("unrecognized-rejected", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("teleport"), alwaysResolves)
+		_, verr := DecodeShowMacroPayload(mk("teleport"), alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Code != ValidationCodeFieldInvalid {
 			t.Fatalf("expected field-invalid error, got %+v", verr)
 		}
@@ -363,7 +380,7 @@ func TestDecodeShowMacroPayloadLocalFallbackClasses(t *testing.T) {
 // Code, distinct from an ordinary bad enum value.
 func TestDecodeShowMacroPayloadLocalFallbackReducedRejected(t *testing.T) {
 	raw := validMacroJSON(`{"id": "s1", "action": "a1", "localFallback": {"class": "reduced", "reason": "because"}}`)
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil {
 		t.Fatal("expected localFallback class \"reduced\" to be rejected")
 	}
@@ -376,7 +393,7 @@ func TestDecodeShowMacroPayloadLocalFallbackReasonRequiredOnEveryClass(t *testin
 	for _, class := range []string{"none", "coordinator-required", "silence"} {
 		t.Run(class, func(t *testing.T) {
 			raw := validMacroJSON(fmt.Sprintf(`{"id": "s1", "action": "a1", "localFallback": {"class": %q}}`, class))
-			_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+			_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 			if verr == nil || verr.Field != "steps[0].localFallback.reason" {
 				t.Fatalf("expected reason-required error for class %q, got %+v", class, verr)
 			}
@@ -387,14 +404,14 @@ func TestDecodeShowMacroPayloadLocalFallbackReasonRequiredOnEveryClass(t *testin
 func TestDecodeShowMacroPayloadShowAndLabelRequired(t *testing.T) {
 	t.Run("show-required", func(t *testing.T) {
 		raw := `{"label": "x", "steps": [` + validMacroStepJSON("s1", "a1", "") + `]}`
-		_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+		_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Field != "show" {
 			t.Fatalf("expected show-required error, got %+v", verr)
 		}
 	})
 	t.Run("label-required", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "steps": [` + validMacroStepJSON("s1", "a1", "") + `]}`
-		_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+		_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 		if verr == nil || verr.Field != "label" {
 			t.Fatalf("expected label-required error, got %+v", verr)
 		}
@@ -403,7 +420,7 @@ func TestDecodeShowMacroPayloadShowAndLabelRequired(t *testing.T) {
 
 func TestDecodeShowMacroPayloadStepsNullRejected(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "steps": null}`
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "steps" {
 		t.Fatalf("expected steps-null error, got %+v", verr)
 	}
@@ -419,7 +436,7 @@ func TestDecodeShowMacroPayloadStepsNullRejected(t *testing.T) {
 // own new caller runs before any per-field decode.
 func TestDecodeShowMacroPayloadUnknownTopLevelKeyRejected(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "step": [` + validMacroStepJSON("s1", "a1", "") + `]}`
-	_, verr := DecodeShowMacroPayload(raw, alwaysResolves)
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysTrueShowExists)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key error for typo'd \"step\", got %+v", verr)
 	}
@@ -447,7 +464,7 @@ func TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback(t
 	resolver := resolvesAsIntegration("resolume-blackout", ShowActionIntegrationResolume)
 
 	t.Run("coordinator-required-accepted", func(t *testing.T) {
-		p, verr := DecodeShowMacroPayload(mk("coordinator-required"), resolver)
+		p, verr := DecodeShowMacroPayload(mk("coordinator-required"), resolver, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -456,13 +473,13 @@ func TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback(t
 		}
 	})
 	t.Run("none-rejected", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("none"), resolver)
+		_, verr := DecodeShowMacroPayload(mk("none"), resolver, alwaysTrueShowExists)
 		if verr == nil || verr.Field != "steps[0].localFallback.class" {
 			t.Fatalf("expected steps[0].localFallback.class error, got %+v", verr)
 		}
 	})
 	t.Run("silence-rejected", func(t *testing.T) {
-		_, verr := DecodeShowMacroPayload(mk("silence"), resolver)
+		_, verr := DecodeShowMacroPayload(mk("silence"), resolver, alwaysTrueShowExists)
 		if verr == nil || verr.Field != "steps[0].localFallback.class" {
 			t.Fatalf("expected steps[0].localFallback.class error, got %+v", verr)
 		}
@@ -473,9 +490,33 @@ func TestDecodeShowMacroPayloadResolumeStepRequiresCoordinatorRequiredFallback(t
 	t.Run("fpp-step-none-still-accepted", func(t *testing.T) {
 		fppResolver := resolvesAsIntegration("fpp-action", ShowActionIntegrationFPP)
 		raw := validMacroJSON(`{"id": "s1", "action": "fpp-action", "localFallback": {"class": "none", "reason": "because"}}`)
-		_, verr := DecodeShowMacroPayload(raw, fppResolver)
+		_, verr := DecodeShowMacroPayload(raw, fppResolver, alwaysTrueShowExists)
 		if verr != nil {
 			t.Fatalf("unexpected error for a non-Resolume step: %+v", verr)
 		}
 	})
+}
+
+// TestDecodeShowMacroPayloadShowMustExist proves a macro naming a "show"
+// that does not resolve is refused naming the missing show, not accepted
+// on shape alone.
+func TestDecodeShowMacroPayloadShowMustExist(t *testing.T) {
+	raw := validMacroJSON(validMacroStepJSON("s1", "a1", ""))
+	_, verr := DecodeShowMacroPayload(raw, alwaysResolves, alwaysFalse)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "show" {
+		t.Fatalf("expected show-unknown-reference error, got %+v", verr)
+	}
+}
+
+// TestDecodeShowMacroPayloadStepActionCrossShowRejected proves a macro
+// step may not reference an action belonging to a different show. A Show
+// is a namespace; a namespace that does not contain anything contains
+// nothing.
+func TestDecodeShowMacroPayloadStepActionCrossShowRejected(t *testing.T) {
+	resolver := resolvesInShow("other-show-action", "christmas-2026")
+	raw := validMacroJSON(validMacroStepJSON("s1", "other-show-action", ""))
+	_, verr := DecodeShowMacroPayload(raw, resolver, alwaysTrueShowExists)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "steps[0].action" {
+		t.Fatalf("expected cross-show unknown-reference error, got %+v", verr)
+	}
 }

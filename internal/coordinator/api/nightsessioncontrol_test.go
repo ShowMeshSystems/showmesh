@@ -124,7 +124,7 @@ func mustCreateNightSessionFSEQAsset(t *testing.T, st *store.Store, backend asse
 	if err != nil {
 		t.Fatalf("Put fseq bytes: %v", err)
 	}
-	_, err = st.CreateAsset(context.Background(), store.AssetRecord{
+	_, _, err = st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: show + "-" + sequence + "-" + target, ShowID: show, SequenceID: sequence,
 		TargetKind: store.AssetTargetKindNode, TargetID: target,
 		MediaType: "fseq", ContentHash: blob.ContentHash, RuntimeFilename: sequence + ".fseq",

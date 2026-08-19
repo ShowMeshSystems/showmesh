@@ -58,7 +58,7 @@ import type {
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
-import type { ResolumeActionResult } from './domain'
+import type { ActionBinding, ActionInvocationResult, ResolumeActionResult } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -326,6 +326,22 @@ export function putShowAction(id: string, payload: ConfigShowAction): Promise<Sc
 
 export function getShowActionRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowActionRevisions(id)
+}
+
+// The pre-show binding check and one action invocation, outside of any
+// macro run (ADR-029). Same thin pass-through pattern as every method
+// above.
+
+export function getActionBinding(id: string): Promise<ActionBinding> {
+  return store.getActionBinding(id)
+}
+
+export function listActionBindings(show?: string): Promise<ActionBinding[]> {
+  return store.listActionBindings(show)
+}
+
+export function invokeAction(id: string): Promise<ActionInvocationResult> {
+  return store.invokeAction(id)
 }
 
 export function getShowMacro(id: string): Promise<SchemaShowMacroConfigResponse> {
