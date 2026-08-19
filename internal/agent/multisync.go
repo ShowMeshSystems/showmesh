@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -35,13 +36,26 @@ import (
 // normally is still correct: a bind conflict must fail loudly (which it
 // does, here, as a degraded-with-reason node) rather than silently sharing
 // the port and risking exactly the desync ADR-013 documents.
-func runMultiSyncListener(ctx context.Context, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, logger *slog.Logger) {
+func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, logger *slog.Logger) {
 	l, err := multisync.NewListener(multisync.ListenerConfig{
 		ListenAddr:    listenAddr,
 		InterfaceName: interfaceName,
 		Logger:        logger,
 		// AllowPortSharing is never set true here; see this function's own
 		// doc comment and ADR-013.
+
+		// Answering discovery is what lets FPP unicast sync to this node:
+		// FPP only unicasts to remotes it has discovered, so a node that
+		// stays silent works on a multicast LAN and is unreachable on a
+		// unicast-only one. It also puts the node in FPP's own MultiSync
+		// list, which is where an operator looks first.
+		RespondToDiscoverPings: true,
+		DiscoverResponse: multisync.PingPacket{
+			SystemType:    multisync.SystemTypeShowMesh,
+			Mode:          multisync.PingModeRemote,
+			Hostname:      nodeID,
+			VersionString: version.Version,
+		},
 	})
 	if err != nil {
 		reason := fmt.Sprintf("failed to bind multisync listener on %s (interface %q): %v", listenAddr, interfaceName, err)

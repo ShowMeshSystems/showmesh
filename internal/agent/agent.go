@@ -164,7 +164,7 @@ func Run() int {
 	multiSyncDone := make(chan struct{})
 	go func() {
 		defer close(multiSyncDone)
-		runMultiSyncListener(sigCtx, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
+		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
 	}()
 
 	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, logger)

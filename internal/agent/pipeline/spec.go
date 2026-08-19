@@ -227,6 +227,14 @@ func gstVideoFormatPropertyNickForPixelFormat(pixelFormat string) (nick string, 
 	return m.propertyNick, ok
 }
 
+// gstBytesPerPixelForPixelFormat is how many bytes one pixel occupies in the
+// tightly packed buffer the frame writer produces, for pinning
+// rawvideoparse's stride.
+func gstBytesPerPixelForPixelFormat(pixelFormat string) (n int, ok bool) {
+	m, ok := gstVideoFormatsByPixelFormat[pixelFormat]
+	return m.bytesPerPixel, ok
+}
+
 // FSEQSourceSpec builds a surface's real pipeline: a source stage reading
 // raw frame buffers from this process's own stdin (fed by B3's frame
 // writer — see frame.go) instead of B2a's videotestsrc, chained through the
@@ -260,6 +268,10 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 		// but this function never trusts that invariant silently — see the
 		// identical guard's reasoning in detectRenderSurfaceFormats.
 		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known GStreamer property-nick mapping", surfaceID, pixelFormat)
+	}
+	bytesPerPixel, ok := gstBytesPerPixelForPixelFormat(pixelFormat)
+	if !ok {
+		return Spec{}, fmt.Errorf("pipeline: surface %q: pixel format %q has no known bytes-per-pixel", surfaceID, pixelFormat)
 	}
 	if width < 1 || height < 1 {
 		return Spec{}, fmt.Errorf("pipeline: surface %q: geometry %dx%d is invalid", surfaceID, width, height)
@@ -317,6 +329,13 @@ func FSEQSourceSpec(surfaceID string, width, height int, pixelFormat string, fra
 							{Key: "height", Value: fmt.Sprintf("%d", height)},
 							{Key: "format", Value: formatNick},
 							{Key: "framerate", Value: fmt.Sprintf("%d/1", frameRate)},
+							// GStreamer pads a raw video row to a 4-byte
+							// boundary by default; the frame writer emits
+							// rows packed tight. Any width whose row is not
+							// already 4-aligned (250x3 = 750, off by 2)
+							// otherwise shears the picture diagonally and
+							// rotates the colour channels once per row.
+							{Key: "plane-strides", Value: fmt.Sprintf("<%d>", width*bytesPerPixel)},
 						},
 					},
 				},
