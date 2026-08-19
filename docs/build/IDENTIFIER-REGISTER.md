@@ -567,7 +567,8 @@ The store schema version, bumped by migrations in
 | v8 | shipped | Track E (asset store tables, ADR-028) |
 | v9 | reserved | Track C (audio session desired state) |
 | v10 | reserved | Track F (night-session lifecycle, cue outbox) |
-| v11+ | unallocated | free |
+| v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
+| v12+ | unallocated | free |
 
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
