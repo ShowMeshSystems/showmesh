@@ -52,7 +52,7 @@ describe('ActionInvocationOutcome', () => {
     }
   })
 
-  it('renders "pending" with the server-stated reason when outcome is null (SM-100)', () => {
+  it('renders "pending" with the server-stated reason when outcome is null', () => {
     render(
       <ActionInvocationOutcome
         result={makeResult({ state: 'pending', outcome: null, outcomeReason: 'still dispatching' })}

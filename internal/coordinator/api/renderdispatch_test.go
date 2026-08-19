@@ -875,7 +875,7 @@ func TestRenderApplyReplayDifferentSequenceIsParamsConflict(t *testing.T) {
 }
 
 // TestRenderApplyReplaySameSequenceReturnsOriginalResultAfterAssetSuperseded
-// is Linear SM-81: a replay must be judged against the CALLER's own request
+// proves a replay must be judged against the CALLER's own request
 // identity (surfaceId, sequenceId), never against resolveRenderApplyParams's
 // MUTABLE resolution. Between the two identical requests the current asset
 // for "opener" is superseded by a new upload with a different content hash —
@@ -953,8 +953,9 @@ func TestRenderApplyReplaySameSequenceReturnsOriginalResultAfterAssetSuperseded(
 }
 
 // TestRenderApplyReplaySameSequenceReturnsOriginalResultEvenWhenResolutionWouldNowFail
-// is SM-81's second wrong behaviour: between the two identical requests the
-// active show changes out from under the surface, so a FRESH resolution of
+// proves a second wrong behaviour a naive replay could have: between the
+// two identical requests the active show changes out from under the
+// surface, so a FRESH resolution of
 // this exact same caller input would now be refused outright ("not the
 // active show"). The replay must still return the first dispatch's own
 // result, never attempt to re-resolve and never surface that refusal.

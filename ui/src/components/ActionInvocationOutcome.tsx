@@ -2,8 +2,8 @@ import type { ActionInvocationResult } from '../app/types'
 
 // The action-invoke sibling of ResolumeActionOutcome, over
 // ActionInvocationResult.outcome's own five-word vocabulary. outcome is
-// null exactly when state is "pending" (SM-100) — never a blank string
-// pretending to be a real outcome. "unconfirmable" renders with its own
+// null exactly when state is "pending" — never a blank string pretending
+// to be a real outcome. "unconfirmable" renders with its own
 // distinct word — never merged into "confirmed" — so an operator can
 // tell the two apart at a glance (ADR-029 decision 4: an operator who
 // cannot stops reading them).

@@ -629,7 +629,14 @@ func (l *Listener) maybeRespondToDiscover(rec Received) {
 func (l *Listener) sendDiscoverResponse(src *net.UDPAddr) {
 	dst := &net.UDPAddr{IP: src.IP, Port: l.discoverReplyPort}
 
-	b, err := EncodePing(l.discoverResponse)
+	resp := l.discoverResponse
+	if resp.IP == ([4]byte{}) {
+		if ip, ok := localIPToward(src.IP); ok {
+			resp.IP = ip
+		}
+	}
+
+	b, err := EncodePing(resp)
 	if err != nil {
 		l.logger.Warn("multisync: failed to encode discover-ping response", "error", err)
 		return
@@ -729,4 +736,27 @@ func localAddressSets() (unicast, broadcast map[string]struct{}) {
 		}
 	}
 	return unicast, broadcast
+}
+
+// localIPToward reports this host's IPv4 address on the interface routing
+// toward peer. FPP registers a discovered remote at the address carried
+// inside the ping body rather than the datagram's source address, so a zero
+// here announces 0.0.0.0 and FPP silently ignores the node. Resolved per
+// peer because a multi-homed host has no single correct answer.
+func localIPToward(peer net.IP) ([4]byte, bool) {
+	var zero [4]byte
+	c, err := net.Dial("udp4", net.JoinHostPort(peer.String(), "9"))
+	if err != nil {
+		return zero, false
+	}
+	defer func() { _ = c.Close() }()
+	ua, ok := c.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return zero, false
+	}
+	v4 := ua.IP.To4()
+	if v4 == nil {
+		return zero, false
+	}
+	return [4]byte{v4[0], v4[1], v4[2], v4[3]}, true
 }

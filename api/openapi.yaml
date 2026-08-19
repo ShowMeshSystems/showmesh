@@ -4444,8 +4444,8 @@ paths:
         identical condition.
 
         `requestedRevision` optionally pins the exact show.action revision
-        to execute (SM-99, TRACK-F-resting-mode.md §F4): a durable/queued
-        caller names the revision it queued against, so activating a
+        to execute: a durable/queued caller names the revision it queued
+        against, so activating a
         newer revision after the cue was queued never changes what runs.
         An interactive caller may omit it to mean "whichever revision is
         active right now". Either way, the response's `result.revision`
@@ -10304,7 +10304,7 @@ components:
       description: >-
         The body of POST /actions/{id}/invocations. idempotencyKey is
         required. requestedRevision optionally pins the exact show.action
-        revision to execute (SM-99): a durable/queued caller (e.g. a
+        revision to execute: a durable/queued caller (e.g. a
         Track F cue) should always set it, so activating a newer revision
         after the cue was queued never changes what runs; an interactive
         caller may omit it to mean "whichever revision is active right
@@ -10354,7 +10354,7 @@ components:
             This invocation's own lifecycle. "pending" means it has not
             yet resolved — either a replay observed mid-flight, or this
             coordinator's own outcome could not be durably recorded yet
-            (ADR-003; SM-100).
+            (ADR-003).
         outcome:
           type: [string, "null"]
           enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed", null]

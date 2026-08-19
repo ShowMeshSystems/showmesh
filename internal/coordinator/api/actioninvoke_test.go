@@ -272,9 +272,9 @@ func TestInvokeActionReplayCarriesTheOriginalLabel(t *testing.T) {
 	}
 }
 
-// TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409 is
-// SM-107: TargetID's grammar is operator-chosen and not namespaced per
-// command family, so an FPP instance id can collide with a show.action id
+// TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409
+// proves that TargetID's grammar is operator-chosen and not namespaced
+// per command family, so an FPP instance id can collide with a show.action id
 // of the same text. A key already used by an FPP command whose TargetID
 // happens to equal the requested action id must be refused as a conflict,
 // never answered as a replay carrying that unrelated command's result.
@@ -344,9 +344,9 @@ func TestInvokeActionMQTTConfirmedAndUnconfirmable(t *testing.T) {
 	}
 }
 
-// TestInvokeActionMQTTNonConfirmedResultPersistsASpecificOutcomeState is
-// SM-103: the macro path computes a specific OutcomeState for an MQTT
-// result (negative_answer, malformed_payload, deadline_exceeded, ...);
+// TestInvokeActionMQTTNonConfirmedResultPersistsASpecificOutcomeState
+// proves that the macro path computes a specific OutcomeState for an
+// MQTT result (negative_answer, malformed_payload, deadline_exceeded, ...);
 // action invocation must persist that same specific state rather than an
 // empty one for a non-confirmed MQTT result.
 func TestInvokeActionMQTTNonConfirmedResultPersistsASpecificOutcomeState(t *testing.T) {

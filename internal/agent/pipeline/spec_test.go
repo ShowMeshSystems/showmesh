@@ -220,3 +220,20 @@ func TestFSEQSourceSpecRejectsInvalidGeometry(t *testing.T) {
 		})
 	}
 }
+
+// A 250-wide rgb row is 750 bytes, which is not 4-aligned, so GStreamer's
+// default padding would shift every row by 2 and shear the picture.
+func TestFSEQSourceSpecPinsStrideForUnalignedWidth(t *testing.T) {
+	spec, err := FSEQSourceSpec("s", 250, 250, "rgb", 40, true)
+	if err != nil {
+		t.Fatalf("FSEQSourceSpec: %v", err)
+	}
+	argv, err := spec.BuildArgv()
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	got := strings.Join(argv, " ")
+	if !strings.Contains(got, "plane-strides=<750>") {
+		t.Fatalf("argv = %q, want it to pin plane-strides=<750>", got)
+	}
+}

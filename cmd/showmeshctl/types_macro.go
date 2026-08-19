@@ -291,15 +291,15 @@ type actionBindingsResponse struct {
 // actionInvocationRequest is the body of POST /actions/{id}/invocations.
 // RequestedRevision is a pointer so an unset flag omits the key entirely
 // (an interactive "invoke whatever is current" call) rather than sending
-// a meaningless zero (SM-99).
+// a meaningless zero.
 type actionInvocationRequest struct {
 	IdempotencyKey    string `json:"idempotencyKey"`
 	RequestedRevision *int64 `json:"requestedRevision,omitempty"`
 }
 
 // actionInvocationResult mirrors v1.ActionInvocationResult field for
-// field. Outcome is a pointer: nil while State is "pending" (SM-100) —
-// never a blank string pretending to be one of the five terminal words.
+// field. Outcome is a pointer: nil while State is "pending" — never a
+// blank string pretending to be one of the five terminal words.
 type actionInvocationResult struct {
 	ID                        string     `json:"id"`
 	IdempotencyKey            string     `json:"idempotencyKey"`
