@@ -94,7 +94,7 @@ func oneShotAnchor() nightContentAnchor {
 func TestNightBoundaryContradicted_Rule3_ItemMismatch(t *testing.T) {
 	anchor := oneShotAnchor()
 	obs := nightPlaybackObservation{Current: true, Status: fppStatusValuePlaying, Playlist: anchor.Playlist, Item: "some-other.fseq"}
-	bad, reason := nightBoundaryContradicted(anchor, obs)
+	bad, reason := nightBoundaryContradicted(anchor, obs, boundaryTestNow)
 	if !bad {
 		t.Fatal("expected contradiction on item mismatch")
 	}
@@ -109,7 +109,7 @@ func TestNightBoundaryContradicted_Rule3_ItemMismatch(t *testing.T) {
 func TestNightBoundaryContradicted_Rule3_Pause(t *testing.T) {
 	anchor := oneShotAnchor()
 	obs := nightPlaybackObservation{Current: true, Status: fppStatusValuePaused, Playlist: anchor.Playlist, Item: anchor.Item}
-	bad, _ := nightBoundaryContradicted(anchor, obs)
+	bad, _ := nightBoundaryContradicted(anchor, obs, boundaryTestNow)
 	if !bad {
 		t.Fatal("expected contradiction on pause")
 	}
@@ -124,7 +124,7 @@ func TestNightBoundaryContradicted_Rule3_PositionMovedBackward(t *testing.T) {
 		Current: true, Status: fppStatusValuePlaying, Playlist: anchor.Playlist, Item: anchor.Item,
 		PositionSeconds: anchor.PositionSeconds - 1, PositionCurrent: true,
 	}
-	bad, _ := nightBoundaryContradicted(anchor, obs)
+	bad, _ := nightBoundaryContradicted(anchor, obs, boundaryTestNow)
 	if !bad {
 		t.Fatal("expected contradiction when position moves backward")
 	}
@@ -138,7 +138,7 @@ func TestNightBoundaryContradicted_AgreeingEvidenceIsNotContradicted(t *testing.
 		Current: true, Status: fppStatusValuePlaying, Playlist: anchor.Playlist, Item: anchor.Item,
 		PositionSeconds: anchor.PositionSeconds + 1, PositionCurrent: true,
 	}
-	if bad, reason := nightBoundaryContradicted(anchor, obs); bad {
+	if bad, reason := nightBoundaryContradicted(anchor, obs, boundaryTestNow); bad {
 		t.Fatalf("expected no contradiction, got one: %s", reason)
 	}
 }
@@ -149,7 +149,7 @@ func TestNightBoundaryContradicted_AgreeingEvidenceIsNotContradicted(t *testing.
 func TestNightBoundaryContradicted_MissingEvidenceIsNotAContradiction(t *testing.T) {
 	anchor := oneShotAnchor()
 	obs := nightPlaybackObservation{Current: false}
-	if bad, reason := nightBoundaryContradicted(anchor, obs); bad {
+	if bad, reason := nightBoundaryContradicted(anchor, obs, boundaryTestNow); bad {
 		t.Fatalf("expected no contradiction from missing evidence, got one: %s", reason)
 	}
 }
@@ -225,7 +225,7 @@ func TestNightBoundaryContradicted_PositionMSMovedBackward(t *testing.T) {
 		Current: true, Status: fppStatusValuePlaying, Playlist: anchor.Playlist, Item: anchor.Item,
 		PositionMS: 4900, PositionMSCurrent: true,
 	}
-	bad, _ := nightBoundaryContradicted(anchor, obs)
+	bad, _ := nightBoundaryContradicted(anchor, obs, boundaryTestNow)
 	if !bad {
 		t.Fatal("expected contradiction when millisecond position moves backward")
 	}
@@ -298,3 +298,7 @@ func TestMapNightTransition_BlankBoundaryReasonNeverRendersBlank(t *testing.T) {
 		t.Fatal("Reason is empty; a blank boundary reason must fall back to a stated reason")
 	}
 }
+
+// boundaryTestNow sits inside oneShotAnchor's own armed window, so a case
+// that does not deliberately exercise the idle rule is unaffected by it.
+var boundaryTestNow = time.Date(2026, 10, 31, 20, 0, 30, 0, time.UTC)

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -324,7 +325,7 @@ func nightAsRepeatBool(v any) bool {
 // fresh evidence disagrees with the anchor this boundary was armed from;
 // it never re-arms silently — the caller re-derives a fresh anchor only
 // after seeing this.
-func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObservation) (bool, string) {
+func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObservation, now time.Time) (bool, string) {
 	if !obs.Current {
 		// F0 does not measure "missing evidence near the boundary" as an
 		// invalidation by itself — a 15s collector gap is expected and
@@ -332,6 +333,9 @@ func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObser
 		// boundary wrong. Rule 7 covers the caller's own display of this
 		// as "unknown" separately.
 		return false, ""
+	}
+	if obs.Status == fppStatusValueIdle {
+		return nightStoppedPlaybackContradicts(anchor, now)
 	}
 	switch obs.Status {
 	case fppStatusValuePaused:
@@ -362,6 +366,40 @@ func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObser
 		// F0 §5: for a one-shot item, decreasing elapsed time between two
 		// polls is the only signal a loop restarted — never expected here.
 		return true, "observed position moved backward; the item appears to have restarted or looped"
+	}
+	return false, ""
+}
+
+// nightBoundaryCompletionTolerance is how close to a boundary's expected
+// end an idle reading counts as that content finishing normally rather
+// than stopping early. It is the same collector-skew allowance
+// [nightAnchorEvidenceTolerance] applies to combining two signals, and
+// deliberately not a separate operator setting.
+const nightBoundaryCompletionTolerance = nightAnchorEvidenceTolerance
+
+// nightStoppedPlaybackContradicts decides what an idle FPP means for the
+// anchor it is read against. Only fpp.status is required here, unlike
+// [handlers.nightAdvanceLive]'s stricter completion test: that one asserts
+// a session may move forward, while this one only ever holds it, so
+// erring toward "the playback is gone" launches nothing.
+func nightStoppedPlaybackContradicts(anchor nightContentAnchor, now time.Time) (bool, string) {
+	switch anchor.Purpose {
+	case nightAnchorPurposeShow:
+		// A show reaching its own end is completion, which
+		// nightAdvanceLive owns, never a contradicted boundary.
+		return false, ""
+	case nightAnchorPurposeRestingRepeat:
+		return true, "FPP is idle, but the repeating resting playlist this session started should still be running"
+	}
+
+	b := deriveNightBoundary(anchor)
+	if b.State != nightBoundaryStateArmed || b.ExpectedAt == nil {
+		return false, ""
+	}
+	if now.Before(b.ExpectedAt.Add(-nightBoundaryCompletionTolerance)) {
+		return true, fmt.Sprintf(
+			"FPP is idle %s before this boundary's expected end; the playback it was derived from stopped early",
+			b.ExpectedAt.Sub(now).Round(time.Second))
 	}
 	return false, ""
 }

@@ -272,7 +272,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	}
 
 	obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
-	if bad, reason := nightBoundaryContradicted(anchor, obsNow); bad {
+	if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
 		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
 		return
 	}
@@ -372,7 +372,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	if !rec.ShowCommitted {
 		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
 			obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
-			if bad, reason := nightBoundaryContradicted(anchor, obsNow); bad {
+			if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
 				h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 					cur.State = nightStateRestingIntershow
 					cur.StateEnteredAt = now

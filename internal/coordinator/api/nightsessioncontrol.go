@@ -1171,12 +1171,7 @@ func (h *handlers) nightStartupReconcilePlayback(ctx context.Context, now time.T
 			rec.State, anchor.FPPInstanceID, subject)
 	}
 
-	// Completion after a restart is normal, not a contradiction: the loop's
-	// own completion check advances the session on its next tick.
-	if obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == "" {
-		return ""
-	}
-	if bad, reason := nightBoundaryContradicted(anchor, obs); bad {
+	if bad, reason := nightBoundaryContradicted(anchor, obs, now); bad {
 		return fmt.Sprintf(
 			"coordinator restarted in %q and fresh evidence contradicts %s (%s); run end-session, then prepare-site, to recover",
 			rec.State, subject, reason)
