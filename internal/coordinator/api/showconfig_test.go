@@ -30,7 +30,7 @@ func showConfigTestDeps(svc identity.Service, st *store.Store) Dependencies {
 		IntegrationBrokers: []config.IntegrationBroker{
 			{ID: "home-automation", URL: "tcp://10.0.0.5:1883"},
 		},
-		Identity: svc, Config: st, Macros: &fakeMacroRunner{},
+		Identity: svc, Config: st, Macros: &fakeMacroRunner{}, Commands: st,
 	}
 }
 

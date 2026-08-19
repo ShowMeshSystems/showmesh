@@ -1,11 +1,12 @@
 import type { ActionInvocationResult } from '../app/types'
 
 // The action-invoke sibling of ResolumeActionOutcome, over
-// ActionInvocationResult.outcome's own five-word vocabulary plus the
-// accepted empty-string replay race, rendered as pending (ADR-003).
-// "unconfirmable" renders with its own distinct word — never merged into
-// "confirmed" — so an operator can tell the two apart at a glance
-// (ADR-029 decision 4: an operator who cannot stops reading them).
+// ActionInvocationResult.outcome's own five-word vocabulary. outcome is
+// null exactly when state is "pending" (SM-100) — never a blank string
+// pretending to be a real outcome. "unconfirmable" renders with its own
+// distinct word — never merged into "confirmed" — so an operator can
+// tell the two apart at a glance (ADR-029 decision 4: an operator who
+// cannot stops reading them).
 export interface ActionInvocationOutcomeProps {
   result: ActionInvocationResult
 }
@@ -14,7 +15,7 @@ export interface ActionInvocationOutcomeProps {
 // other value falls through to the fallback branch below rather than
 // rendering nothing, since a blank reads as fine (CLAUDE.md's own
 // standing rule) and a future sixth outcome word must never go silent.
-const KNOWN_OUTCOMES = new Set(['confirmed', 'unconfirmed', 'unconfirmable', 'refused', 'failed', ''])
+const KNOWN_OUTCOMES = new Set(['confirmed', 'unconfirmed', 'unconfirmable', 'refused', 'failed'])
 
 export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps) {
   return (
@@ -48,10 +49,10 @@ export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps
           Failed: {result.outcomeReason}
         </p>
       )}
-      {result.outcome === '' && (
-        <p className="text-muted">Pending: this invocation has not yet resolved.</p>
+      {result.outcome === null && (
+        <p className="text-muted">Pending: {result.outcomeReason}</p>
       )}
-      {!KNOWN_OUTCOMES.has(result.outcome) && (
+      {result.outcome !== null && !KNOWN_OUTCOMES.has(result.outcome) && (
         <p role="alert" className="action-invocation-outcome__unrecognized">
           Unrecognized outcome {JSON.stringify(result.outcome)}: {result.outcomeReason || '(no reason given)'}
         </p>

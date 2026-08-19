@@ -396,6 +396,75 @@ func TestCmdActionInvokeUnconfirmableExitsDistinctFromConfirmed(t *testing.T) {
 	}
 }
 
+// TestCmdActionInvokeRevisionFlagIsSent proves SM-99's CLI coverage: a
+// caller pinning --revision sends requestedRevision on the wire, and
+// omitting it sends none (the existing len(gotBody)==1 assertion above
+// already proves the omitted case).
+func TestCmdActionInvokeRevisionFlagIsSent(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeJSONBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","result":{
+			"id":"cmd-3","idempotencyKey":"k","actionId":"blackout-now","revision":1,"label":"Blackout","replay":false,
+			"state":"resolved","outcome":"confirmed","outcomeReason":"went dark",
+			"dispatchAttribution":"complete","dispatchAttributionReason":"x",
+			"outcomeAttribution":"complete","outcomeAttributionReason":"y",
+			"attributionDegraded":false,
+			"dispatchedAt":"2026-08-18T21:00:00Z","resolvedAt":"2026-08-18T21:00:01Z"
+		}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke", "--server", ts.URL, "--revision", "1", "blackout-now"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	rr, ok := gotBody["requestedRevision"].(float64)
+	if !ok || int64(rr) != 1 {
+		t.Errorf("request body requestedRevision = %v, want 1", gotBody["requestedRevision"])
+	}
+}
+
+func TestCmdActionInvokeNegativeRevisionExitsUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke", "--revision", "-1", "blackout-now"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage; stderr=%s", code, stderr.String())
+	}
+}
+
+// TestCmdActionInvokePendingResultRendersPendingNotABlankOutcome is
+// SM-100's CLI coverage: a null outcome (this command's own
+// *string field) renders as "pending", never as a blank or unrecognized
+// outcome word.
+func TestCmdActionInvokePendingResultRendersPendingNotABlankOutcome(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","result":{
+			"id":"cmd-4","idempotencyKey":"k","actionId":"blackout-now","revision":1,"label":"Blackout","replay":true,
+			"state":"pending","outcome":null,"outcomeReason":"still working",
+			"dispatchAttribution":"complete","dispatchAttributionReason":"x",
+			"outcomeAttribution":"pending","outcomeAttributionReason":"y",
+			"attributionDegraded":false,
+			"dispatchedAt":null,"resolvedAt":null
+		}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"invoke", "--server", ts.URL, "blackout-now"}, &stdout, &stderr, time.Now)
+	if code != exitCommandUnconfirmed {
+		t.Fatalf("exit code = %d, want exitCommandUnconfirmed; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "pending:") {
+		t.Errorf("stdout = %q, want it to lead with \"pending:\"", stdout.String())
+	}
+}
+
 func TestCmdActionInvokeRequiresExactlyOneArg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdAction([]string{"invoke"}, &stdout, &stderr, time.Now)

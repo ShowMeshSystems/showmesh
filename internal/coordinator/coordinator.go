@@ -776,6 +776,15 @@ func Run() int {
 		logger.Warn("resolved action invocations left stranded by a prior process", "count", n)
 	}
 
+	// SM-102 finding 4: the one-shot sweep above cannot self-heal a row
+	// that becomes stranded AFTER it ran (actioninvoke.go's own
+	// persistErr branch — a commands-table write failing right after a
+	// successful dispatch). This loop retries it periodically for the
+	// rest of this process's life; it is safe to run alongside live
+	// requests because it only ever touches rows older than
+	// actionInvokeReconcileMinAge — see that constant's own doc comment.
+	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
+
 	// fppHTTPClient and fppRunner were already constructed above (before
 	// apiDeps), one shared *http.Client per contract/Task C's own guidance
 	// ("callers SHOULD construct one *http.Client and pass it to every

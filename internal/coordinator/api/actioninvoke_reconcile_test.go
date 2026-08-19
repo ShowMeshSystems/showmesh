@@ -127,8 +127,14 @@ func TestReconcileStrandedActionInvocationsMakesTheReplayRaceUnreachablePermanen
 	}
 	m1 := decodeMap(t, body1)
 	result1, _ := m1["result"].(map[string]any)
-	if result1["outcome"] != "" {
-		t.Fatalf("pre-reconciliation outcome = %v, want \"\" (fixture setup is wrong if this fails)", result1["outcome"])
+	if result1["state"] != "pending" {
+		t.Fatalf("pre-reconciliation state = %v, want \"pending\" (fixture setup is wrong if this fails)", result1["state"])
+	}
+	if result1["outcome"] != nil {
+		t.Fatalf("pre-reconciliation outcome = %v, want null (a pending result must not carry one)", result1["outcome"])
+	}
+	if reason, _ := result1["outcomeReason"].(string); reason == "" {
+		t.Fatalf("pre-reconciliation outcomeReason is empty, want a stated reason even while pending")
 	}
 
 	if _, err := ReconcileStrandedActionInvocations(context.Background(), deps, fixedClock(testNow), testLogger()); err != nil {

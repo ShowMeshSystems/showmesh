@@ -10,9 +10,15 @@ function makeResult(overrides: Partial<ActionInvocationResult>): ActionInvocatio
     id: 'cmd-1',
     idempotencyKey: 'key-1',
     actionId: 'blackout-now',
+    revision: 1,
     replay: false,
+    state: 'resolved',
     outcome: 'confirmed',
     outcomeReason: 'went dark',
+    dispatchAttribution: 'complete',
+    dispatchAttributionReason: 'the pre-dispatch audit entry was written durably before dispatch',
+    outcomeAttribution: 'complete',
+    outcomeAttributionReason: 'the outcome audit entry was written durably',
     attributionDegraded: false,
     dispatchedAt: '2026-08-19T00:00:00Z',
     resolvedAt: '2026-08-19T00:00:01Z',
@@ -46,9 +52,13 @@ describe('ActionInvocationOutcome', () => {
     }
   })
 
-  it('renders "pending" for the accepted empty-outcome replay race', () => {
-    render(<ActionInvocationOutcome result={makeResult({ outcome: '', outcomeReason: '' })} />)
-    expect(screen.getByText(/Pending/)).toBeVisible()
+  it('renders "pending" with the server-stated reason when outcome is null (SM-100)', () => {
+    render(
+      <ActionInvocationOutcome
+        result={makeResult({ state: 'pending', outcome: null, outcomeReason: 'still dispatching' })}
+      />,
+    )
+    expect(screen.getByText(/Pending: still dispatching/)).toBeVisible()
   })
 
   // A review finding: an outcome word outside the six documented values

@@ -1167,6 +1167,7 @@ export interface paths {
          * Invoke one stored show.action by id (Track E seam E7-1, ADR-037 decision 8)
          * @description Behind `show:action:invoke`. The request carries only an idempotency key: the stored action's own target supplies every parameter, so a caller cannot pass a protocol address, topic, or path here (that raw hatch is ADR-029 decision 3's own, separately queued, deliberately inconvenient escape valve, not this endpoint) — a body naming any key other than `idempotencyKey` is refused (`400`), never silently ignored. Dispatches through the exact same in-process seams `internal/coordinator/macro`'s own step dispatch uses. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer- token-authenticated request is exempt.
          *     `idempotencyKey` is resolved first: a replayed key against the SAME action id dispatches nothing and returns the original result, flagged `replay: true`. A key reused against a DIFFERENT action id is a `409` conflict. `blackout`/`stop`/`powerOff`-classed actions (read from the stored action's own `safetyClass`) are exempt from ADR-024 decision 11's fail-closed audit rule; every other action fails closed (`503`, nothing dispatched) under the identical condition.
+         *     `requestedRevision` optionally pins the exact show.action revision to execute (SM-99, TRACK-F-resting-mode.md §F4): a durable/queued caller names the revision it queued against, so activating a newer revision after the cue was queued never changes what runs. An interactive caller may omit it to mean "whichever revision is active right now". Either way, the response's `result.revision` states which revision actually executed.
          */
         post: operations["invokeAction"];
         delete?: never;
@@ -3010,25 +3011,50 @@ export interface components {
             serverTime: string;
             bindings: components["schemas"]["ActionBinding"][];
         };
-        /** @description The body of POST /actions/{id}/invocations. idempotencyKey is the ONLY field: the stored action's own target supplies every parameter. */
+        /** @description The body of POST /actions/{id}/invocations. idempotencyKey is required. requestedRevision optionally pins the exact show.action revision to execute (SM-99): a durable/queued caller (e.g. a Track F cue) should always set it, so activating a newer revision after the cue was queued never changes what runs; an interactive caller may omit it to mean "whichever revision is active right now" — the response's revision field always states which revision actually ran. */
         ActionInvocationRequest: {
             idempotencyKey: string;
+            /** Format: int64 */
+            requestedRevision?: number;
         };
-        /** @description What happened to one invoked (or replayed) action, against this API's shared five-word outcome vocabulary — the same one ResolumeActionResult.outcome uses. */
+        /** @description One invoked (or replayed) action's lifecycle and, once resolved, its outcome against this API's shared five-word outcome vocabulary — the same one ResolumeActionResult.outcome uses. */
         ActionInvocationResult: {
             id: string;
             idempotencyKey: string;
             actionId: string;
+            /**
+             * Format: int64
+             * @description The show.action revision that actually executed.
+             */
+            revision: number;
             label?: string;
             /** @description True when this response answers a REPLAYED idempotency key: nothing was dispatched by this request. */
             replay: boolean;
             /**
-             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — a real, honest value (ADR-020), matching ResolumeActionResult.outcome's identical narrow case.
+             * @description This invocation's own lifecycle. "pending" means it has not yet resolved — either a replay observed mid-flight, or this coordinator's own outcome could not be durably recorded yet (ADR-003; SM-100).
              * @enum {string}
              */
-            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed" | "";
-            /** @description Non-empty for every resolved result, including "confirmed". */
+            state: "pending" | "resolved";
+            /**
+             * @description null while state is "pending" — a pending result never carries a blank outcome pretending to be one. One of the five terminal words once state is "resolved".
+             * @enum {string|null}
+             */
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed" | null;
+            /** @description Always non-empty, in both states — while pending, states why no outcome exists yet (ADR-020 decision 5). */
             outcomeReason: string;
+            /**
+             * @description Whether the pre-dispatch audit entry was written durably.
+             * @enum {string}
+             */
+            dispatchAttribution: "complete" | "degraded";
+            dispatchAttributionReason: string;
+            /**
+             * @description Whether the outcome audit entry (and this invocation's own durable outcome record) was written durably. "pending" only while state is itself "pending".
+             * @enum {string}
+             */
+            outcomeAttribution: "pending" | "complete" | "degraded";
+            outcomeAttributionReason: string;
+            /** @description Derived: true iff dispatchAttribution or outcomeAttribution is "degraded". Kept only for a caller that has not moved to the two named states above. */
             attributionDegraded: boolean;
             /** Format: date-time */
             dispatchedAt: string | null;

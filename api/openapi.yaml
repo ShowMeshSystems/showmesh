@@ -3301,6 +3301,14 @@ paths:
         exempt from ADR-024 decision 11's fail-closed audit rule; every
         other action fails closed (`503`, nothing dispatched) under the
         identical condition.
+
+        `requestedRevision` optionally pins the exact show.action revision
+        to execute (SM-99, TRACK-F-resting-mode.md §F4): a durable/queued
+        caller names the revision it queued against, so activating a
+        newer revision after the cue was queued never changes what runs.
+        An interactive caller may omit it to mean "whichever revision is
+        active right now". Either way, the response's `result.revision`
+        states which revision actually executed.
       parameters:
         - name: id
           in: path
@@ -8437,21 +8445,32 @@ components:
     ActionInvocationRequest:
       type: object
       description: >-
-        The body of POST /actions/{id}/invocations. idempotencyKey is the
-        ONLY field: the stored action's own target supplies every
-        parameter.
+        The body of POST /actions/{id}/invocations. idempotencyKey is
+        required. requestedRevision optionally pins the exact show.action
+        revision to execute (SM-99): a durable/queued caller (e.g. a
+        Track F cue) should always set it, so activating a newer revision
+        after the cue was queued never changes what runs; an interactive
+        caller may omit it to mean "whichever revision is active right
+        now" — the response's revision field always states which
+        revision actually ran.
       required: [idempotencyKey]
       properties:
         idempotencyKey:
           type: string
+        requestedRevision:
+          type: integer
+          format: int64
+          minimum: 1
     ActionInvocationResult:
       type: object
       description: >-
-        What happened to one invoked (or replayed) action, against this
-        API's shared five-word outcome vocabulary — the same one
-        ResolumeActionResult.outcome uses.
+        One invoked (or replayed) action's lifecycle and, once resolved,
+        its outcome against this API's shared five-word outcome
+        vocabulary — the same one ResolumeActionResult.outcome uses.
       required:
-        [id, idempotencyKey, actionId, replay, outcome, outcomeReason,
+        [id, idempotencyKey, actionId, revision, replay, state, outcome,
+         outcomeReason, dispatchAttribution, dispatchAttributionReason,
+         outcomeAttribution, outcomeAttributionReason,
          attributionDegraded, dispatchedAt, resolvedAt]
       properties:
         id:
@@ -8460,6 +8479,10 @@ components:
           type: string
         actionId:
           type: string
+        revision:
+          type: integer
+          format: int64
+          description: The show.action revision that actually executed.
         label:
           type: string
         replay:
@@ -8467,19 +8490,48 @@ components:
           description: >-
             True when this response answers a REPLAYED idempotency key:
             nothing was dispatched by this request.
-        outcome:
+        state:
           type: string
-          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed", ""]
+          enum: ["pending", "resolved"]
           description: >-
-            Empty only for a REPLAY response returned before the original
-            request's own dispatch/confirmation has finished — a real,
-            honest value (ADR-020), matching ResolumeActionResult.outcome's
-            identical narrow case.
+            This invocation's own lifecycle. "pending" means it has not
+            yet resolved — either a replay observed mid-flight, or this
+            coordinator's own outcome could not be durably recorded yet
+            (ADR-003; SM-100).
+        outcome:
+          type: [string, "null"]
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed", null]
+          description: >-
+            null while state is "pending" — a pending result never
+            carries a blank outcome pretending to be one. One of the five
+            terminal words once state is "resolved".
         outcomeReason:
           type: string
-          description: Non-empty for every resolved result, including "confirmed".
+          description: >-
+            Always non-empty, in both states — while pending, states why
+            no outcome exists yet (ADR-020 decision 5).
+        dispatchAttribution:
+          type: string
+          enum: ["complete", "degraded"]
+          description: >-
+            Whether the pre-dispatch audit entry was written durably.
+        dispatchAttributionReason:
+          type: string
+        outcomeAttribution:
+          type: string
+          enum: ["pending", "complete", "degraded"]
+          description: >-
+            Whether the outcome audit entry (and this invocation's own
+            durable outcome record) was written durably. "pending" only
+            while state is itself "pending".
+        outcomeAttributionReason:
+          type: string
         attributionDegraded:
           type: boolean
+          description: >-
+            Derived: true iff dispatchAttribution or outcomeAttribution is
+            "degraded". Kept only for a caller that has not moved to the
+            two named states above.
         dispatchedAt:
           type: [string, "null"]
           format: date-time

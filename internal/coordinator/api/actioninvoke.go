@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +22,10 @@ import (
 )
 
 // POST /api/v1/actions/{id}/invocations: invoke one stored show.action by
-// id outside a macro run (ADR-037 decision 8). The request carries only
-// an idempotency key; the stored target supplies every parameter
-// (ADR-029) — no protocol address, topic, or path is ever accepted here.
+// id outside a macro run (ADR-037 decision 8). The request carries an
+// idempotency key and an optional pinned revision: the stored target
+// supplies every parameter (ADR-029) — no protocol address, topic, or
+// path is ever accepted here.
 // Dispatch reuses dispatchFPPCommand, [Dependencies.ResolumeActions].Dispatch,
 // and [DispatchMQTTAction], the same seams macro's own step dispatch
 // uses. AuditExempt is read from the stored action's own SafetyClass,
@@ -46,12 +48,59 @@ const (
 	outcomeWordFailed        = "failed"
 )
 
+// Lifecycle states for [v1.ActionInvocationResult.State], mirroring
+// store.CommandRecord.State's own two live values for this command
+// family (SM-100).
+const (
+	actionInvokeStatePending  = "pending"
+	actionInvokeStateResolved = "resolved"
+)
+
+// Attribution states for [v1.ActionInvocationResult.DispatchAttribution]/
+// OutcomeAttribution (SM-100): named states with their own reasons,
+// replacing a single aggregate boolean that could not tell a dispatch-
+// audit loss apart from an outcome-audit loss. "pending" applies only to
+// OutcomeAttribution, before this invocation has resolved.
+const (
+	attributionStatePending  = "pending"
+	attributionStateComplete = "complete"
+	attributionStateDegraded = "degraded"
+)
+
+const actionInvokeDispatchCompleteReason = "the pre-dispatch audit entry was written durably before dispatch"
+const actionInvokeOutcomeCompleteReason = "the outcome audit entry was written durably"
+const actionInvokeOutcomePendingReason = "this invocation has not yet resolved, so no outcome audit entry has been attempted yet"
+
+// actionInvokePendingOutcomeReason is the canned, non-blank OutcomeReason
+// a fresh command row carries between insertion and resolution — SM-100:
+// a pending result must state a real reason, never an empty string a
+// racing replay could observe.
+const actionInvokePendingOutcomeReason = "this invocation has not yet resolved: it is still being dispatched or is awaiting confirmation evidence"
+
+// actionInvokeOutcomeNotPersistedReason is SM-102 finding 2: the outward
+// effect ran and its outcome is known to THIS request, but the write
+// recording that outcome in the command journal failed. Reporting
+// "resolved" here would tell this caller a different story than a
+// concurrent replay (which reads the still-pending row) and a future
+// restart (which reconciles it independently) would tell — so this
+// caller is told the truth the row itself carries: still pending, and
+// self-healing via [RunActionInvokeReconciliationLoop] rather than a
+// restart.
+const actionInvokeOutcomeNotPersistedReason = "this invocation's outward effect has already completed and its outcome is known to this coordinator, but durably recording that outcome failed; it remains pending and this coordinator's own ongoing reconciliation will resolve it without waiting for a restart"
+
 const maxActionInvokeRequestBodyBytes = 1 << 10 // 1 KiB
 
 // actionInvokeTargetKind names this seam's own commands.target_kind.
 // target_id is the action's own object id, so two different actions may
 // reuse the same idempotency key text without colliding.
 const actionInvokeTargetKind = "show.action"
+
+// actionInvokeFPPChildIdempotencyKeyPrefix is the deterministic prefix
+// [dispatchActionTarget]'s FPP branch mints its nested command's own
+// idempotency key from ("action-invoke:"+cmdID) — see
+// [ReconcileStrandedActionInvocations]'s use of it to find that child
+// again at startup.
+const actionInvokeFPPChildIdempotencyKeyPrefix = "action-invoke:"
 
 // actionInvokeHTTPWriteDeadline covers this endpoint's worst case across
 // all three integrations, dominated by mqtt's 120s expect.deadlineSeconds
@@ -100,11 +149,19 @@ func actionInvokeReplayConflictProblem(existingID, existingTargetKind, existingT
 }
 
 // actionInvokeResultPayload is what this handler stores in
-// store.CommandRecord.ResultJSON, mirroring resolumeActionResultPayload's
-// identical narrow shape.
+// store.CommandRecord.ResultJSON. It carries the attribution axes
+// alongside Outcome/Label so a replay or a startup reconciliation reads
+// back the SAME attribution this invocation's own original request
+// determined, rather than recomputing (and potentially disagreeing with)
+// it later (SM-102 finding 1).
 type actionInvokeResultPayload struct {
 	Label   string `json:"label,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
+
+	DispatchAttribution       string `json:"dispatchAttribution,omitempty"`
+	DispatchAttributionReason string `json:"dispatchAttributionReason,omitempty"`
+	OutcomeAttribution        string `json:"outcomeAttribution,omitempty"`
+	OutcomeAttributionReason  string `json:"outcomeAttributionReason,omitempty"`
 }
 
 // handleInvokeAction serves POST /api/v1/actions/{id}/invocations, behind
@@ -125,7 +182,8 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(bodyBytes) > maxActionInvokeRequestBodyBytes {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			"the request body exceeds this endpoint's %d byte limit; an idempotency key alone never legitimately needs more",
+			"the request body exceeds this endpoint's %d byte limit; an idempotency key and an optional revision "+
+				"number never legitimately need more",
 			maxActionInvokeRequestBodyBytes)))
 		return
 	}
@@ -133,7 +191,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	var top map[string]json.RawMessage
 	if len(bodyBytes) > 0 {
 		if err := json.Unmarshal(bodyBytes, &top); err != nil {
-			writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string}`))
+			writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string,"requestedRevision":integer?}`))
 			return
 		}
 	}
@@ -144,15 +202,15 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	// never silently ignored.
 	var unknownKeys []string
 	for k := range top {
-		if k != "idempotencyKey" {
+		if k != "idempotencyKey" && k != "requestedRevision" {
 			unknownKeys = append(unknownKeys, k)
 		}
 	}
 	if len(unknownKeys) > 0 {
 		sort.Strings(unknownKeys)
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf(
-			`request body contains unrecognized key(s): %s (this endpoint accepts only "idempotencyKey" — the `+
-				`action's own stored target supplies every parameter)`, strings.Join(unknownKeys, ", "))))
+			`request body contains unrecognized key(s): %s (this endpoint accepts only "idempotencyKey" and `+
+				`"requestedRevision" — the action's own stored target supplies every parameter)`, strings.Join(unknownKeys, ", "))))
 		return
 	}
 	var idempotencyKey string
@@ -163,10 +221,19 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem("idempotencyKey: "+err.Error()))
 		return
 	}
+	var requestedRevision *int64
+	if revRaw, hasRev := top["requestedRevision"]; hasRev {
+		var rr int64
+		if err := json.Unmarshal(revRaw, &rr); err != nil {
+			writeProblem(w, h.logger, now, invalidParameterProblem("requestedRevision must be a JSON integer"))
+			return
+		}
+		requestedRevision = &rr
+	}
 
-	rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, id)
+	rev, problem, err := h.resolveActionInvokeRevision(ctx, id, requestedRevision)
 	if err != nil {
-		h.writeInternalError(w, now, "get active show.action config revision for invocation", err)
+		h.writeInternalError(w, now, "resolve action revision for invocation", err)
 		return
 	}
 	if problem != nil {
@@ -204,17 +271,20 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmdID := uuid.NewString()
+	requestedRevisionStr := strconv.FormatInt(rev.Revision, 10)
 	dispatchEntry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: auditAction, Target: id, IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditDispatch, CommandID: cmdID, Params: map[string]any{"actionId": id, "label": payload.Label},
+		Kind: identity.AuditDispatch, CommandID: cmdID, Params: map[string]any{"actionId": id, "label": payload.Label, "revision": rev.Revision},
 	}
 	rec := store.CommandRecord{
 		ID: cmdID, IdempotencyKey: idempotencyKey, Action: auditAction,
 		TargetKind: actionInvokeTargetKind, TargetID: id,
 		IssuerPrincipalID: ac.result.Principal.ID, IssuerPrincipalName: ac.result.Principal.Name,
+		RequestedRevision:  requestedRevisionStr,
 		ConfirmationMethod: string(command.ConfirmationEvidence), State: "pending",
+		OutcomeReason: actionInvokePendingOutcomeReason,
 	}
 
 	// AuditExempt reads straight off the stored action's own safetyClass
@@ -273,48 +343,99 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Dispatch — outside any transaction and on a detached context,
-	// so an abandoned client cannot abort an in-flight dispatch or its
-	// bookkeeping, matching dispatchFPPCommand/handleDispatchResolumeAction's
-	// identical bgCtx cutover. ---
+	dispatchAttribution, dispatchAttributionReason := attributionStateComplete, actionInvokeDispatchCompleteReason
+	if dispatchDegraded {
+		dispatchAttribution, dispatchAttributionReason = attributionStateDegraded, degradedAttributionReasonSafetyClassExemption
+	}
+
+	// --- From here on, a detached context: an abandoned client must not
+	// abort an in-flight dispatch or its bookkeeping, matching
+	// dispatchFPPCommand/handleDispatchResolumeAction's identical bgCtx
+	// cutover. ---
 	bgCtx := context.WithoutCancel(ctx)
+
+	// Persist the attribution axes known so far immediately, before
+	// dispatch even starts — SM-102 finding 1: a replay racing this
+	// still-in-flight request must read the SAME dispatch attribution
+	// this request just determined, not a default zero value.
+	interimResult, _ := json.Marshal(actionInvokeResultPayload{
+		Label:               payload.Label,
+		DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
+		OutcomeAttribution: attributionStatePending, OutcomeAttributionReason: actionInvokeOutcomePendingReason,
+	})
+	interimResultStr := string(interimResult)
+	if err := h.updateActionInvokeOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{ResultJSON: &interimResultStr}); err != nil {
+		h.logWarn("failed to record action invocation dispatch attribution", "commandId", cmdID, "error", err)
+	}
+
 	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, actionInvokeHTTPWriteDeadline-actionInvokeBookkeepingBudget)
 	defer dispatchCancel()
 
-	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, ac, h.clientAddr(r), auditExempt)
+	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, requestedRevisionStr, ac, h.clientAddr(r), auditExempt)
 
-	resolvedState := "resolved"
-	// evidenceState prefers dispatchActionTarget's own family-specific
-	// state (MQTT's mqttActionState* vocabulary — see that function's doc
-	// comment); FPP and Resolume leave it unset and fall back to this
-	// pkg/observation-vocabulary default, unchanged from before this state
-	// existed.
+	// evidenceState is currently unused on the wire directly but kept for
+	// parity with the outcome-audit entry below, which does carry it.
 	evidenceState := outcomeState
 	if evidenceState == "" && outcome == outcomeWordConfirmed {
 		evidenceState = "current"
-	}
-	finalResult, _ := json.Marshal(actionInvokeResultPayload{Label: payload.Label, Outcome: outcome})
-	finalResultStr := string(finalResult)
-	if err := h.updateActionInvokeOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
-		DispatchedAt: dispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
-		OutcomeState: &evidenceState, OutcomeReason: &outcomeReason,
-	}); err != nil {
-		h.logWarn("failed to record action invocation outcome", "commandId", cmdID, "error", err)
 	}
 
 	outcomeDegraded := h.writeActionInvokeAuditBounded(bgCtx, resolvedAt, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: resolvedAt, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 		Action: auditAction, Target: id, IdempotencyKey: idempotencyKey,
-		Kind: identity.AuditOutcome, CommandID: cmdID, Params: map[string]any{"actionId": id, "label": payload.Label},
+		Kind: identity.AuditOutcome, CommandID: cmdID, Params: map[string]any{"actionId": id, "label": payload.Label, "revision": rev.Revision},
 		Outcome: outcome, OutcomeState: evidenceState, OutcomeReason: outcomeReason,
 	})
+	outcomeAttribution, outcomeAttributionReason := attributionStateComplete, actionInvokeOutcomeCompleteReason
+	if outcomeDegraded {
+		outcomeAttribution, outcomeAttributionReason = attributionStateDegraded, degradedAttributionReasonPostDispatch
+	}
 
+	resolvedState := "resolved"
+	finalResult, _ := json.Marshal(actionInvokeResultPayload{
+		Label: payload.Label, Outcome: outcome,
+		DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
+		OutcomeAttribution: outcomeAttribution, OutcomeAttributionReason: outcomeAttributionReason,
+	})
+	finalResultStr := string(finalResult)
+	persistErr := h.updateActionInvokeOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
+		DispatchedAt: dispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
+		OutcomeState: &evidenceState, OutcomeReason: &outcomeReason,
+	})
+	if persistErr != nil {
+		h.logWarn("failed to record action invocation outcome", "commandId", cmdID, "error", persistErr)
+	}
+
+	// SM-102 finding 2: if the row itself never became durably "resolved",
+	// this response must not claim it is — a concurrent replay reads the
+	// still-"pending" row, and a later restart's reconciliation resolves
+	// it independently; telling THIS caller "resolved" would be a third,
+	// different story about the same dispatch.
+	if persistErr != nil {
+		jsonWrite(w, v1.ActionInvocationResponse{
+			ServerTime: formatTime(h.now()),
+			Result: v1.ActionInvocationResult{
+				ID: cmdID, IdempotencyKey: idempotencyKey, ActionID: id, Revision: rev.Revision, Label: payload.Label,
+				Replay: false, State: actionInvokeStatePending, Outcome: nil, OutcomeReason: actionInvokeOutcomeNotPersistedReason,
+				DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
+				OutcomeAttribution: attributionStateDegraded, OutcomeAttributionReason: actionInvokeOutcomeNotPersistedReason,
+				AttributionDegraded: true,
+				DispatchedAt:        formatTimePtr(dispatchedAt),
+				ResolvedAt:          nil,
+			},
+		})
+		return
+	}
+
+	outcomeCopy := outcome
 	jsonWrite(w, v1.ActionInvocationResponse{
 		ServerTime: formatTime(h.now()),
 		Result: v1.ActionInvocationResult{
-			ID: cmdID, IdempotencyKey: idempotencyKey, ActionID: id, Label: payload.Label,
-			Replay: false, Outcome: outcome, OutcomeReason: outcomeReason,
+			ID: cmdID, IdempotencyKey: idempotencyKey, ActionID: id, Revision: rev.Revision, Label: payload.Label,
+			Replay: false, State: actionInvokeStateResolved, Outcome: &outcomeCopy, OutcomeReason: outcomeReason,
+			DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
+			OutcomeAttribution: outcomeAttribution, OutcomeAttributionReason: outcomeAttributionReason,
 			AttributionDegraded: dispatchDegraded || outcomeDegraded,
 			DispatchedAt:        formatTimePtr(dispatchedAt),
 			ResolvedAt:          formatTimePtr(&resolvedAt),
@@ -322,24 +443,61 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// resolveActionInvokeRevision loads either the show.action's currently
+// active revision (requestedRevision == nil, an interactive "run
+// whatever is current" call) or one EXACT pinned revision
+// (requestedRevision != nil, a durable/queued caller naming the exact
+// revision it queued against — SM-99/TRACK-F §F4). Either way, the
+// returned revision is what [v1.ActionInvocationResult.Revision] reports
+// as having actually executed.
+func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, requestedRevision *int64) (store.ConfigRevisionRecord, *v1.Problem, error) {
+	if requestedRevision == nil {
+		rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, id)
+		return rev, problem, err
+	}
+	if *requestedRevision <= 0 {
+		p := invalidParameterProblem(fmt.Sprintf("requestedRevision must be a positive revision number, got %d", *requestedRevision))
+		return store.ConfigRevisionRecord{}, &p, nil
+	}
+	if _, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, id); err != nil {
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			p := showConfigObjectNotFoundProblem(config.ShowActionConfigKind, id)
+			return store.ConfigRevisionRecord{}, &p, nil
+		}
+		return store.ConfigRevisionRecord{}, nil, err
+	}
+	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, id, *requestedRevision)
+	if errors.Is(err, store.ErrConfigRevisionNotFound) {
+		p := resourceNotFoundProblem(fmt.Sprintf("show.action %q has no revision %d", id, *requestedRevision))
+		return store.ConfigRevisionRecord{}, &p, nil
+	}
+	if err != nil {
+		return store.ConfigRevisionRecord{}, nil, err
+	}
+	return rev, nil, nil
+}
+
 // dispatchActionTarget routes payload.Target to the same in-process
 // dispatch seam its own integration already uses. auditExempt is
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
-// handler's own outer decision.
+// handler's own outer decision. requestedRevision (SM-99) is threaded
+// into the FPP branch's own child command row, so the nested dispatch
+// carries the SAME pinned revision the outer invocation resolved against.
 //
 // outcomeState is empty for FPP and Resolume (the caller derives a
 // pkg/observation-vocabulary fallback from outcome itself, unchanged) and
 // carries DispatchMQTTAction's own mqttActionState* vocabulary for MQTT —
 // macro/vocab.go's identical split, applied here instead of re-deriving a
 // second classification for the same dispatch.
-func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
+func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, requestedRevision string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
 	target := payload.Target
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
 		in := FPPCommandInput{
 			InstanceID: target.InstanceID, Action: target.Primitive, Params: target.Params,
-			IdempotencyKey: "action-invoke:" + cmdID,
+			IdempotencyKey:    actionInvokeFPPChildIdempotencyKeyPrefix + cmdID,
+			RequestedRevision: requestedRevision,
 			Issuer: FPPCommandIssuer{
 				PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 				Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
@@ -412,6 +570,9 @@ func mapResolumeOutcomeWord(o ResolumeActionOutcome) string {
 // resolveActionInvokeReplay answers a replayed idempotency key: nothing
 // is dispatched, and existing's own already-recorded result is returned
 // verbatim — mirroring resolveResolumeActionReplay's identical reasoning.
+// existing's own stored payload carries State/Outcome/attribution exactly
+// as its original request (or a startup reconciliation) left them
+// (SM-100/SM-102 finding 1): this never recomputes them.
 func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time, ac authContext, existing store.CommandRecord, requestedActionID string) (v1.ActionInvocationResult, *v1.Problem) {
 	if existing.TargetKind != actionInvokeTargetKind || existing.TargetID != requestedActionID {
 		p := actionInvokeReplayConflictProblem(existing.ID, existing.TargetKind, existing.TargetID, requestedActionID)
@@ -428,10 +589,42 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	var payload actionInvokeResultPayload
 	_ = json.Unmarshal([]byte(existing.ResultJSON), &payload)
 
+	revision, _ := strconv.ParseInt(existing.RequestedRevision, 10, 64)
+
+	state := actionInvokeStatePending
+	var outcomePtr *string
+	if existing.State == "resolved" {
+		state = actionInvokeStateResolved
+		outcomeCopy := payload.Outcome
+		outcomePtr = &outcomeCopy
+	}
+	outcomeReason := existing.OutcomeReason
+	if outcomeReason == "" {
+		outcomeReason = actionInvokePendingOutcomeReason
+	}
+
+	dispatchAttribution, dispatchAttributionReason := payload.DispatchAttribution, payload.DispatchAttributionReason
+	if dispatchAttribution == "" {
+		dispatchAttribution, dispatchAttributionReason = attributionStateComplete, actionInvokeDispatchCompleteReason
+	}
+	outcomeAttribution, outcomeAttributionReason := payload.OutcomeAttribution, payload.OutcomeAttributionReason
+	if outcomeAttribution == "" {
+		if state == actionInvokeStateResolved {
+			outcomeAttribution, outcomeAttributionReason = attributionStateComplete, actionInvokeOutcomeCompleteReason
+		} else {
+			outcomeAttribution, outcomeAttributionReason = attributionStatePending, actionInvokeOutcomePendingReason
+		}
+	}
+	if degraded {
+		outcomeAttribution, outcomeAttributionReason = attributionStateDegraded, degradedAttributionReasonPostDispatch
+	}
+
 	return v1.ActionInvocationResult{
-		ID: existing.ID, IdempotencyKey: existing.IdempotencyKey, ActionID: existing.TargetID, Label: payload.Label,
-		Replay: true, Outcome: payload.Outcome, OutcomeReason: existing.OutcomeReason,
-		AttributionDegraded: degraded,
+		ID: existing.ID, IdempotencyKey: existing.IdempotencyKey, ActionID: existing.TargetID, Revision: revision, Label: payload.Label,
+		Replay: true, State: state, Outcome: outcomePtr, OutcomeReason: outcomeReason,
+		DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
+		OutcomeAttribution: outcomeAttribution, OutcomeAttributionReason: outcomeAttributionReason,
+		AttributionDegraded: dispatchAttribution == attributionStateDegraded || outcomeAttribution == attributionStateDegraded,
 		DispatchedAt:        formatTimePtr(existing.DispatchedAt),
 		ResolvedAt:          formatTimePtr(existing.ResolvedAt),
 	}, nil

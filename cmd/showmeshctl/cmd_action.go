@@ -375,12 +375,16 @@ func effectiveActionInvokeTimeout(flagTimeout time.Duration) time.Duration {
 // surface.
 func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl action invoke", stderr)
+	var revision int64
+	fs.Int64Var(&revision, "revision", 0, "pin the exact show.action revision to execute (SM-99); 0 (default) "+
+		"means \"whichever revision is active right now\"")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action invoke [flags] <action-id>")
 		_, _ = fmt.Fprintln(stderr, "\nInvoke one stored show.action by id, outside of any macro run")
 		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/actions/{id}/invocations, requires show:action:invoke).")
 		_, _ = fmt.Fprintln(stderr, "The action's own stored target supplies every parameter; this command")
-		_, _ = fmt.Fprintln(stderr, "passes none.")
+		_, _ = fmt.Fprintln(stderr, "passes none. --revision pins the exact revision to execute; a queued/")
+		_, _ = fmt.Fprintln(stderr, "durable caller should always set it, an interactive one may omit it.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -395,6 +399,9 @@ func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitUsage
 	}
 	id := rest[0]
+	if revision < 0 {
+		return reportError(stderr, "action invoke", newCLIError(exitUsage, "--revision must be a positive revision number, got %d", revision))
+	}
 
 	timeout := effectiveActionInvokeTimeout(g.timeout)
 	if timeout != g.timeout {
@@ -414,9 +421,12 @@ func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.
 		return reportError(stderr, "action invoke", err)
 	}
 
+	req := actionInvocationRequest{IdempotencyKey: key}
+	if revision > 0 {
+		req.RequestedRevision = &revision
+	}
 	var resp actionInvocationResponse
-	if err := c.postJSON(ctx, "/api/v1/actions/"+url.PathEscape(id)+"/invocations",
-		actionInvocationRequest{IdempotencyKey: key}, &resp); err != nil {
+	if err := c.postJSON(ctx, "/api/v1/actions/"+url.PathEscape(id)+"/invocations", req, &resp); err != nil {
 		return reportError(stderr, "action invoke", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -442,13 +452,19 @@ func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.
 // outcome word and the reason, and returns the matching exit code.
 // "unconfirmable" is printed with its own distinct word, never merged
 // into "confirmed" — an operator who cannot tell the two apart at a
-// glance stops reading them (ADR-029 decision 4).
+// glance stops reading them (ADR-029 decision 4). result.Outcome is nil
+// while result.State is "pending" (SM-100) — a real lifecycle state, not
+// a blank outcome this command used to special-case.
 func reportActionInvocationResult(stdout io.Writer, result actionInvocationResult) int {
 	label := result.Label
 	if label == "" {
 		label = result.ActionID
 	}
-	switch result.Outcome {
+	if result.Outcome == nil {
+		_, _ = fmt.Fprintf(stdout, "pending: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitCommandUnconfirmed
+	}
+	switch *result.Outcome {
 	case "confirmed":
 		_, _ = fmt.Fprintf(stdout, "confirmed: %s (invocation %s): %s\n", label, result.ID, result.OutcomeReason)
 		return exitOK
@@ -465,13 +481,16 @@ func reportActionInvocationResult(stdout io.Writer, result actionInvocationResul
 		_, _ = fmt.Fprintf(stdout, "failed: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
 		return exitActionFailed
 	default:
-		_, _ = fmt.Fprintf(stdout, "pending: %s: invocation %s has not yet resolved\n", label, result.ID)
+		_, _ = fmt.Fprintf(stdout, "%s: %s: %s (invocation %s)\n", *result.Outcome, label, result.OutcomeReason, result.ID)
 		return exitCommandUnconfirmed
 	}
 }
 
 func exitCodeForActionInvocation(result actionInvocationResult) int {
-	switch result.Outcome {
+	if result.Outcome == nil {
+		return exitCommandUnconfirmed
+	}
+	switch *result.Outcome {
 	case "confirmed":
 		return exitOK
 	case "unconfirmable":
