@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -105,6 +106,77 @@ func TestActionBindingResolumeStates(t *testing.T) {
 	}
 }
 
+// TestActionBindingFPPInventoryFailureLeavesResolumeBindingAnswering
+// proves a Resolume-only binding does not consult FPP at all, so an FPP
+// inventory load failure must not turn its check into a 500.
+func TestActionBindingFPPInventoryFailureLeavesResolumeBindingAnswering(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	resolver := newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
+	deps.ResolumeReferences = resolver
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	deps.FPP = &fakeFPPLister{err: errors.New("fpp inventory unavailable")}
+	api2 := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api2.Handler, "GET", "/api/v1/actions/launch-main/binding", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 because this binding is Resolume-only; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	if state := m["binding"].(map[string]any)["state"]; state != "ok" {
+		t.Fatalf("state = %v, want ok; body: %s", state, body)
+	}
+
+	respList, listBody := doRequest(t, api2.Handler, "GET", "/api/v1/actions/bindings", nil)
+	if respList.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body: %s", respList.StatusCode, listBody)
+	}
+}
+
+// TestActionBindingFPPInventoryFailureReportsFPPBindingUnknown proves an
+// FPP-target binding reports "unknown" with a stated reason when FPP
+// inventory itself failed to load — never a 500, never "broken".
+func TestActionBindingFPPInventoryFailureReportsFPPBindingUnknown(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	deps.FPP = &fakeFPPLister{err: errors.New("fpp inventory unavailable")}
+	api2 := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api2.Handler, "GET", "/api/v1/actions/start-main/binding", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	binding := m["binding"].(map[string]any)
+	if binding["state"] != "unknown" {
+		t.Fatalf("state = %v, want unknown; body: %s", binding["state"], body)
+	}
+	if reason, _ := binding["reason"].(string); reason == "" {
+		t.Errorf("reason is empty, want a stated reason naming the fpp inventory failure")
+	}
+}
+
 // TestActionBindingUnknownActionIs404 proves the GET-one route 404s for a
 // nonexistent action id rather than reporting any binding state.
 func TestActionBindingUnknownActionIs404(t *testing.T) {
@@ -145,8 +217,7 @@ func TestActionBindingRequiresNoCredential(t *testing.T) {
 }
 
 // TestActionBindingsListFiltersByShow proves the ?show= filter narrows
-// the list, and an unknown show id returns an empty list, not a refusal
-// (matching E7-3's own ?show= precedent).
+// the list, and an unknown show id returns an empty list, not a refusal.
 func TestActionBindingsListFiltersByShow(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -174,11 +245,9 @@ func TestActionBindingsListFiltersByShow(t *testing.T) {
 	}
 }
 
-// TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution is A8:
-// blackout resolves nothing (it addresses every tracked layer, not a
-// named one), so its "ok" reason must not say a reference resolved — even
-// with no composition ever uploaded, since blackout has no reference to
-// need one for.
+// TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution proves
+// blackout's "ok" reason never says a reference resolved: blackout has no
+// reference to resolve, even with no composition ever uploaded.
 func TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -209,15 +278,11 @@ func TestActionBindingResolumeBlackoutOKReasonNeverClaimsAResolution(t *testing.
 	}
 }
 
-// TestActionBindingResolumeUnrecognizedActionIsUnknownNotBroken is A9: a
-// stored action naming a resolume action this build's own resolution
-// switch does not recognize (a version-skew condition — the vocabulary
-// moved on after this row was written) is "unknown", never "broken":
-// broken would tell an operator their binding is broken when this
-// coordinator genuinely cannot check it, ADR-011's exact mistake.
-// Simulated by writing the revision directly into the store, bypassing
-// DecodeShowActionPayload's own membership check the way a pre-existing
-// or hand-edited row could.
+// TestActionBindingResolumeUnrecognizedActionIsUnknownNotBroken proves a
+// stored action naming a resolume action this build's resolution switch
+// does not recognize reports "unknown", never "broken". The revision is
+// written directly into the store to simulate a pre-existing or
+// hand-edited row bypassing normal write-time validation.
 func TestActionBindingResolumeUnrecognizedActionIsUnknownNotBroken(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	deps := showConfigTestDeps(svc, st)

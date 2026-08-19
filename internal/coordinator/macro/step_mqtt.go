@@ -16,34 +16,16 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// mqttReasonMaxBytes bounds how much of a response payload this package
-// records in a step's own operator-facing OutcomeReason (the "text" kind's
-// confirmed reason echoes the payload back) — STEP-9-SPEC.md section 7.3:
-// "the payload is recorded, bounded." Not a protocol limit, just this
-// package's own defense against an oversized MQTT payload turning into an
-// oversized database row.
+// mqttReasonMaxBytes bounds how much of a response payload lands in a
+// step's operator-facing OutcomeReason, so an oversized MQTT payload
+// cannot turn into an oversized database row.
 const mqttReasonMaxBytes = 512
 
-// dispatchMQTTStep dispatches one MQTT-integration step (STEP-9-SPEC.md
-// section 7): write the DISPATCH audit entry (subject to the per-step
-// audit exemption — see this function's own middle section), then publish
-// and, for every expect.kind except "none", wait for a live matching
-// response through [mqttRegistry.AwaitResponse] (broker/response.go),
-// which already handles STEP-9-SPEC.md section 7.2's retained-message trap
-// (subscribe before publish, discard every RETAIN=1 delivery, deadline
-// measured from the publish) — this function does not re-implement any of
-// that; it only decides what a resolved (or failed, or expired) response
-// MEANS, per section 7.3's five-mode contract (resolveMQTTPayload below).
-//
-// Unlike an FPP step, there is no pre-existing in-process dispatch seam
-// that already writes an audit entry on this package's behalf — the
-// broker package (Wave 1c) is a transport primitive only (its own top
-// comment: "this package provides only the transport-level primitive").
-// So this function writes both the dispatch and outcome audit entries
-// itself, directly against [identity.Service], mirroring
-// dispatchFPPCommand's own shape (write DISPATCH before attempting
-// anything; write OUTCOME best-effort afterward, regardless of safety
-// class) one level up, in the one integration where nothing else does it.
+// dispatchMQTTStep writes the DISPATCH audit entry, publishes, and — for
+// every expect.kind except "none" — waits for a live matching response via
+// [mqttRegistry.AwaitResponse], then writes the OUTCOME audit entry. This
+// package owns both audit entries itself: unlike an FPP step there is no
+// pre-existing dispatch seam that writes one on its behalf.
 func (e *Executor) dispatchMQTTStep(ctx context.Context, run store.MacroRunRecord, step store.MacroRunStepRecord, action resolvedAction, issuer api.FPPCommandIssuer) stepResult {
 	target := action.Payload.Target
 	if target.Publish == nil || target.Expect == nil {
@@ -74,15 +56,10 @@ func (e *Executor) dispatchMQTTStep(ctx context.Context, run store.MacroRunRecor
 		Params:         map[string]any{"runId": run.ID, "stepId": step.StepID, "stepIndex": step.StepIndex},
 	}
 
-	// OWNER DECISION, 2026-08-14: a macro run never withholds a command
-	// because the audit store is down, whatever this step's safety class.
-	// This branch used to refuse any step whose class was not one of
-	// ADR-024 decision 11's three, which meant an unwritable audit_log
-	// could punch a hole in a running show. Attribution is downgraded and
-	// said out loud instead: the step publishes, carries
-	// AttributionDegraded onto the run, and logs the cause. See
-	// [api.FPPCommandInput.NeverWithholdOnAuditFailure] for the FPP half of
-	// the same rule and the owner's own wording of it.
+	// A macro run never withholds a command because the audit store is
+	// down: attribution is degraded and logged instead of refusing to
+	// dispatch. See [api.FPPCommandInput.NeverWithholdOnAuditFailure] for
+	// the FPP half of the same rule.
 	attrDegraded := false
 	if auditErr := e.identity.WriteAudit(ctx, dispatchEntry); auditErr != nil {
 		attrDegraded = true
@@ -118,10 +95,8 @@ func (e *Executor) dispatchMQTTStep(ctx context.Context, run store.MacroRunRecor
 		OutcomeReason:  res.outcomeReason,
 		Params:         map[string]any{"runId": run.ID, "stepId": step.StepID, "stepIndex": step.StepIndex},
 	}
-	// Best-effort, always — mirroring dispatchFPPCommand's own outcome
-	// audit entry, "for EVERY primitive regardless of SafetyClass": the
-	// exemption governs whether the STEP dispatches, never whether its
-	// outcome is worth trying to record.
+	// Best-effort always: the audit exemption governs whether the step
+	// dispatches, never whether its outcome is worth trying to record.
 	if err := e.identity.WriteAudit(ctx, outcomeEntry); err != nil {
 		res.attrDegraded = true
 		e.logWarn("failed to write mqtt step outcome audit entry", "runId", run.ID, "stepId", step.StepID, "error", err)
@@ -163,33 +138,17 @@ func (e *Executor) publishAndAwait(ctx context.Context, target config.ShowAction
 		ResponseTopic:  target.Expect.Topic,
 		ResponseQoS:    mqttResponseQoS,
 		Deadline:       time.Duration(target.Expect.DeadlineSeconds) * time.Second,
-		// Accept any live delivery; resolveMQTTPayload below decides
+		// Accept any live delivery; resolveMQTTPayload below classifies
 		// confirmed/negative-answer/malformed from what actually arrived.
-		// See this file's own top comment and STEP-9-SPEC.md's wave 2
-		// brief item 4: "write Match to accept any live delivery ... and
-		// decide confirmed / negative-answer / malformed from the
-		// returned payload. That is what makes 'malformed under a typed
-		// contract is failed, not unconfirmed' implementable at all."
 		Match: func(broker.Message) bool { return true },
 	}
 
 	msg, err := e.brokers.AwaitResponse(ctx, target.Broker, req)
 	switch {
 	case err == nil && msg.Retained:
-		// Defense in depth. [broker.BrokerManager.AwaitResponse]'s own
-		// contract already guarantees Retained is always false on a
-		// successful return (broker/response.go's dispatchToWaiters
-		// discards every RETAIN=1 delivery before a Matcher, or a
-		// caller, ever sees it — STEP-9-SPEC.md section 7.2's own
-		// "single most important line of code in this file"). This
-		// package trusts that contract and does not re-implement it, but
-		// still refuses to treat a retained delivery as confirmation if
-		// that contract is ever violated by a future defect one layer
-		// down, mirroring dispatchFPPCommand's own "never trust a
-		// caller's own claim that its params were already validated"
-		// precedent. This branch should never fire in production; it
-		// exists so a violation resolves unconfirmed rather than a false
-		// confirmed.
+		// Defense in depth: [broker.BrokerManager.AwaitResponse] should
+		// never return Retained=true on success. Refuse to treat one as
+		// confirmation if that contract is ever violated one layer down.
 		e.logError("mqtt response waiter returned a retained delivery on success; treating as unconfirmed rather than trusting it",
 			"broker", target.Broker, "topic", target.Expect.Topic)
 		return stepResult{
@@ -222,26 +181,17 @@ func (e *Executor) publishAndAwait(ctx context.Context, target config.ShowAction
 	}
 }
 
-// mqttPublishErrorResult classifies every AwaitResponse/Publish error this
-// package has not already special-cased (broker.ErrBrokerUnavailable,
-// broker.ErrPublishNotAuthorized, broker.ErrInvalidResponseTopic, a
-// transport-level publish failure, or ctx's own cancellation) as "failed":
-// STEP-9-SPEC.md section 7.3 states only two explicit mappings (deadline
-// expiry is unconfirmed; ErrUnknownBroker is failed); this package's own
-// judgment call, stated here and in this builder's report, is that every
-// OTHER failure to even attempt the exchange is a concrete inability to
-// run this step as declared, not a monitoring gap — the "unconfirmed"
-// state is reserved for the one specific case ADR-031 decision 2 defines
-// it around: an attempt was made and evidence for it did not arrive in
-// time.
-//
-// It also decides whether this step ever put anything on a wire. An
-// unknown identifier and a down connection both fail before any packet
-// leaves the process, so neither earns a dispatchedAt; every other error
-// here happened at or after the attempt, and nil-ing those would be the
-// opposite lie.
+// mqttPublishErrorResult classifies every AwaitResponse/Publish error not
+// already special-cased above as "failed": "unconfirmed" is reserved for
+// an attempt that was made but whose evidence did not arrive in time.
+// publishAttempted is false only for an error that fired before anything
+// left this process (unknown broker, down connection, or a subscribe/
+// deadline failure preceding the publish); every other error happened at
+// or after the attempt.
 func (e *Executor) mqttPublishErrorResult(err error, brokerID string) stepResult {
-	attempted := !errors.Is(err, broker.ErrUnknownBroker) && !errors.Is(err, broker.ErrBrokerUnavailable)
+	attempted := !errors.Is(err, broker.ErrUnknownBroker) &&
+		!errors.Is(err, broker.ErrBrokerUnavailable) &&
+		!errors.Is(err, broker.ErrResponseFailedBeforePublish)
 	return stepResult{
 		outcome:          outcomeFailed,
 		outcomeState:     mqttStateTransportError,
@@ -250,11 +200,8 @@ func (e *Executor) mqttPublishErrorResult(err error, brokerID string) stepResult
 	}
 }
 
-// resolveMQTTPayload implements STEP-9-SPEC.md section 7.3's five-mode
-// response contract for whatever live, non-retained payload actually
-// arrived (retained deliveries never reach here — [broker.BrokerManager.AwaitResponse]
-// discards them unconditionally before Match is ever consulted, per
-// section 7.2 rule 2).
+// resolveMQTTPayload implements the five-mode response contract for
+// whatever live, non-retained payload actually arrived.
 func resolveMQTTPayload(expect config.ShowActionMQTTExpect, payload []byte) stepResult {
 	switch expect.Kind {
 	case config.MQTTExpectKindBoolean:

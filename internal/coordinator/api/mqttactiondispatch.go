@@ -38,12 +38,28 @@ const mqttActionReasonMaxBytes = 512
 // mqttActionResponseQoS mirrors step_mqtt.go's identical mqttResponseQoS.
 const mqttActionResponseQoS = 1
 
+// OutcomeState values this file produces, mirroring macro/vocab.go's
+// identical mqttState* constants for the same five-mode contract. Kept as
+// this package's own copy rather than imported: macro imports api, not the
+// reverse.
+const (
+	mqttActionStateConfirmed           = "confirmed"
+	mqttActionStateNegativeAnswer      = "negative_answer"
+	mqttActionStateMalformedPayload    = "malformed_payload"
+	mqttActionStateDeadlineExceeded    = "deadline_exceeded"
+	mqttActionStateUnconfirmableByKind = "unconfirmable_declared"
+	mqttActionStateUnknownBroker       = "unknown_broker"
+	mqttActionStateTransportError      = "transport_error"
+)
+
 // MQTTActionResult is [DispatchMQTTAction]'s own outcome: Outcome is one
 // of confirmed/unconfirmed/unconfirmable/failed (never "refused", which
-// this function never produces). PublishAttempted is true only once
-// something actually reached the wire.
+// this function never produces). OutcomeState is the finer-grained reason
+// from the mqttActionState* vocabulary above. PublishAttempted is true
+// only once something actually reached the wire.
 type MQTTActionResult struct {
 	Outcome          string
+	OutcomeState     string
 	OutcomeReason    string
 	PublishAttempted bool
 	ResolvedAt       time.Time
@@ -81,7 +97,7 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 		if err := brokers.Publish(ctx, target.Broker, target.Publish.Topic, qos, target.Publish.Retain, []byte(target.Publish.Payload)); err != nil {
 			return mqttActionPublishErrorResult(err, target.Broker, now())
 		}
-		return MQTTActionResult{Outcome: outcomeWordUnconfirmable, OutcomeReason: "this action declares no expected response", PublishAttempted: true, ResolvedAt: now()}
+		return MQTTActionResult{Outcome: outcomeWordUnconfirmable, OutcomeState: mqttActionStateUnconfirmableByKind, OutcomeReason: "this action declares no expected response", PublishAttempted: true, ResolvedAt: now()}
 	}
 
 	req := broker.ResponseRequest{
@@ -102,7 +118,8 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 		// false on success; this refuses to treat one as confirmation if
 		// that contract is ever violated one layer down.
 		return MQTTActionResult{
-			Outcome: outcomeWordUnconfirmed,
+			Outcome:      outcomeWordUnconfirmed,
+			OutcomeState: mqttActionStateDeadlineExceeded,
 			OutcomeReason: fmt.Sprintf("the only delivery observed on %q was a retained replay, which cannot confirm this dispatch",
 				target.Expect.Topic),
 			PublishAttempted: true, ResolvedAt: now(),
@@ -114,7 +131,8 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 		return res
 	case errors.Is(err, broker.ErrResponseDeadlineExceeded):
 		return MQTTActionResult{
-			Outcome: outcomeWordUnconfirmed,
+			Outcome:      outcomeWordUnconfirmed,
+			OutcomeState: mqttActionStateDeadlineExceeded,
 			OutcomeReason: fmt.Sprintf("no live response arrived on %q within %d seconds",
 				target.Expect.Topic, target.Expect.DeadlineSeconds),
 			PublishAttempted: true, ResolvedAt: now(),
@@ -122,6 +140,7 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 	case errors.Is(err, broker.ErrUnknownBroker):
 		return MQTTActionResult{
 			Outcome:       outcomeWordFailed,
+			OutcomeState:  mqttActionStateUnknownBroker,
 			OutcomeReason: fmt.Sprintf("broker %q is not registered with this coordinator", target.Broker),
 			ResolvedAt:    now(),
 		}
@@ -135,9 +154,12 @@ func DispatchMQTTAction(ctx context.Context, brokers MQTTBrokerRegistry, target 
 // special-cased above is "failed", and PublishAttempted is false only for
 // an error that fired before anything left this process.
 func mqttActionPublishErrorResult(err error, brokerID string, resolvedAt time.Time) MQTTActionResult {
-	attempted := !errors.Is(err, broker.ErrUnknownBroker) && !errors.Is(err, broker.ErrBrokerUnavailable)
+	attempted := !errors.Is(err, broker.ErrUnknownBroker) &&
+		!errors.Is(err, broker.ErrBrokerUnavailable) &&
+		!errors.Is(err, broker.ErrResponseFailedBeforePublish)
 	return MQTTActionResult{
 		Outcome:          outcomeWordFailed,
+		OutcomeState:     mqttActionStateTransportError,
 		OutcomeReason:    fmt.Sprintf("could not publish or subscribe on broker %q", brokerID),
 		PublishAttempted: attempted,
 		ResolvedAt:       resolvedAt,
@@ -152,31 +174,31 @@ func resolveMQTTActionPayload(expect config.ShowActionMQTTExpect, payload []byte
 	case config.MQTTExpectKindBoolean:
 		var b bool
 		if err := json.Unmarshal(payload, &b); err != nil {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: "the response payload was not a valid JSON boolean"}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateMalformedPayload, OutcomeReason: "the response payload was not a valid JSON boolean"}
 		}
 		if !b {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: "the external system reported false"}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: "the external system reported false"}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeReason: "the external system reported true"}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: "the external system reported true"}
 
 	case config.MQTTExpectKindNumber:
 		var f float64
 		if err := json.Unmarshal(payload, &f); err != nil {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: "the response payload was not a valid JSON number"}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateMalformedPayload, OutcomeReason: "the response payload was not a valid JSON number"}
 		}
 		if expect.Value != nil {
 			want, werr := strconv.ParseFloat(*expect.Value, 64)
 			if werr != nil || f != want {
-				return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: fmt.Sprintf("the response number %v did not equal the expected value %s", f, *expect.Value)}
+				return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: fmt.Sprintf("the response number %v did not equal the expected value %s", f, *expect.Value)}
 			}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeReason: fmt.Sprintf("the external system reported %v", f)}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: fmt.Sprintf("the external system reported %v", f)}
 
 	case config.MQTTExpectKindText:
 		if !utf8.Valid(payload) {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: "the response payload was not valid UTF-8"}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateMalformedPayload, OutcomeReason: "the response payload was not valid UTF-8"}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeReason: "received: " + truncateMQTTActionReason(payload)}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: "received: " + truncateMQTTActionReason(payload)}
 
 	case config.MQTTExpectKindMatch:
 		want := ""
@@ -184,9 +206,9 @@ func resolveMQTTActionPayload(expect config.ShowActionMQTTExpect, payload []byte
 			want = *expect.Value
 		}
 		if string(payload) != want {
-			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeReason: fmt.Sprintf("the response payload %q did not equal the expected value %q", truncateMQTTActionReason(payload), want)}
+			return MQTTActionResult{Outcome: outcomeWordFailed, OutcomeState: mqttActionStateNegativeAnswer, OutcomeReason: fmt.Sprintf("the response payload %q did not equal the expected value %q", truncateMQTTActionReason(payload), want)}
 		}
-		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeReason: "the response payload matched the expected value"}
+		return MQTTActionResult{Outcome: outcomeWordConfirmed, OutcomeState: mqttActionStateConfirmed, OutcomeReason: "the response payload matched the expected value"}
 
 	default:
 		// Unreachable given write-time validation of expect.kind's closed

@@ -12,11 +12,9 @@ import (
 
 // GET /api/v1/actions/{id}/binding and GET /api/v1/actions/bindings
 // re-resolve a stored show.action's target against current integration
-// state, through the same resolver/registry/broker-list write-time
-// validation already uses. A read: dispatches nothing, requires no
-// credential. The result is three-valued: "ok", "broken", or "unknown"
-// (the check could not be performed) — never "ok" for a check that did
-// not run, never "broken" for one that could not.
+// state. A read: dispatches nothing, requires no credential. The result is
+// three-valued: "ok", "broken", or "unknown" — never "ok" for a check that
+// did not run, never "broken" for one that could not.
 
 func (h *handlers) handleGetActionBinding(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
@@ -44,11 +42,7 @@ func (h *handlers) handleListActionBindings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	endpoints, err := currentFPPEndpoints(r.Context(), h.deps.FPP)
-	if err != nil {
-		h.writeInternalError(w, now, "list fpp instances for binding check", err)
-		return
-	}
+	fetchFPPEndpoints := h.memoizedFPPEndpoints(r.Context())
 
 	bindings := make([]v1.ActionBinding, 0, len(objs))
 	for _, obj := range objs {
@@ -71,17 +65,15 @@ func (h *handlers) handleListActionBindings(w http.ResponseWriter, r *http.Reque
 		if showFilter != "" && payload.Show != showFilter {
 			continue
 		}
-		bindings = append(bindings, h.checkActionBindingTarget(r.Context(), obj.ID, payload, endpoints))
+		bindings = append(bindings, h.checkActionBindingTarget(r.Context(), obj.ID, payload, fetchFPPEndpoints))
 	}
 
 	jsonWrite(w, v1.ActionBindingsResponse{ServerTime: formatTime(now), Bindings: bindings})
 }
 
-// checkActionBindingByID reads id's active show.action revision and
-// checks its binding — the GET-one path. problem is non-nil only for
-// "no such action" (404); a decode failure or an unresolved reference is
-// never a 4xx here, since the object itself is real — see this file's own
-// top comment.
+// checkActionBindingByID is the GET-one path. problem is non-nil only for
+// "no such action" (404); a decode failure or unresolved reference is
+// never a 4xx, since the object itself is real.
 func (h *handlers) checkActionBindingByID(ctx context.Context, id string) (v1.ActionBinding, *v1.Problem, error) {
 	rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, id)
 	if err != nil {
@@ -97,21 +89,42 @@ func (h *handlers) checkActionBindingByID(ctx context.Context, id string) (v1.Ac
 			Reason: fmt.Sprintf("this coordinator could not decode the stored payload: %v", decodeErr),
 		}, nil, nil
 	}
-	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
-	if err != nil {
-		return v1.ActionBinding{}, nil, err
+	return h.checkActionBindingTarget(ctx, id, payload, h.memoizedFPPEndpoints(ctx)), nil, nil
+}
+
+// memoizedFPPEndpoints fetches the FPP endpoint list at most once per
+// call, whether or not any binding actually consults it, and caches a
+// fetch failure alongside a successful result so callers see it too.
+func (h *handlers) memoizedFPPEndpoints(ctx context.Context) func() ([]config.FPPEndpoint, error) {
+	var (
+		fetched   bool
+		endpoints []config.FPPEndpoint
+		err       error
+	)
+	return func() ([]config.FPPEndpoint, error) {
+		if !fetched {
+			endpoints, err = currentFPPEndpoints(ctx, h.deps.FPP)
+			fetched = true
+		}
+		return endpoints, err
 	}
-	return h.checkActionBindingTarget(ctx, id, payload, endpoints), nil, nil
 }
 
 // checkActionBindingTarget re-resolves payload.Target against current
-// integration state. endpoints is the caller's already-fetched FPP
-// endpoint list, so a list of N actions costs one FPP lookup, not N.
-func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payload config.ShowActionPayload, endpoints []config.FPPEndpoint) v1.ActionBinding {
+// integration state. fetchFPPEndpoints is only invoked for an FPP-target
+// binding, so a failure loading FPP inventory never affects a binding
+// that does not consult it.
+func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payload config.ShowActionPayload, fetchFPPEndpoints func() ([]config.FPPEndpoint, error)) v1.ActionBinding {
 	binding := v1.ActionBinding{ActionID: id, Label: payload.Label, Show: payload.Show}
 
 	switch payload.Target.Integration {
 	case config.ShowActionIntegrationFPP:
+		endpoints, err := fetchFPPEndpoints()
+		if err != nil {
+			binding.State = v1.ActionBindingStateUnknown
+			binding.Reason = fmt.Sprintf("this coordinator could not list fpp endpoints to check the binding: %v", err)
+			break
+		}
 		binding.State, binding.Reason = checkFPPActionBinding(payload.Target, endpoints)
 	case config.ShowActionIntegrationMQTT:
 		binding.State, binding.Reason = checkMQTTActionBinding(payload.Target, h.deps.IntegrationBrokers)
@@ -165,21 +178,14 @@ func checkMQTTActionBinding(target config.ShowActionTarget, brokers []config.Int
 }
 
 // checkResolumeActionBinding runs target's stored reference through
-// [config.ResolveResolumeRef] — the same dispatch write-time validation
-// uses, not a second hand-copied switch (a review finding: an earlier
-// version of this function forked that switch, and its own default case
-// disagreed with config's — "broken" for an action config's vocabulary
-// had moved on from, which is "broken for a check that could not run",
-// the absence-of-evidence mistake ADR-011 exists to name). blackout
-// resolves nothing and is reported "ok" without claiming a resolution
+// [config.ResolveResolumeRef], the same resolver dispatch write-time
+// validation uses, rather than a second hand-copied switch. blackout
+// resolves nothing and reports "ok" without claiming a resolution
 // happened. [config.ErrResolumeCompositionNotUploaded] and
-// [config.ErrResolumeActionResolutionUnrecognized] are both "unknown",
-// never "broken": this coordinator cannot tell whether the reference
-// resolves with nothing to resolve it against, and an action name this
-// build's own switch does not recognize is a version-skew condition, not
-// a broken reference. Every other resolver error already names the
-// reference or every candidate (ADR-037 decisions 5/6); its Error() text
-// is reported unchanged.
+// [config.ErrResolumeActionResolutionUnrecognized] are "unknown", never
+// "broken": neither means the reference is bad, only that it cannot be
+// checked. Every other resolver error already names the reference or
+// every candidate; its Error() text is reported unchanged.
 func (h *handlers) checkResolumeActionBinding(target config.ShowActionTarget) (state, reason string) {
 	err := config.ResolveResolumeRef(target.Action, target.Ref, h.deps.ResolumeReferences)
 	switch {
