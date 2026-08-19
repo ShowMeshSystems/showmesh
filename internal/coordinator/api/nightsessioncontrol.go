@@ -545,9 +545,10 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // applyNightShutdownEffect is fade-out-night's and power-down-
 // presentation's shared core: close admission, record the (monotonic)
 // shutdown intent, and either defer (a live or already-committed show
-// finishes first — RESTING-MODE.md §7.1.1) or reach stopped immediately —
-// this seam has no outward cue to wait on, so the immediate case reaches
-// stopped directly; a future seam's cue wait replaces this.
+// finishes first — RESTING-MODE.md §7.1.1) or enter the fade/shutdown
+// path. It never reaches stopped on its own: stopped requires an issued
+// FPP stop and fresh idle evidence, which the night loop's own
+// fading-out tick owns (nightshutdown.go).
 func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string) (store.NightSessionRecord, bool) {
 	changed := false
 	if !rec.AdmissionClosed {
@@ -575,8 +576,13 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 	default: // preparing, preshow, uncommitted transition-to-show, transition-to-resting, resting-intershow, end-of-night-resting
 		rec.ArmedShowID = ""
 		rec.ShowCommitted = false
-		rec.State = nightStateStopped
+		rec.State = nightStateFadingOut
 		rec.StateEnteredAt = now
+		rec.ContentAnchorJSON = ""
+		rec.BoundaryJSON = encodeNightBoundary(nightBoundary{
+			State:  nightBoundaryStateInvalid,
+			Reason: "the armed boundary was cancelled by a shutdown request",
+		})
 		changed = true
 	}
 	return rec, changed
@@ -942,6 +948,10 @@ func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSession
 	out := make([]v1.NightCue, 0, len(payload.EnterShow.Cues)+len(payload.EnterResting.Cues))
 	out = appendMappedNightCues(out, nightPhaseEnterShow, sortedNightCues(payload.EnterShow.Cues), byKey)
 	out = appendMappedNightCues(out, nightPhaseEnterResting, sortedNightCues(payload.EnterResting.Cues), byKey)
+	// The fade-out phase replays the enterShow definitions, so it is only
+	// listed once rows for it exist rather than always showing a second,
+	// permanently not_dispatched copy of that list.
+	out = appendDispatchedNightCues(out, nightPhaseFadeOut, sortedNightCues(payload.EnterShow.Cues), byKey)
 	return v1.NightCues{State: v1.NightEvidenceRecorded, Cues: out}
 }
 
@@ -949,6 +959,19 @@ func appendMappedNightCues(out []v1.NightCue, phase string, cues []config.NightS
 	for _, cue := range cues {
 		row, has := byKey[phase+"\x00"+cue.Name]
 		out = append(out, mapNightCue(phase, cue, row, has))
+	}
+	return out
+}
+
+// appendDispatchedNightCues lists only the cues of phase that already have
+// an outbox row in this cycle.
+func appendDispatchedNightCues(out []v1.NightCue, phase string, cues []config.NightSessionCue, byKey map[string]store.NightCueOutboxRecord) []v1.NightCue {
+	for _, cue := range cues {
+		row, has := byKey[phase+"\x00"+cue.Name]
+		if !has {
+			continue
+		}
+		out = append(out, mapNightCue(phase, cue, row, true))
 	}
 	return out
 }
@@ -971,16 +994,14 @@ func mapNightCue(phase string, cue config.NightSessionCue, row store.NightCueOut
 	return out
 }
 
-// mapNightPowerPhase: a deferred power-down (shutdownIntent
-// == "power-down" but the phase itself has not resolved yet, because the
-// show it is waiting on is still live) must say so, not repeat the
-// "has not been requested" text that is only true before any shutdown was
-// requested at all.
+// mapNightPowerPhase: a power-down whose phase has not resolved yet must
+// say why it is still pending, not repeat the "has not been requested"
+// text that is only true before any shutdown was requested at all.
 func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	switch rec.PowerPhase {
 	case "":
 		if rec.ShutdownIntent == "power-down" {
-			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "power-down-presentation was requested and is deferred until the current show finishes"}
+			return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "power-down-presentation was requested and is deferred until playback has been observed stopped"}
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "power-down-presentation has not been requested"}
 	case "not_configured":

@@ -22,6 +22,11 @@ import (
 const (
 	nightPhaseEnterShow    = "enterShow"
 	nightPhaseEnterResting = "enterResting"
+
+	// nightPhaseFadeOut replays the enterShow cue definitions when the
+	// session is fading out. It is its own phase so those rows never
+	// collide with a real enter-show commit in the same cycle.
+	nightPhaseFadeOut = "fadeOut"
 )
 
 // nightCueDispatchHooks lets a test deterministically interrupt the two
@@ -327,14 +332,10 @@ func sortedNightCues(cues []config.NightSessionCue) []config.NightSessionCue {
 }
 
 // nightAdvanceCueList runs every due cue (offset relative to referenceE).
-// isEnterShow selects both the atomic show-commit boundary and whether a
-// barrier is evaluated at all: enterResting is fire-and-forget and has no
-// launch barrier of its own to gate.
-func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, cues []config.NightSessionCue, isEnterShow bool) (barrierSatisfied bool, blockedReason string) {
-	phase := nightPhaseEnterResting
-	if isEnterShow {
-		phase = nightPhaseEnterShow
-	}
+// Only nightPhaseEnterShow carries the atomic show-commit boundary and a
+// launch barrier; enterResting and fadeOut are fire-and-forget.
+func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue) (barrierSatisfied bool, blockedReason string) {
+	isEnterShow := phase == nightPhaseEnterShow
 	issuer := nightIssuerFor(rec.ID)
 	firstCommitted := !isEnterShow || rec.ShowCommitted
 

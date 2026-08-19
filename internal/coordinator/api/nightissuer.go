@@ -56,3 +56,24 @@ func nightIssuerFor(sessionID string) FPPCommandIssuer {
 	issuer, _ := v.(FPPCommandIssuer)
 	return issuer
 }
+
+// nightControllerPrincipalPrefix names the constrained system actor the
+// night controller dispatches its own safety actions as. It is not a
+// principal in the identity store and can hold no credential; it exists so
+// a stop, blackout, or power-off is attributable to a specific session
+// rather than being refused for want of a user identity.
+const nightControllerPrincipalPrefix = "night-controller:"
+
+// nightSafetyIssuer never returns a zero issuer: a stop or blackout that
+// refuses because attribution is unavailable is strictly worse than the
+// coordinator being switched off. Non-safety autonomous dispatch keeps
+// using nightIssuerFor and its refusal.
+func nightSafetyIssuer(sessionID string) FPPCommandIssuer {
+	if issuer := nightIssuerFor(sessionID); issuer.PrincipalID != "" {
+		return issuer
+	}
+	return FPPCommandIssuer{
+		PrincipalID:   nightControllerPrincipalPrefix + sessionID,
+		PrincipalName: "night controller",
+	}
+}

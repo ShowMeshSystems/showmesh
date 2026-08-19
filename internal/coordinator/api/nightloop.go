@@ -117,11 +117,13 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightAdvanceLive(ctx, now, rec)
 	case nightStateTransitionToResting:
 		h.nightAdvanceTransitionToResting(ctx, now, rec)
+	case nightStateFadingOut:
+		h.nightAdvanceFadingOut(ctx, now, rec)
 	}
-	// preparing, end-of-night-resting, fading-out, stopped, inactive: no
-	// autonomous action here. end-of-night-resting's repeating resting
-	// playlist was already started on the tick that entered it; its only
-	// exit is fade-out-night, which F2 already handles.
+	// preparing, end-of-night-resting, stopped, inactive: no autonomous
+	// action here. end-of-night-resting's repeating resting playlist was
+	// already started on the tick that entered it; its only exit is
+	// fade-out-night.
 }
 
 // getPinnedNightSessionPayload reads outside any HTTP request's own
@@ -373,7 +375,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// Cues run every tick regardless of hold: an offset cue may legitimately
 	// fire before the hold elapses. The launch itself (below) waits on both
 	// hold AND every barrier cue's own resolved outcome.
-	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, payload.EnterShow.Cues, true)
+	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, nightPhaseEnterShow, payload.EnterShow.Cues)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Before(boundaryE.Add(hold)) {
@@ -486,11 +488,27 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
+	// A deferred shutdown outranks entry into resting: the show it was
+	// waiting on has finished, so nothing else starts and the resting
+	// fade-up cues never run.
+	if rec.ShutdownIntent != "" {
+		h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+			cur.State = nightStateFadingOut
+			cur.StateEnteredAt = now
+			cur.ArmedShowID = ""
+			cur.ShowCommitted = false
+			cur.ContentAnchorJSON = ""
+			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "a shutdown was requested during the final show; end-of-night resting is not started"})
+			return cur
+		})
+		return
+	}
+
 	// §7.2's fade-up cues run independently of the resting-playlist restart
 	// below: unlike enter-show, no atomic commit boundary or barrier gates
 	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
 	// note: "show completion remains the authoritative anchor").
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, payload.EnterResting.Cues, false)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseEnterResting, payload.EnterResting.Cues)
 
 	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {

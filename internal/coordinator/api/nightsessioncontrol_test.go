@@ -239,8 +239,13 @@ func TestInvariant1_FadeOutThenPowerDown_NeverDowngrades(t *testing.T) {
 	if out.Session.ShutdownIntent != "power-down" {
 		t.Fatalf("shutdownIntent after power-down-presentation = %q, want power-down (upgrade, never a downgrade)", out.Session.ShutdownIntent)
 	}
-	if out.Session.PowerPhase.State != v1.NightEvidenceNotConfigured {
-		t.Fatalf("powerPhase.state after power-down-presentation on an already-stopped session = %q, want not_configured", out.Session.PowerPhase.State)
+	// The power phase resolves when playback has been observed stopped,
+	// not at the moment the command is accepted.
+	if out.Session.PowerPhase.State != v1.NightEvidenceUnknown {
+		t.Fatalf("powerPhase.state while still fading out = %q, want unknown", out.Session.PowerPhase.State)
+	}
+	if !strings.Contains(out.Session.PowerPhase.Reason, "deferred") {
+		t.Fatalf("powerPhase.reason = %q, want it to say the phase is deferred", out.Session.PowerPhase.Reason)
 	}
 }
 
@@ -249,16 +254,16 @@ func TestInvariant1_PowerDownThenFadeOut_ReversedOrderNeverDowngrades(t *testing
 	runToPreshow(t, api, token, obs, testNow)
 
 	out := mustNightCommand(t, api, token, "power-down-presentation")
-	if out.Session.State != "stopped" || out.Session.ShutdownIntent != "power-down" {
-		t.Fatalf("after power-down-presentation from preshow with no power config: state=%q shutdownIntent=%q, want stopped/power-down", out.Session.State, out.Session.ShutdownIntent)
+	if out.Session.State != nightStateFadingOut || out.Session.ShutdownIntent != "power-down" {
+		t.Fatalf("after power-down-presentation from preshow with no power config: state=%q shutdownIntent=%q, want fading-out/power-down", out.Session.State, out.Session.ShutdownIntent)
 	}
 
 	out2 := mustNightCommand(t, api, token, "fade-out-night")
 	if out2.Command.Outcome != "idempotent_no_op" {
-		t.Fatalf("fade-out-night after power-down reached stopped: outcome = %q, want idempotent_no_op", out2.Command.Outcome)
+		t.Fatalf("fade-out-night after power-down entered the fade path: outcome = %q, want idempotent_no_op", out2.Command.Outcome)
 	}
-	if out2.Session.ShutdownIntent != "power-down" || out2.Session.State != "stopped" {
-		t.Fatalf("fade-out-night after stopped changed state: %+v", out2.Session)
+	if out2.Session.ShutdownIntent != "power-down" || out2.Session.State != nightStateFadingOut {
+		t.Fatalf("fade-out-night after fading-out changed state: %+v", out2.Session)
 	}
 }
 
@@ -270,16 +275,16 @@ func TestInvariant1_RequestFinalShowCannotReopenAdmission(t *testing.T) {
 	if !fadeOut.Session.AdmissionClosed {
 		t.Fatalf("admission not closed after fade-out-night")
 	}
-	if fadeOut.Session.State != "stopped" {
-		t.Fatalf("fade-out-night from preshow (uncommitted) = %q, want stopped directly (finding 3: no outward cues to wait on in this seam)", fadeOut.Session.State)
+	if fadeOut.Session.State != nightStateFadingOut {
+		t.Fatalf("fade-out-night from preshow (uncommitted) = %q, want fading-out", fadeOut.Session.State)
 	}
 
 	final := mustNightCommand(t, api, token, "request-final-show")
 	if !final.Session.AdmissionClosed {
 		t.Fatalf("admission reopened by a late request-final-show")
 	}
-	if final.Session.State != "stopped" {
-		t.Fatalf("request-final-show after fade-out-night changed state to %q, want it to stay stopped", final.Session.State)
+	if final.Session.State != nightStateFadingOut {
+		t.Fatalf("request-final-show after fade-out-night changed state to %q, want it to stay fading-out", final.Session.State)
 	}
 }
 
@@ -333,6 +338,9 @@ func TestInvariant2_ReadinessFromPriorEpochNeverAdopted(t *testing.T) {
 	api, _, token, _, obs := setupNightControlFixture(t, time.Hour)
 	runToPreshow(t, api, token, obs, testNow)
 	mustNightCommand(t, api, token, "power-down-presentation")
+	// The fade path holds the session until FPP is observed stopped, so
+	// the operator's documented recovery is end-session, then prepare-site.
+	mustNightCommand(t, api, token, "end-session")
 
 	second := mustNightCommand(t, api, token, "prepare-site")
 	if second.Command.Outcome != "applied" {
@@ -832,8 +840,8 @@ func TestFinding9_AttributionDegradedIsPopulatedOnTheExemptPath(t *testing.T) {
 	installFailAuditTrigger(t, storeDir)
 
 	out := mustNightCommand(t, api, opToken, "fade-out-night")
-	if out.Session.State != "stopped" {
-		t.Fatalf("fade-out-night with a failing audit write: state = %q, want stopped (never refused)", out.Session.State)
+	if out.Session.State != nightStateFadingOut {
+		t.Fatalf("fade-out-night with a failing audit write: state = %q, want fading-out (never refused)", out.Session.State)
 	}
 	if !out.Command.AttributionDegraded {
 		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and the field exists precisely to say so)")
@@ -867,8 +875,8 @@ func TestInvariant8Both(t *testing.T) {
 			installFailAuditTrigger(t, storeDir)
 
 			out := mustNightCommand(t, api, opToken, cmd)
-			if out.Session.State != "stopped" {
-				t.Fatalf("%s with a failing audit write: state = %q, want stopped (never refused)", cmd, out.Session.State)
+			if out.Session.State != nightStateFadingOut {
+				t.Fatalf("%s with a failing audit write: state = %q, want fading-out (never refused)", cmd, out.Session.State)
 			}
 		})
 	}
@@ -957,15 +965,29 @@ func TestInvariant5_UnknownReadinessNeverBlocksStartNight(t *testing.T) {
 // --- invariant 6: power-down with no power configuration ---
 
 func TestInvariant6_PowerDownWithNoPowerConfigReachesStoppedWithoutError(t *testing.T) {
-	api, _, token, _, obs := setupNightControlFixture(t, time.Hour)
+	api, st, token, _, obs := setupNightControlFixture(t, time.Hour)
 	runToPreshow(t, api, token, obs, testNow)
 
 	out := mustNightCommand(t, api, token, "power-down-presentation")
-	if out.Session.State != "stopped" {
-		t.Fatalf("power-down-presentation with no power config: state = %q, want stopped", out.Session.State)
+	if out.Session.State != nightStateFadingOut {
+		t.Fatalf("power-down-presentation with no power config: state = %q, want fading-out", out.Session.State)
 	}
-	if out.Session.PowerPhase.State != v1.NightEvidenceNotConfigured {
-		t.Fatalf("power-down-presentation with no power config: powerPhase.state = %q, want not_configured", out.Session.PowerPhase.State)
+
+	// The optional power phase resolves not_configured at the moment the
+	// session actually reaches stopped, never before.
+	rec := mustGetCurrentSession(t, st)
+	h := &handlers{
+		deps:  Dependencies{NightSessions: st, Observations: obs}.withDefaults(),
+		clock: fixedClock(testNow), logger: testLogger(),
+	}
+	h.nightReachStopped(context.Background(), testNow, rec)
+
+	final := mustGetCurrentSession(t, st)
+	if final.State != nightStateStopped {
+		t.Fatalf("after the stop was observed: state = %q, want stopped", final.State)
+	}
+	if got := mapNightPowerPhase(final); got.State != v1.NightEvidenceNotConfigured {
+		t.Fatalf("power-down-presentation with no power config: powerPhase.state = %q, want not_configured", got.State)
 	}
 }
 
