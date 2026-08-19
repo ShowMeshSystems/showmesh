@@ -251,7 +251,12 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	audioSub := subscribeAudioReports(t, nodeID)
 
 	const sessionID = "show-session-1"
-	dispatchCmd(t, cli, nodeID, applySessionCmd(nodeID, "cmd-apply-"+uniqueSuffix(), sessionID, "clip-1", contentHash, filename, int64(len(content))))
+	applyCmdID := "cmd-apply-" + uniqueSuffix()
+	dispatchCmd(t, cli, nodeID, applySessionCmd(nodeID, applyCmdID, sessionID, "clip-1", contentHash, filename, int64(len(content))))
+	// Each inbound command runs in its own goroutine (mqtt.go's
+	// registerCommandHandling), so start must not fire until apply's own
+	// result confirms it has already run.
+	waitForResult(t, w, applyCmdID, 10*time.Second)
 	dispatchCmd(t, cli, nodeID, startSessionCmd(nodeID, "cmd-start-"+uniqueSuffix(), sessionID))
 
 	// Confirm the session actually reached Playing before the broker ever
