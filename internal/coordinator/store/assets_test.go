@@ -221,6 +221,59 @@ func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {
 	}
 }
 
+// TestRollbackCurrentAssetCanHaveOlderCreatedAtThanSuperseded is the
+// durable guard the review asked for: it proves CreatedAt ordering is NOT
+// a valid way to find the current asset. A rollback restores an old row
+// without touching its CreatedAt, so after a rollback the current row's
+// CreatedAt is older than the row it just superseded — the opposite of
+// what "newest by CreatedAt wins" would assume. SupersededAt nil is the
+// only correct test, and this test fails loudly if anyone changes that.
+func TestRollbackCurrentAssetCanHaveOlderCreatedAtThanSuperseded(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	ctx := context.Background()
+
+	a := newTestAsset("older-a", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "f.fseq")
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || rb {
+		t.Fatalf("create a: rolledBack=%v err=%v", rb, err)
+	}
+
+	clock.advance(time.Hour)
+	b := newTestAsset("newer-b", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "f.fseq")
+	if _, rb, err := st.CreateAsset(ctx, b); err != nil || rb {
+		t.Fatalf("create b: rolledBack=%v err=%v", rb, err)
+	}
+
+	clock.advance(time.Hour)
+	rolledBack, rb, err := st.CreateAsset(ctx, a)
+	if err != nil || !rb {
+		t.Fatalf("rollback to a: rolledBack=%v err=%v, want true/nil", rb, err)
+	}
+
+	current, err := st.GetAsset(ctx, "older-a")
+	if err != nil {
+		t.Fatalf("get current: %v", err)
+	}
+	superseded, err := st.GetAsset(ctx, "newer-b")
+	if err != nil {
+		t.Fatalf("get superseded: %v", err)
+	}
+
+	if current.SupersededAt != nil {
+		t.Fatalf("current.SupersededAt = %v, want nil", current.SupersededAt)
+	}
+	if superseded.SupersededAt == nil {
+		t.Fatalf("superseded.SupersededAt = nil, want set")
+	}
+	if !current.CreatedAt.Before(superseded.CreatedAt) {
+		t.Fatalf("current.CreatedAt %v is not before superseded.CreatedAt %v — this test's whole premise (rollback preserves the restored row's original CreatedAt) no longer holds",
+			current.CreatedAt, superseded.CreatedAt)
+	}
+	if rolledBack.CreatedAt != current.CreatedAt {
+		t.Fatalf("CreateAsset's own return CreatedAt = %v, want it to match the re-fetched row %v", rolledBack.CreatedAt, current.CreatedAt)
+	}
+}
+
 // TestCreateAssetRollbackRollForwardRollbackCycleTerminates proves a
 // rollback/roll-forward/rollback cycle stays at two rows, never a walk.
 func TestCreateAssetRollbackRollForwardRollbackCycleTerminates(t *testing.T) {

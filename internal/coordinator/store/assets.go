@@ -32,17 +32,21 @@ const (
 // filename, and identity here is the (show, sequence, target, hash) tuple,
 // never the name.
 type AssetRecord struct {
-	ID                     string
-	ShowID                 string
-	SequenceID             string
-	TargetKind             string // AssetTargetKindNode | AssetTargetKindShow
-	TargetID               string // node id, or "" when TargetKind == AssetTargetKindShow
-	MediaType              string // "fseq" | "audio" | "media"
-	ContentHash            string // "sha256:<hex>"
-	RuntimeFilename        string
-	SizeBytes              int64
-	Backend                string // "volume"
-	StorageKey             string
+	ID              string
+	ShowID          string
+	SequenceID      string
+	TargetKind      string // AssetTargetKindNode | AssetTargetKindShow
+	TargetID        string // node id, or "" when TargetKind == AssetTargetKindShow
+	MediaType       string // "fseq" | "audio" | "media"
+	ContentHash     string // "sha256:<hex>"
+	RuntimeFilename string
+	SizeBytes       int64
+	Backend         string // "volume"
+	StorageKey      string
+	// CreatedAt is ingestion time only, never a currentness signal: a
+	// rollback (rollbackAsset) restores a row without touching it, so the
+	// current row can hold an older CreatedAt than the row it superseded.
+	// SupersededAt nil is the sole test for current.
 	CreatedAt              time.Time
 	CreatedByPrincipalID   string
 	CreatedByPrincipalName string
@@ -219,6 +223,35 @@ func rollbackAsset(ctx context.Context, q querier, existing AssetRecord, now tim
 	}
 	existing.SupersededAt = nil
 	return existing, true, nil
+}
+
+func getCurrentAssetForTuple(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
+	row := q.QueryRowContext(ctx, `SELECT`+assetColumns+`FROM assets
+		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND superseded_at IS NULL`,
+		showID, sequenceID, targetKind, targetID)
+	rec, err := scanAsset(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssetRecord{}, ErrAssetNotFound
+	}
+	if err != nil {
+		return AssetRecord{}, fmt.Errorf("store: get current asset for tuple: %w", err)
+	}
+	return rec, nil
+}
+
+// GetCurrentAssetForTuple returns the current (superseded_at IS NULL) asset
+// for one (showID, sequenceID, targetKind, targetID), or [ErrAssetNotFound]
+// when nothing is current yet. Callers needing the row a write is about to
+// displace — e.g. a rollback audit entry — must read this INSIDE the same
+// transaction as the write, before it runs.
+func (s *Store) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
+	guardNotInTx(ctx, "Store.GetCurrentAssetForTuple")
+	return getCurrentAssetForTuple(ctx, s.db, showID, sequenceID, targetKind, targetID)
+}
+
+// GetCurrentAssetForTuple is [Store.GetCurrentAssetForTuple]'s [Tx] form.
+func (t *Tx) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
+	return getCurrentAssetForTuple(ctx, t.tx, showID, sequenceID, targetKind, targetID)
 }
 
 // CreateAsset registers a new asset, superseding any existing current

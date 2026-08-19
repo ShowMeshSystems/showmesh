@@ -1096,6 +1096,22 @@ func TestPostAssetUploadRollback(t *testing.T) {
 	for _, e := range audit {
 		if e.Action == "asset.rollback" && e.Target == rollbackResp.Asset.ID {
 			foundRollback = true
+
+			var params struct {
+				FromAssetID string `json:"fromAssetId"`
+				ToAssetID   string `json:"toAssetId"`
+			}
+			if err := json.Unmarshal([]byte(e.ParamsJSON), &params); err != nil {
+				t.Fatalf("decode rollback audit params: %v\nparams: %s", err, e.ParamsJSON)
+			}
+			// B was current when A's rollback ran, so B is what got
+			// displaced — the "half the event" blocker 1 asked for.
+			if params.ToAssetID != rollbackResp.Asset.ID {
+				t.Errorf("audit toAssetId = %q, want the restored asset %q", params.ToAssetID, rollbackResp.Asset.ID)
+			}
+			if params.FromAssetID == "" || params.FromAssetID == params.ToAssetID {
+				t.Errorf("audit fromAssetId = %q, want the displaced (B) asset id, distinct from toAssetId %q", params.FromAssetID, params.ToAssetID)
+			}
 		}
 		if e.Action == "asset.rollback" && e.Kind != string(identity.AuditAdmin) {
 			t.Errorf("asset.rollback audit kind = %q, want %q", e.Kind, identity.AuditAdmin)
@@ -1134,6 +1150,77 @@ func TestPostAssetUploadRollback(t *testing.T) {
 	}
 	if getResp.RolledBack {
 		t.Error("GET /assets/{id} rolledBack = true, want false always")
+	}
+}
+
+// clockAdvancingAssetBackend wraps a real assetstore.Backend and advances clock by
+// delta inside Put, after the bytes are staged — modeling review blocker
+// 2: a real upload's Put can take a long time, and the audit entry's
+// timestamp must reflect when the write actually ran, not when the
+// request started.
+type clockAdvancingAssetBackend struct {
+	assetstore.Backend
+	clock *syncClock
+	delta time.Duration
+}
+
+func (b *clockAdvancingAssetBackend) Put(ctx context.Context, r io.Reader, limit int64) (assetstore.Blob, error) {
+	blob, err := b.Backend.Put(ctx, r, limit)
+	b.clock.advance(b.delta)
+	return blob, err
+}
+
+// TestPostAssetUploadAuditTimestampReflectsWriteNotUploadStart proves
+// review blocker 2's fix: the audit entry's Timestamp is read inside the
+// transaction, after the (possibly slow) upload stream, not once at
+// request start. Before the fix this test's audit entry would carry
+// requestStart rather than a time at or after it.
+func TestPostAssetUploadAuditTimestampReflectsWriteNotUploadStart(t *testing.T) {
+	requestStart := testNow
+	clock := &syncClock{t: requestStart}
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock.now)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	backend, err := assetstore.NewVolumeBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("new volume backend: %v", err)
+	}
+	deps := assetsTestDeps(t, svc, st)
+	deps.AssetBackend = &clockAdvancingAssetBackend{Backend: backend, clock: clock, delta: time.Hour}
+	api := New(deps, Options{Clock: clock.now, Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("version A"), auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+
+	writeTime := clock.now() // advanced by Put; this is what the write actually happened at
+	if !writeTime.After(requestStart) {
+		t.Fatalf("test setup: writeTime %v did not advance past requestStart %v", writeTime, requestStart)
+	}
+
+	audit, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	found := false
+	for _, e := range audit {
+		if e.Action != "asset.upload" {
+			continue
+		}
+		found = true
+		if !e.RecordedAt.Equal(writeTime) {
+			t.Errorf("audit RecordedAt = %v, want %v (the write-time clock read, not requestStart %v)",
+				e.RecordedAt, writeTime, requestStart)
+		}
+	}
+	if !found {
+		t.Fatalf("no asset.upload audit entry found among %+v", audit)
 	}
 }
 
