@@ -11,6 +11,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // fakeMQTTBrokerRegistry is a minimal [MQTTBrokerRegistry] fake: publish
@@ -226,6 +227,94 @@ func TestInvokeActionIdempotencyKeyReusedForDifferentActionIs409(t *testing.T) {
 	}
 }
 
+// TestInvokeActionReplayCarriesTheOriginalLabel proves a replayed
+// response reports the same label field the original dispatch did,
+// rather than silently dropping it.
+func TestInvokeActionReplayCarriesTheOriginalLabel(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	// showConfigTestDeps leaves Commands unwired, which makes
+	// UpdateCommandOutcome a silent no-op; wiring it to st matches real
+	// coordinator wiring (coordinator.go) and is required to observe
+	// what a replay actually reads back.
+	deps.Commands = st
+	deps.ResolumeActions = &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	resp1, body1 := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "label-key", token))
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first: status = %d; body: %s", resp1.StatusCode, body1)
+	}
+	m1 := decodeMap(t, body1)
+	result1 := m1["result"].(map[string]any)
+	if result1["label"] != "Blackout everything" {
+		t.Fatalf("first response label = %v, want %q; body: %s", result1["label"], "Blackout everything", body1)
+	}
+
+	resp2, body2 := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", "label-key", token))
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second: status = %d; body: %s", resp2.StatusCode, body2)
+	}
+	m2 := decodeMap(t, body2)
+	result2 := m2["result"].(map[string]any)
+	if replay, _ := result2["replay"].(bool); !replay {
+		t.Fatalf("second request's replay = %v, want true", result2["replay"])
+	}
+	if result2["label"] != "Blackout everything" {
+		t.Errorf("replayed label = %v, want %q (a replay must carry the same fields the original dispatch did); body: %s",
+			result2["label"], "Blackout everything", body2)
+	}
+}
+
+// TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409 is
+// SM-107: TargetID's grammar is operator-chosen and not namespaced per
+// command family, so an FPP instance id can collide with a show.action id
+// of the same text. A key already used by an FPP command whose TargetID
+// happens to equal the requested action id must be refused as a conflict,
+// never answered as a replay carrying that unrelated command's result.
+func TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.ResolumeActions = &fakeResolumeActionDispatcher{results: map[string]ResolumeActionResult{
+		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
+	}}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "blackout-now", validShowActionResolumeBlackoutBody)
+
+	const sharedKey = "cross-family-key"
+	rec, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "other-command", IdempotencyKey: sharedKey, Action: "fpp.stopPlaylist",
+		TargetKind: "fpp", TargetID: "blackout-now",
+		IssuerPrincipalID: "operator-1", IssuerPrincipalName: "operator-1",
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed unrelated command: %v", err)
+	}
+	resolvedState := "resolved"
+	resultJSON := `{"outcome":"confirmed"}`
+	if err := st.UpdateCommandOutcome(context.Background(), rec.ID, store.CommandOutcomeUpdate{
+		State: &resolvedState, ResultJSON: &resultJSON,
+	}); err != nil {
+		t.Fatalf("resolve unrelated command: %v", err)
+	}
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("blackout-now", sharedKey, token))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (a command from a different family must never resolve as a replay); body: %s",
+			resp.StatusCode, body)
+	}
+}
+
 // TestInvokeActionMQTTConfirmedAndUnconfirmable proves the mqtt branch
 // dispatches through [DispatchMQTTAction] over [Dependencies.MQTTBrokers]:
 // a "none" expect kind reports unconfirmable, never success dressed up as
@@ -252,6 +341,49 @@ func TestInvokeActionMQTTConfirmedAndUnconfirmable(t *testing.T) {
 	}
 	if brokers.publishes == 0 {
 		t.Errorf("expected the mqtt broker to have been published to")
+	}
+}
+
+// TestInvokeActionMQTTNonConfirmedResultPersistsASpecificOutcomeState is
+// SM-103: the macro path computes a specific OutcomeState for an MQTT
+// result (negative_answer, malformed_payload, deadline_exceeded, ...);
+// action invocation must persist that same specific state rather than an
+// empty one for a non-confirmed MQTT result.
+func TestInvokeActionMQTTNonConfirmedResultPersistsASpecificOutcomeState(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	brokers := &fakeMQTTBrokerRegistry{msg: broker.Message{Payload: []byte("false")}}
+	deps.MQTTBrokers = brokers
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "relay-check", validShowActionMQTTBooleanBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("relay-check", "mqtt-state-key", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if result["outcome"] != "failed" {
+		t.Fatalf("outcome = %v, want failed (a boolean expect answered false); body: %s", result["outcome"], body)
+	}
+	cmdID, _ := result["id"].(string)
+	if cmdID == "" {
+		t.Fatalf("response carried no command id; body: %s", body)
+	}
+
+	rec, err := st.GetCommand(context.Background(), cmdID)
+	if err != nil {
+		t.Fatalf("GetCommand: %v", err)
+	}
+	if rec.OutcomeState == "" {
+		t.Fatalf("persisted OutcomeState is empty, want a specific state (%q)", mqttActionStateNegativeAnswer)
+	}
+	if rec.OutcomeState != mqttActionStateNegativeAnswer {
+		t.Errorf("persisted OutcomeState = %q, want %q", rec.OutcomeState, mqttActionStateNegativeAnswer)
 	}
 }
 

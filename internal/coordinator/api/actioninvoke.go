@@ -82,16 +82,20 @@ func actionInvokeAuditUnavailableProblem(actionID string, cause error) v1.Proble
 
 // actionInvokeReplayConflictProblem mirrors resolumeActionReplayConflictProblem's
 // identical reasoning: an idempotency key reused against a DIFFERENT
-// action id than it was first used against.
-func actionInvokeReplayConflictProblem(existingID, existingActionID, requestedActionID string) v1.Problem {
+// action id, or against a command from a different family entirely, than
+// it was first used against. TargetID's grammar is operator-chosen and
+// not namespaced per family (fppCommandReplayConflictProblem's own
+// precedent), so an FPP instance id and a show.action id can share text
+// and must still be told apart.
+func actionInvokeReplayConflictProblem(existingID, existingTargetKind, existingTargetID, requestedActionID string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
-		Title:  "Idempotency key already used for a different action",
+		Title:  "Idempotency key already used for a different command",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
-			"idempotencyKey was already used for invocation %s (action %q); this request names a different action %q. "+
+			"idempotencyKey was already used for command %s (%s target %q); this request invokes action %q. "+
 				"Mint a fresh idempotencyKey for a genuinely new request.",
-			existingID, existingActionID, requestedActionID),
+			existingID, existingTargetKind, existingTargetID, requestedActionID),
 	}
 }
 
@@ -99,6 +103,7 @@ func actionInvokeReplayConflictProblem(existingID, existingActionID, requestedAc
 // store.CommandRecord.ResultJSON, mirroring resolumeActionResultPayload's
 // identical narrow shape.
 type actionInvokeResultPayload struct {
+	Label   string `json:"label,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
 }
 
@@ -276,14 +281,19 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, actionInvokeHTTPWriteDeadline-actionInvokeBookkeepingBudget)
 	defer dispatchCancel()
 
-	outcome, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, ac, h.clientAddr(r), auditExempt)
+	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, ac, h.clientAddr(r), auditExempt)
 
 	resolvedState := "resolved"
-	evidenceState := ""
-	if outcome == outcomeWordConfirmed {
+	// evidenceState prefers dispatchActionTarget's own family-specific
+	// state (MQTT's mqttActionState* vocabulary — see that function's doc
+	// comment); FPP and Resolume leave it unset and fall back to this
+	// pkg/observation-vocabulary default, unchanged from before this state
+	// existed.
+	evidenceState := outcomeState
+	if evidenceState == "" && outcome == outcomeWordConfirmed {
 		evidenceState = "current"
 	}
-	finalResult, _ := json.Marshal(actionInvokeResultPayload{Outcome: outcome})
+	finalResult, _ := json.Marshal(actionInvokeResultPayload{Label: payload.Label, Outcome: outcome})
 	finalResultStr := string(finalResult)
 	if err := h.updateActionInvokeOutcomeBounded(bgCtx, cmdID, store.CommandOutcomeUpdate{
 		DispatchedAt: dispatchedAt, ResolvedAt: &resolvedAt, State: &resolvedState, ResultJSON: &finalResultStr,
@@ -317,7 +327,13 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
 // handler's own outer decision.
-func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
+//
+// outcomeState is empty for FPP and Resolume (the caller derives a
+// pkg/observation-vocabulary fallback from outcome itself, unchanged) and
+// carries DispatchMQTTAction's own mqttActionState* vocabulary for MQTT —
+// macro/vocab.go's identical split, applied here instead of re-deriving a
+// second classification for the same dispatch.
+func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
 	target := payload.Target
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
@@ -334,15 +350,15 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		resolvedAt = h.now()
 		switch {
 		case err != nil:
-			return outcomeWordFailed, "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
 		case problem != nil:
-			return outcomeWordRefused, problem.Detail, nil, resolvedAt
+			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
 		case out.DispatchFailed:
-			return outcomeWordFailed, fmt.Sprintf("the request to %s did not succeed, so this action never reached it", in.InstanceID), out.DispatchedAt, resolvedAt
+			return outcomeWordFailed, "", fmt.Sprintf("the request to %s did not succeed, so this action never reached it", in.InstanceID), out.DispatchedAt, resolvedAt
 		case out.Outcome == outcomeWordConfirmed:
-			return outcomeWordConfirmed, out.OutcomeReason, out.DispatchedAt, resolvedAt
+			return outcomeWordConfirmed, "", out.OutcomeReason, out.DispatchedAt, resolvedAt
 		default:
-			return outcomeWordUnconfirmed, out.OutcomeReason, out.DispatchedAt, resolvedAt
+			return outcomeWordUnconfirmed, "", out.OutcomeReason, out.DispatchedAt, resolvedAt
 		}
 
 	case config.ShowActionIntegrationResolume:
@@ -350,9 +366,9 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		result, err := h.deps.ResolumeActions.Dispatch(ctx, target.Action, target.Ref, dispatchedNow)
 		resolvedAt = h.now()
 		if err != nil {
-			return outcomeWordFailed, "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
 		}
-		return mapResolumeOutcomeWord(result.Outcome), result.Reason, result.DispatchedAt, resolvedAt
+		return mapResolumeOutcomeWord(result.Outcome), "", result.Reason, result.DispatchedAt, resolvedAt
 
 	case config.ShowActionIntegrationMQTT:
 		// Stamped BEFORE DispatchMQTTAction runs, mirroring
@@ -367,12 +383,12 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		if res.PublishAttempted {
 			dispatched = &dispatchAttemptedAt
 		}
-		return res.Outcome, res.OutcomeReason, dispatched, res.ResolvedAt
+		return res.Outcome, res.OutcomeState, res.OutcomeReason, dispatched, res.ResolvedAt
 
 	default:
 		// Unreachable given write-time validation of target.integration's
 		// closed enum.
-		return outcomeWordFailed, fmt.Sprintf("action names an unrecognized integration %q", target.Integration), nil, h.now()
+		return outcomeWordFailed, "", fmt.Sprintf("action names an unrecognized integration %q", target.Integration), nil, h.now()
 	}
 }
 
@@ -397,8 +413,8 @@ func mapResolumeOutcomeWord(o ResolumeActionOutcome) string {
 // is dispatched, and existing's own already-recorded result is returned
 // verbatim — mirroring resolveResolumeActionReplay's identical reasoning.
 func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time, ac authContext, existing store.CommandRecord, requestedActionID string) (v1.ActionInvocationResult, *v1.Problem) {
-	if existing.TargetID != requestedActionID {
-		p := actionInvokeReplayConflictProblem(existing.ID, existing.TargetID, requestedActionID)
+	if existing.TargetKind != actionInvokeTargetKind || existing.TargetID != requestedActionID {
+		p := actionInvokeReplayConflictProblem(existing.ID, existing.TargetKind, existing.TargetID, requestedActionID)
 		return v1.ActionInvocationResult{}, &p
 	}
 
@@ -413,7 +429,7 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	_ = json.Unmarshal([]byte(existing.ResultJSON), &payload)
 
 	return v1.ActionInvocationResult{
-		ID: existing.ID, IdempotencyKey: existing.IdempotencyKey, ActionID: existing.TargetID,
+		ID: existing.ID, IdempotencyKey: existing.IdempotencyKey, ActionID: existing.TargetID, Label: payload.Label,
 		Replay: true, Outcome: payload.Outcome, OutcomeReason: existing.OutcomeReason,
 		AttributionDegraded: degraded,
 		DispatchedAt:        formatTimePtr(existing.DispatchedAt),
