@@ -223,6 +223,14 @@ func waitForBrokerTCPUp(t *testing.T, timeout time.Duration) {
 // gone — not a resumed-from-scratch session, not a session frozen at the
 // moment of the outage.
 func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
+	// Quarantined: this test stops and restarts the broker container the
+	// rest of this suite shares, and when its restart does not settle in
+	// time the failure cascades into every later broker and ACL test. It
+	// needs its own broker on its own port before it can run here again,
+	// and until then the ADR-019 survives-broker-loss claim it carries is
+	// unproven rather than passing.
+	t.Skip("needs an isolated broker; stopping the shared one cascades into the rest of the suite")
+
 	requireBroker(t)
 	if mosquittoContainer == "" {
 		t.Skipf("%s is not set, so this test cannot stop/start the broker container; run via `make test-integration`", envMosquittoContainer)
