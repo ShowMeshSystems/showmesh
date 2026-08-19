@@ -66,6 +66,7 @@ func setupNightControlFixture(t *testing.T, maxAge time.Duration) (api *API, st 
 
 	api = New(deps, Options{Clock: now, Logger: testLogger(), NightReadinessMaxAge: maxAge})
 
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
@@ -371,6 +372,7 @@ func TestInvariant2_ConfigRevisionStaysPinnedAcrossAnEditMidSession(t *testing.T
 	deps, obs := nightControlTestDeps(svc, st)
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
 
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
@@ -789,6 +791,7 @@ func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
 	deps, _ := nightControlTestDeps(svc, st)
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
 
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
@@ -819,6 +822,7 @@ func TestFinding9_AttributionDegradedIsPopulatedOnTheExemptPath(t *testing.T) {
 	deps, obs := nightControlTestDeps(svc, st)
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
 
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
@@ -853,6 +857,7 @@ func TestInvariant8Both(t *testing.T) {
 			deps, obs := nightControlTestDeps(svc, st)
 			api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
 
+			mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 			mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 			mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 			mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)

@@ -46,6 +46,7 @@ func TestOpenAPINightSessionResponsesMatchRealResponses(t *testing.T) {
 	api := New(nightSessionTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	auth := map[string]string{"Authorization": "Bearer " + token}
 
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, token, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")

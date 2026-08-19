@@ -132,6 +132,7 @@ func TestOpenAPINightAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 	deps, _ := nightControlTestDeps(svc, st)
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
 
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)

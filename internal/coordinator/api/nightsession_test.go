@@ -98,6 +98,7 @@ func setupNightSessionFixture(t *testing.T) (*API, *store.Store, string) {
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(nightSessionTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, token, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 	return api, st, token
@@ -180,6 +181,7 @@ func TestGetNightSessionRevisionReportsItsOwnCreationTime(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(nightSessionTestDeps(svc, st), Options{Clock: clock, Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, token, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
 
@@ -241,6 +243,7 @@ func TestPutNightSessionRejectsDanglingAsset(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(nightSessionTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, token, "lighting-fade-out", validShowActionFPPBody)
 	// Deliberately no CreateAsset call: the timelineAsset reference dangles.
 
