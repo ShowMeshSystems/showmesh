@@ -11,13 +11,20 @@ import (
 	"testing"
 )
 
-// linearRefPattern matches this workspace's Linear issue key shape: the
-// team prefix this workspace's Linear issues use, a hyphen, and a
-// number. It deliberately does not match ADR-024, RES-002, TRACK-F, or
-// L0..L4: those are this project's own public identifiers, documented in
-// CLAUDE.md and docs/decisions, never a private ticket number in
-// someone else's tracker.
-var linearRefPattern = regexp.MustCompile(`\bSM\x2d[0-9]+\b`)
+// linearRefPatterns match a private tracker reference in any form that
+// has actually shipped: the issue key, and a bare tracker URL. Matching is
+// case-insensitive. ADR-024, RES-002, TRACK-F and L0..L4 are deliberately
+// not matched — those are this project's own public identifiers.
+var linearRefPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bSM\x2d[0-9]+\b`),
+	regexp.MustCompile(`(?i)\blinear\.app/`),
+}
+
+// commentWrap matches a line break and the comment marker that continues
+// it. Content is matched twice, once as written and once with these
+// removed, because an issue key wrapped across two comment lines is the
+// evasion nobody types on purpose and every 72-column reflow produces.
+var commentWrap = regexp.MustCompile(`\r?\n[ \t]*(?://+|\*|#)?[ \t]*`)
 
 // linearRefSweepRoots are the directories this test sweeps, relative to
 // the repository root: everywhere shipped Go and TypeScript source and
@@ -29,10 +36,21 @@ var linearRefSweepRoots = []string{"cmd", "internal", "pkg", "test", "ui/src"}
 
 var linearRefSweepExtraFiles = []string{"api/openapi.yaml"}
 
+// linearRefSweptExts is wider than the shipped-source extensions because a
+// reference is just as public in a fixture or a stylesheet.
+var linearRefSweptExts = map[string]bool{
+	".go": true, ".ts": true, ".tsx": true, ".js": true,
+	".json": true, ".css": true, ".sql": true, ".sh": true,
+	".yaml": true, ".yml": true,
+}
+
+// linearRefSkipDirs are matched as repo-relative paths, not basenames, so
+// skipping the generated API types cannot silently exempt any other
+// directory that happens to be named "generated".
 var linearRefSkipDirs = map[string]bool{
-	"node_modules": true,
-	".git":         true,
-	"generated":    true, // ui/src/api/generated
+	"node_modules":         true,
+	".git":                 true,
+	"ui/src/api/generated": true,
 }
 
 // repoRoot locates the repository root relative to this package's own
@@ -59,8 +77,17 @@ func TestNoLinearIssueReferencesInShippedSource(t *testing.T) {
 			t.Fatalf("reading %s: %v", path, err)
 		}
 		rel, _ := filepath.Rel(root, path)
-		for _, m := range linearRefPattern.FindAllString(string(raw), -1) {
-			offenders = append(offenders, filepath.ToSlash(rel)+": "+m)
+		seen := map[string]bool{}
+		for _, text := range []string{string(raw), commentWrap.ReplaceAllString(string(raw), "")} {
+			for _, pat := range linearRefPatterns {
+				for _, m := range pat.FindAllString(text, -1) {
+					if seen[m] {
+						continue
+					}
+					seen[m] = true
+					offenders = append(offenders, filepath.ToSlash(rel)+": "+m)
+				}
+			}
 		}
 	}
 
@@ -73,14 +100,14 @@ func TestNoLinearIssueReferencesInShippedSource(t *testing.T) {
 				}
 				return err
 			}
+			relDir, _ := filepath.Rel(root, path)
 			if d.IsDir() {
-				if linearRefSkipDirs[d.Name()] {
+				if linearRefSkipDirs[filepath.ToSlash(relDir)] || linearRefSkipDirs[d.Name()] {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			ext := filepath.Ext(path)
-			if ext != ".go" && ext != ".ts" && ext != ".tsx" {
+			if !linearRefSweptExts[filepath.Ext(path)] {
 				return nil
 			}
 			sweep(path)
