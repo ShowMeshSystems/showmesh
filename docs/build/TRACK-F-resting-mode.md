@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17.
+Status: F0 through F4 built on `track-f/night-session` (2026-08-18), F4 in review and not yet committed; F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
 
 ## Goal
 
@@ -27,7 +27,9 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 
 ## Deliverables
 
-### F0. Evidence capture and schema proof
+### F0. Evidence capture and schema proof — built (`369ad34`, 2026-08-18)
+
+Captured against a dedicated bench `fppd` 9.5.3, never the shared bench container and never the deployed fleet. Found that stock FPP has no brightness command at all (owner decision RES-018/SM-49); see the 2026-08-18 BUILD-LOG entry for the full capture summary and the four other measurements that shaped F3.
 
 - Parse duration from representative deployed resting FSEQ variants.
 - Capture the supported read path for an idle FPP playlist definition and prove that ShowMesh can verify its ordered entries and media association before playback. If the FPP API cannot supply it, specify and bench an explicit plugin/config-import path; readiness may not claim playlist contents from running-state observations alone.
@@ -38,7 +40,9 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 - Record FPP repeat and one-shot behavior used by inter-show and end-of-night resting.
 - Capture the scheduled-brightness command and its observable state, then prove or reject a control path that preserves the FPP ceiling while applying an independent ShowMesh transition multiplier. If FPP exposes only destructive absolute brightness, record that limitation and select a different provider or authored-FSEQ fade before F4.
 
-### F1. Versioned configuration and validation
+### F1. Versioned configuration and validation — built (`e48660f`, 2026-08-18)
+
+Built against fakes; `make check` and `make test-integration` (287.957s, zero failures) green on this tree. No integrated acceptance is claimed and nothing here has run against a real FPP. Nine review findings, two blocking, are recorded in the 2026-08-18 BUILD-LOG entry.
 
 Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show playlist references, asset/action references, relative cue timing, and a background-audio source. That source is either one logical Track E audio slot or an embedded ordered list of logical audio slots plus repeat, resume/restart, and sequential/gapless/crossfade item-transition policy. Each slot identifies the current show/sequence/target audio asset rather than a filename. The Night Session configuration revision is the playlist revision; session activation pins it and resolves every ordered slot to an exact asset id and content hash. No separate audio-playlist configuration kind or undocumented authoring path is introduced.
 
@@ -46,13 +50,17 @@ Validation rejects calendar fields, a manual duplicate rest duration, a resting 
 
 Configuration pins revisions for an active session. Editing a show at 8 PM cannot silently change the controller running that night.
 
-### F2. Persisted lifecycle controller
+### F2. Persisted lifecycle controller — built (`49189d7`, 2026-08-18)
+
+Built against fakes and recorded observations; `make check` and `make test-integration` (292.492s, 74 passed, zero failures) green on this tree. No integrated acceptance is claimed and nothing here has run against a real FPP. Thirteen review findings are recorded in the 2026-08-18 BUILD-LOG entry, including a degraded session with no recovery path (fixed) and an untransacted read-decide-write (fixed).
 
 Implement the closed state machine and command vocabulary from `RESTING-MODE.md`. `prepare-site` opens the operating-day preparation epoch; readiness and pre-show attach to it; `start-night` consumes it only with fresh same-epoch evidence. Persist preparation epoch, readiness identity/freshness, session identity, state, final intent, admission-closed flag, cycle, content anchor, armed-show identity, `showCommitted`, durable cue outbox records, stable cue invocation identities, cue outcomes, and pending fade/shutdown. Shutdown intents are monotonic and cancel any uncommitted next-show boundary. Submission is asynchronous; the API and change stream expose state rather than holding a request open.
 
 This controller must not import or reuse the desired-state reconciler as a loop, and it must not resume a generic macro after restart.
 
-### F3. FPP timeline and playlist integration
+### F3. FPP timeline and playlist integration — built (`63f4770`, 2026-08-18)
+
+Built against fakes, a throwaway bench `fppd`, and F0's recorded observations; `make check`, `make test-integration` (298.666s, zero failures), and `make test-integration-fpp` (176.682s, 29 cases) green on this tree. No integrated acceptance is claimed and nothing here has run against the deployed fleet. Ten review findings across two rounds are recorded in the 2026-08-18 BUILD-LOG entry, including a silently re-arming invalidated boundary and a show-launch replacement guard reachable without positive identification.
 
 - Start the configured FPP-owned one-item resting playlist and confirm the exact FSEQ item.
 - Derive its boundary from asset duration plus observed FPP position.
@@ -62,7 +70,9 @@ This controller must not import or reuse the desired-state reconciler as a loop,
 - Start repeating end-of-night resting after the final show.
 - Preserve FPP busy-start protections and never replace an unrelated running playlist silently.
 
-### F4. Transition action runner
+### F4. Transition action runner — built, in review, not yet committed (2026-08-18)
+
+Uncommitted changes in the `track-f/night-session` worktree. Review found cue offsets collapsing to zero (every fade would have run after the resting sequence ended rather than before it) and an unbounded barrier; both are recorded in the 2026-08-18 BUILD-LOG entry as findings under review, not as closed. `make test-integration` for this seam has not been run (host load was above 80 with several parallel sessions at the time of writing); until it runs, F4 is not gated the way F0 through F3 are.
 
 Run independently offset lighting, projection, audio, announcement, and other-media cues through named logical actions. Support parallel dispatch where cues share an offset and barriers where show launch requires their outcomes. Record completion and confirmation separately.
 

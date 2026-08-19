@@ -84,6 +84,12 @@ type handlers struct {
 	// constructed per [New] call and tests build several independent APIs
 	// in one process.
 	discoveryRunInFlight atomic.Bool
+
+	// nightCueHooks is Track F seam F4's own crash-injection seam for
+	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
+	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
+	// value is a no-op; only a test ever sets it.
+	nightCueHooks nightCueDispatchHooks
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

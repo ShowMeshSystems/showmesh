@@ -377,6 +377,17 @@ type NightSessionStore interface {
 	CreateNightReadiness(ctx context.Context, rec store.NightReadinessRecord) error
 	GetLatestNightReadiness(ctx context.Context, sessionID string) (store.NightReadinessRecord, error)
 
+	// The four methods below are Track F seam F4's own addition, over the
+	// night_cue_outbox table schemaV10 already created (store/migrations.go).
+	// InsertNightCueOutboxRow's [Tx] form is what makes RESTING-MODE.md
+	// §7.1.1's atomic commit possible: the session's own show_committed
+	// flag and the first outward-facing cue's outbox row are written
+	// together, inside one InTx call, before either is ever acted on.
+	InsertNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord, now time.Time) error
+	GetNightCueOutboxRow(ctx context.Context, sessionID string, cycle int64, phase, cueName string) (store.NightCueOutboxRecord, error)
+	ListNightCueOutboxRows(ctx context.Context, sessionID string, cycle int64) ([]store.NightCueOutboxRecord, error)
+	UpdateNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord) error
+
 	// InTx runs fn inside one BEGIN IMMEDIATE transaction, so a lifecycle
 	// command's read, decision, and write share one atomic unit. *store.
 	// Store already satisfies this with no adapter.

@@ -309,12 +309,15 @@ func (t *Tx) GetLatestNightReadiness(ctx context.Context, sessionID string) (Nig
 }
 
 // NightCueOutboxRecord is one row of night_cue_outbox — Track F seam F4's
-// own table, created by this migration only. This seam's only use of it
-// is [Store.InsertNightCueOutboxRow]'s own uniqueness proof.
+// own table, created by this migration only. Phase (enterShow/enterResting)
+// is part of the row's own identity alongside session/cycle/cue name: the
+// two lists are separately validated and may legitimately share a cue
+// name, and the outbox must never let one resolve the other's row.
 type NightCueOutboxRecord struct {
 	ID             string
 	SessionID      string
 	Cycle          int64
+	Phase          string
 	CueName        string
 	ActionRevision int64
 	State          string
@@ -324,16 +327,18 @@ type NightCueOutboxRecord struct {
 	OutcomeReason  string
 }
 
-// ErrNightCueOutboxDuplicate is returned when (session, cycle, cue) is
-// reused — enforced by night_cue_outbox's own UNIQUE index.
-var ErrNightCueOutboxDuplicate = errors.New("store: a cue outbox row with this session/cycle/cue identity already exists")
+// ErrNightCueOutboxDuplicate is returned when (session, cycle, phase, cue)
+// is reused — enforced by night_cue_outbox's own UNIQUE index.
+var ErrNightCueOutboxDuplicate = errors.New("store: a cue outbox row with this session/cycle/phase/cue identity already exists")
 
-func (s *Store) InsertNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord, now time.Time) error {
-	guardNotInTx(ctx, "Store.InsertNightCueOutboxRow")
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO night_cue_outbox (id, session_id, cycle, cue_name, action_revision, state, dispatched_at, resolved_at, outcome, outcome_reason, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, rec.ID, rec.SessionID, rec.Cycle, rec.CueName, rec.ActionRevision, rec.State,
+// ErrNightCueOutboxNotFound is returned when no row matches.
+var ErrNightCueOutboxNotFound = errors.New("store: night cue outbox row not found")
+
+func insertNightCueOutboxRow(ctx context.Context, q querier, rec NightCueOutboxRecord, now time.Time) error {
+	_, err := q.ExecContext(ctx, `
+		INSERT INTO night_cue_outbox (id, session_id, cycle, phase, cue_name, action_revision, state, dispatched_at, resolved_at, outcome, outcome_reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, rec.ID, rec.SessionID, rec.Cycle, rec.Phase, rec.CueName, rec.ActionRevision, rec.State,
 		timePtrToDB(rec.DispatchedAt), timePtrToDB(rec.ResolvedAt), rec.Outcome, rec.OutcomeReason, timeToDB(now))
 	if err != nil {
 		if isUniqueConstraintErr(err) {
@@ -342,4 +347,128 @@ func (s *Store) InsertNightCueOutboxRow(ctx context.Context, rec NightCueOutboxR
 		return fmt.Errorf("store: insert night cue outbox row %q: %w", rec.ID, err)
 	}
 	return nil
+}
+
+// InsertNightCueOutboxRow is [Store]'s own-transaction form — used where
+// the row's own identity is all that must be durable (no sibling write to
+// commit alongside it).
+func (s *Store) InsertNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord, now time.Time) error {
+	guardNotInTx(ctx, "Store.InsertNightCueOutboxRow")
+	return insertNightCueOutboxRow(ctx, s.db, rec, now)
+}
+
+// InsertNightCueOutboxRow is [Store.InsertNightCueOutboxRow]'s [Tx] form —
+// RESTING-MODE.md §7.1.1's own atomic commit needs this: the first
+// outward-facing cue's outbox row and the session's own show_committed
+// flag are written in the SAME transaction, before either is ever acted
+// on, so a caller (api.nightCommitFirstCue) can compose the two.
+func (t *Tx) InsertNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord, now time.Time) error {
+	return insertNightCueOutboxRow(ctx, t.tx, rec, now)
+}
+
+func scanNightCueOutboxRow(row interface{ Scan(dest ...any) error }) (NightCueOutboxRecord, error) {
+	var (
+		rec                      NightCueOutboxRecord
+		dispatchedAt, resolvedAt sql.NullString
+		createdAt                string
+	)
+	if err := row.Scan(&rec.ID, &rec.SessionID, &rec.Cycle, &rec.Phase, &rec.CueName, &rec.ActionRevision, &rec.State,
+		&dispatchedAt, &resolvedAt, &rec.Outcome, &rec.OutcomeReason, &createdAt); err != nil {
+		return NightCueOutboxRecord{}, err
+	}
+	var err error
+	if rec.DispatchedAt, err = dbToTimePtr(dispatchedAt); err != nil {
+		return NightCueOutboxRecord{}, fmt.Errorf("store: parse night cue outbox dispatched_at: %w", err)
+	}
+	if rec.ResolvedAt, err = dbToTimePtr(resolvedAt); err != nil {
+		return NightCueOutboxRecord{}, fmt.Errorf("store: parse night cue outbox resolved_at: %w", err)
+	}
+	_ = createdAt
+	return rec, nil
+}
+
+const nightCueOutboxColumns = `id, session_id, cycle, phase, cue_name, action_revision, state, dispatched_at, resolved_at, outcome, outcome_reason, created_at`
+
+func getNightCueOutboxRow(ctx context.Context, q querier, sessionID string, cycle int64, phase, cueName string) (NightCueOutboxRecord, error) {
+	row := q.QueryRowContext(ctx, `SELECT `+nightCueOutboxColumns+` FROM night_cue_outbox WHERE session_id = ? AND cycle = ? AND phase = ? AND cue_name = ?`, sessionID, cycle, phase, cueName)
+	rec, err := scanNightCueOutboxRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NightCueOutboxRecord{}, ErrNightCueOutboxNotFound
+	}
+	if err != nil {
+		return NightCueOutboxRecord{}, fmt.Errorf("store: get night cue outbox row %s/%d/%s/%s: %w", sessionID, cycle, phase, cueName, err)
+	}
+	return rec, nil
+}
+
+// GetNightCueOutboxRow returns the outbox row for (sessionID, cycle,
+// phase, cueName), or [ErrNightCueOutboxNotFound].
+func (s *Store) GetNightCueOutboxRow(ctx context.Context, sessionID string, cycle int64, phase, cueName string) (NightCueOutboxRecord, error) {
+	guardNotInTx(ctx, "Store.GetNightCueOutboxRow")
+	return getNightCueOutboxRow(ctx, s.db, sessionID, cycle, phase, cueName)
+}
+
+// GetNightCueOutboxRow is [Store.GetNightCueOutboxRow]'s [Tx] form.
+func (t *Tx) GetNightCueOutboxRow(ctx context.Context, sessionID string, cycle int64, phase, cueName string) (NightCueOutboxRecord, error) {
+	return getNightCueOutboxRow(ctx, t.tx, sessionID, cycle, phase, cueName)
+}
+
+func listNightCueOutboxRows(ctx context.Context, q querier, sessionID string, cycle int64) ([]NightCueOutboxRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+nightCueOutboxColumns+` FROM night_cue_outbox WHERE session_id = ? AND cycle = ? ORDER BY rowid ASC`, sessionID, cycle)
+	if err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows %s/%d: %w", sessionID, cycle, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []NightCueOutboxRecord
+	for rows.Next() {
+		rec, err := scanNightCueOutboxRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan night cue outbox row: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows %s/%d: %w", sessionID, cycle, err)
+	}
+	return out, nil
+}
+
+// ListNightCueOutboxRows returns every outbox row for (sessionID, cycle),
+// in insertion order — recovery's own read (api.nightRecoverCueOutbox).
+func (s *Store) ListNightCueOutboxRows(ctx context.Context, sessionID string, cycle int64) ([]NightCueOutboxRecord, error) {
+	guardNotInTx(ctx, "Store.ListNightCueOutboxRows")
+	return listNightCueOutboxRows(ctx, s.db, sessionID, cycle)
+}
+
+func updateNightCueOutboxRow(ctx context.Context, q querier, rec NightCueOutboxRecord) error {
+	res, err := q.ExecContext(ctx, `
+		UPDATE night_cue_outbox SET state = ?, dispatched_at = ?, resolved_at = ?, outcome = ?, outcome_reason = ?
+		WHERE session_id = ? AND cycle = ? AND phase = ? AND cue_name = ?
+	`, rec.State, timePtrToDB(rec.DispatchedAt), timePtrToDB(rec.ResolvedAt), rec.Outcome, rec.OutcomeReason,
+		rec.SessionID, rec.Cycle, rec.Phase, rec.CueName)
+	if err != nil {
+		return fmt.Errorf("store: update night cue outbox row %s/%d/%s/%s: %w", rec.SessionID, rec.Cycle, rec.Phase, rec.CueName, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update night cue outbox row %s/%d/%s/%s: rows affected: %w", rec.SessionID, rec.Cycle, rec.Phase, rec.CueName, err)
+	}
+	if n == 0 {
+		return ErrNightCueOutboxNotFound
+	}
+	return nil
+}
+
+// UpdateNightCueOutboxRow overwrites the mutable columns (state,
+// dispatched_at, resolved_at, outcome, outcome_reason) of the row named by
+// rec's own identity (session_id, cycle, phase, cue_name), which never
+// changes.
+func (s *Store) UpdateNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord) error {
+	guardNotInTx(ctx, "Store.UpdateNightCueOutboxRow")
+	return updateNightCueOutboxRow(ctx, s.db, rec)
+}
+
+// UpdateNightCueOutboxRow is [Store.UpdateNightCueOutboxRow]'s [Tx] form.
+func (t *Tx) UpdateNightCueOutboxRow(ctx context.Context, rec NightCueOutboxRecord) error {
+	return updateNightCueOutboxRow(ctx, t.tx, rec)
 }

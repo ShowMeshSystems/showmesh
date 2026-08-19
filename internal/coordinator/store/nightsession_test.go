@@ -13,14 +13,18 @@ import (
 // with the same identity fails." This test fails if
 // night_cue_outbox_identity's UNIQUE index is ever dropped or narrowed —
 // verified by temporarily removing the index from schemaV10 and confirming
-// this test then fails (the second insert succeeds).
+// this test then fails (the second insert succeeds). Phase is part of the
+// identity (review finding: enterShow and enterResting are separately
+// validated lists that may legitimately share a cue name, and a shared
+// name without phase in the key let one list silently resolve the other's
+// row) — the same-name-different-phase case below proves that half.
 func TestNightCueOutboxDuplicateIdentityFails(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
 	now := time.Now()
 
 	rec := NightCueOutboxRecord{
-		ID: "cue-1", SessionID: "session-1", Cycle: 1, CueName: "lighting-fade-in",
+		ID: "cue-1", SessionID: "session-1", Cycle: 1, Phase: "enterShow", CueName: "lighting-fade-in",
 		ActionRevision: 1, State: "pending",
 	}
 	if err := st.InsertNightCueOutboxRow(ctx, rec, now); err != nil {
@@ -28,30 +32,36 @@ func TestNightCueOutboxDuplicateIdentityFails(t *testing.T) {
 	}
 
 	dup := rec
-	dup.ID = "cue-2" // different row id, SAME (session, cycle, cue) identity
+	dup.ID = "cue-2" // different row id, SAME (session, cycle, phase, cue) identity
 	err := st.InsertNightCueOutboxRow(ctx, dup, now)
 	if err == nil {
-		t.Fatalf("second insert with the same (session, cycle, cue) identity succeeded, want ErrNightCueOutboxDuplicate")
+		t.Fatalf("second insert with the same (session, cycle, phase, cue) identity succeeded, want ErrNightCueOutboxDuplicate")
 	}
 	if !errors.Is(err, ErrNightCueOutboxDuplicate) {
 		t.Fatalf("error = %v, want it to wrap ErrNightCueOutboxDuplicate", err)
 	}
 
-	// A different cue name in the same session/cycle, or a different
-	// cycle for the same cue name, is a DIFFERENT identity and must
-	// succeed — the index guards the (session, cycle, cue) tuple, not any
-	// single column of it.
+	// A different cue name in the same session/cycle/phase, a different
+	// cycle for the same cue name, or the SAME cue name in a DIFFERENT
+	// phase, are all DIFFERENT identities and must succeed — the index
+	// guards the full (session, cycle, phase, cue) tuple, not any subset.
 	otherCue := rec
 	otherCue.ID = "cue-3"
 	otherCue.CueName = "audio-fade-in"
 	if err := st.InsertNightCueOutboxRow(ctx, otherCue, now); err != nil {
-		t.Fatalf("insert with a different cue name in the same session/cycle: %v", err)
+		t.Fatalf("insert with a different cue name in the same session/cycle/phase: %v", err)
 	}
 	otherCycle := rec
 	otherCycle.ID = "cue-4"
 	otherCycle.Cycle = 2
 	if err := st.InsertNightCueOutboxRow(ctx, otherCycle, now); err != nil {
 		t.Fatalf("insert with the same cue name in a different cycle: %v", err)
+	}
+	otherPhase := rec
+	otherPhase.ID = "cue-5"
+	otherPhase.Phase = "enterResting"
+	if err := st.InsertNightCueOutboxRow(ctx, otherPhase, now); err != nil {
+		t.Fatalf("insert with the same cue name in a different phase: %v", err)
 	}
 }
 

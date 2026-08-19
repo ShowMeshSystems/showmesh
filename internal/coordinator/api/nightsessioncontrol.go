@@ -498,6 +498,12 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		next.ArmedShowID = uuid.NewString()
 		next.ShowCommitted = false
 		next.Cycle = current.Cycle + 1
+		next.ContentAnchorJSON = ""
+		// The first show of the night has no resting playback to lead
+		// from, so E is the moment this transition begins — written
+		// explicitly, never left for a fallback to reconstruct.
+		boundaryE := now
+		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &boundaryE, Reason: "content boundary E is this transition's own start; no resting playback preceded it"})
 		return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
 	case nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
@@ -761,6 +767,9 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		checks = append(checks, nightReadinessCheck{name: "show:playlist-present:" + payload.ShowPlaylist.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the show playlist definition from"})
 	}
 	checks = append(checks, nightCheckRestingAssetExactVariant(payload.Resting.Playlist))
+	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
+	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
+	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
 
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable {

@@ -546,6 +546,22 @@ func (noNightSessionStore) InTx(context.Context, func(context.Context, *store.Tx
 	return fmt.Errorf("api: night session store not wired in")
 }
 
+func (noNightSessionStore) InsertNightCueOutboxRow(context.Context, store.NightCueOutboxRecord, time.Time) error {
+	return fmt.Errorf("api: night session store not wired in")
+}
+
+func (noNightSessionStore) GetNightCueOutboxRow(context.Context, string, int64, string, string) (store.NightCueOutboxRecord, error) {
+	return store.NightCueOutboxRecord{}, store.ErrNightCueOutboxNotFound
+}
+
+func (noNightSessionStore) ListNightCueOutboxRows(context.Context, string, int64) ([]store.NightCueOutboxRecord, error) {
+	return nil, nil
+}
+
+func (noNightSessionStore) UpdateNightCueOutboxRow(context.Context, store.NightCueOutboxRecord) error {
+	return fmt.Errorf("api: night session store not wired in")
+}
+
 // noFPPMQTTHostLister is [Dependencies.FPPMQTT]'s nil-safe default:
 // CurrentHosts always answers empty-and-successful, matching every other
 // no-op lister in this package.

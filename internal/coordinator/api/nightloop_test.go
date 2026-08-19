@@ -334,10 +334,15 @@ func setupTransitionToShowTest(t *testing.T, obsRecords []observation.Observatio
 	}
 
 	// StateEnteredAt well before now: enterShow.blackoutHoldMs (6000 in
-	// validShowActionBody's own fixture shape) has already elapsed.
+	// validShowActionBody's own fixture shape) has already elapsed. E is
+	// pinned to the same instant (no enterShow cues are configured in
+	// this harness, so the lead is zero and E == StateEnteredAt exactly);
+	// LastTickAt is "now" so the clock-jump guard sees a normal gap.
+	enteredAt := now.Add(-time.Minute)
 	rec = store.NightSessionRecord{
 		ID: "sess-1", ConfigObjectID: "halloween-main", ConfigRevision: 1,
-		State: nightStateTransitionToShow, StateEnteredAt: now.Add(-time.Minute),
+		State: nightStateTransitionToShow, StateEnteredAt: enteredAt,
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &enteredAt, LastTickAt: &now}),
 	}
 	if err := storeInst.CreateNightSession(context.Background(), rec, now); err != nil {
 		t.Fatalf("create night session: %v", err)

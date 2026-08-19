@@ -49,11 +49,14 @@ type nightContentAnchor struct {
 
 // nightBoundary is the derived expected content-end time E, or the
 // explicit reason it is not currently known — rule 7: missing evidence is
-// "unknown", never a guess.
+// "unknown", never a guess. LastTickAt is transition-to-show's own clock
+// sanity checkpoint (nightloop.go's clock-jump guard); every other state
+// leaves it nil.
 type nightBoundary struct {
 	State      string     `json:"state"` // "armed" | "invalid" | "unknown"
 	Reason     string     `json:"reason"`
 	ExpectedAt *time.Time `json:"expectedAt,omitempty"`
+	LastTickAt *time.Time `json:"lastTickAt,omitempty"`
 }
 
 const (

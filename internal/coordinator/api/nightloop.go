@@ -263,17 +263,60 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
 		return
 	}
-	if now.Before(*boundary.ExpectedAt) {
+	// §7.1: the transition begins at E minus the largest enterShow lead,
+	// not at E itself, or a fade meant to finish before the resting FSEQ
+	// ends only begins after it. See [nightEnterShowLeadMs].
+	lead := time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond
+	if now.Before(boundary.ExpectedAt.Add(-lead)) {
 		return
 	}
+	boundaryE := *boundary.ExpectedAt
+	lastTick := now
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.State = nightStateTransitionToShow
 		cur.StateEnteredAt = now
 		cur.ArmedShowID = uuid.NewString()
 		cur.ShowCommitted = false
 		cur.Cycle = cur.Cycle + 1
-		cur.ContentAnchorJSON = ""
-		cur.BoundaryJSON = ""
+		// The resting anchor is KEPT, not cleared: it is still playing
+		// through the lead window and must stay supervised (finding 7)
+		// until the first outward-facing cue commits.
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "content boundary E; enterShow cues and the show launch are relative to it"})
+		return cur
+	})
+}
+
+// nightEnterShowLeadMs is RESTING-MODE.md §7.1's own pre-boundary lead: the
+// largest amount of time any enterShow cue asks to run BEFORE E. Only a
+// negative offsetMs counts as a lead; a cue at or after E contributes
+// nothing here and simply becomes due once its own offset elapses inside
+// transition-to-show ([nightAdvanceCueList]'s own due-ness check, now run
+// against E rather than this state's entry time).
+func nightEnterShowLeadMs(cues []config.NightSessionCue) int64 {
+	var lead int64
+	for _, cue := range cues {
+		if cue.OffsetMs < 0 && int64(-cue.OffsetMs) > lead {
+			lead = int64(-cue.OffsetMs)
+		}
+	}
+	return lead
+}
+
+// nightClockForwardJumpTolerance mirrors [nightClockBackstepTolerance] the
+// other direction: a jump past ordinary tick cadence is a discontinuity,
+// not progress, and must not satisfy the hold and barrier deadline at once.
+const nightClockForwardJumpTolerance = 30 * time.Second
+
+// nightDegradeSession marks rec degraded with reason and stops advancing
+// it (nightTick's own top-level guard skips a degraded session) — used
+// where an assumption this state depends on (its own boundary, or the
+// clock) is no longer trustworthy, rather than silently substituting one.
+func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec store.NightSessionRecord, reason string) {
+	h.logWarn("night loop: session degraded", "sessionId", rec.ID, "reason", reason)
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.Degraded = true
+		cur.DegradedReason = reason
 		return cur
 	})
 }
@@ -284,8 +327,60 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
+
+	// The resting playback stays supervised through the lead window, up to
+	// the moment the show commits. Only a real resting-oneshot anchor is
+	// checked; start-night's own boundary has none — the first show has
+	// no playback to supervise.
+	if !rec.ShowCommitted {
+		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
+			obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
+			if bad, reason := nightBoundaryContradicted(anchor, obsNow); bad {
+				h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+					cur.State = nightStateRestingIntershow
+					cur.StateEnteredAt = now
+					cur.ArmedShowID = ""
+					cur.ContentAnchorJSON = encodeNightContentAnchor(nightInvalidateAnchor(anchor, reason))
+					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+					return cur
+				})
+				return
+			}
+		}
+	}
+
+	// E is persisted, never substituted: an absent or malformed boundary is
+	// a stated degraded condition, not a fallback to this state's own
+	// entry time (that reproduced the collapse-to-zero defect).
+	b, ok := decodeNightBoundary(rec.BoundaryJSON)
+	if !ok || b.ExpectedAt == nil {
+		h.nightDegradeSession(ctx, now, rec, "transition-to-show has no persisted content boundary; end-session and prepare-site again to recover")
+		return
+	}
+	boundaryE := *b.ExpectedAt
+
+	// A gap outside ordinary tick cadence, either direction, is a clock
+	// discontinuity: resync the checkpoint and wait for a sane gap before
+	// evaluating hold or the deadline again (also covers a restart
+	// benignly — one skipped tick, not a false "jumped" degrade).
+	if b.LastTickAt != nil && (now.Before(b.LastTickAt.Add(-nightClockBackstepTolerance)) || now.After(b.LastTickAt.Add(nightClockForwardJumpTolerance))) {
+		lastTick := now
+		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "resynchronized after a clock discontinuity"})
+		return
+	}
+	lastTick := now
+
+	// Cues run every tick regardless of hold: an offset cue may legitimately
+	// fire before the hold elapses. The launch itself (below) waits on both
+	// hold AND every barrier cue's own resolved outcome.
+	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, payload.EnterShow.Cues, true)
+
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
-	if now.Sub(rec.StateEnteredAt) < hold {
+	if now.Before(boundaryE.Add(hold)) {
+		return
+	}
+	if !barrierOK {
+		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: blockedReason})
 		return
 	}
 	// ifBusy is decided ONCE here, from a snapshot read; the dispatch is a
@@ -298,11 +393,9 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		return
 	}
 	if !ready {
-		// anchor.Source carries the primitive's own refusal detail when
-		// ifBusy was refuse (names what was observed) — see
-		// fppStartPlaylistBusyProblem/fppStartPlaylistEvidenceNotCurrentProblem.
-		// The session stays in transition-to-show; live is never entered.
-		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+		// anchor.Source carries the primitive's own refusal detail. The
+		// session stays in transition-to-show; live is never entered.
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: anchor.Source})
 		return
 	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
@@ -393,6 +486,12 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
 		return
 	}
+	// §7.2's fade-up cues run independently of the resting-playlist restart
+	// below: unlike enter-show, no atomic commit boundary or barrier gates
+	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
+	// note: "show completion remains the authoritative anchor").
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, payload.EnterResting.Cues, false)
+
 	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
 		return

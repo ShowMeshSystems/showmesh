@@ -1076,8 +1076,9 @@ CREATE TABLE node_asset_reports (
 // serves as its preparation epoch (RESTING-MODE.md §4.1). night_readiness_
 // results: one row per run-readiness call, never updated. night_cue_outbox
 // is Track F seam F4's table, created here only; its UNIQUE index on
-// (session_id, cycle, cue_name) is RESTING-MODE.md §7.1.1's own stable
-// invocation identity.
+// (session_id, cycle, phase, cue_name) is RESTING-MODE.md §7.1.1's stable
+// invocation identity, with phase included because enterShow and
+// enterResting may each carry a cue of the same name in one cycle.
 const schemaV10 = `
 CREATE TABLE night_sessions (
     id                       TEXT PRIMARY KEY,
@@ -1131,6 +1132,7 @@ CREATE TABLE night_cue_outbox (
     id                TEXT PRIMARY KEY,
     session_id        TEXT NOT NULL,
     cycle             INTEGER NOT NULL,
+    phase             TEXT NOT NULL,
     cue_name          TEXT NOT NULL,
     action_revision   INTEGER NOT NULL,
     state             TEXT NOT NULL,
@@ -1141,9 +1143,12 @@ CREATE TABLE night_cue_outbox (
     created_at        TEXT NOT NULL
 );
 
--- RESTING-MODE.md §7.1.1: "a stable cue invocation identity ... unique
--- across (session, cycle, cue)" — the mechanism, not a nicety.
-CREATE UNIQUE INDEX night_cue_outbox_identity ON night_cue_outbox (session_id, cycle, cue_name);
+-- A stable cue invocation identity, unique across (session, cycle, phase,
+-- cue) — phase is part of the key because enterShow and enterResting are
+-- separately author-validated lists that may legitimately share a cue
+-- name (review finding: a shared name silently returned the OTHER list's
+-- already-resolved row).
+CREATE UNIQUE INDEX night_cue_outbox_identity ON night_cue_outbox (session_id, cycle, phase, cue_name);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
