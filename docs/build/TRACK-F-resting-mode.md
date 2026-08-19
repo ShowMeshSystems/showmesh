@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: F0 through F4 built on `track-f/night-session` (2026-08-18), F4 in review and not yet committed; F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
+Status: F0 through F4 built, reviewed, gated and committed on `track-f/night-session` (2026-08-18); F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
 
 ## Goal
 
@@ -70,9 +70,9 @@ Built against fakes, a throwaway bench `fppd`, and F0's recorded observations; `
 - Start repeating end-of-night resting after the final show.
 - Preserve FPP busy-start protections and never replace an unrelated running playlist silently.
 
-### F4. Transition action runner — built, in review, not yet committed (2026-08-18)
+### F4. Transition action runner — built and gated (`506c6c0`, 2026-08-18)
 
-Uncommitted changes in the `track-f/night-session` worktree. Review found cue offsets collapsing to zero (every fade would have run after the resting sequence ended rather than before it) and an unbounded barrier; both are recorded in the 2026-08-18 BUILD-LOG entry as findings under review, not as closed. `make test-integration` for this seam has not been run (host load was above 80 with several parallel sessions at the time of writing); until it runs, F4 is not gated the way F0 through F3 are.
+Two review rounds found sixteen defects after the seam's own gates were green, all fixed; the 2026-08-18 BUILD-LOG entry carries them. `make check` exit 0 and `make test-integration` `ok ... 303.774s` with zero failures, run by the orchestrating session once host load was quiet. **The cue outbox has no operator surface**, which is F7's work and is tracked as Linear SM-98; the ambiguous outcome names the recovery that exists today rather than promising one that does not.
 
 Run independently offset lighting, projection, audio, announcement, and other-media cues through named logical actions. Support parallel dispatch where cues share an offset and barriers where show launch requires their outcomes. Record completion and confirmation separately.
 
