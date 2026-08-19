@@ -108,6 +108,26 @@ Fades the active non-live presentation to stopped. Receipt closes admission imme
 
 Closes the session after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. If presentation-power actions are configured, it performs their configured shutdown, confirmation, and cooldown steps. With no power actions, it records `not_configured` for that optional phase and reaches `stopped` without error. Any configured power action must remain scoped away from environmental protection.
 
+### 4.8 `end-session` (operator recovery, not an FPP-invoked intent)
+
+Abandons the current session, reaches `stopped`, and launches nothing. FPP does not invoke it;
+it exists for an operator facing a session ShowMesh cannot safely resume.
+
+A coordinator restart mid-transition leaves the session degraded, because ShowMesh cannot confirm
+what is safe to resume and will not guess (§4.4, §11). Without a way out that state is permanent.
+`end-session` is the way out: after it, the operator runs `prepare-site` and the ordinary sequence
+with readiness evaluated fresh.
+
+It deliberately does **not** clear the degraded flag and continue, and it cannot start a show,
+resume an unconfirmed session, or skip readiness. The three admission-closing commands
+(`request-final-show`, `fade-out-night`, `power-down-presentation`) remain accepted while
+degraded, because a refusal for want of ShowMesh's own evidence is worse than the coordinator
+being switched off ([ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md)
+decision 7).
+
+See [ADR-041](../decisions/ADR-041-operator-recovery-is-not-a-calendar-intent.md) for why this
+sits alongside §4's closed set rather than inside it.
+
 ## 5. Reference operating day
 
 Times below document the reference installation's shape. They are examples configured in FPP and are not product defaults.
