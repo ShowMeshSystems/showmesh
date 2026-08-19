@@ -204,10 +204,28 @@ pressing a button on the wall right now, and the two want to be grantable
 independently. It is also not `resolume:action` or `fpp:command`: the whole
 point of ADR-029 is that the caller names an action and never learns which
 protocol it reaches, so a scope named after a protocol would leak the
-binding back into the authorization model. The **dispatch path underneath
-still checks the per-integration scope it always did**, so this scope widens
-nothing; it gates the logical surface only. Reads of an action, its
+binding back into the authorization model. Reads of an action, its
 bindings, and their validation stay open per ADR-024 constraint 23.
+
+**It is umbrella authority, not conjunctive** (owner, 2026-08-19, Linear
+SM-104). A principal holding `show:action:invoke` may invoke any stored
+action, including ones that reach FPP or Resolume, without also holding
+`fpp:command` or `resolume:action`. This paragraph previously claimed the
+opposite, that the dispatch path underneath still checked the
+per-integration scope, and **that was simply false**: authorization lives
+entirely in the HTTP write guard, and neither `dispatchFPPCommand` nor the
+Resolume dispatcher checks a scope. The register described a security
+property the code did not have, which is worse than describing none.
+
+The ruling follows the shape rather than the plumbing. A caller selects a
+stored logical action and supplies no protocol parameters, so what it is
+authorized to do is bounded by what an operator already authored and an
+administrator already accepted. That is the same argument `show:macro:run`
+rests on, and it is ADR-029's own: the caller names an action and never
+learns which protocol it reaches, so requiring a protocol-named scope would
+reintroduce the binding the ADR exists to hide. The grant to watch is
+therefore `config:write`, which decides what an action may be bound to, not
+this one.
 
 ## Collector source ids
 
@@ -589,7 +607,16 @@ The store schema version, bumped by migrations in
 | v9 | reserved | Track C (audio session desired state) |
 | v10 | reserved | Track F (night-session lifecycle, cue outbox) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
-| v12+ | unallocated | free |
+| v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
+| v13+ | unallocated | free |
+
+**v12 is reserved defensively and may well come back.** SM-100's lifecycle
+state and SM-102's durable dispatch and outcome attribution may fit in the
+existing `commands.result_json` payload and `commands.requested_revision`,
+in which case no migration is needed and v12 is released. It is reserved
+now because three sessions are running and discovering mid-build that the
+number is taken costs a rename across a branch, while releasing an unused
+reservation costs nothing.
 
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
