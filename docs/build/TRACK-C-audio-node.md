@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Audio engine spec](../architecture/AUDIO-ENGINE.md) · [RES-007](../research/RES-007-audio-node-architecture.md) · [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md)
 
-Status: **ALL ELEVEN SEAMS BUILT — C0a-1, C0a-2, C1a, C1b, C2, C3, C4, C5, C6, C7, C8 — on `track-c/audio-node`, not merged to `main`.** Specified 2026-08-13; dependency-complete review 2026-08-17. Pipeline/graph behaviour measured in C0a-1, C1a's real-device probe test, and C2's discoverer-versus-decode measurement is L2 (see RES-007); everything hardware- or device-dependent, and every seam's behaviour against a real pipeline, remains L0 design intent until the benches or seams below run for real. **C4 is built** (mix policy, gain, fades, mute, and the announcement primitives) against the same fake backend the session layer uses, so its semantics are specified and tested and none of it has ever produced sound. **C5 is built** (`f7743c5`): live LTC generation to the owner's ruling on Linear SM-69/SM-83. **C8 is built** (`cb8a45a`): the generic synchronized-remote-output mock against a deterministic fake. **No seam ships an audio engine**: the shipped fake reports unavailable everywhere and every outcome is forced to `unconfirmable` except the session layer's own `refused`/`failed`. **C0b — per-device commissioning — is the only remaining deliverable in this track, and it cannot start until an interface is selected** (RES-007's 2026-08-14 note stands). See "Track C, end state" below for what is, and is not, true across the whole track in one place.
+Status: **CHANGES REQUESTED on PR #21.** Ten seams are written and gated in isolation (C0a-1, C0a-2, C1a, C1b, C2, C3, C4, C6, C7, C8); **C5 is incomplete** and **the audio command surface does not work end to end**. See the correction below before reading anything as delivered.
 
 ## Track C, end state
 
@@ -24,7 +24,14 @@ This section states plainly, in one place, what the eleven built seams do and do
 - **The Operator UI controls** for `audio.settings`, `audio.node`, and the C6/C7 telemetry this track publishes do not exist — **Linear SM-73**.
 - **Open owner decisions**: the real pipeline-control backend (**SM-68**), whether announcements ever interrupt show audio (**SM-70**), and three more owner decisions this track has raised and not resolved (**SM-71, SM-72, SM-78, SM-84**).
 
-## C5, complete 2026-08-18
+
+> **CORRECTION, 2026-08-19: C5 is not complete, and this document said it was.** External review of PR #21 found no `showmesh-ltcgen` artifact, no build rule for one, no production caller of `LTCGenerator.Start`/`Stop`, PCM stdout discarded, and no session lifecycle driving LTC. The bench's generator is a different, one-shot file writer. What exists is supervision logic and configuration, which is not the seam. **Every claim of C5 completion in this file, in the build log, and in PR #21's body was wrong.**
+>
+> **Review also found the audio command surface is non-functional end to end**: the coordinator never places `revision` into MQTT params and the agent requires it, so all thirteen session, gain and output commands fail on a real broker. Coordinator tests use a fake publisher; the one integration test that crosses the real boundary builds its own payload and bypasses the coordinator. Each half of the seam was covered by a test that bypassed the other half.
+>
+> Treat every "complete" below as "written and gated in isolation", not as "works end to end". Track C is **In Review with changes requested**, not delivered.
+
+## C5, INCOMPLETE (documented below as built; see the correction above) 2026-08-18
 
 `f7743c5`. LTC generated live by a supervised external `libltc`-based process, program on channels 1–2 and LTC on a discrete channel 3. Built to the owner's ruling, Linear SM-69 and SM-83.
 
