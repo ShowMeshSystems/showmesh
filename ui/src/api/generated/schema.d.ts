@@ -3415,6 +3415,31 @@ export interface components {
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             reason: string;
         };
+        /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" — never "failed". */
+        NightCue: {
+            name: string;
+            /** @enum {string} */
+            phase: "enterShow" | "enterResting";
+            role: string;
+            action: string;
+            actionRevision: number | null;
+            /** @enum {string} */
+            state: "not_dispatched" | "pending" | "dispatched" | "resolved" | "ambiguous";
+            /** @enum {string} */
+            outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused" | "ambiguous";
+            reason?: string;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+        };
+        /** @description The current cycle's per-cue detail, or the stated reason it could not be read — never a silently empty list for either "no cues configured" or "read failed". */
+        NightCues: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            reason: string;
+            cues: components["schemas"]["NightCue"][];
+        };
         /** @description The night-session lifecycle controller's own persisted state — a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {
             id: string;
@@ -3441,6 +3466,7 @@ export interface components {
             readiness: components["schemas"]["NightReadiness"];
             powerPhase: components["schemas"]["NightPhaseEvidence"];
             transition: components["schemas"]["NightPhaseEvidence"];
+            cues: components["schemas"]["NightCues"];
             degraded: boolean;
             degradedReason?: string;
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11). Never cleared once true. */

@@ -377,32 +377,41 @@ func nightInvalidateAnchor(a nightContentAnchor, reason string) nightContentAnch
 }
 
 // mapNightTransition is the wire form of this session's own content
-// anchor/boundary — Track F seam F3's fill of the "not_available" stub F2
-// shipped (nightsessioncontrol.go's own mapNightSessionState). "recorded"
-// only once an anchor carries post-dispatch evidence (rule 2); a
-// dispatched-but-not-yet-observed anchor, or none at all, reports
-// "unknown" with a reason rather than a stale or invented boundary (rule
-// 7).
+// anchor/boundary. A dispatched-but-not-yet-observed anchor reports
+// "unknown" rather than a stale or invented boundary; otherwise the
+// persisted boundary's own state and reason govern, with or without an
+// anchor present.
 func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	anchor, hasAnchor := decodeNightContentAnchor(rec.ContentAnchorJSON)
-	if !hasAnchor {
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "no content anchor is armed for the current state"}
-	}
 	boundary, hasBoundary := decodeNightBoundary(rec.BoundaryJSON)
-	switch {
-	case anchor.ObservedAt.IsZero():
+	if hasAnchor && anchor.ObservedAt.IsZero() {
 		reason := anchor.Source
 		if reason == "" {
 			reason = "playback was dispatched but is not yet confirmed by evidence"
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: reason}
+	}
+	if !hasAnchor && !hasBoundary {
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "no content anchor is armed for the current state"}
+	}
+	switch {
 	case hasBoundary && boundary.State == nightBoundaryStateArmed && boundary.ExpectedAt != nil:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: "boundary armed for " + boundary.ExpectedAt.Format(time.RFC3339)}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: nightBoundaryReasonOrFallback(boundary, "boundary armed for "+boundary.ExpectedAt.Format(time.RFC3339))}
 	case hasBoundary && boundary.State == nightBoundaryStateInvalid:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "boundary invalidated: " + boundary.Reason}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "boundary invalidated: " + nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
 	case hasBoundary:
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: boundary.Reason}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
 	default:
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: "playback confirmed; this purpose carries no show-transition boundary"}
 	}
+}
+
+// nightBoundaryReasonOrFallback never lets a blank boundary.Reason render
+// as an empty string (no writer leaves it blank today, but this is a
+// wire surface, not an invariant the type system enforces).
+func nightBoundaryReasonOrFallback(boundary nightBoundary, fallback string) string {
+	if boundary.Reason != "" {
+		return boundary.Reason
+	}
+	return fallback
 }

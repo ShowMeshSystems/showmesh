@@ -28,6 +28,25 @@ type nightPhaseEvidenceWire struct {
 	Reason string `json:"reason"`
 }
 
+type nightCueWire struct {
+	Name           string  `json:"name"`
+	Phase          string  `json:"phase"`
+	Role           string  `json:"role"`
+	Action         string  `json:"action"`
+	ActionRevision *int64  `json:"actionRevision"`
+	State          string  `json:"state"`
+	Outcome        string  `json:"outcome,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	DispatchedAt   *string `json:"dispatchedAt"`
+	ResolvedAt     *string `json:"resolvedAt"`
+}
+
+type nightCuesWire struct {
+	State  string         `json:"state"`
+	Reason string         `json:"reason"`
+	Cues   []nightCueWire `json:"cues"`
+}
+
 type nightSessionStateWire struct {
 	ID             string `json:"id"`
 	ConfigObjectID string `json:"configObjectId"`
@@ -50,6 +69,8 @@ type nightSessionStateWire struct {
 
 	PowerPhase nightPhaseEvidenceWire `json:"powerPhase"`
 	Transition nightPhaseEvidenceWire `json:"transition"`
+
+	Cues nightCuesWire `json:"cues"`
 
 	Degraded            bool   `json:"degraded"`
 	DegradedReason      string `json:"degradedReason,omitempty"`

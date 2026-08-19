@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // This file is Track F seam F2's own conformance coverage, following
@@ -18,7 +20,7 @@ func TestOpenAPINightLifecycleDocumentIsWellFormed(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	for _, name := range []string{
 		"NightReadinessCheck", "NightReadiness", "NightPhaseEvidence",
-		"NightSessionState", "NightSessionResponse",
+		"NightCue", "NightCues", "NightSessionState", "NightSessionResponse",
 		"NightCommandRequest", "NightCommandResult", "NightCommandResponse",
 	} {
 		compileSchema(t, c, name)
@@ -142,6 +144,90 @@ func TestOpenAPINightAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 		t.Fatalf("prepare-site with a failing audit write: status = %d, want 503; body: %s", resp.StatusCode, body)
 	}
 	assertMatchesSchema(t, c, "Problem", body)
+}
+
+// TestOpenAPINightCueResponseMatchesRealResponse drives a real
+// dispatched-and-unconfirmed outbox row through the real store and
+// asserts the GET response reports it distinctly from "failed".
+func TestOpenAPINightCueResponseMatchesRealResponse(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, st, token, _, obs := setupNightControlFixture(t, time.Hour)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	setHealthyFPPReachable(obs, testNow)
+
+	prepReq := newJSONRequest(t, http.MethodPost, "/api/v1/night/commands/prepare-site", `{}`, auth)
+	_, prepBody := doRawRequest(t, api.Handler, prepReq)
+	assertMatchesSchema(t, c, "NightCommandResponse", prepBody)
+
+	rec, ok, err := st.GetCurrentNightSession(context.Background())
+	if !ok || err != nil {
+		t.Fatalf("get current night session: ok=%v err=%v", ok, err)
+	}
+
+	// validNightSessionBody's own enterShow cue is "lighting-fade" — mark
+	// it dispatched and confirmed directly in the store, matching what
+	// nightDispatchAndPersistCue itself writes, without depending on the
+	// night loop's own tick timing.
+	rev := int64(1)
+	dispatched := testNow
+	resolved := testNow.Add(time.Second)
+	if err := st.InsertNightCueOutboxRow(context.Background(), store.NightCueOutboxRecord{
+		ID: "row-1", SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseEnterShow, CueName: "lighting-fade",
+		ActionRevision: rev, State: nightCueStateResolved, DispatchedAt: &dispatched, ResolvedAt: &resolved,
+		Outcome: nightCueOutcomeUnconfirmed, OutcomeReason: "no confirming evidence arrived",
+	}, testNow); err != nil {
+		t.Fatalf("insert night cue outbox row: %v", err)
+	}
+
+	_, body := doRequest(t, api.Handler, "GET", "/api/v1/night/session", nil)
+	assertMatchesSchema(t, c, "NightSessionResponse", body)
+
+	var resp struct {
+		Session struct {
+			Cues struct {
+				State  string `json:"state"`
+				Reason string `json:"reason"`
+				Cues   []struct {
+					Name           string  `json:"name"`
+					Phase          string  `json:"phase"`
+					State          string  `json:"state"`
+					Outcome        string  `json:"outcome"`
+					Reason         string  `json:"reason"`
+					ActionRevision *int64  `json:"actionRevision"`
+					DispatchedAt   *string `json:"dispatchedAt"`
+					ResolvedAt     *string `json:"resolvedAt"`
+				} `json:"cues"`
+			} `json:"cues"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Session.Cues.State != "recorded" {
+		t.Fatalf("cues.state = %q, want %q; reason=%q", resp.Session.Cues.State, "recorded", resp.Session.Cues.Reason)
+	}
+	if len(resp.Session.Cues.Cues) != 1 {
+		t.Fatalf("cues = %#v, want exactly the one configured cue", resp.Session.Cues.Cues)
+	}
+	got := resp.Session.Cues.Cues[0]
+	if got.Name != "lighting-fade" || got.Phase != nightPhaseEnterShow {
+		t.Fatalf("cue identity = %q/%q, want lighting-fade/%s", got.Name, got.Phase, nightPhaseEnterShow)
+	}
+	// The point of decision 3: state says the dispatch completed, outcome
+	// says it was never confirmed — and outcome must read "unconfirmed",
+	// never "failed", so a monitoring gap does not read as a broken cue.
+	if got.State != nightCueStateResolved {
+		t.Fatalf("cue state = %q, want %q", got.State, nightCueStateResolved)
+	}
+	if got.Outcome != nightCueOutcomeUnconfirmed {
+		t.Fatalf("cue outcome = %q, want %q (never %q)", got.Outcome, nightCueOutcomeUnconfirmed, nightCueOutcomeFailed)
+	}
+	if got.ActionRevision == nil || *got.ActionRevision != rev {
+		t.Fatalf("cue actionRevision = %v, want %d", got.ActionRevision, rev)
+	}
+	if got.DispatchedAt == nil || got.ResolvedAt == nil {
+		t.Fatalf("cue timestamps = dispatchedAt=%v resolvedAt=%v, want both present", got.DispatchedAt, got.ResolvedAt)
+	}
 }
 
 // mustDecodeSessionID pulls "session":{"id":"..."} out of a

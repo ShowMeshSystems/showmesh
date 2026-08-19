@@ -51,6 +51,30 @@ type NightPhaseEvidence struct {
 	Reason string             `json:"reason"`
 }
 
+// NightCue is one configured cue's outbox detail for the session's
+// current cycle. State "not_dispatched" means no outbox row exists yet.
+type NightCue struct {
+	Name           string  `json:"name"`
+	Phase          string  `json:"phase"` // "enterShow" | "enterResting"
+	Role           string  `json:"role"`
+	Action         string  `json:"action"`
+	ActionRevision *int64  `json:"actionRevision"`
+	State          string  `json:"state"` // "not_dispatched" | "pending" | "dispatched" | "resolved" | "ambiguous"
+	Outcome        string  `json:"outcome,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	DispatchedAt   *string `json:"dispatchedAt"`
+	ResolvedAt     *string `json:"resolvedAt"`
+}
+
+// NightCues is the current cycle's per-cue detail, or the stated reason it
+// could not be read — never a silently empty list standing in for either
+// "no cues configured" or "read failed" (ADR-020).
+type NightCues struct {
+	State  NightEvidenceState `json:"state"`
+	Reason string             `json:"reason"`
+	Cues   []NightCue         `json:"cues"`
+}
+
 // NightSessionState is the full lifecycle resource.
 type NightSessionState struct {
 	ID             string `json:"id"`
@@ -74,6 +98,8 @@ type NightSessionState struct {
 
 	PowerPhase NightPhaseEvidence `json:"powerPhase"`
 	Transition NightPhaseEvidence `json:"transition"`
+
+	Cues NightCues `json:"cues"`
 
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`

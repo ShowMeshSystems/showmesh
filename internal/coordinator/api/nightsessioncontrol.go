@@ -908,6 +908,66 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
+	out.Cues = mapNightCues(ctx, deps, rec)
+	return out
+}
+
+// mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
+// failure at any step reports NightEvidenceUnknown with its own reason,
+// never a claim about any individual cue's state.
+func mapNightCues(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightCues {
+	unreadable := func(reason string) v1.NightCues {
+		return v1.NightCues{State: v1.NightEvidenceUnknown, Reason: reason, Cues: []v1.NightCue{}}
+	}
+	if rec.ID == "" || rec.ConfigObjectID == "" {
+		return unreadable("no session")
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return unreadable("failed to read the pinned night.session revision: " + err.Error())
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return unreadable("failed to decode the pinned night.session revision: " + err.Error())
+	}
+	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
+	if err != nil {
+		return unreadable("failed to read the cue outbox: " + err.Error())
+	}
+	byKey := make(map[string]store.NightCueOutboxRecord, len(rows))
+	for _, row := range rows {
+		byKey[row.Phase+"\x00"+row.CueName] = row
+	}
+
+	out := make([]v1.NightCue, 0, len(payload.EnterShow.Cues)+len(payload.EnterResting.Cues))
+	out = appendMappedNightCues(out, nightPhaseEnterShow, sortedNightCues(payload.EnterShow.Cues), byKey)
+	out = appendMappedNightCues(out, nightPhaseEnterResting, sortedNightCues(payload.EnterResting.Cues), byKey)
+	return v1.NightCues{State: v1.NightEvidenceRecorded, Cues: out}
+}
+
+func appendMappedNightCues(out []v1.NightCue, phase string, cues []config.NightSessionCue, byKey map[string]store.NightCueOutboxRecord) []v1.NightCue {
+	for _, cue := range cues {
+		row, has := byKey[phase+"\x00"+cue.Name]
+		out = append(out, mapNightCue(phase, cue, row, has))
+	}
+	return out
+}
+
+// mapNightCue joins one configured cue against its outbox row, if any.
+func mapNightCue(phase string, cue config.NightSessionCue, row store.NightCueOutboxRecord, hasRow bool) v1.NightCue {
+	out := v1.NightCue{Name: cue.Name, Phase: phase, Role: cue.Role, Action: cue.Action}
+	if !hasRow {
+		out.State = nightCueStateNotDispatched
+		out.Reason = "this cue has not been dispatched in the current cycle"
+		return out
+	}
+	rev := row.ActionRevision
+	out.ActionRevision = &rev
+	out.State = row.State
+	out.Outcome = row.Outcome
+	out.Reason = row.OutcomeReason
+	out.DispatchedAt = formatTimePtr(row.DispatchedAt)
+	out.ResolvedAt = formatTimePtr(row.ResolvedAt)
 	return out
 }
 

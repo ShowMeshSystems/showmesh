@@ -3,6 +3,9 @@ package api
 import (
 	"testing"
 	"time"
+
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // Track F seam F3 tests: docs/private/seam-specs/TRACK-F-F3-fpp-timeline.md
@@ -225,5 +228,73 @@ func TestNightBoundaryContradicted_PositionMSMovedBackward(t *testing.T) {
 	bad, _ := nightBoundaryContradicted(anchor, obs)
 	if !bad {
 		t.Fatal("expected contradiction when millisecond position moves backward")
+	}
+}
+
+// TestMapNightTransition_HeldReasonReachesTheSurface: a held-transition
+// reason in BoundaryJSON.Reason must reach the wire even with no content
+// anchor recorded (transition-to-show on the first show of the night).
+func TestMapNightTransition_HeldReasonReachesTheSurface(t *testing.T) {
+	const blockedReason = `barrier cue "lighting-fade" is dispatched, not resolved`
+	expected := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	rec := store.NightSessionRecord{
+		ContentAnchorJSON: "", // cleared on entering transition-to-show
+		BoundaryJSON:      encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &expected, Reason: blockedReason}),
+	}
+	got := mapNightTransition(rec)
+	if got.Reason != blockedReason {
+		t.Fatalf("Reason = %q, want the held-transition reason %q", got.Reason, blockedReason)
+	}
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("State = %q, want %q (a boundary is armed, evidence exists)", got.State, v1.NightEvidenceRecorded)
+	}
+}
+
+// TestMapNightTransition_HeldReasonReachesTheSurfaceWithAnchorPresent: the
+// same held-transition reason must also surface on the second night's
+// cycle onward, where nightAdvanceRestingIntershow deliberately keeps the
+// content anchor through the lead window (F4 review) and hasAnchor is
+// true. The armed-boundary case must not discard boundary.Reason for its
+// own "boundary armed for <time>" text.
+func TestMapNightTransition_HeldReasonReachesTheSurfaceWithAnchorPresent(t *testing.T) {
+	const blockedReason = `barrier cue "lighting-fade" is dispatched, not resolved`
+	expected := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	observed := expected.Add(-time.Minute)
+	rec := store.NightSessionRecord{
+		ContentAnchorJSON: encodeNightContentAnchor(nightContentAnchor{
+			Purpose: nightAnchorPurposeRestingOneShot, DispatchedAt: observed.Add(-time.Second), ObservedAt: observed,
+		}),
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &expected, Reason: blockedReason}),
+	}
+	got := mapNightTransition(rec)
+	if got.Reason != blockedReason {
+		t.Fatalf("Reason = %q, want the held-transition reason %q", got.Reason, blockedReason)
+	}
+}
+
+// TestMapNightTransition_NoAnchorNoBoundaryStillUnknown: the fix must not
+// remove the original fallback for the case that motivated it (no
+// content anchor recorded at all, e.g. before start-night).
+func TestMapNightTransition_NoAnchorNoBoundaryStillUnknown(t *testing.T) {
+	got := mapNightTransition(store.NightSessionRecord{})
+	if got.State != v1.NightEvidenceUnknown {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightEvidenceUnknown)
+	}
+	if got.Reason != "no content anchor is armed for the current state" {
+		t.Fatalf("Reason = %q, want the original fallback text", got.Reason)
+	}
+}
+
+// TestMapNightTransition_BlankBoundaryReasonNeverRendersBlank: no writer
+// leaves nightBoundary.Reason empty today, but a blank Reason must not
+// reach the wire as an empty string, which renders as fine.
+func TestMapNightTransition_BlankBoundaryReasonNeverRendersBlank(t *testing.T) {
+	expected := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	rec := store.NightSessionRecord{
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &expected}),
+	}
+	got := mapNightTransition(rec)
+	if got.Reason == "" {
+		t.Fatal("Reason is empty; a blank boundary reason must fall back to a stated reason")
 	}
 }

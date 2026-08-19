@@ -62,4 +62,31 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 
 	_, _ = fmt.Fprintf(w, "\nPower phase: %s (%s)\n", s.PowerPhase.State, s.PowerPhase.Reason)
 	_, _ = fmt.Fprintf(w, "Transition:  %s (%s)\n", s.Transition.State, s.Transition.Reason)
+
+	if s.Cues.State != "recorded" {
+		_, _ = fmt.Fprintf(w, "\nCues:        %s (%s)\n", s.Cues.State, s.Cues.Reason)
+	} else if len(s.Cues.Cues) == 0 {
+		_, _ = fmt.Fprintf(w, "\nCues:        none configured\n")
+	} else {
+		_, _ = fmt.Fprintf(w, "\nCues:\n")
+		for _, cue := range s.Cues.Cues {
+			_, _ = fmt.Fprintf(w, "  - [%s] %s (role=%s action=%s): %s", cue.Phase, cue.Name, cue.Role, cue.Action, cue.State)
+			if cue.Outcome != "" {
+				_, _ = fmt.Fprintf(w, " outcome=%s", cue.Outcome)
+			}
+			if cue.ActionRevision != nil {
+				_, _ = fmt.Fprintf(w, " rev=%d", *cue.ActionRevision)
+			}
+			_, _ = fmt.Fprintln(w)
+			if cue.Reason != "" {
+				_, _ = fmt.Fprintf(w, "      %s\n", cue.Reason)
+			}
+			if cue.DispatchedAt != nil {
+				_, _ = fmt.Fprintf(w, "      dispatched: %s\n", *cue.DispatchedAt)
+			}
+			if cue.ResolvedAt != nil {
+				_, _ = fmt.Fprintf(w, "      resolved:   %s\n", *cue.ResolvedAt)
+			}
+		}
+	}
 }

@@ -9449,6 +9449,59 @@ components:
           enum: [recorded, unknown, not_configured, not_available]
         reason:
           type: string
+    NightCue:
+      type: object
+      description: >-
+        One configured cue's outbox detail for the session's current
+        cycle. `state` "not_dispatched" means no outbox row exists for
+        this cycle. `state` and `outcome` are never collapsed into one
+        field: a dispatched-but-unconfirmed cue reports `state`
+        "resolved", `outcome` "unconfirmed" — never "failed".
+      required: [name, phase, role, action, actionRevision, state,
+                 dispatchedAt, resolvedAt]
+      properties:
+        name:
+          type: string
+        phase:
+          type: string
+          enum: [enterShow, enterResting]
+        role:
+          type: string
+        action:
+          type: string
+        actionRevision:
+          type: [integer, "null"]
+        state:
+          type: string
+          enum: [not_dispatched, pending, dispatched, resolved, ambiguous]
+        outcome:
+          type: string
+          enum: [confirmed, unconfirmed, unconfirmable, failed, refused, ambiguous]
+        reason:
+          type: string
+        dispatchedAt:
+          type: [string, "null"]
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+    NightCues:
+      type: object
+      description: >-
+        The current cycle's per-cue detail, or the stated reason it could
+        not be read — never a silently empty list for either "no cues
+        configured" or "read failed".
+      required: [state, reason, cues]
+      properties:
+        state:
+          type: string
+          enum: [recorded, unknown, not_configured, not_available]
+        reason:
+          type: string
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/NightCue"
     NightSessionState:
       type: object
       description: >-
@@ -9460,8 +9513,8 @@ components:
         [id, configObjectId, configRevision, state, stateEnteredAt, cycle,
          finalShowRequested, finalShowRequestedAt, admissionClosed,
          admissionClosedAt, shutdownIntent, armedShowId, showCommitted,
-         readiness, powerPhase, transition, degraded, attributionDegraded,
-         updatedAt]
+         readiness, powerPhase, transition, cues, degraded,
+         attributionDegraded, updatedAt]
       properties:
         id:
           type: string
@@ -9511,6 +9564,8 @@ components:
           $ref: "#/components/schemas/NightPhaseEvidence"
         transition:
           $ref: "#/components/schemas/NightPhaseEvidence"
+        cues:
+          $ref: "#/components/schemas/NightCues"
         degraded:
           type: boolean
         degradedReason:

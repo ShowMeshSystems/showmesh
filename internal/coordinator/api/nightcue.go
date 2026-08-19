@@ -18,6 +18,11 @@ const (
 	nightCueStateDispatched = "dispatched" // a dispatch attempt was made; outcome not yet resolved.
 	nightCueStateResolved   = "resolved"   // outcome captured — see the outcome column for confirmed/unconfirmed/etc.
 	nightCueStateAmbiguous  = "ambiguous"  // terminal, unresolved by construction; never retried automatically.
+
+	// nightCueStateNotDispatched is a wire-only state (no outbox row
+	// exists yet): the current cycle has not reached this cue's offset,
+	// or the session has never run. Never written to night_cue_outbox.
+	nightCueStateNotDispatched = "not_dispatched"
 )
 
 // The night_cue_outbox.outcome vocabulary, for resolved/ambiguous rows.
