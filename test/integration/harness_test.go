@@ -690,6 +690,17 @@ func createAdminAndIssueToken(t *testing.T, dataDir, name, password string) (tok
 	return token
 }
 
+// ensureShow creates a "show" config object via showmeshctl — the
+// prerequisite a show.action, show.macro, or show.surface fixture now
+// requires: each validates its own "show" field for existence at write
+// time (ADR-027), refusing a name that does not resolve. Every caller
+// mints its own showID (uniqueSuffix(), matching every other fixture id
+// in this package); this does not check for an existing show first.
+func ensureShow(t *testing.T, coord *testCoordinator, token, showID, name string) {
+	t.Helper()
+	mustCtl(t, coord, token, []string{"show", "set", "--name", name}, showID)
+}
+
 // runCoordinatorSubcommand execs coordinatorBinPath as a subprocess with
 // the given args and SHOWMESH_DATA_DIR=dataDir (matching
 // cmd/showmesh-coordinator's own subcommand dispatch, which reads that

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { listConfigObjects } from '../api'
+import { Link, useSearchParams } from 'react-router-dom'
+import { listActionBindings, listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
-import type { ConfigObjectSummary } from '../app/types'
+import type { ActionBinding, ConfigObjectSummary } from '../app/types'
+import { ActionBindingBadge } from '../components/DomainBadges'
+import { ActionInvokeButton } from '../components/ActionInvokeButton'
 
 // Same read posture as Macros.tsx (STEP-9-SPEC.md section 5.5: "Same
 // read posture as GET /config/show.action"): show:macro:run OR
@@ -23,14 +25,24 @@ export function ShowActions() {
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
+  // ?show=<id>, mirroring ShowSurfaces.tsx's own filter.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const showFilter = searchParams.get('show') ?? ''
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  // Binding-check results, keyed by action id. A SEPARATE fetch from the
+  // list above: the binding sweep requires no credential at all (ADR-024
+  // constraint 23), so it must not be gated on readGate, and a failure to
+  // fetch it must not blank the list itself —
+  // an action row with no binding entry yet renders with no badge, never
+  // an error for the whole table.
+  const [bindings, setBindings] = useState<Map<string, ActionBinding>>(new Map())
 
   useEffect(() => {
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    listConfigObjects('show.action')
+    listConfigObjects('show.action', showFilter === '' ? undefined : showFilter)
       .then((resp) => {
         if (cancelled) return
         setState({ kind: 'loaded', objects: resp.objects })
@@ -42,7 +54,22 @@ export function ShowActions() {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed])
+  }, [readGate.allowed, showFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    listActionBindings(showFilter === '' ? undefined : showFilter)
+      .then((list) => {
+        if (cancelled) return
+        setBindings(new Map(list.map((b) => [b.actionId, b])))
+      })
+      .catch(() => {
+        // Best-effort: the list itself still renders with no badges.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showFilter])
 
   return (
     <div>
@@ -74,6 +101,19 @@ export function ShowActions() {
         show.
       </p>
 
+      <label className="form-field" style={{ maxWidth: '20rem' }}>
+        Narrow by show
+        <input
+          type="text"
+          placeholder="show id — leave blank for every show"
+          value={showFilter}
+          onChange={(e) => {
+            const value = e.target.value
+            setSearchParams(value === '' ? {} : { show: value })
+          }}
+        />
+      </label>
+
       {!readGate.allowed && (
         <p className="panel panel--error" role="status">
           {readGate.reason}
@@ -103,21 +143,36 @@ export function ShowActions() {
                     <th>Show</th>
                     <th>Revision</th>
                     <th>Updated</th>
+                    <th>Binding</th>
+                    <th>Invoke</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <td>
-                        <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
-                          {obj.label}
-                        </Link>
-                      </td>
-                      <td>{obj.show}</td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
-                    </tr>
-                  ))}
+                  {state.objects.map((obj) => {
+                    const binding = bindings.get(obj.id)
+                    return (
+                      <tr key={obj.id}>
+                        <td>
+                          <Link className="entity-link" to={`/actions/${encodeURIComponent(obj.id)}`}>
+                            {obj.label}
+                          </Link>
+                        </td>
+                        <td>{obj.show}</td>
+                        <td>{obj.currentRevision}</td>
+                        <td>{formatAbsolute(obj.updatedAt)}</td>
+                        <td>
+                          {binding ? (
+                            <ActionBindingBadge state={binding.state} reason={binding.reason} />
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td>
+                          <ActionInvokeButton actionId={obj.id} label="Go" />
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

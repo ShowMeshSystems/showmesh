@@ -74,7 +74,10 @@ const maxShowConfigRequestBodyBytes = 256 * 1024
 // blank label and show: it has no active payload to read either field
 // from, and a caller enumerating "what macros exist" should see only
 // what it could actually run.
-func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind string) ([]v1.ConfigObjectSummary, error) {
+// showFilter, when non-empty, narrows the result to objects whose "show"
+// field equals it. Not existence-checked: an unmatched value returns an
+// empty list, never a refusal.
+func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind, showFilter string) ([]v1.ConfigObjectSummary, error) {
 	objs, err := cfg.ListConfigObjects(ctx, kind)
 	if err != nil {
 		return nil, fmt.Errorf("list %s config objects: %w", kind, err)
@@ -104,6 +107,9 @@ func listConfigObjectSummaries(ctx context.Context, cfg ConfigStore, kind string
 		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
 			return nil, fmt.Errorf("decode %s config payload head for %q: %w", kind, obj.ID, err)
 		}
+		if showFilter != "" && head.Show != showFilter {
+			continue
+		}
 		out = append(out, v1.ConfigObjectSummary{
 			ID: obj.ID, Label: head.Label, Show: head.Show,
 			CurrentRevision: obj.CurrentRevision, UpdatedAt: formatTime(obj.UpdatedAt),
@@ -129,7 +135,7 @@ func (h *handlers) handleListShowActions(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.ShowActionConfigKind))
 		return
 	}
-	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowActionConfigKind)
+	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowActionConfigKind, r.URL.Query().Get("show"))
 	if err != nil {
 		h.writeInternalError(w, now, "list show.action config objects", err)
 		return
@@ -143,7 +149,7 @@ func (h *handlers) handleListShowMacros(w http.ResponseWriter, r *http.Request) 
 		writeProblem(w, h.logger, now, unsupportedNodeFilterProblem(config.ShowMacroConfigKind))
 		return
 	}
-	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowMacroConfigKind)
+	objs, err := listConfigObjectSummaries(r.Context(), h.deps.Config, config.ShowMacroConfigKind, r.URL.Query().Get("show"))
 	if err != nil {
 		h.writeInternalError(w, now, "list show.macro config objects", err)
 		return
@@ -312,32 +318,35 @@ func currentFPPEndpoints(ctx context.Context, fpp FPPLister) ([]config.FPPEndpoi
 
 // showActionLookup reports whether id names a show.action object with an
 // active revision and, when it does, that action's own target.integration
-// — [config.DecodeShowMacroPayload]'s resolveAction callback. The
-// integration is what lets that decoder enforce the Resolume localFallback
-// rule at write time rather than fetching it a second way. A store error,
-// or a payload this function cannot decode enough to read
-// target.integration from, is treated as "does not resolve": a transient
-// failure surfaces as a validation refusal on this ONE step rather than
-// crashing or silently accepting an unverifiable reference.
-func (h *handlers) showActionLookup(ctx context.Context) func(actionID string) (string, bool) {
-	return func(actionID string) (string, bool) {
+// and "show" — [config.DecodeShowMacroPayload]'s resolveAction callback.
+// The integration is what lets that decoder enforce the Resolume
+// localFallback rule at write time rather than fetching it a second way;
+// the show is what lets it refuse a macro step naming an action outside
+// the macro's own show namespace (ADR-027). A store error, or a payload
+// this function cannot decode enough to read target.integration/show
+// from, is treated as "does not resolve": a transient failure surfaces as
+// a validation refusal on this ONE step rather than crashing or silently
+// accepting an unverifiable reference.
+func (h *handlers) showActionLookup(ctx context.Context) func(actionID string) (string, string, bool) {
+	return func(actionID string) (string, string, bool) {
 		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, actionID)
 		if err != nil || obj.CurrentRevision == 0 {
-			return "", false
+			return "", "", false
 		}
 		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, actionID, obj.CurrentRevision)
 		if err != nil {
-			return "", false
+			return "", "", false
 		}
 		var head struct {
+			Show   string `json:"show"`
 			Target struct {
 				Integration string `json:"integration"`
 			} `json:"target"`
 		}
 		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
-			return "", false
+			return "", "", false
 		}
-		return head.Target.Integration, true
+		return head.Target.Integration, head.Show, true
 	}
 }
 
@@ -417,7 +426,7 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences)
+	payload, verr := config.DecodeShowActionPayload(string(raw), endpoints, h.deps.IntegrationBrokers, FPPPrimitiveRegistry, h.deps.ResolumeReferences, h.showExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -468,7 +477,7 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionLookup(r.Context()))
+	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionLookup(r.Context()), h.showExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return

@@ -564,6 +564,86 @@ func TestAwaitResponseRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	}
 }
 
+// --- ErrResponseFailedBeforePublish: SM-105 ---
+
+// TestAwaitResponseDeadlineValidationFailsBeforePublish proves that an
+// invalid Deadline is rejected before Subscribe or Publish is ever called,
+// and the returned error lets a caller (api.DispatchMQTTAction,
+// macro.publishAndAwait) tell that apart from a failure at or after the
+// wire attempt.
+func TestAwaitResponseDeadlineValidationFailsBeforePublish(t *testing.T) {
+	cases := []ResponseRequest{
+		{PublishTopic: "home/projectors/set", ResponseTopic: "home/projectors/state", Deadline: 0, Match: textMatcher("on")},
+		{PublishTopic: "home/projectors/set", ResponseTopic: "home/projectors/state", Deadline: MaxResponseDeadline + time.Second, Match: textMatcher("on")},
+	}
+	for _, req := range cases {
+		cm := &fakeMQTTClient{}
+		bm := newResponseTestBrokerManager(cm)
+
+		_, err := bm.AwaitResponse(context.Background(), req)
+		if !errors.Is(err, ErrResponseFailedBeforePublish) {
+			t.Errorf("deadline %v: err = %v, want it to wrap ErrResponseFailedBeforePublish", req.Deadline, err)
+		}
+		if cm.publishCount() != 0 {
+			t.Errorf("deadline %v: publishCount = %d, want 0", req.Deadline, cm.publishCount())
+		}
+	}
+}
+
+// TestAwaitResponseSubscribeFailureFailsBeforePublish proves that a
+// rejected SUBSCRIBE never reaches Publish and that the error is
+// distinguishable as a pre-publish failure.
+func TestAwaitResponseSubscribeFailureFailsBeforePublish(t *testing.T) {
+	cm := &fakeMQTTClient{
+		subscribeFunc: func(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error) {
+			return nil, errors.New("subscribe rejected")
+		},
+	}
+	bm := newResponseTestBrokerManager(cm)
+
+	_, err := bm.AwaitResponse(context.Background(), ResponseRequest{
+		PublishTopic:  "home/projectors/set",
+		ResponseTopic: "home/projectors/state",
+		Deadline:      5 * time.Second,
+		Match:         textMatcher("on"),
+	})
+	if !errors.Is(err, ErrResponseFailedBeforePublish) {
+		t.Fatalf("err = %v, want it to wrap ErrResponseFailedBeforePublish", err)
+	}
+	if cm.publishCount() != 0 {
+		t.Errorf("publishCount = %d, want 0", cm.publishCount())
+	}
+}
+
+// TestAwaitResponseCtxCanceledDuringSubscribeFailsBeforePublish proves that
+// a context already canceled by the time Subscribe runs is reported the
+// same way as any other pre-publish failure — SM-105's third named case,
+// alongside an invalid deadline and a rejected SUBSCRIBE.
+func TestAwaitResponseCtxCanceledDuringSubscribeFailsBeforePublish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cm := &fakeMQTTClient{
+		subscribeFunc: func(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error) {
+			return nil, ctx.Err()
+		},
+	}
+	bm := newResponseTestBrokerManager(cm)
+
+	_, err := bm.AwaitResponse(ctx, ResponseRequest{
+		PublishTopic:  "home/projectors/set",
+		ResponseTopic: "home/projectors/state",
+		Deadline:      5 * time.Second,
+		Match:         textMatcher("on"),
+	})
+	if !errors.Is(err, ErrResponseFailedBeforePublish) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap both ErrResponseFailedBeforePublish and context.Canceled", err)
+	}
+	if cm.publishCount() != 0 {
+		t.Errorf("publishCount = %d, want 0", cm.publishCount())
+	}
+}
+
 func TestAwaitResponseDeadlineExceededIsDistinctOutcome(t *testing.T) {
 	bm := newResponseTestBrokerManager(&fakeMQTTClient{})
 

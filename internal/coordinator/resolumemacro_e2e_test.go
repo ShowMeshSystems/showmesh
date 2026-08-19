@@ -165,7 +165,7 @@ func TestMacroRunResolumeReRunsResolutionAgainstTheCurrentComposition(t *testing
 			resolver := newResolumeReferenceResolverAdapter(compWiring.store)
 			actionJSON := `{"show":"e2e-show","label":"Launch E2E clip","safetyClass":"none",
 				"target":{"integration":"resolume","action":"launchClip","ref":{"clip":"E2E Clip","deck":"Deck One"}}}`
-			payload, verr := config.DecodeShowActionPayload(actionJSON, nil, nil, nil, resolver)
+			payload, verr := config.DecodeShowActionPayload(actionJSON, nil, nil, nil, resolver, func(string) bool { return true })
 			if verr != nil {
 				t.Fatalf("action authoring was refused while the clip still resolved: %+v", verr)
 			}

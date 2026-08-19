@@ -265,3 +265,63 @@ type createMacroRunRequest struct {
 	// at the route.
 	Trigger string `json:"trigger"`
 }
+
+// actionBinding mirrors v1.ActionBinding: state is "ok", "broken", or
+// "unknown", reason always non-empty.
+type actionBinding struct {
+	ActionID string `json:"actionId"`
+	Label    string `json:"label"`
+	Show     string `json:"show"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
+}
+
+// actionBindingResponse is the body of GET /actions/{id}/binding.
+type actionBindingResponse struct {
+	ServerTime time.Time     `json:"serverTime"`
+	Binding    actionBinding `json:"binding"`
+}
+
+// actionBindingsResponse is the body of GET /actions/bindings.
+type actionBindingsResponse struct {
+	ServerTime time.Time       `json:"serverTime"`
+	Bindings   []actionBinding `json:"bindings"`
+}
+
+// actionInvocationRequest is the body of POST /actions/{id}/invocations.
+// RequestedRevision is a pointer so an unset flag omits the key entirely
+// (an interactive "invoke whatever is current" call) rather than sending
+// a meaningless zero (SM-99).
+type actionInvocationRequest struct {
+	IdempotencyKey    string `json:"idempotencyKey"`
+	RequestedRevision *int64 `json:"requestedRevision,omitempty"`
+}
+
+// actionInvocationResult mirrors v1.ActionInvocationResult field for
+// field. Outcome is a pointer: nil while State is "pending" (SM-100) —
+// never a blank string pretending to be one of the five terminal words.
+type actionInvocationResult struct {
+	ID                        string     `json:"id"`
+	IdempotencyKey            string     `json:"idempotencyKey"`
+	ActionID                  string     `json:"actionId"`
+	Revision                  int64      `json:"revision"`
+	Label                     string     `json:"label"`
+	Replay                    bool       `json:"replay"`
+	State                     string     `json:"state"`
+	Outcome                   *string    `json:"outcome"`
+	OutcomeReason             string     `json:"outcomeReason"`
+	DispatchAttribution       string     `json:"dispatchAttribution"`
+	DispatchAttributionReason string     `json:"dispatchAttributionReason"`
+	OutcomeAttribution        string     `json:"outcomeAttribution"`
+	OutcomeAttributionReason  string     `json:"outcomeAttributionReason"`
+	AttributionDegraded       bool       `json:"attributionDegraded"`
+	DispatchedAt              *time.Time `json:"dispatchedAt"`
+	ResolvedAt                *time.Time `json:"resolvedAt"`
+}
+
+// actionInvocationResponse is the body of a successful POST
+// /actions/{id}/invocations.
+type actionInvocationResponse struct {
+	ServerTime time.Time              `json:"serverTime"`
+	Result     actionInvocationResult `json:"result"`
+}

@@ -86,6 +86,24 @@ describe('MacroDetail (new macro authoring)', () => {
     expect(screen.getByText(/no delivery path exists/)).toBeVisible()
   })
 
+  // E7-3 fix: the action picker previously fetched every show.action from
+  // every show with no filter, so an operator authoring a
+  // "halloween-2026" macro could pick a "christmas-2026" action and get a
+  // 400 the dropdown itself steered them into. The picker now narrows to
+  // the macro's own show as it is typed.
+  it('narrows the action picker to the macro\'s own show as it is typed', async () => {
+    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-18T00:00:00Z', kind: 'show.action', objects: [] })
+    const user = userEvent.setup()
+    renderNewMacro(makeModel({ session: adminSession }))
+
+    expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined)
+    listConfigObjects.mockClear()
+
+    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+
+    expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026')
+  })
+
   it('requires a non-empty local-fallback reason before submitting, even for class "none"', async () => {
     listConfigObjects.mockResolvedValue({ serverTime: '2026-08-14T00:00:00Z', kind: 'show.action', objects: [] })
     const user = userEvent.setup()

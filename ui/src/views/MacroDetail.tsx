@@ -168,10 +168,19 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
   // id is never retried, which is what bounds the effect below.
   const [actionIntegrations, setActionIntegrations] = useState<Record<string, ActionIntegration | null>>({})
 
+  // Filtered to this macro's own show: a macro step may only reference an
+  // action in the same show namespace, and the server refuses a
+  // cross-show reference at write time. Filtering here rather than
+  // rendering every action from every show and letting the write refuse
+  // it — the alternative this seam considered — because an operator
+  // authoring a "halloween-2026" macro who picks a "christmas-2026"
+  // action from the dropdown gets a 400 the dropdown itself steered them
+  // into; an action outside the current show is simply not offered.
   useEffect(() => {
     if (!readGate.allowed) return
+    const show = form.show.trim()
     let cancelled = false
-    listConfigObjects('show.action')
+    listConfigObjects('show.action', show === '' ? undefined : show)
       .then((resp) => {
         if (!cancelled) setActions(resp.objects)
       })
@@ -184,7 +193,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed])
+  }, [readGate.allowed, form.show])
 
   useEffect(() => {
     if (isNew) return

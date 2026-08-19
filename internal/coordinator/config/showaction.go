@@ -536,11 +536,11 @@ func EncodeShowActionPayload(p ShowActionPayload) (string, error) {
 // or the store-authoritative equivalent); brokers is the caller's declared
 // integration broker set (see integrationbrokers.go); registry resolves
 // and validates an FPP primitive's own parameter vocabulary and safety
-// class; resolver resolves
-// a resolume target's seam B reference against the currently stored
-// composition. None of the four is fetched by this package — see this
-// file's own top doc comment.
-func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver) (ShowActionPayload, *ValidationError) {
+// class; resolver resolves a resolume target's seam B reference against
+// the currently stored composition; showExists reports whether "show"
+// names an existing show config object. None of the five is fetched by
+// this package — see this file's own top doc comment.
+func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []IntegrationBroker, registry FPPPrimitiveRegistry, resolver ResolumeReferenceResolver, showExists func(string) bool) (ShowActionPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowActionPayload{}, verr
@@ -555,6 +555,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 	}
 	if verr := validateShowRef(show); verr != nil {
 		return ShowActionPayload{}, verr
+	}
+	if !showExists(show) {
+		return ShowActionPayload{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "show",
+			Detail: fmt.Sprintf("show %q is not a configured show; create it first", show),
+		}
 	}
 
 	label, verr := decodeRequiredString(top, "label", "label")
@@ -1063,14 +1069,25 @@ func validateResolumeRefConditionals(action string, ref map[string]any) *Validat
 	return nil
 }
 
-// resolveResolumeRef resolves action's own reference fields out of ref
-// against resolver. blackout resolves nothing (it addresses every tracked
-// layer, not a named one). Every non-nil error — not found, ambiguous, or
-// [ErrResolumeCompositionNotUploaded] — is reported through the same
-// Code, ValidationCodeFieldUnknownReference, told apart for the operator
-// by Detail's own text rather than by a client branching on a second Code.
-func resolveResolumeRef(action string, ref map[string]any, resolver ResolumeReferenceResolver) *ValidationError {
-	var err error
+// ErrResolumeActionResolutionUnrecognized is [ResolveResolumeRef]'s own
+// sentinel for an action name this package's resolution switch does not
+// recognize. Reachable in practice only if a caller's own membership
+// check (showActionResolumeActions at write time) and this switch ever
+// disagree — the exact condition E7-2's own binding check must tell apart
+// from "the reference does not resolve": an unrecognized action is
+// "cannot check", never "checked and broken" (ADR-011).
+var ErrResolumeActionResolutionUnrecognized = errors.New("config: no resolume resolution rule for this action")
+
+// ResolveResolumeRef resolves action's own reference fields out of ref
+// against resolver — the single place this package (and any other caller,
+// e.g. the binding check in internal/coordinator/api) dispatches a
+// resolume action name onto [ResolumeReferenceResolver]'s four methods.
+// blackout resolves nothing (it addresses every tracked layer, not a
+// named one). nil means resolved; every other error, including
+// [ErrResolumeCompositionNotUploaded], is returned unchanged from the
+// resolver, or [ErrResolumeActionResolutionUnrecognized] for an action
+// this switch does not recognize.
+func ResolveResolumeRef(action string, ref map[string]any, resolver ResolumeReferenceResolver) error {
 	switch action {
 	case ShowActionResolumeBlackout:
 		return nil
@@ -1079,25 +1096,38 @@ func resolveResolumeRef(action string, ref map[string]any, resolver ResolumeRefe
 		deck, _ := ref["deck"].(string)
 		layer, _ := ref["layer"].(string)
 		persistent, _ := ref["persistent"].(bool)
-		err = resolver.ResolveClip(ResolumeClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
+		return resolver.ResolveClip(ResolumeClipReference{Clip: clip, Deck: deck, Persistent: persistent, Layer: layer})
 	case ShowActionResolumeClearLayer, ShowActionResolumeSetLayerBypass, ShowActionResolumeSetLayerMaster:
 		layer, _ := ref["layer"].(string)
-		err = resolver.ResolveLayer(layer)
+		return resolver.ResolveLayer(layer)
 	case ShowActionResolumeLaunchColumn:
 		deck, _ := ref["deck"].(string)
 		column, _ := ref["column"].(string)
-		err = resolver.ResolveColumn(deck, column)
+		return resolver.ResolveColumn(deck, column)
 	case ShowActionResolumeSelectDeck:
 		deck, _ := ref["deck"].(string)
-		err = resolver.ResolveDeck(deck)
+		return resolver.ResolveDeck(deck)
 	default:
-		// Unreachable given showActionResolumeActions' own membership check
-		// in decodeResolumeTarget, answered rather than silently resolving
-		// nothing if the two ever disagree.
-		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: "target.action", Detail: fmt.Sprintf("no resolution rule for action %q", action)}
+		return fmt.Errorf("%w: action %q", ErrResolumeActionResolutionUnrecognized, action)
 	}
+}
+
+// resolveResolumeRef is [ResolveResolumeRef] wrapped for this package's
+// own write-time ValidationError shape. Every non-nil error — not found,
+// ambiguous, unrecognized, or [ErrResolumeCompositionNotUploaded] — is
+// reported through the same Code, ValidationCodeFieldUnknownReference,
+// told apart for the operator by Detail's own text rather than by a
+// client branching on a second Code.
+func resolveResolumeRef(action string, ref map[string]any, resolver ResolumeReferenceResolver) *ValidationError {
+	err := ResolveResolumeRef(action, ref, resolver)
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrResolumeActionResolutionUnrecognized) {
+		// Unreachable given showActionResolumeActions' own membership
+		// check in decodeResolumeTarget, answered rather than silently
+		// resolving nothing if the two ever disagree.
+		return &ValidationError{Code: ValidationCodeFieldInvalid, Field: "target.action", Detail: fmt.Sprintf("no resolution rule for action %q", action)}
 	}
 	return &ValidationError{Code: ValidationCodeFieldUnknownReference, Field: "target.ref", Detail: err.Error()}
 }
@@ -1129,13 +1159,13 @@ func stringInSlice(s string, list []string) bool {
 	return false
 }
 
-// validateShowRef format-validates (never existence-validates — the Show
-// object is Track E's and does not exist yet, STEP-9-SPEC.md section 5.2)
-// a "show" reference. Reuses [mqttproto.ValidateNodeID] rather than
-// inventing a second identifier grammar: this builder's own judgment call,
-// since neither the shared contract nor STEP-9-SPEC.md states an exact
-// format — see this builder's report. It happens to accept every example
-// in STEP-9-SPEC.md ("halloween-2026").
+// validateShowRef format-validates only; existence is the caller's
+// showExists check (DecodeShowActionPayload, DecodeShowMacroPayload).
+// Reuses [mqttproto.ValidateNodeID] rather than inventing a second
+// identifier grammar: this builder's own judgment call, since neither the
+// shared contract nor STEP-9-SPEC.md states an exact format — see this
+// builder's report. It happens to accept every example in STEP-9-SPEC.md
+// ("halloween-2026").
 func validateShowRef(show string) *ValidationError {
 	if err := mqttproto.ValidateNodeID(show); err != nil {
 		return &ValidationError{

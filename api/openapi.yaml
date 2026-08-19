@@ -2918,9 +2918,18 @@ paths:
         exactly like `GET /audit`). Corrected from an earlier draft that
         would have copied `fpp.endpoints`' `config:write`-only posture,
         which breaks the operator role's own macro list (the operator role
-        holds `show:macro:run`, never `config:write`). show.action objects
-        carry no `node` field, so `?node=` is rejected with 400 rather than
-        silently ignored — only `GET /config/show.surface` supports it.
+        holds `show:macro:run`, never `config:write`). Optionally narrowed
+        with `?show=<id>`; an id naming no configured show is a legitimate,
+        empty answer, never a refusal. show.action objects carry no `node`
+        field, so `?node=` is rejected with 400 rather than silently
+        ignored — only `GET /config/show.surface` supports it.
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to show.action objects belonging to this show id.
       responses:
         "200":
           description: OK
@@ -2975,7 +2984,11 @@ paths:
       operationId: putShowAction
       summary: Write a new show.action revision (Step 9)
       description: >-
-        Requires `config:write` (admin only). `safetyClass` is required and
+        Requires `config:write` (admin only). `show` must name an existing
+        `show` config object (`GET /config/show`); a nonexistent show is
+        refused naming the missing id. This is a write-time check only —
+        an existing revision written before this check shipped still
+        reads, lists, and runs unchanged. `safetyClass` is required and
         must agree with an `fpp` target's own registered primitive safety
         class; an `mqtt` target's `broker` must name a broker this
         deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no
@@ -3057,9 +3070,18 @@ paths:
       description: >-
         Object ids with label, show, and current revision number, NOT the
         full payloads. Same read posture as GET /config/show.action.
-        show.macro objects carry no `node` field, so `?node=` is rejected
-        with 400 rather than silently ignored — only `GET
-        /config/show.surface` supports it.
+        Optionally narrowed with `?show=<id>`; an id naming no configured
+        show is a legitimate, empty answer, never a refusal. show.macro
+        objects carry no `node` field, so `?node=` is rejected with 400
+        rather than silently ignored — only `GET /config/show.surface`
+        supports it.
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to show.macro objects belonging to this show id.
       responses:
         "200":
           description: OK
@@ -3114,9 +3136,14 @@ paths:
       operationId: putShowMacro
       summary: Write a new show.macro revision (Step 9)
       description: >-
-        Requires `config:write` (admin only). `steps` is required, must
+        Requires `config:write` (admin only). `show` must name an existing
+        `show` config object, refused naming the missing id otherwise
+        (write-time only; an existing revision keeps reading, listing, and
+        running unchanged). `steps` is required, must
         contain 1-32 entries, each `id` unique, each `action` resolving to
-        an existing `show.action` object. Two keys in this payload default
+        an existing `show.action` object **in this macro's own show** — a
+        step naming an action belonging to a different show is refused,
+        naming both shows. Two keys in this payload default
         when absent, and reject a present `null` as invalid: the
         top-level `description` (defaults to empty, i.e. no description)
         and each step's `onFailure` (default `continue`) /
@@ -3191,6 +3218,167 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /actions/{id}/binding:
+    get:
+      operationId: getActionBinding
+      summary: Re-resolve one show.action's stored target (Track E seam E7-2, ADR-029)
+      description: >-
+        Never gated by any scope (ADR-024: reads stay open by default) and
+        never dispatches anything. Re-resolves `id`'s CURRENTLY STORED
+        target against whatever the relevant integration reports right
+        now, through the same resolver/registry/broker-list write-time
+        validation already uses. `binding.state` is three-valued and
+        `unknown` is not a soft `ok`: it means the check could not be
+        performed at all (no Resolume composition uploaded, or a stored
+        payload this coordinator cannot decode), never that the target
+        was found broken.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionBindingResponse"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /actions/bindings:
+    get:
+      operationId: listActionBindings
+      summary: Re-resolve every show.action's stored target (Track E seam E7-2)
+      description: >-
+        The pre-show sweep: every show.action's own binding check, in one
+        request. Never gated by any scope. `show`, when given, narrows the
+        result to that show; a show id matching nothing returns an empty
+        list, never a refusal — see `?show=` on `GET /config/show.action`.
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionBindingsResponse"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /actions/{id}/invocations:
+    post:
+      operationId: invokeAction
+      summary: Invoke one stored show.action by id (Track E seam E7-1, ADR-037 decision 8)
+      description: >-
+        Behind `show:action:invoke`. The request carries only an
+        idempotency key: the stored action's own target supplies every
+        parameter, so a caller cannot pass a protocol address, topic, or
+        path here (that raw hatch is ADR-029 decision 3's own, separately
+        queued, deliberately inconvenient escape valve, not this
+        endpoint) — a body naming any key other than `idempotencyKey` is
+        refused (`400`), never silently ignored. Dispatches through the
+        exact same in-process seams
+        `internal/coordinator/macro`'s own step dispatch uses. A cookie-
+        authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-
+        token-authenticated request is exempt.
+
+        `idempotencyKey` is resolved first: a replayed key against the
+        SAME action id dispatches nothing and returns the original
+        result, flagged `replay: true`. A key reused against a DIFFERENT
+        action id is a `409` conflict. `blackout`/`stop`/`powerOff`-classed
+        actions (read from the stored action's own `safetyClass`) are
+        exempt from ADR-024 decision 11's fail-closed audit rule; every
+        other action fails closed (`503`, nothing dispatched) under the
+        identical condition.
+
+        `requestedRevision` optionally pins the exact show.action revision
+        to execute (SM-99, TRACK-F-resting-mode.md §F4): a durable/queued
+        caller names the revision it queued against, so activating a
+        newer revision after the cue was queued never changes what runs.
+        An interactive caller may omit it to mean "whichever revision is
+        active right now". Either way, the response's `result.revision`
+        states which revision actually executed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The show.action object id to invoke.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionInvocationRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionInvocationResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            `idempotencyKey` was already used for a different action id —
+            `type` `conflict`, remedy "mint a fresh key".
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: >-
+            ADR-024 decision 11's fail-closed default: this action's own
+            safetyClass is "none", and the pre-dispatch write that must
+            durably record it before dispatch could not be appended to
+            this coordinator's audit store. `type`
+            `action-invoke-refused-audit-unavailable`. Nothing was
+            recorded and nothing was dispatched; retry once the audit
+            store is writable again.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /macros/{id}/runs:
     post:
       operationId: submitMacroRun
@@ -7327,7 +7515,11 @@ components:
         own ADR-024 decision 11 fail-closed default for a non-exempt
         action — every action except `blackout` and `clearLayer` — `503`,
         mirroring "fpp-command-refused-audit-unavailable" exactly, for a
-        second vendor's command surface).
+        second vendor's command surface). One is Track E seam E7-1's own
+        addition: "action-invoke-refused-audit-unavailable"
+        (POST /actions/{id}/invocations' own ADR-024 decision 11
+        fail-closed default for an action whose stored safetyClass is
+        "none").
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -7365,6 +7557,7 @@ components:
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
             - https://showmesh.dev/problems/payload-too-large
             - https://showmesh.dev/problems/resolume-action-refused-audit-unavailable
+            - https://showmesh.dev/problems/action-invoke-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
         title:
@@ -8219,6 +8412,158 @@ components:
             $ref: "#/components/schemas/MacroPriorFailureRequest"
         priorFailuresDropped:
           type: integer
+    ActionBinding:
+      type: object
+      description: >-
+        One show.action's binding-check result (Track E seam E7-2).
+        `reason` is always non-empty, including for `state: "ok"`.
+      required: [actionId, label, show, state, reason]
+      properties:
+        actionId:
+          type: string
+        label:
+          type: string
+        show:
+          type: string
+        state:
+          type: string
+          enum: [ok, broken, unknown]
+          description: >-
+            "ok": the target resolved, unambiguously, against current
+            integration state. "broken": the target did not resolve, or
+            resolved ambiguously. "unknown": the check could not be
+            performed at all — never a soft "ok", and never reported as
+            "broken" for a check this coordinator simply could not run.
+        reason:
+          type: string
+    ActionBindingResponse:
+      type: object
+      description: The body of GET /actions/{id}/binding.
+      required: [serverTime, binding]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        binding:
+          $ref: "#/components/schemas/ActionBinding"
+    ActionBindingsResponse:
+      type: object
+      description: The body of GET /actions/bindings.
+      required: [serverTime, bindings]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionBinding"
+    ActionInvocationRequest:
+      type: object
+      description: >-
+        The body of POST /actions/{id}/invocations. idempotencyKey is
+        required. requestedRevision optionally pins the exact show.action
+        revision to execute (SM-99): a durable/queued caller (e.g. a
+        Track F cue) should always set it, so activating a newer revision
+        after the cue was queued never changes what runs; an interactive
+        caller may omit it to mean "whichever revision is active right
+        now" — the response's revision field always states which
+        revision actually ran.
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey:
+          type: string
+        requestedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+    ActionInvocationResult:
+      type: object
+      description: >-
+        One invoked (or replayed) action's lifecycle and, once resolved,
+        its outcome against this API's shared five-word outcome
+        vocabulary — the same one ResolumeActionResult.outcome uses.
+      required:
+        [id, idempotencyKey, actionId, revision, replay, state, outcome,
+         outcomeReason, dispatchAttribution, dispatchAttributionReason,
+         outcomeAttribution, outcomeAttributionReason,
+         attributionDegraded, dispatchedAt, resolvedAt]
+      properties:
+        id:
+          type: string
+        idempotencyKey:
+          type: string
+        actionId:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          description: The show.action revision that actually executed.
+        label:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            nothing was dispatched by this request.
+        state:
+          type: string
+          enum: ["pending", "resolved"]
+          description: >-
+            This invocation's own lifecycle. "pending" means it has not
+            yet resolved — either a replay observed mid-flight, or this
+            coordinator's own outcome could not be durably recorded yet
+            (ADR-003; SM-100).
+        outcome:
+          type: [string, "null"]
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed", null]
+          description: >-
+            null while state is "pending" — a pending result never
+            carries a blank outcome pretending to be one. One of the five
+            terminal words once state is "resolved".
+        outcomeReason:
+          type: string
+          description: >-
+            Always non-empty, in both states — while pending, states why
+            no outcome exists yet (ADR-020 decision 5).
+        dispatchAttribution:
+          type: string
+          enum: ["complete", "degraded"]
+          description: >-
+            Whether the pre-dispatch audit entry was written durably.
+        dispatchAttributionReason:
+          type: string
+        outcomeAttribution:
+          type: string
+          enum: ["pending", "complete", "degraded"]
+          description: >-
+            Whether the outcome audit entry (and this invocation's own
+            durable outcome record) was written durably. "pending" only
+            while state is itself "pending".
+        outcomeAttributionReason:
+          type: string
+        attributionDegraded:
+          type: boolean
+          description: >-
+            Derived: true iff dispatchAttribution or outcomeAttribution is
+            "degraded". Kept only for a caller that has not moved to the
+            two named states above.
+        dispatchedAt:
+          type: [string, "null"]
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+    ActionInvocationResponse:
+      type: object
+      description: The body of a successful (200) response from POST /actions/{id}/invocations.
+      required: [serverTime, result]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        result:
+          $ref: "#/components/schemas/ActionInvocationResult"
     MacroRunChangedEvent:
       type: object
       description: >-

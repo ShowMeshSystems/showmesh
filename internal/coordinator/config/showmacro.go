@@ -141,12 +141,15 @@ func EncodeShowMacroPayload(p ShowMacroPayload) (string, error) {
 // DecodeShowMacroPayload parses and validates raw against STEP-9-SPEC.md
 // section 5.4's rules. resolveAction reports whether a step's action id
 // names an existing show.action object and, when it does, that action's
-// own target.integration — a caller-supplied lookup, per this file's own
-// top note, never something this package fetches itself. The integration
-// is needed because a step whose action is a Resolume action must declare
-// localFallback.class == "coordinator-required": a controlled device
-// (ADR-016) holds no fallback of its own.
-func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (integration string, ok bool)) (ShowMacroPayload, *ValidationError) {
+// own target.integration and its own "show" — a caller-supplied lookup,
+// per this file's own top note, never something this package fetches
+// itself. The integration is needed because a step whose action is a
+// Resolume action must declare localFallback.class ==
+// "coordinator-required": a controlled device (ADR-016) holds no fallback
+// of its own. The action's show is needed because a macro may only step
+// through actions in its own show namespace (ADR-027). showExists reports
+// whether the macro's own "show" names an existing show config object.
+func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (integration, show string, ok bool), showExists func(string) bool) (ShowMacroPayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowMacroPayload{}, verr
@@ -161,6 +164,12 @@ func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (int
 	}
 	if verr := validateShowRef(show); verr != nil {
 		return ShowMacroPayload{}, verr
+	}
+	if !showExists(show) {
+		return ShowMacroPayload{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "show",
+			Detail: fmt.Sprintf("show %q is not a configured show; create it first", show),
+		}
 	}
 
 	label, verr := decodeRequiredString(top, "label", "label")
@@ -198,7 +207,7 @@ func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (int
 	seenIDs := make(map[string]bool, len(rawSteps))
 	for i, rawStep := range rawSteps {
 		field := fmt.Sprintf("steps[%d]", i)
-		step, verr := decodeShowMacroStep(rawStep, field, resolveAction)
+		step, verr := decodeShowMacroStep(rawStep, field, show, resolveAction)
 		if verr != nil {
 			return ShowMacroPayload{}, verr
 		}
@@ -215,7 +224,7 @@ func DecodeShowMacroPayload(raw string, resolveAction func(actionID string) (int
 	return ShowMacroPayload{Show: show, Label: label, Description: description, Steps: steps}, nil
 }
 
-func decodeShowMacroStep(raw json.RawMessage, field string, resolveAction func(string) (string, bool)) (ShowMacroStep, *ValidationError) {
+func decodeShowMacroStep(raw json.RawMessage, field string, macroShow string, resolveAction func(string) (string, string, bool)) (ShowMacroStep, *ValidationError) {
 	if isJSONNull(raw) {
 		return ShowMacroStep{}, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
 	}
@@ -233,11 +242,17 @@ func decodeShowMacroStep(raw json.RawMessage, field string, resolveAction func(s
 	if verr != nil {
 		return ShowMacroStep{}, verr
 	}
-	integration, ok := resolveAction(action)
+	integration, actionShow, ok := resolveAction(action)
 	if !ok {
 		return ShowMacroStep{}, &ValidationError{
 			Code: ValidationCodeFieldUnknownReference, Field: field + ".action",
 			Detail: fmt.Sprintf("action %q does not resolve to an existing show.action object", action),
+		}
+	}
+	if actionShow != macroShow {
+		return ShowMacroStep{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: field + ".action",
+			Detail: fmt.Sprintf("action %q belongs to show %q, not this macro's show %q", action, actionShow, macroShow),
 		}
 	}
 
