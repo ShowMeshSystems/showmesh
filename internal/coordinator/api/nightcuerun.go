@@ -286,6 +286,27 @@ func (h *handlers) nightTimeoutBarrierCue(ctx context.Context, now time.Time, ro
 	return row, nil
 }
 
+// nightRecordMissingBarrierCue durably records a barrier cue that never
+// got an outbox row, as a resolved failure. Its own onFailure policy then
+// decides whether the launch proceeds, exactly as for any other resolved
+// row. A row that appeared in the meantime is returned instead.
+func (h *handlers) nightRecordMissingBarrierCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string) (store.NightCueOutboxRecord, error) {
+	resolvedAt := now
+	row := store.NightCueOutboxRecord{
+		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: phase, CueName: cueName,
+		State: nightCueStateResolved, Outcome: nightCueOutcomeFailed, ResolvedAt: &resolvedAt,
+		OutcomeReason: fmt.Sprintf("cue %q: no outbox record could be created for it within %s of the content boundary, so it was never dispatched", cueName, nightBarrierResolutionDeadline),
+	}
+	err := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, row, now)
+	if errors.Is(err, store.ErrNightCueOutboxDuplicate) {
+		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	}
+	if err != nil {
+		return store.NightCueOutboxRecord{}, err
+	}
+	return row, nil
+}
+
 // nightBarrierSatisfied reports whether every barrier cue in cues has
 // reached [nightCueStateResolved] with an outcome its own onFailure
 // policy accepts. referenceE anchors the deadline. A cue with no row yet,
@@ -300,9 +321,18 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 		}
 		row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
 		if errors.Is(err, store.ErrNightCueOutboxNotFound) {
-			return false, fmt.Sprintf("barrier cue %q has not been dispatched yet", cue.Name), nil
-		}
-		if err != nil {
+			if now.Sub(referenceE) < nightBarrierResolutionDeadline {
+				return false, fmt.Sprintf("barrier cue %q has not been dispatched yet", cue.Name), nil
+			}
+			// The row could not be created at all, so the deadline has to
+			// apply to its absence too, and durably: a barrier that stays
+			// unrepresented holds the launch forever with nothing on the
+			// operator surface to explain it.
+			row, err = h.nightRecordMissingBarrierCue(ctx, now, rec, phase, cue.Name)
+			if err != nil {
+				return false, "", err
+			}
+		} else if err != nil {
 			return false, "", err
 		}
 		timedOutState := row.State == nightCueStateDispatched || row.State == nightCueStatePending

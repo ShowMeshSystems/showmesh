@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -194,6 +195,26 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		return
 	}
 	h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+}
+
+// nightDispatchRetryBackoff paces retries of a dispatch refused before it
+// reached the wire; nightDispatchRetryWindow bounds how long that may
+// continue before the session degrades rather than retrying silently
+// forever.
+const (
+	nightDispatchRetryBackoff = 10 * time.Second
+	nightDispatchRetryWindow  = 5 * time.Minute
+)
+
+// nightRefusalIsTerminal separates a refusal a later tick may clear (the
+// host is busy, or its evidence is not current yet) from one it cannot: a
+// missing instance, invalid parameters, or an authorization failure.
+func nightRefusalIsTerminal(problem *v1.Problem) bool {
+	switch problem.Type {
+	case ProblemTypeFPPStartPlaylistBusy, ProblemTypeFPPStartPlaylistEvidenceNotCurrent:
+		return false
+	}
+	return true
 }
 
 // nightClockBackstepTolerance: a wall clock that reads earlier than an
@@ -585,7 +606,9 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 // evidence and is safe to derive a boundary from.
 func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, instanceID, playlist string, repeat bool, durationMS int64, ifBusy string) (anchor nightContentAnchor, ready, changed bool) {
 	cur, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
-	if has && cur.Purpose == purpose && cur.Playlist == playlist && !cur.DispatchedAt.IsZero() {
+	matches := has && cur.Purpose == purpose && cur.Playlist == playlist
+
+	if matches && !cur.DispatchedAt.IsZero() {
 		if !cur.ObservedAt.IsZero() {
 			return cur, true, false
 		}
@@ -596,6 +619,23 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 			}
 		}
 		return cur, false, false
+	}
+
+	// A prior attempt was refused before reaching the wire. A terminal
+	// refusal is not retried; a transient one waits out its backoff and
+	// degrades the session once it has been failing for the whole window.
+	if matches && !cur.AttemptedAt.IsZero() {
+		switch {
+		case cur.RefusalTerminal:
+			return cur, false, false
+		case now.Sub(cur.FirstAttemptAt) >= nightDispatchRetryWindow:
+			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
+				"playlist %q could not be started on FPP instance %q for %s: %s; run end-session, then prepare-site, to recover",
+				playlist, instanceID, nightDispatchRetryWindow, cur.Source))
+			return cur, false, false
+		case now.Sub(cur.AttemptedAt) < nightDispatchRetryBackoff:
+			return cur, false, false
+		}
 	}
 
 	issuer := nightControllerIssuer(rec)
@@ -626,15 +666,28 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		return nightContentAnchor{}, false, false
 	}
 
+	if problem != nil {
+		// Nothing reached FPP. DispatchedAt stays zero so the branch above
+		// keeps retrying under this same purpose rather than treating the
+		// refusal as a dispatch whose evidence merely has not arrived.
+		next := nightContentAnchor{
+			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist,
+			DurationMS: durationMS, RepeatMode: repeat,
+			FirstAttemptAt: now, AttemptedAt: now,
+			RefusalTerminal: nightRefusalIsTerminal(problem),
+			Source:          "refused: " + problem.Detail,
+		}
+		if matches && !cur.FirstAttemptAt.IsZero() {
+			next.FirstAttemptAt = cur.FirstAttemptAt
+		}
+		return next, false, true
+	}
+
 	dispatchedAt := now
 	if outcome.DispatchedAt != nil {
 		dispatchedAt = *outcome.DispatchedAt
 	}
 	next := nightContentAnchor{Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist, DurationMS: durationMS, RepeatMode: repeat, DispatchedAt: dispatchedAt}
-	if problem != nil {
-		next.Source = "refused: " + problem.Detail
-		return next, false, true
-	}
 	if outcome.Outcome == "confirmed" {
 		obs := nightObservePlayback(ctx, h.deps.Observations, instanceID, dispatchedAt, now)
 		if obs.Current {

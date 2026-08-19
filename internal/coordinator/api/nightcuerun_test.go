@@ -94,9 +94,7 @@ func TestNightCueConfirmable(t *testing.T) {
 		{"resolume", config.ShowActionTarget{Integration: config.ShowActionIntegrationResolume, Action: config.ShowActionResolumeBlackout}, true},
 		{"mqttNoExpect", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT}, false},
 		{"mqttExpectNone", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindNone}}, false},
-		// mqtt has no wired dispatcher in this build at all, so even a
-		// real expect block is never confirmable (finding 3).
-		{"mqttExpectBoolean", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindBoolean, Value: &yes}}, false},
+		{"mqttExpectBoolean", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindBoolean, Value: &yes}}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

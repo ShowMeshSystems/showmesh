@@ -91,12 +91,14 @@ func nightShutdownStopInstance(payload config.NightSessionPayload) string {
 
 // nightShutdownRetryDue paces retries of a stop that was refused before it
 // reached the wire. On such an anchor DispatchedAt is zero, Source carries
-// the refusal's own detail, and ObservedAt is when that attempt was made.
+// the refusal's own detail, and AttemptedAt is when that attempt was made.
+// The stop is retried even on a terminal-looking refusal: leaving the
+// display running is worse than a repeated refusal in the log.
 func (h *handlers) nightShutdownRetryDue(anchor nightContentAnchor, now time.Time) bool {
-	if anchor.Source == "" {
+	if anchor.AttemptedAt.IsZero() {
 		return true
 	}
-	return !now.Before(anchor.ObservedAt.Add(nightShutdownStopRetryBackoff))
+	return !now.Before(anchor.AttemptedAt.Add(nightShutdownStopRetryBackoff))
 }
 
 // nightShutdownStopIdempotencyKey is stable across ticks and restarts, so
@@ -121,7 +123,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 		h.logWarn("night loop: shutdown stop dispatch failed", "sessionId", rec.ID, "instanceId", instanceID, "error", err)
 		h.nightCommitShutdownAnchor(ctx, now, rec, nightContentAnchor{
 			Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID,
-			ObservedAt: now, Source: "the stop could not be dispatched: " + err.Error(),
+			AttemptedAt: now, Source: "the stop could not be dispatched: " + err.Error(),
 		})
 		return
 	}
@@ -130,7 +132,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 		// visible while later ticks retry under the same key.
 		h.nightCommitShutdownAnchor(ctx, now, rec, nightContentAnchor{
 			Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID,
-			ObservedAt: now, Source: "the stop was refused before it reached FPP: " + problem.Detail,
+			AttemptedAt: now, Source: "the stop was refused before it reached FPP: " + problem.Detail,
 		})
 		return
 	}

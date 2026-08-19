@@ -80,13 +80,15 @@ func nightResolveShowActionRevision(ctx context.Context, cfg ConfigStore, action
 }
 
 // nightCueConfirmable reports whether target's own adapter is wired to
-// BOTH dispatch and confirm its effect in this build. fpp and resolume
-// are; mqtt is not ([handlers.nightDispatchCueTarget]'s mqtt branch always
-// fails without transmitting anything), so it is never confirmable here.
+// BOTH dispatch and confirm its effect. An mqtt action qualifies only when
+// it declares an expected response; one that declares none can publish but
+// can never report more than "unconfirmable".
 func nightCueConfirmable(target config.ShowActionTarget) bool {
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP, config.ShowActionIntegrationResolume:
 		return true
+	case config.ShowActionIntegrationMQTT:
+		return target.Expect != nil && target.Expect.Kind != config.MQTTExpectKindNone
 	default:
 		return false
 	}
@@ -120,11 +122,7 @@ func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, is
 	case config.ShowActionIntegrationResolume:
 		return h.nightDispatchCueResolume(ctx, now, target)
 	case config.ShowActionIntegrationMQTT:
-		return nightCueDispatchResult{
-			dispatched: false, resolved: true,
-			outcome: nightCueOutcomeFailed,
-			reason:  "mqtt cue dispatch is not wired into this coordinator build",
-		}
+		return h.nightDispatchCueMQTT(ctx, now, target)
 	default:
 		return nightCueDispatchResult{
 			dispatched: false, resolved: true,
@@ -168,6 +166,38 @@ func (h *handlers) nightDispatchCueFPP(ctx context.Context, now time.Time, issue
 	return nightCueDispatchResult{
 		dispatched: true, dispatchedAt: outcome.DispatchedAt, resolved: true,
 		outcome: finalOutcome, reason: outcome.OutcomeReason,
+	}
+}
+
+// nightDispatchCueMQTT publishes through the same adapter the ad hoc
+// action-invocation path uses. The outcome is always resolved: an mqtt
+// action carries no retry identity, so a later tick must never re-publish
+// it, and an ambiguous post-send result stays ambiguous for an operator.
+func (h *handlers) nightDispatchCueMQTT(ctx context.Context, now time.Time, target config.ShowActionTarget) nightCueDispatchResult {
+	res := DispatchMQTTAction(ctx, h.deps.MQTTBrokers, target, func() time.Time { return now })
+	var outcome string
+	switch res.Outcome {
+	case outcomeWordConfirmed:
+		outcome = nightCueOutcomeConfirmed
+	case outcomeWordUnconfirmed:
+		outcome = nightCueOutcomeUnconfirmed
+	case outcomeWordUnconfirmable:
+		outcome = nightCueOutcomeUnconfirmable
+	default:
+		outcome = nightCueOutcomeFailed
+	}
+	reason := res.OutcomeReason
+	if res.OutcomeState != "" {
+		reason = res.OutcomeState + ": " + reason
+	}
+	dispatchedAt := now
+	var at *time.Time
+	if res.PublishAttempted {
+		at = &dispatchedAt
+	}
+	return nightCueDispatchResult{
+		dispatched: res.PublishAttempted, dispatchedAt: at, resolved: true,
+		outcome: outcome, reason: reason,
 	}
 }
 

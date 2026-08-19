@@ -41,10 +41,18 @@ type nightContentAnchor struct {
 	// anchoring observation — distinct from a genuine 0ms position.
 	PositionMS      int64     `json:"positionMs"`
 	PositionMSKnown bool      `json:"positionMsKnown"`
-	RepeatMode      bool      `json:"repeatMode"`
-	DispatchedAt    time.Time `json:"dispatchedAt"`
-	ObservedAt      time.Time `json:"observedAt"`
-	Source          string    `json:"source"`
+	RepeatMode   bool      `json:"repeatMode"`
+	DispatchedAt time.Time `json:"dispatchedAt"`
+	ObservedAt   time.Time `json:"observedAt"`
+	Source       string    `json:"source"`
+
+	// These three describe a dispatch that never reached the wire.
+	// DispatchedAt stays zero for those; FirstAttemptAt bounds the retry
+	// window, AttemptedAt paces the backoff, and RefusalTerminal marks a
+	// refusal retrying cannot fix.
+	FirstAttemptAt  time.Time `json:"firstAttemptAt,omitempty"`
+	AttemptedAt     time.Time `json:"attemptedAt,omitempty"`
+	RefusalTerminal bool      `json:"refusalTerminal,omitempty"`
 }
 
 // nightBoundary is the derived expected content-end time E, or the
