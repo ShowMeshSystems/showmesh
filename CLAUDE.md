@@ -77,6 +77,12 @@ The repository is **public** at `github.com/ShowMeshSystems/showmesh` (corrected
 - `api/openapi.yaml` — the machine-readable form of the public control API (ADR-014, ADR-020). Conformance-tested against real handler responses, so it cannot drift from the implementation in either direction. Step 4 generates or verifies its TypeScript types from it rather than hand-maintaining them twice (ADR-015).
 - `bench/fpp-multisync/` — bench scaffolding only, never the product. A real containerized `fppd` for RES-002 captures and for the FPP collector's integration tests. Its image is a full source build, so it stays out of default CI and off the fast path.
 
+### Human documentation boundary
+
+Human-facing operator, user, integration, troubleshooting, public reference, and contributor guides live in the separate `ShowMeshSystems/showmesh-docs` repository. This repository remains authoritative for code, tests, the OpenAPI contract, engineering specifications, ADRs, research evidence, build state, and agent guidance. Public docs may translate or summarize those sources but never supersede them, and this repository's `docs/` tree must not be mirrored into the public site.
+
+When updating human documentation, verify claims against code, tests that actually constrain the behavior, `api/openapi.yaml`, compiled CLI help, and captured running-system evidence. Treat prose in this repository as a lead when sources conflict. Do not add linked-PR enforcement, release gates, or an automated documentation-update workflow until the first release process defines them.
+
 ## Non-negotiable design constraints (from accepted ADRs)
 
 1. **FPP is the authoritative calendar scheduler** (ADR-001 as narrowed by ADR-038). Lifecycle actions are exposed as native FPP commands. FPP opens and closes the operating window; ShowMesh advances content-driven rest/show cycles inside that authorized session using only relative command timing. ShowMesh core has no date, weekday, time-zone, cron, or wall-clock schedule.
