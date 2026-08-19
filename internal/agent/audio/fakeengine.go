@@ -24,8 +24,9 @@ const FakeEngineUnavailableReason = "no pipeline backend is implemented (Linear 
 type FakeEngine struct {
 	now func() time.Time
 
-	mu      sync.Mutex
-	handles map[EngineHandle]*fakeHandle
+	mu       sync.Mutex
+	handles  map[EngineHandle]*fakeHandle
+	failNext map[EngineHandle]error
 }
 
 type fakeHandle struct {
@@ -57,7 +58,35 @@ type fakeFade struct {
 
 // NewFakeEngine returns a FakeEngine using now for its internal clock.
 func NewFakeEngine(now func() time.Time) *FakeEngine {
-	return &FakeEngine{now: now, handles: make(map[EngineHandle]*fakeHandle)}
+	return &FakeEngine{now: now, handles: make(map[EngineHandle]*fakeHandle), failNext: make(map[EngineHandle]error)}
+}
+
+// InjectFailure arms handle so its next call to Load, Start, Pause,
+// Resume, Seek, or Observe returns err instead of running normally, then
+// disarms itself — a one-shot fault, not a standing one, so a test
+// controls exactly which call fails. There is no real backend to produce
+// a pipeline crash, a freeze, a route change, or timing-authority loss
+// (AUDIO-ENGINE section 11.4); this is how a test exercises the session
+// layer's classification of those four against something that can never
+// happen on its own here. err should wrap one of this package's
+// ErrEngine* sentinels ([pkgaudio.ClassifyFault]) for a test to assert a
+// specific fault class, or an unwrapped error to exercise [pkgaudio.
+// FaultOther].
+func (e *FakeEngine) InjectFailure(handle EngineHandle, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.failNext[handle] = err
+}
+
+// takeFailure returns and clears handle's armed failure, if any. Callers
+// hold e.mu.
+func (e *FakeEngine) takeFailure(handle EngineHandle) error {
+	err, ok := e.failNext[handle]
+	if !ok {
+		return nil
+	}
+	delete(e.failNext, handle)
+	return err
 }
 
 // Available always reports false with [FakeEngineUnavailableReason].
@@ -113,6 +142,9 @@ func (e *FakeEngine) currentPosition(h *fakeHandle) time.Duration {
 func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := e.takeFailure(handle); err != nil {
+		return EngineObservation{}, err
+	}
 	h := &fakeHandle{media: media, duration: duration, state: pkgaudio.StateReady, gain: 1}
 	e.handles[handle] = h
 	return e.obs(h), nil
@@ -133,6 +165,9 @@ func (e *FakeEngine) Start(_ context.Context, handle EngineHandle, position time
 	if err != nil {
 		return EngineObservation{}, err
 	}
+	if err := e.takeFailure(handle); err != nil {
+		return EngineObservation{}, err
+	}
 	h.position = position
 	h.state = pkgaudio.StatePlaying
 	h.playStartedAt = e.now()
@@ -144,6 +179,9 @@ func (e *FakeEngine) Pause(_ context.Context, handle EngineHandle) (EngineObserv
 	defer e.mu.Unlock()
 	h, err := e.get(handle)
 	if err != nil {
+		return EngineObservation{}, err
+	}
+	if err := e.takeFailure(handle); err != nil {
 		return EngineObservation{}, err
 	}
 	h.position = e.currentPosition(h)
@@ -164,6 +202,9 @@ func (e *FakeEngine) Resume(_ context.Context, handle EngineHandle) (EngineObser
 	if h.state != pkgaudio.StatePaused {
 		return EngineObservation{}, fmt.Errorf("audio: fake engine cannot resume handle %q from state %q", handle, h.state)
 	}
+	if err := e.takeFailure(handle); err != nil {
+		return EngineObservation{}, err
+	}
 	h.state = pkgaudio.StatePlaying
 	h.playStartedAt = e.now()
 	return e.obs(h), nil
@@ -174,6 +215,9 @@ func (e *FakeEngine) Seek(_ context.Context, handle EngineHandle, position time.
 	defer e.mu.Unlock()
 	h, err := e.get(handle)
 	if err != nil {
+		return EngineObservation{}, err
+	}
+	if err := e.takeFailure(handle); err != nil {
 		return EngineObservation{}, err
 	}
 	h.position = position
@@ -231,6 +275,9 @@ func (e *FakeEngine) Observe(_ context.Context, handle EngineHandle) (EngineObse
 	defer e.mu.Unlock()
 	h, err := e.get(handle)
 	if err != nil {
+		return EngineObservation{}, err
+	}
+	if err := e.takeFailure(handle); err != nil {
 		return EngineObservation{}, err
 	}
 	return e.obs(h), nil

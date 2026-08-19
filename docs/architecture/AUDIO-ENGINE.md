@@ -247,6 +247,17 @@ A pipeline crash or freeze, decode failure, media disappearance or corruption, s
 
 ADR-019 deliberately removes automatic fallback to FPP audio, so the release documentation and Track C bench must include a manual restoration procedure. It identifies the failed component, keeps failed output silent, verifies the intended route and gain, offers restart or eligible-node reassignment, and documents deliberate reversion to FPP audio as an installation change rather than an automatic command. A running local session must continue through coordinator or broker loss for media already present; later transitions that require unavailable authority fail visibly rather than guessing.
 
+#### The procedure
+
+ADR-019 removed automatic fallback, which makes this procedure the replacement rather than a supplement to it. It is written as steps because an operator runs it while a show is degraded.
+
+1. **Identify the failed component.** Read `audio_session.fault.kind` for the affected sessions and `node.audio.device.state`, `node.audio.program.state` and `node.audio.ltc.state` for the node. The fault kind names what broke: `pipeline_crash` or `freeze` is the engine, `decode_failure` or `media_disappeared` is the asset, `route_changed` is the physical output, `timing_authority_lost` is the clock relationship.
+2. **Confirm the failed output is silent rather than misrouted.** Verify it; do not assume it. A failed output must never be left sending ungated signal anywhere, and least of all toward an FM transmitter, which is the specific outcome ADR-019 exists to prevent.
+3. **Revalidate before touching playback.** In order: the intended route is still the one physically connected; program and LTC are still on separate correctly assigned channels, neither mixed nor swapped; the program-to-LTC clock relationship is back within tolerance where a measurement exists; every pinned asset still resolves by content hash, re-probed rather than trusted from a stale result; and the current playlist item is the one expected.
+4. **Then act, choosing one.** Restart the session on the same node, `audio.session.prepare` followed by `audio.session.start`: a successful prepare is what clears a recorded fault, and a start without one neither clears it nor confirms anything. Or reassign to an eligible standby node, verifying its media, output capabilities and physical routing first (§11.3); this is operator-initiated, not automatic.
+5. **Reverting to FPP's own audio output is never a command.** Where it is genuinely necessary it is a deliberate installation change made outside ShowMesh's control surface. ShowMesh neither offers it as a recovery action nor performs it on its own.
+6. **Confirm recovery from evidence, not from the command.** Check that `audio_session.fault.kind` has returned to `none`. Every session command's confirmation is gated while no pipeline backend exists, so the cleared fault is the durable evidence and the command's own reported outcome is not.
+
 ## 12. Platform
 
 Linux is the reference and supported platform for the audio node: FPP ecosystem compatibility, predictable headless operation, the existing agent deployment model, GStreamer, PipeWire and ALSA, straightforward service supervision, and no dependence on desktop-session behavior.

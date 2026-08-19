@@ -852,9 +852,68 @@ type AudioRouteReport struct {
 	Format   string `json:"format"`
 }
 
+// maxAudioSessions bounds [AudioPayload.Sessions], the same "an
+// advertisement can't consume its own whole budget" cap [maxAudioRoutes]
+// enforces one field over.
+const maxAudioSessions = 16
+
+// AudioSessionReport is one session's retained telemetry (AUDIO-ENGINE
+// section 15), inside [AudioPayload.Sessions]. Every Has*/*Known field
+// distinguishes "not set" from its paired field's zero value — the wire
+// form of internal/agent/audio.SessionSnapshot.
+type AudioSessionReport struct {
+	SessionID string `json:"sessionId"`
+
+	HasSourceRole bool   `json:"hasSourceRole"`
+	SourceRole    string `json:"sourceRole"`
+
+	HasPlaylist      bool   `json:"hasPlaylist"`
+	PlaylistRevision uint64 `json:"playlistRevision"`
+
+	HasItem   bool   `json:"hasItem"`
+	ItemID    string `json:"itemId"`
+	ItemIndex int64  `json:"itemIndex"`
+
+	// PositionKnown is false immediately after a discontinuity or when no
+	// handle is loaded — never a stale position presented as current.
+	PositionKnown bool  `json:"positionKnown"`
+	PositionMs    int64 `json:"positionMs"`
+
+	State           string `json:"state"`
+	DesiredRevision uint64 `json:"desiredRevision"`
+
+	HasGain    bool    `json:"hasGain"`
+	Gain       float64 `json:"gain"`
+	HasCeiling bool    `json:"hasCeiling"`
+	Ceiling    float64 `json:"ceiling"`
+
+	// FadeState is "none", "in_progress", or "complete" — a state rather
+	// than a boolean because a boolean cannot distinguish "just
+	// completed" from "never started".
+	FadeState string `json:"fadeState"`
+
+	Ducked   bool   `json:"ducked"`
+	DuckedBy string `json:"duckedBy"`
+
+	HasAssetProbe    bool   `json:"hasAssetProbe"`
+	AssetProbeState  string `json:"assetProbeState"`
+	AssetProbeReason string `json:"assetProbeReason"`
+
+	// Fault is "none" or one of the six named AUDIO-ENGINE section 11.4
+	// fault classes; FaultReason is required whenever Fault != "none".
+	Fault       string `json:"fault"`
+	FaultReason string `json:"faultReason"`
+
+	// ObservedAt is the engine's own evidence time for PositionMs, nil
+	// when PositionKnown is false. Never the coordinator's or this
+	// node's own receipt time (ADR-011).
+	ObservedAt *time.Time `json:"observedAt"`
+}
+
 // AudioPayload is the payload of the showmesh.node.audio/v1 schema,
 // published RETAINED to a node's observed/audio topic ([ObservedTopic],
-// [ObservedDeliveryPolicy]): this node's audio discovery evidence.
+// [ObservedDeliveryPolicy]): this node's audio discovery evidence and,
+// its current session telemetry.
 type AudioPayload struct {
 	// EngineAvailable is real evidence (a PLAYING transition against the
 	// always-present ALSA "null" device) that this node's GStreamer/ALSA
@@ -928,18 +987,43 @@ type AudioPayload struct {
 	// ObservedAt's own nil-means-unknown convention (ADR-011: never
 	// defaulted to "now").
 	ObservedAt *time.Time `json:"observedAt"`
+
+	// Sessions is every audio session this node currently holds, rebuilt
+	// fresh on every report tick (unlike the discovery fields above,
+	// which are a one-shot cache — see audioreport.go's own doc comment).
+	// Nil-unsafe like Routes: this package's own encoder emits
+	// "sessions":[] for a node with none.
+	Sessions []AudioSessionReport `json:"sessions"`
+
+	// SessionsTruncated is true when more sessions existed than fit
+	// within maxAudioSessions — stated, never a silent drop.
+	SessionsTruncated bool `json:"sessionsTruncated"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
-// non-empty, ObservedAt present, and every Reason field required wherever
-// this payload's own doc comments say so — the same shape
-// RenderPayload.Validate enforces one type up.
+// non-empty, ObservedAt present, every Reason field required wherever
+// this payload's own doc comments say so, and the same for Sessions —
+// the same shape RenderPayload.Validate enforces one type up.
 func (p AudioPayload) Validate() error {
 	if p.Routes == nil {
 		return fmt.Errorf("%w: routes (a node reports \"routes\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
 	}
 	if len(p.Routes) > maxAudioRoutes {
 		return fmt.Errorf("%w: %d routes, max %d", ErrPayloadTooLarge, len(p.Routes), maxAudioRoutes)
+	}
+	if p.Sessions == nil {
+		return fmt.Errorf("%w: sessions (a node reports \"sessions\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
+	if len(p.Sessions) > maxAudioSessions {
+		return fmt.Errorf("%w: %d sessions, max %d", ErrPayloadTooLarge, len(p.Sessions), maxAudioSessions)
+	}
+	for i, sess := range p.Sessions {
+		if sess.SessionID == "" {
+			return fmt.Errorf("%w: sessions[%d].sessionId", ErrPayloadMissingField, i)
+		}
+		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
+			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
+		}
 	}
 	if p.ObservedAt == nil {
 		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)

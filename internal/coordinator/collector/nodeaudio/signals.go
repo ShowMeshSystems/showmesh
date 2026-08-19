@@ -27,6 +27,15 @@ const (
 	SignalLTCState          observation.SignalID = "node.audio.ltc.state"
 	SignalClockDomain       observation.SignalID = "node.audio.clock.domain"
 	SignalClockProvenance   observation.SignalID = "node.audio.clock.provenance"
+
+	// SignalClockAlignment is AUDIO-ENGINE section 15's program-to-LTC
+	// alignment readiness signal. Nothing in this seam measures it — no
+	// loop-back or cross-output timing comparison exists yet — so it is
+	// always [observation.StateNotCollected] with a reason, never
+	// inferred from the program and LTC buses both being usable and
+	// never from ClockDomain/ClockProvenance declaring a shared clock.
+	// See [nodeObservations].
+	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 )
 
 // AllSignalIDs is every signal this package ever emits, in the order
@@ -43,6 +52,69 @@ var AllSignalIDs = []observation.SignalID{
 	SignalLTCState,
 	SignalClockDomain,
 	SignalClockProvenance,
+	SignalClockAlignment,
+}
+
+// Signal vocabulary under the "audio_session" resource kind, one
+// session per resource id. Every signal here is a claim about the
+// session state machine, never proof audio reached an output — see
+// SignalSessionStateReason's own doc comment for where that distinction
+// is stated explicitly.
+const (
+	SignalSessionSourceRole       observation.SignalID = "audio_session.source_role"
+	SignalSessionPlaylistRevision observation.SignalID = "audio_session.playlist.revision"
+	SignalSessionItemID           observation.SignalID = "audio_session.playlist.item_id"
+	SignalSessionItemIndex        observation.SignalID = "audio_session.playlist.item_index"
+	SignalSessionPositionMs       observation.SignalID = "audio_session.position_ms"
+
+	// SignalSessionReferencePositionMs and SignalSessionDriftMs are
+	// AUDIO-ENGINE section 15's reference-position and drift telemetry.
+	// No source for either is wired into this seam (ADR-017: drift is
+	// measured discretely at track boundaries, not continuously, and
+	// that measurement does not exist yet), so both always report
+	// [observation.StateNotCollected] with a reason.
+	SignalSessionReferencePositionMs observation.SignalID = "audio_session.reference_position_ms"
+	SignalSessionDriftMs             observation.SignalID = "audio_session.drift_ms"
+
+	SignalSessionState observation.SignalID = "audio_session.state"
+
+	// SignalSessionStateReason carries AUDIO-ENGINE section 15's distinction whenever
+	// State reports Playing or Paused: an engine-side claim, not evidence
+	// audio reached an output. Always present, never empty.
+	SignalSessionStateReason observation.SignalID = "audio_session.state.reason"
+
+	SignalSessionDesiredRevision  observation.SignalID = "audio_session.desired_revision"
+	SignalSessionGain             observation.SignalID = "audio_session.gain.effective"
+	SignalSessionGainCeiling      observation.SignalID = "audio_session.gain.ceiling"
+	SignalSessionFadeState        observation.SignalID = "audio_session.fade.state"
+	SignalSessionMixDuckedBy      observation.SignalID = "audio_session.mix.ducked_by"
+	SignalSessionAssetProbeState  observation.SignalID = "audio_session.readiness.state"
+	SignalSessionAssetProbeReason observation.SignalID = "audio_session.readiness.reason"
+	SignalSessionFaultKind        observation.SignalID = "audio_session.fault.kind"
+	SignalSessionFaultReason      observation.SignalID = "audio_session.fault.reason"
+)
+
+// SessionSignalIDs is every audio_session.* signal this package ever
+// emits, in the order [sessionObservations] builds them for one session.
+var SessionSignalIDs = []observation.SignalID{
+	SignalSessionSourceRole,
+	SignalSessionPlaylistRevision,
+	SignalSessionItemID,
+	SignalSessionItemIndex,
+	SignalSessionPositionMs,
+	SignalSessionReferencePositionMs,
+	SignalSessionDriftMs,
+	SignalSessionState,
+	SignalSessionStateReason,
+	SignalSessionDesiredRevision,
+	SignalSessionGain,
+	SignalSessionGainCeiling,
+	SignalSessionFadeState,
+	SignalSessionMixDuckedBy,
+	SignalSessionAssetProbeState,
+	SignalSessionAssetProbeReason,
+	SignalSessionFaultKind,
+	SignalSessionFaultReason,
 }
 
 // StateUsable and StateUnavailable are the two values SignalEngineState,

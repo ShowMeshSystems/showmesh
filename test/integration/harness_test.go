@@ -125,6 +125,15 @@ const (
 	// through the coordinator's real render report cadence within a bounded
 	// wait, rather than only at the 15s production default.
 	envRenderReportInterval = "SHOWMESH_RENDER_REPORT_INTERVAL"
+
+	// envAudioReportInterval is envRenderReportInterval's identical twin
+	// for the agent's audio report ticker (internal/agent/config's own
+	// SHOWMESH_AUDIO_REPORT_INTERVAL). Forwarded by startAgent exactly
+	// like envRenderReportInterval; audio_broker_loss_test.go sets it in
+	// the test process's own environment so a session's post-outage
+	// evidence is visible within a bounded wait rather than only at the
+	// 15s production default.
+	envAudioReportInterval = "SHOWMESH_AUDIO_REPORT_INTERVAL"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -520,6 +529,9 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	}
 	if raw := os.Getenv(envRenderReportInterval); raw != "" {
 		env = append(env, envRenderReportInterval+"="+raw)
+	}
+	if raw := os.Getenv(envAudioReportInterval); raw != "" {
+		env = append(env, envAudioReportInterval+"="+raw)
 	}
 	if cfg.capabilities != "" {
 		env = append(env, "SHOWMESH_NODE_CAPABILITIES="+cfg.capabilities)
@@ -1328,5 +1340,38 @@ func restartBroker(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("docker restart %s: %v\n%s", mosquittoContainer, err, out)
+	}
+}
+
+// stopBroker and startBroker docker-stop/docker-start the same Mosquitto
+// container restartBroker restarts, split into two calls rather than one
+// restart so a test can hold the broker down for a real interval and
+// observe what happens WHILE it is gone, not only that things resume
+// after. Same skip contract as restartBroker: no envMosquittoContainer,
+// no broker control, an explicit skip rather than a silent no-op.
+func stopBroker(t *testing.T) {
+	t.Helper()
+	if mosquittoContainer == "" {
+		t.Skipf(
+			"%s is not set, so this harness has no way to stop the broker container; "+
+				"run via `make test-integration` (which sets it) or export it yourself pointing at a running eclipse-mosquitto container",
+			envMosquittoContainer)
+	}
+	cmd := exec.Command("docker", "stop", mosquittoContainer)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker stop %s: %v\n%s", mosquittoContainer, err, out)
+	}
+}
+
+func startBroker(t *testing.T) {
+	t.Helper()
+	if mosquittoContainer == "" {
+		t.Skipf("%s is not set, so this harness has no way to start the broker container", envMosquittoContainer)
+	}
+	cmd := exec.Command("docker", "start", mosquittoContainer)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker start %s: %v\n%s", mosquittoContainer, err, out)
 	}
 }

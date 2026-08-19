@@ -59,6 +59,13 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.preMuteGain = rec.PreMuteGain
 	s.duckedBy = rec.DuckedBy
 	s.preDuckGain = rec.PreDuckGain
+	s.fault = rec.Fault
+	if s.fault == "" {
+		s.fault = pkgaudio.FaultNone
+	}
+	s.faultReason = rec.FaultReason
+	s.faultAt = rec.FaultAt
+	s.lastProbe = rec.LastProbe
 
 	m.mu.Lock()
 	m.sessions[id] = s
@@ -166,8 +173,17 @@ func (m *Manager) watchTick(ctx context.Context) {
 		s.checkFadeCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
 			obs, err := m.engine.Observe(ctx, s.handle)
-			if err == nil && obs.State == pkgaudio.StateCompleted {
-				s.advanceLocked(ctx, false)
+			if err != nil {
+				// A background poll failing to read a loaded, playing
+				// handle is itself evidence: this is where a real
+				// engine's crash or freeze is most likely to surface
+				// first, ahead of any operator-dispatched command.
+				s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			} else {
+				s.lastObservedAt = obs.ObservedAt
+				if obs.State == pkgaudio.StateCompleted {
+					s.advanceLocked(ctx, false)
+				}
 			}
 		}
 		if s.state == pkgaudio.StateCompleted {

@@ -20,6 +20,7 @@ func validAudioPayload() AudioPayload {
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
 		ObservedAt: &now,
+		Sessions:   []AudioSessionReport{},
 	}
 }
 
@@ -126,6 +127,50 @@ func TestAudioPayloadValidateRequiresRouteReasonWhenUnavailable(t *testing.T) {
 	p.Routes[0].Reason = ""
 	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
 		t.Errorf("Validate(unavailable route with no reason) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsNilSessions(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = nil
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(nil sessions) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsEmptySessions(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(empty sessions) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsTooManySessions(t *testing.T) {
+	p := validAudioPayload()
+	sessions := make([]AudioSessionReport, maxAudioSessions+1)
+	for i := range sessions {
+		sessions[i] = AudioSessionReport{SessionID: "s", Fault: "none"}
+	}
+	p.Sessions = sessions
+	if err := p.Validate(); !errors.Is(err, ErrPayloadTooLarge) {
+		t.Errorf("Validate(too many sessions) = %v, want ErrPayloadTooLarge", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresSessionID(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{Fault: "none"}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(session with no id) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresFaultReasonWhenFaulted(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "pipeline_crash", FaultReason: ""}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(faulted session with no reason) = %v, want ErrPayloadMissingField", err)
 	}
 }
 

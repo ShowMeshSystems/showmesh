@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -159,7 +160,7 @@ func TestRunAudioReportPublishesOnEachTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, time.Now, ticks, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -208,7 +209,7 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -230,5 +231,97 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	last := decodeAudioReport(t, publishes[2].payload)
 	if first.ObservedAt == nil || last.ObservedAt == nil || !first.ObservedAt.Equal(*last.ObservedAt) {
 		t.Errorf("ObservedAt changed across republishes (%v -> %v), want the SAME original probe time on every tick", first.ObservedAt, last.ObservedAt)
+	}
+}
+
+// stubSnapshotter is a scriptable [audioSessionSnapshotter]: each call to
+// Snapshot returns the next entry in results (repeating the last one once
+// exhausted), so a test can prove session evidence is rebuilt per tick
+// rather than cached like the hardware discovery half of the report.
+type stubSnapshotter struct {
+	results [][]audio.SessionSnapshot
+	calls   int
+}
+
+func (s *stubSnapshotter) Snapshot(context.Context) []audio.SessionSnapshot {
+	i := s.calls
+	if i >= len(s.results) {
+		i = len(s.results) - 1
+	}
+	s.calls++
+	return s.results[i]
+}
+
+// TestRunAudioReportRebuildsSessionsEveryTick proves the report's session half of
+// the report is NOT subject to finding 1's discovery cache: two ticks
+// against a snapshotter returning different session state must produce
+// two different published Sessions payloads, unlike the hardware
+// discovery evidence, which TestRunAudioReportProbesOnceAcrossMultipleTicks
+// proves stays identical across ticks.
+func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	mgr := &stubSnapshotter{results: [][]audio.SessionSnapshot{
+		{{ID: "s1", State: pkgaudio.StatePreparing, Fault: pkgaudio.FaultNone}},
+		{{
+			ID: "s1", State: pkgaudio.StatePlaying, Fault: pkgaudio.FaultPipelineCrash,
+			FaultReason:   "engine: audio: pipeline crashed",
+			PositionKnown: true, Position: 4200 * time.Millisecond, ObservedAt: time.Unix(9000, 0).UTC(),
+		}},
+	}}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", mgr, time.Now, ticks, discardLogger())
+	}()
+
+	for i := 0; i < 2; i++ {
+		ticks <- time.Now()
+		<-pub.notify
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("publish calls = %d, want 2", len(calls))
+	}
+	firstReport := decodeAudioReport(t, calls[0].payload)
+	secondReport := decodeAudioReport(t, calls[1].payload)
+
+	if len(firstReport.Sessions) != 1 || firstReport.Sessions[0].State != string(pkgaudio.StatePreparing) {
+		t.Fatalf("first tick sessions = %+v, want one session in state %q", firstReport.Sessions, pkgaudio.StatePreparing)
+	}
+	if len(secondReport.Sessions) != 1 {
+		t.Fatalf("second tick sessions = %+v, want 1", secondReport.Sessions)
+	}
+	got := secondReport.Sessions[0]
+	if got.State != string(pkgaudio.StatePlaying) {
+		t.Errorf("second tick state = %q, want %q (must not be the first tick's cached value)", got.State, pkgaudio.StatePlaying)
+	}
+	if got.Fault != string(pkgaudio.FaultPipelineCrash) || got.FaultReason == "" {
+		t.Errorf("second tick fault = %q/%q, want %q with a non-empty reason", got.Fault, got.FaultReason, pkgaudio.FaultPipelineCrash)
+	}
+	if !got.PositionKnown || got.PositionMs != 4200 {
+		t.Errorf("second tick position = known=%v ms=%d, want known=true ms=4200", got.PositionKnown, got.PositionMs)
+	}
+	if got.ObservedAt == nil || !got.ObservedAt.Equal(time.Unix(9000, 0).UTC()) {
+		t.Errorf("second tick ObservedAt = %v, want the snapshot's own engine evidence time", got.ObservedAt)
+	}
+
+	firstSession := firstReport.Sessions[0]
+	if firstSession.Fault != "none" {
+		t.Errorf("first tick fault = %q, want %q (FaultNone renders as the literal string \"none\")", firstSession.Fault, "none")
+	}
+	if firstSession.PositionKnown {
+		t.Error("first tick PositionKnown = true, want false (no engine evidence was ever supplied)")
 	}
 }

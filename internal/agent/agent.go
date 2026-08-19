@@ -257,15 +257,15 @@ func Run() int {
 		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
-	// Track C seam C1a: audio discovery report, on its own cadence — see
-	// audioreport.go. No trigger channel: there is no session engine yet
-	// in this seam to signal an out-of-cadence publish from.
+	// Audio report: hardware discovery evidence (cached) plus a fresh
+	// audioMgr session snapshot, on its own cadence — see audioreport.go.
+	// No trigger channel: nothing here needs an out-of-cadence publish.
 	audioReportDone := make(chan struct{})
 	go func() {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, time.Now, ticker.C, logger)
 	}()
 
 	<-sigCtx.Done()

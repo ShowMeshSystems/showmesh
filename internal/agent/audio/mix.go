@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -139,6 +140,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 	s.desired.Fade = &f
 	s.fadePending = true
 	s.fadeInvocation = invocation
+	s.fadeState = FadeStateInProgress
 	s.persistLocked()
 
 	dispatchedAt := s.mgr.now()
@@ -146,6 +148,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 	if err != nil {
 		s.fadePending = false
 		s.fadeInvocation = ""
+		s.fadeState = FadeStateNone
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
 	if obs.ObservedAt.Before(dispatchedAt) {
@@ -174,7 +177,14 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		return
 	}
 	obs, err := s.mgr.engine.Observe(ctx, s.handle)
-	if err != nil || obs.FadeActive {
+	if err != nil {
+		// A failing Observe here is the same class of evidence
+		// [Manager.watchTick]'s identical poll already treats as a fault:
+		// this session's own engine handle just failed to answer, mid-fade.
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		return
+	}
+	if obs.FadeActive {
 		return
 	}
 
@@ -183,7 +193,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		target = s.desired.Fade.TargetGain
 	}
 	var outcome pkgaudio.OutcomeResult
-	if obs.Gain == target {
+	if gainsEqual(obs.Gain, target) {
 		outcome = pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFadeComplete}
 	} else {
 		outcome = pkgaudio.OutcomeResult{
@@ -199,7 +209,19 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	s.desired.Gain = &gain
 	s.fadePending = false
 	s.fadeInvocation = ""
+	s.fadeState = FadeStateComplete
 	s.persistLocked()
+}
+
+// gainEpsilon bounds how far an engine's reported gain may sit from a
+// fade's target and still count as having reached it. A real backend
+// computes a ramp in floating point, so exact equality would report a
+// completed fade as unconfirmable forever; the fake stores exact values
+// and cannot expose that.
+const gainEpsilon = 1e-6
+
+func gainsEqual(a, b pkgaudio.Gain) bool {
+	return math.Abs(float64(a-b)) <= gainEpsilon
 }
 
 // Mute is audio.output.mute: it saves id's current gain and drives its

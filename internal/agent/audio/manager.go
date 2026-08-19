@@ -64,6 +64,30 @@ func (m *Manager) get(id pkgaudio.SessionID) (*Session, bool) {
 	return s, ok
 }
 
+// Snapshot returns fresh, read-only telemetry for every session this
+// Manager currently holds — the retained observation surface. It never
+// mutates any command-facing session state and never consults
+// [Manager.gateAvailability]: what it reports is the session state
+// machine's own internal bookkeeping, real even while every command's
+// own outward-facing outcome is being rewritten to Unconfirmable. See
+// [Session.snapshotLocked].
+func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	out := make([]SessionSnapshot, 0, len(sessions))
+	for _, s := range sessions {
+		s.mu.Lock()
+		out = append(out, s.snapshotLocked(ctx))
+		s.mu.Unlock()
+	}
+	return out
+}
+
 // gateAvailability is the single choke point that keeps this seam honest
 // about what it is: a Refused or Failed outcome (a structural decision —
 // bad invocation, stale revision, invalid params, no media to act on)
@@ -181,11 +205,13 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		obs, err := s.mgr.engine.Start(ctx, s.handle, position)
 		if err != nil {
 			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = true
 		s.bookmark = nil
+		s.lastObservedAt = obs.ObservedAt
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 
@@ -223,6 +249,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Pause(ctx, s.handle)
 		if err != nil {
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePaused
@@ -231,6 +258,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 			s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
 		}
 		s.timingKnown = true
+		s.lastObservedAt = obs.ObservedAt
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePaused, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -253,11 +281,13 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Resume(ctx, s.handle)
 		if err != nil {
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.bookmark = nil
 		s.timingKnown = true
+		s.lastObservedAt = obs.ObservedAt
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -281,9 +311,11 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Seek(ctx, s.handle, position)
 		if err != nil {
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.timingKnown = true
+		s.lastObservedAt = obs.ObservedAt
 		if s.state == pkgaudio.StatePaused {
 			s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Index: s.currentIndex, Position: obs.Position}
 			if s.desired.Playlist != nil {

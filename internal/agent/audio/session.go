@@ -9,6 +9,18 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
+// FadeState is a session's retained fade-progress state
+// (SessionSnapshot.FadeState), reporting-only like timingKnown and
+// fadePending: three values because a boolean cannot distinguish "just
+// completed" from "never started".
+type FadeState string
+
+const (
+	FadeStateNone       FadeState = "none"
+	FadeStateInProgress FadeState = "in_progress"
+	FadeStateComplete   FadeState = "complete"
+)
+
 // PersistedSession is one session's durable record: everything
 // [Manager.RestoreAll] needs to rebuild a [Session], including its
 // [pkgaudio.RevisionState] and every invocation's already-produced
@@ -46,6 +58,19 @@ type PersistedSession struct {
 	// [Manager.restoreOneDuckLocked].
 	DuckedBy    pkgaudio.SessionID
 	PreDuckGain *pkgaudio.Gain
+
+	// Fault, FaultReason, and FaultAt are the last engine fault reported
+	// against this session (AUDIO-ENGINE section 11.4), FaultNone when
+	// none is in effect. Persisted so a fault survives a restart instead
+	// of silently clearing itself.
+	Fault       pkgaudio.SessionFault
+	FaultReason string
+	FaultAt     time.Time
+
+	// LastProbe is the most recent [ProbeAsset] result for this session's
+	// current item — the asset probe evidence the retained observation
+	// surface reports.
+	LastProbe MediaItemResult
 }
 
 // SessionStore is the session layer's durability boundary — enough of
@@ -95,11 +120,31 @@ type Session struct {
 	fadePending    bool
 	fadeInvocation pkgaudio.InvocationID
 
+	// fadeState is fadePending's reporting-only companion: it additionally
+	// distinguishes a fade that just completed from one that never
+	// started, which fadePending's own true-to-false transition cannot —
+	// by the time a caller reads fadePending as false, "just completed"
+	// and "never started" already look identical. See [FadeState].
+	fadeState FadeState
+
 	muted       bool
 	preMuteGain *pkgaudio.Gain
 
 	duckedBy    pkgaudio.SessionID
 	preDuckGain *pkgaudio.Gain
+
+	fault       pkgaudio.SessionFault
+	faultReason string
+	faultAt     time.Time
+	lastProbe   MediaItemResult
+
+	// lastObservedAt is when [Engine.Observe] (or an equivalent
+	// state-changing call) last returned a genuine reading, engine-clock
+	// time — never the coordinator's or this process's own wall-clock
+	// "now". Zero means no engine evidence has ever been collected for
+	// this session. The retained observation surface reports position
+	// against this, never against the time it happens to be read.
+	lastObservedAt time.Time
 }
 
 func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
@@ -110,6 +155,8 @@ func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 		executedResults: make(map[pkgaudio.InvocationID]pkgaudio.OutcomeResult),
 		state:           pkgaudio.StateUnknown,
 		currentIndex:    -1,
+		fault:           pkgaudio.FaultNone,
+		fadeState:       FadeStateNone,
 	}
 }
 
@@ -129,6 +176,10 @@ func (s *Session) persistedLocked() PersistedSession {
 		PreMuteGain:     s.preMuteGain,
 		DuckedBy:        s.duckedBy,
 		PreDuckGain:     s.preDuckGain,
+		Fault:           s.fault,
+		FaultReason:     s.faultReason,
+		FaultAt:         s.faultAt,
+		LastProbe:       s.lastProbe,
 	}
 }
 
@@ -214,20 +265,69 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 // undecodable asset fails here rather than at Start — and, only when
 // ready, loads it on a fresh engine handle. A prior handle must already
 // have been released by the caller.
+//
+// This is the one revalidation choke point: every path that reaches a
+// successful Load — Prepare, Start, and the advance/restore paths that
+// call this directly — clears any standing fault right here, and a
+// probe or Load failure classifies and records one. A reappearing
+// device or a re-probed asset therefore stays faulted until an actual
+// successful prepare, never resumes silently.
 func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem) (EngineObservation, error) {
 	probe := ProbeAsset(ctx, s.mgr.assetDir, item.Media, s.mgr.decoder)
+	s.lastProbe = probe
 	if probe.State != MediaReady {
-		return EngineObservation{}, fmt.Errorf("media not ready: %s", probe.Reason)
+		err := fmt.Errorf("media not ready: %s", probe.Reason)
+		s.setFaultLocked(mediaFaultToSessionFault(probe.Fault), err.Error())
+		return EngineObservation{}, err
 	}
 	handle := s.engineHandleFor(item.ItemID)
 	obs, err := s.mgr.engine.Load(ctx, handle, item.Media, probe.Duration)
 	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		return EngineObservation{}, err
 	}
 	s.handle = handle
 	s.handleLoaded = true
 	s.currentItemID = item.ItemID
+	s.lastObservedAt = obs.ObservedAt
+	s.clearFaultLocked()
 	return obs, nil
+}
+
+// mediaFaultToSessionFault maps a pre-flight [MediaFault] (C2's ProbeAsset
+// vocabulary) onto the closest of the six runtime [pkgaudio.SessionFault]
+// classes, for the two cases prepareLocked can itself detect: the asset is
+// gone or was replaced under a pinned reference, or it will not decode.
+// [MediaFaultDurationUnknown] never reaches here — that probe state is
+// [MediaReady] with an advisory Reason, not a prepareLocked failure.
+func mediaFaultToSessionFault(f MediaFault) pkgaudio.SessionFault {
+	switch f {
+	case MediaFaultMissing, MediaFaultHashMismatch:
+		return pkgaudio.FaultMediaDisappeared
+	case MediaFaultUndecodable, MediaFaultUnsupportedFormat:
+		return pkgaudio.FaultDecodeFailure
+	default:
+		return pkgaudio.FaultOther
+	}
+}
+
+// setFaultLocked records fault as this session's current fault, unless
+// fault is [pkgaudio.FaultNone] (use [Session.clearFaultLocked] for that
+// so every caller states its intent, rather than one function meaning
+// two things depending on its argument).
+func (s *Session) setFaultLocked(fault pkgaudio.SessionFault, reason string) {
+	s.fault = fault
+	s.faultReason = reason
+	s.faultAt = s.mgr.now()
+}
+
+// clearFaultLocked resets this session to no fault. Only called from a
+// genuine revalidation ([Session.prepareLocked]'s success path) — never
+// from a state transition alone, so a session cannot silently resume
+// out of a fault it was never actually revalidated against.
+func (s *Session) clearFaultLocked() {
+	s.fault = pkgaudio.FaultNone
+	s.faultReason = ""
 }
 
 // advanceLocked is the one path that moves s to its next playlist item,
@@ -280,13 +380,118 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	obs, err := s.mgr.engine.Start(ctx, s.handle, 0)
 	if err != nil {
 		s.state = pkgaudio.StateFailed
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		s.persistLocked()
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
+	s.lastObservedAt = obs.ObservedAt
 	s.persistLocked()
 	return confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt)
+}
+
+// SessionSnapshot is one session's retained telemetry, fresh as of the
+// moment [Manager.Snapshot] built it (AUDIO-ENGINE section 15): the
+// source this node's audio report (audioreport.go) turns into wire
+// evidence and the coordinator's nodeaudio collector turns into
+// audio_session.* observations. Every Has*/*Known field distinguishes
+// "not set" from the zero value of its paired field — a field left
+// false is never rendered by reading its paired value.
+type SessionSnapshot struct {
+	ID pkgaudio.SessionID
+
+	HasSourceRole bool
+	SourceRole    pkgaudio.SourceRole
+
+	HasPlaylist      bool
+	PlaylistRevision pkgaudio.Revision
+
+	HasItem   bool
+	ItemID    string
+	ItemIndex int
+
+	// PositionKnown is false immediately after any discontinuity
+	// (mirrors s.timingKnown) or when no handle is loaded. ObservedAt is
+	// only meaningful when PositionKnown is true, and is the engine's
+	// own evidence time from the fresh [Engine.Observe] this snapshot
+	// issued — never this call's own wall-clock time.
+	PositionKnown bool
+	Position      time.Duration
+	ObservedAt    time.Time
+
+	State           pkgaudio.State
+	DesiredRevision pkgaudio.Revision
+
+	HasGain    bool
+	Gain       pkgaudio.Gain
+	HasCeiling bool
+	Ceiling    pkgaudio.Ceiling
+
+	FadeState FadeState
+
+	Ducked   bool
+	DuckedBy pkgaudio.SessionID
+
+	HasAssetProbe    bool
+	AssetProbeState  MediaReadiness
+	AssetProbeReason string
+
+	Fault       pkgaudio.SessionFault
+	FaultReason string
+}
+
+// snapshotLocked builds s's [SessionSnapshot]. Caller holds s.mu. When a
+// handle is loaded this issues one fresh [Engine.Observe] — never the
+// cached position a past command call left behind — so Position and
+// ObservedAt reflect genuine evidence collected at this call, not
+// extrapolated from elapsed wall time by this method itself. An Observe
+// failure is itself fault evidence (see [Manager.watchTick]'s identical
+// treatment) and leaves PositionKnown false, never a stale reading
+// presented as current.
+func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
+	snap := SessionSnapshot{
+		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
+		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
+	}
+
+	if s.desired.SourceRole != nil {
+		snap.HasSourceRole, snap.SourceRole = true, *s.desired.SourceRole
+	}
+	if s.desired.Playlist != nil {
+		snap.HasPlaylist, snap.PlaylistRevision = true, s.desired.Playlist.OwnerRevision
+	}
+	if item, ok := s.currentItemLocked(); ok {
+		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
+	}
+	if s.desired.Gain != nil {
+		snap.HasGain, snap.Gain = true, *s.desired.Gain
+	}
+	if s.desired.Ceiling != nil {
+		snap.HasCeiling, snap.Ceiling = true, *s.desired.Ceiling
+	}
+	snap.Ducked = s.duckedBy != ""
+	snap.DuckedBy = s.duckedBy
+
+	if s.lastProbe.State != "" {
+		snap.HasAssetProbe = true
+		snap.AssetProbeState = s.lastProbe.State
+		snap.AssetProbeReason = s.lastProbe.Reason
+	}
+
+	if s.handleLoaded && s.timingKnown {
+		obs, err := s.mgr.engine.Observe(ctx, s.handle)
+		if err != nil {
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		} else {
+			s.lastObservedAt = obs.ObservedAt
+			snap.PositionKnown = true
+			snap.Position = obs.Position
+			snap.ObservedAt = obs.ObservedAt
+		}
+	}
+
+	return snap
 }
 
 // confirmLocked builds an [pkgaudio.OutcomeResult] from an engine

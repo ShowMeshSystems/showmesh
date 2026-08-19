@@ -453,3 +453,22 @@ func TestDuckRestoreExactlyOnce_CrashWhileDuckerStillPlaying(t *testing.T) {
 		t.Fatalf("bg2 gain after ann finally stopped = %v, want restored 0.9", *bg2.desired.Gain)
 	}
 }
+
+// TestFadeCompletionToleratesFloatingPointDrift proves a fade whose
+// engine-reported gain differs from its target only by floating-point
+// error still reports fade_complete. Exact equality here would report a
+// completed fade as unconfirmable forever on any real backend, and the
+// fake stores exact values, so no fake-only test can reach this.
+func TestFadeCompletionToleratesFloatingPointDrift(t *testing.T) {
+	const target = pkgaudio.Gain(0.2)
+	drifted := pkgaudio.Gain(0.3) - pkgaudio.Gain(0.1) // 0.19999999999999998
+	if drifted == target {
+		t.Skip("this platform's arithmetic produced an exact value; nothing to prove")
+	}
+	if !gainsEqual(drifted, target) {
+		t.Fatalf("gainsEqual(%v, %v) = false, want true: a fade that reached its target within floating-point error must report complete", drifted, target)
+	}
+	if gainsEqual(pkgaudio.Gain(0.3), target) {
+		t.Fatal("gainsEqual(0.3, 0.2) = true, want false: the tolerance must not accept a gain that genuinely missed its target")
+	}
+}

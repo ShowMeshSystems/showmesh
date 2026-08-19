@@ -65,6 +65,7 @@ func sampleAudioPayload() mqttproto.AudioPayload {
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
 		ObservedAt: &observedAt,
+		Sessions:   []mqttproto.AudioSessionReport{},
 	}
 }
 

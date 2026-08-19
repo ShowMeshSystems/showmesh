@@ -14,20 +14,34 @@ import (
 // matching renderreport.go's identical renderReportPublishTimeout.
 const audioReportPublishTimeout = 5 * time.Second
 
-// runAudioReport publishes this node's audio discovery report to nodeID's
-// observed/audio topic on every tick received from ticks. Discovery itself
-// runs exactly once, before the loop starts: the throwaway probe pipelines
-// this involves must never repeat on a fixed cadence for the life of the
-// process (finding 1), so every tick republishes the SAME cached evidence,
-// with its own original observation time, never a fresh probe. A live
-// device state change is picked up only at the next agent restart, or by
-// the operator's own explicit "audio.device.probe" command (audioops.go),
-// which probes one named device and is unrelated to this cache.
+// audioSessionSnapshotter is the read side of an [audio.Manager] this
+// package needs: fresh, per-session telemetry, never a command path. A
+// nil snapshotter (no asset directory configured — see agent.go) reports
+// zero sessions on every tick.
+type audioSessionSnapshotter interface {
+	Snapshot(ctx context.Context) []audio.SessionSnapshot
+}
+
+// runAudioReport publishes this node's audio report to nodeID's
+// observed/audio topic on every tick received from ticks. Hardware
+// discovery runs exactly once, before the loop starts: the throwaway
+// probe pipelines it involves must never repeat on a fixed cadence for
+// the life of the process (finding 1), so every tick republishes the SAME
+// cached discovery evidence, with its own original observation time,
+// never a fresh probe. A live device state change is picked up only at
+// the next agent restart, or by the operator's own explicit
+// "audio.device.probe" command (audioops.go), which probes one named
+// device and is unrelated to this cache.
+//
+// Session telemetry is the opposite: mgr, when non-nil, is asked for a
+// fresh [audio.Manager.Snapshot] on every tick, because a session's
+// state, position, and fault are live facts a cache would make stale
+// evidence look current.
 //
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
 // contract.
-func runAudioReport(ctx context.Context, pub Publisher, nodeID string, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
+func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "audio")
 	if err != nil {
 		// nodeID is validated at config load, matching runRenderReport's
@@ -37,7 +51,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, now func(
 	}
 
 	d := audioDiscoverer(ctx, audioEnumerator)
-	payload := buildAudioPayload(d, now())
+	discovery := buildAudioPayload(d, now())
 
 	for {
 		select {
@@ -47,9 +61,80 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, now func(
 			if !ok {
 				return
 			}
+			payload := discovery
+			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
+}
+
+// buildAudioSessionReports turns mgr's current snapshot into wire form,
+// bounded to maxAudioSessions via mqttproto's own Validate — this
+// function truncates first so a node with more sessions than fit still
+// publishes a valid payload rather than none at all. A nil mgr (no asset
+// directory configured on this node) reports zero sessions, matching
+// buildAudioPayload's own Routes convention: never nil, never omitted.
+func buildAudioSessionReports(ctx context.Context, mgr audioSessionSnapshotter) ([]mqttproto.AudioSessionReport, bool) {
+	if mgr == nil {
+		return []mqttproto.AudioSessionReport{}, false
+	}
+	snaps := mgr.Snapshot(ctx)
+	truncated := false
+	if len(snaps) > audioSessionReportLimit {
+		snaps = snaps[:audioSessionReportLimit]
+		truncated = true
+	}
+	reports := make([]mqttproto.AudioSessionReport, 0, len(snaps))
+	for _, s := range snaps {
+		reports = append(reports, sessionReportFromSnapshot(s))
+	}
+	return reports, truncated
+}
+
+// audioSessionReportLimit mirrors mqttproto's unexported maxAudioSessions
+// so this package can truncate before Validate ever sees an oversized
+// payload, matching renderreport.go's identical surface-truncation
+// convention for maxRenderSurfaces.
+const audioSessionReportLimit = 16
+
+func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionReport {
+	r := mqttproto.AudioSessionReport{
+		SessionID:        string(s.ID),
+		HasSourceRole:    s.HasSourceRole,
+		SourceRole:       string(s.SourceRole),
+		HasPlaylist:      s.HasPlaylist,
+		PlaylistRevision: uint64(s.PlaylistRevision),
+		HasItem:          s.HasItem,
+		ItemID:           s.ItemID,
+		ItemIndex:        int64(s.ItemIndex),
+		PositionKnown:    s.PositionKnown,
+		PositionMs:       s.Position.Milliseconds(),
+		State:            string(s.State),
+		DesiredRevision:  uint64(s.DesiredRevision),
+		HasGain:          s.HasGain,
+		Gain:             float64(s.Gain),
+		HasCeiling:       s.HasCeiling,
+		Ceiling:          float64(s.Ceiling),
+		FadeState:        string(s.FadeState),
+		Ducked:           s.Ducked,
+		DuckedBy:         string(s.DuckedBy),
+		HasAssetProbe:    s.HasAssetProbe,
+		AssetProbeState:  string(s.AssetProbeState),
+		AssetProbeReason: s.AssetProbeReason,
+		Fault:            string(s.Fault),
+		FaultReason:      s.FaultReason,
+	}
+	if r.Fault == "" {
+		r.Fault = "none"
+	}
+	if r.FadeState == "" {
+		r.FadeState = "none"
+	}
+	if s.PositionKnown {
+		observedAt := s.ObservedAt
+		r.ObservedAt = &observedAt
+	}
+	return r
 }
 
 func publishAudioPayload(ctx context.Context, pub Publisher, topic, nodeID string, payload mqttproto.AudioPayload, now func() time.Time, logger *slog.Logger) {
@@ -95,6 +180,7 @@ func buildAudioPayload(d audio.Discovery, observedAt time.Time) mqttproto.AudioP
 		Truncated:                d.Truncated,
 		EnumeratedCount:          int64(d.EnumeratedCount),
 		ObservedAt:               &observedAt,
+		Sessions:                 []mqttproto.AudioSessionReport{},
 	}
 	if !p.EngineAvailable && p.EngineReason == "" {
 		p.EngineReason = "audio engine probe did not reach PLAYING"

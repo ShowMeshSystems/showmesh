@@ -11,8 +11,15 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
+
+// noAlignmentMeasurementReason is [SignalClockAlignment]'s standing
+// reason: no runtime path in this seam measures program-to-LTC alignment
+// — see that signal's own doc comment for why it may never be inferred
+// from anything else this package already reports.
+const noAlignmentMeasurementReason = "no program-to-LTC alignment measurement is implemented; nothing in this seam can measure it"
 
 // Collector implements collector.Collector; enforced at compile time so a
 // signature drift is caught here, matching noderender.Collector's identical
@@ -47,6 +54,7 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	var obs []observation.Observation
 	for nodeID, rep := range snap {
 		obs = append(obs, nodeObservations(ctx, nodeID, rep, c.store.clockSrc)...)
+		obs = append(obs, sessionObservations(nodeID, rep)...)
 	}
 	return obs, true
 }
@@ -64,7 +72,8 @@ func (s *Store) NodeAudioObservations(nodeID string) []observation.Observation {
 	if !ok {
 		return nil
 	}
-	return nodeObservations(context.Background(), nodeID, rep, s.clockSrc)
+	obs := nodeObservations(context.Background(), nodeID, rep, s.clockSrc)
+	return append(obs, sessionObservations(nodeID, rep)...)
 }
 
 func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc ClockDomainSource) []observation.Observation {
@@ -138,7 +147,178 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		)
 	}
 
+	obs = append(obs, notCollected(res, SignalClockAlignment, source, noAlignmentMeasurementReason, rep.receivedAt))
+
 	return obs
+}
+
+// sessionObservations renders every session in rep.payload.Sessions into
+// audio_session.* observations, resource id the session id. Unlike
+// nodeObservations, this is a dynamic list (sessions come and go), but it
+// needs no dropped-item bookkeeping either: [Store] only ever holds a
+// node's MOST RECENT report, so a session that no longer appears simply
+// stops being reported — it does not need an explicit absence entry any
+// more than a route that disappeared from Routes does.
+func sessionObservations(nodeID string, rep report) []observation.Observation {
+	var obs []observation.Observation
+	for _, sess := range rep.payload.Sessions {
+		obs = append(obs, oneSessionObservations(nodeID, sess, rep)...)
+	}
+	return obs
+}
+
+func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: sess.SessionID}
+	source := SourceForSession(nodeID, sess.SessionID)
+	observedAt := rep.payload.ObservedAt // the node's own report evidence time; see buildSessionValue.
+
+	obs := []observation.Observation{}
+
+	if sess.HasSourceRole {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionSourceRole, sess.SourceRole, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionSourceRole, source, "session has no source role set", rep.receivedAt))
+	}
+
+	if sess.HasPlaylist {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionPlaylistRevision, int64(sess.PlaylistRevision), observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionPlaylistRevision, source, "session has no pinned playlist", rep.receivedAt))
+	}
+
+	if sess.HasItem {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionItemID, sess.ItemID, observedAt, rep),
+			buildSessionValue(res, source, SignalSessionItemIndex, sess.ItemIndex, observedAt, rep),
+		)
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalSessionItemID, source, "session has no current item", rep.receivedAt),
+			notCollected(res, SignalSessionItemIndex, source, "session has no current item", rep.receivedAt),
+		)
+	}
+
+	if sess.PositionKnown {
+		posAt := observedAt
+		if sess.ObservedAt != nil {
+			posAt = sess.ObservedAt
+		}
+		obs = append(obs, buildSessionValue(res, source, SignalSessionPositionMs, sess.PositionMs, posAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh engine evidence: mid-discontinuity or no handle loaded", rep.receivedAt))
+	}
+
+	obs = append(obs,
+		notCollected(res, SignalSessionReferencePositionMs, source, "no reference show-position source is wired into this seam", rep.receivedAt),
+		notCollected(res, SignalSessionDriftMs, source, "drift is measured at track boundaries only (ADR-017); that measurement is not implemented", rep.receivedAt),
+	)
+
+	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionStateReason, sessionStateReason(sess.State), observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), observedAt, rep))
+
+	if sess.HasGain {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, sess.Gain, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionGain, source, "session has no gain set", rep.receivedAt))
+	}
+	if sess.HasCeiling {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, sess.Ceiling, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionGainCeiling, source, "session has no gain ceiling set", rep.receivedAt))
+	}
+
+	fadeState := sess.FadeState
+	if fadeState == "" {
+		fadeState = "none"
+	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionFadeState, fadeState, observedAt, rep))
+
+	if sess.Ducked {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionMixDuckedBy, sess.DuckedBy, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionMixDuckedBy, source, "session is not currently ducked", rep.receivedAt))
+	}
+
+	if sess.HasAssetProbe {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionAssetProbeState, sess.AssetProbeState, observedAt, rep),
+			buildSessionValue(res, source, SignalSessionAssetProbeReason, sess.AssetProbeReason, observedAt, rep),
+		)
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalSessionAssetProbeState, source, "no asset has been probed for this session yet", rep.receivedAt),
+			notCollected(res, SignalSessionAssetProbeReason, source, "no asset has been probed for this session yet", rep.receivedAt),
+		)
+	}
+
+	fault := sess.Fault
+	if fault == "" {
+		fault = "none"
+	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionFaultKind, fault, observedAt, rep))
+	if fault != "none" {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
+	}
+
+	return obs
+}
+
+// sessionStateReason states AUDIO-ENGINE section 15's distinction: Playing and Paused
+// are engine-side claims this seam cannot corroborate with anything an
+// audience would experience, because the only Engine this repository
+// ships never plays audio (see internal/agent/audio.FakeEngine). Every
+// other state carries no such ambiguity to flag.
+func sessionStateReason(state string) string {
+	switch state {
+	case "playing", "paused":
+		return "the session state machine reports this; no pipeline backend exists yet to confirm audio actually reached an output"
+	default:
+		return "no playback claim is in effect in this state"
+	}
+}
+
+// buildSessionValue is [buildValue]'s audio_session counterpart: same
+// ADR-011 ObservedAt/CollectedAt split, different resource kind.
+func buildSessionValue(res observation.ResourceRef, source string, sig observation.SignalID, value any, observedAt *time.Time, rep report) observation.Observation {
+	opts := []observation.Option{
+		observation.WithSource(source),
+		observation.WithCollectedAt(rep.receivedAt),
+	}
+	if observedAt == nil {
+		o, err := observation.MeasuredUnknownAge(res, sig, value, opts...)
+		if err != nil {
+			return notCollected(res, sig, source, fmt.Sprintf("internal error building observation: %v", err), rep.receivedAt)
+		}
+		return o
+	}
+	opts = append(opts, observation.WithValidFor(DefaultValidFor))
+	o, err := observation.Measured(res, sig, value, *observedAt, opts...)
+	if err != nil {
+		return notCollected(res, sig, source, fmt.Sprintf("internal error building observation: %v", err), rep.receivedAt)
+	}
+	return o
+}
+
+func notCollected(res observation.ResourceRef, sig observation.SignalID, source, reason string, at time.Time) observation.Observation {
+	o, err := observation.NotCollected(res, sig, reason,
+		observation.WithSource(source), observation.WithCollectedAt(at))
+	if err != nil {
+		panic(fmt.Sprintf("nodeaudio: NotCollected(%q) unexpectedly failed: %v", sig, err))
+	}
+	return o
+}
+
+// SourceForSession returns the Source this package stamps on every
+// audio_session.* observation for sessionID on nodeID: SourceFor(nodeID)
+// plus the session id, so two sessions on the same node (or the same
+// session id reused on two nodes, which should never happen but must not
+// collide silently if it does) never collide on one observations-table
+// row.
+func SourceForSession(nodeID, sessionID string) string {
+	return SourceFor(nodeID) + sourceNodeSeparator + sessionID
 }
 
 // lookupClockDomain reads nodeID's active audio.node configuration
