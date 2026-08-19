@@ -2282,6 +2282,8 @@ export interface components {
             dispatchedAt: string;
             /** Format: date-time */
             resolvedAt: string | null;
+            /** @description True when this command's dispatch could not write its audit entry atomically with the command and proceeded anyway under the `audio.session.stop`/`audio.session.clear`/ `audio.output.mute` safety-class exemption (ADR-024 decision 11), with a degraded, stderr-only attribution record. */
+            attributionDegraded: boolean;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
         FPPCommandResponse: {
