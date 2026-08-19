@@ -44,12 +44,35 @@ type Dependencies struct {
 	// in this package that predates this field.
 	Render NodeRenderLister
 
+	// Audio is Track C seam C1a/C1b's dependency — see [NodeAudioLister].
+	// A nil field is replaced by [noNodeAudioLister], matching Render's
+	// identical no-op default posture.
+	Audio NodeAudioLister
+
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
 	// replaced by [noRenderPublisher], under which every render.* dispatch
 	// fails with an internal error naming the missing wiring, matching
 	// [Dependencies.Commands]'s identical no-op default posture.
 	RenderPublisher RenderPublisher
+
+	// AudioPublisher is this API's MQTT publish-and-await capability for
+	// audio.session.* commands — see [AudioSessionPublisher]'s doc
+	// comment (audiodispatch.go). A nil field is replaced by
+	// [noAudioSessionPublisher], under which every audio.session.*
+	// dispatch fails with an internal error naming the missing wiring,
+	// matching [Dependencies.RenderPublisher]'s identical no-op default
+	// posture.
+	AudioPublisher AudioSessionPublisher
+
+	// AudioSessions is the coordinator's own durable record of each
+	// playback session's last-dispatched desired state (schemaV9's
+	// audio_sessions table) — see [AudioSessionStore]. A nil field is
+	// replaced by [noAudioSessionStore], under which every dispatch still
+	// runs (this coordinator's own durable mirror is best-effort
+	// bookkeeping, never a precondition for reaching the node — ADR-024
+	// decision 7) but is never persisted coordinator-side.
+	AudioSessions AudioSessionStore
 
 	// AssetManifests is ALSO this seam's own dependency for resolving a
 	// surface's current FSEQ asset by identity (ADR-028) — see
@@ -359,6 +382,19 @@ type Dependencies struct {
 	// dependency is not this API failing" posture.
 	ResolumeReferences config.ResolumeReferenceResolver
 
+	// MQTTBrokers is the mqtt action-invocation dispatch dependency: the
+	// deployment's live integration broker registry, reached only through
+	// [MQTTBrokerRegistry] (mqttactiondispatch.go). The real value is the
+	// SAME *broker.Registry internal/coordinator/macro's own executor
+	// dispatches an mqtt-integration show.macro step through, wired twice
+	// against one shared registry the identical way
+	// [NewFPPCommandDispatcher]'s doc comment explains is safe for
+	// *handlers. A nil field is replaced by [noMQTTBrokerRegistry]: every
+	// method refuses loudly rather than fabricating success — this
+	// struct's standing "an unwired dependency is not this API failing"
+	// posture.
+	MQTTBrokers MQTTBrokerRegistry
+
 	// ResolumeRecovery is Track D seam D-3a's own recovery controller
 	// (internal/coordinator/collector/resolume.Recovery), reached only
 	// through [ResolumeRecoveryProvider]. A nil field is replaced by
@@ -443,8 +479,17 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Render == nil {
 		d.Render = noNodeRenderLister{}
 	}
+	if d.Audio == nil {
+		d.Audio = noNodeAudioLister{}
+	}
 	if d.RenderPublisher == nil {
 		d.RenderPublisher = noRenderPublisher{}
+	}
+	if d.AudioPublisher == nil {
+		d.AudioPublisher = noAudioSessionPublisher{}
+	}
+	if d.AudioSessions == nil {
+		d.AudioSessions = noAudioSessionStore{}
 	}
 	if d.Identity == nil {
 		d.Identity = noIdentityService{}
@@ -484,6 +529,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.ResolumeReferences == nil {
 		d.ResolumeReferences = noResolumeReferenceResolver{}
+	}
+	if d.MQTTBrokers == nil {
+		d.MQTTBrokers = noMQTTBrokerRegistry{}
 	}
 	if d.ResolumeRecovery == nil {
 		d.ResolumeRecovery = noResolumeRecoveryProvider{}
@@ -611,6 +659,12 @@ func (noNodeLister) Snapshot(context.Context, time.Time) ([]inventory.NodeView, 
 type noNodeRenderLister struct{}
 
 func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observation { return nil }
+
+// noNodeAudioLister is [Dependencies.Audio]'s nil-safe default, matching
+// [noNodeRenderLister]'s identical posture one dependency over.
+type noNodeAudioLister struct{}
+
+func (noNodeAudioLister) NodeAudioObservations(string) []observation.Observation { return nil }
 
 type noFPPLister struct{}
 
@@ -1135,6 +1189,26 @@ func New(deps Dependencies, opts Options) *API {
 	// the "go find out now" counterpart.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe", h.writeGuard(&scopeRenderCommand, h.handleRenderTransportProbe))
 
+	// Dispatch the agent's audio.session.* operations (audiodispatch.go).
+	// Guarded by audio:command, matching render:command's identical
+	// "reads open, this write isn't" posture.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/apply", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionApply))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPrepare))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/start", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStart))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/pause", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPause))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/resume", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionResume))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/seek", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionSeek))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/advance", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionAdvance))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/stop", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStop))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/clear", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionClear))
+
+	// The four remaining reserved audio.gain.*/audio.output.* operations,
+	// same dispatch core and same scope.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/gain", h.writeGuard(&scopeAudioCommand, h.handleAudioGainSet))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade", h.writeGuard(&scopeAudioCommand, h.handleAudioGainFade))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/mute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputMute))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputUnmute))
+
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
 	mux.HandleFunc("GET /api/v1/stream", h.readGuardAll(readAllScopes, hub.ServeHTTP))
@@ -1249,6 +1323,21 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacro))
 	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
+
+	// A pre-show binding check (ADR-029's own Consequences section),
+	// re-resolving a stored show.action's target against current
+	// integration state. Never gated by any scope — this is a read,
+	// dispatches nothing, and must be reachable with no credential
+	// (ADR-024 constraint 23) — see actionbinding.go.
+	mux.HandleFunc("GET /api/v1/actions/{id}/binding", h.handleGetActionBinding)
+	mux.HandleFunc("GET /api/v1/actions/bindings", h.handleListActionBindings)
+
+	// Invoke one stored show.action by id, outside of a macro run
+	// (ADR-037 decision 8's controller surface). show:action:invoke is
+	// the only scope check on this route — see that scope's own doc
+	// comment (identity/types.go) for why. No state change here is
+	// reachable by GET — see actioninvoke.go.
+	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an
@@ -1386,6 +1475,25 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/render.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/render.settings", h.writeGuard(&scopeConfigWrite, h.handlePutRenderSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/render.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfigRevisions))
+
+	// GET/PUT /api/v1/config/audio.settings (Track C seam C1b, ADR-039):
+	// the engine-wide operator-settings singleton. Mirrors
+	// /config/render.settings' config:write-only posture exactly
+	// (audiosettings.go).
+	mux.HandleFunc("GET /api/v1/config/audio.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/audio.settings", h.writeGuard(&scopeConfigWrite, h.handlePutAudioSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/audio.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioSettingsConfigRevisions))
+
+	// GET/PUT /api/v1/config/audio.node/{id} (Track C seam C1b, ADR-039): a
+	// collection keyed by node id, mirroring show.surface's four-route
+	// shape (audionode.go). Gated by config:write only, matching
+	// render.settings/audio.settings rather than show.surface's open
+	// showConfigReadScopes posture: this is nearer principal/physical-
+	// interface management than show-programming state.
+	mux.HandleFunc("GET /api/v1/config/audio.node", h.requireScope(identity.ScopeConfigWrite, h.handleListAudioNodes))
+	mux.HandleFunc("GET /api/v1/config/audio.node/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNode))
+	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
+	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

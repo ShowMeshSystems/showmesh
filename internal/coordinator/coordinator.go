@@ -21,6 +21,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -238,7 +239,14 @@ func Run() int {
 	// SAME store, on its own poll cadence.
 	renderStore := noderender.NewStore()
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore))
+	// Track C seam C1a: audio's own push cache, the identical shape as
+	// renderStore above, one report type over — see nodeaudio's package
+	// doc comment. *store.Store already satisfies nodeaudio.ClockDomainSource
+	// directly, so a node never claims its own clock domain (that is
+	// operator-declared audio.node configuration, read live on every poll).
+	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
 
 	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
 	if err != nil {
@@ -339,6 +347,13 @@ func Run() int {
 		logger.Warn("failed to seed node-render known-surfaces from the store; starting with none", "error", err)
 	}
 	fppRunner.Add(noderender.New(renderStore, noderender.WithKnownSurfaces(knownSurfaces)), noderender.DefaultPollInterval)
+
+	// Track C seam C1a: audioStore's own read side, sharing fppRunner for
+	// the identical reason renderStore's does (see noderender's own
+	// comment above) — no per-node dynamic list to seed here (engine/
+	// device/program/ltc are fixed, one-per-node signals), so this needs
+	// no known-surfaces-style restart bookkeeping.
+	fppRunner.Add(nodeaudio.New(audioStore), nodeaudio.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -456,6 +471,10 @@ func Run() int {
 		// adapter needed, the same "the real dependency already has this
 		// method set" pattern api.ConfigStore's own wiring below uses.
 		Render: renderStore,
+		// Track C seam C1a/C1b: audioStore already satisfies
+		// api.NodeAudioLister's NodeAudioObservations method directly, no
+		// adapter needed, matching renderStore's identical wiring above.
+		Audio: audioStore,
 		// RenderPublisher is Track B seam B2b-front's own dependency: the
 		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
 		// built from above already satisfies api.RenderPublisher with no
@@ -466,6 +485,14 @@ func Run() int {
 		// error naming the missing wiring, against api.noRenderPublisher's
 		// no-op default.
 		RenderPublisher: bm,
+		// AudioPublisher: the SAME bm already satisfies
+		// api.AudioSessionPublisher (Publish plus AwaitResponse) with no
+		// adapter, matching RenderPublisher's identical wiring immediately
+		// above. AudioSessions is st itself — schemaV9's audio_sessions
+		// table methods already match api.AudioSessionStore's one method
+		// with no adapter either.
+		AudioPublisher: bm,
+		AudioSessions:  st,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
@@ -654,6 +681,12 @@ func Run() int {
 		// never disagree about which identifiers exist, because both
 		// read the identical field.
 		IntegrationBrokers: cfg.IntegrationBrokers,
+		// The SAME *broker.Registry macro.Dependencies.Brokers (below)
+		// dispatches an mqtt-integration show.macro step through — see
+		// [api.Dependencies.MQTTBrokers]'s own doc comment for why wiring
+		// one registry into two independently-constructed Dependencies
+		// values is safe.
+		MQTTBrokers: integrationBrokers,
 	}
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
@@ -759,6 +792,25 @@ func Run() int {
 	} else if n > 0 {
 		logger.Warn("resolved resolume actions left stranded by a prior process", "count", n)
 	}
+
+	// The action-invocation sibling of the two sweeps immediately above,
+	// closing the identical gap for a third command family — see
+	// api.ReconcileStrandedActionInvocations' own doc comment
+	// (actioninvoke_reconcile.go).
+	if n, rerr := api.ReconcileStrandedActionInvocations(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile stranded action invocations at startup", "error", rerr)
+	} else if n > 0 {
+		logger.Warn("resolved action invocations left stranded by a prior process", "count", n)
+	}
+
+	// SM-102 finding 4: the one-shot sweep above cannot self-heal a row
+	// that becomes stranded AFTER it ran (actioninvoke.go's own
+	// persistErr branch — a commands-table write failing right after a
+	// successful dispatch). This loop retries it periodically for the
+	// rest of this process's life; it is safe to run alongside live
+	// requests because it only ever touches rows older than
+	// actionInvokeReconcileMinAge — see that constant's own doc comment.
+	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
 
 	// fppHTTPClient and fppRunner were already constructed above (before
 	// apiDeps), one shared *http.Client per contract/Task C's own guidance

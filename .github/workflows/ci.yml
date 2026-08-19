@@ -46,14 +46,18 @@ jobs:
       # ndisink is deliberately not installed: ADR-010 forbids shipping the
       # NDI runtime, so NDI transport stays a bench concern and only the
       # fakesink/queue fallback runs here.
-      - name: Install GStreamer (renderer tests)
+      - name: Install GStreamer (renderer and audio tests)
         run: |
-          # tools + plugins-base is the whole requirement: fdsrc, queue and
-          # fakesink are core, and rawvideoparse and videotestsrc are in
-          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
-          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
-          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
-          # took this step from 3 seconds to over 300.
+          # fdsrc, queue and fakesink are core, and rawvideoparse and
+          # videotestsrc are in plugins-base (MEASURED on 1.24.2, where the
+          # rawparse plugin is no longer in plugins-bad). plugins-good adds
+          # wavparse and flacdec: Track C's real-decoder audio tests
+          # (internal/agent/audio) drive decodebin against real WAV/FLAC
+          # fixtures, and without them decodebin typefinds the container but
+          # has no element to decode it, which reports as MediaFault, not a
+          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
+          # jack, SDL2 and a 5 MB soundfont, which took this step from
+          # 3 seconds to over 300.
           #
           # The runner's default azure.archive.ubuntu.com mirror intermittently
           # stops answering; apt then retries it per index file before falling
@@ -72,9 +76,10 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
+          gst-inspect-1.0 wavparse > /dev/null
 
       - name: Vet
         run: go vet ./...
@@ -139,14 +144,18 @@ jobs:
       # the point of this job.
       # Same reason as the unit-test job above: Track B's render integration
       # tests start a real gst-launch-1.0 child and assert on its pid.
-      - name: Install GStreamer (renderer tests)
+      - name: Install GStreamer (renderer and audio tests)
         run: |
-          # tools + plugins-base is the whole requirement: fdsrc, queue and
-          # fakesink are core, and rawvideoparse and videotestsrc are in
-          # plugins-base (MEASURED on 1.24.2, where the rawparse plugin is
-          # no longer in plugins-bad). Do not add plugins-bad "to be safe":
-          # it drags in pipewire, jack, SDL2 and a 5 MB soundfont, which
-          # took this step from 3 seconds to over 300.
+          # fdsrc, queue and fakesink are core, and rawvideoparse and
+          # videotestsrc are in plugins-base (MEASURED on 1.24.2, where the
+          # rawparse plugin is no longer in plugins-bad). plugins-good adds
+          # wavparse and flacdec: Track C's real-decoder audio tests
+          # (internal/agent/audio) drive decodebin against real WAV/FLAC
+          # fixtures, and without them decodebin typefinds the container but
+          # has no element to decode it, which reports as MediaFault, not a
+          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
+          # jack, SDL2 and a 5 MB soundfont, which took this step from
+          # 3 seconds to over 300.
           #
           # The runner's default azure.archive.ubuntu.com mirror intermittently
           # stops answering; apt then retries it per index file before falling
@@ -165,9 +174,10 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
+          gst-inspect-1.0 wavparse > /dev/null
 
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration

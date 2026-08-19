@@ -83,6 +83,19 @@ Delivery evidence is recorded separately by destination instance, immutable dest
 
 External provisioning follows decision 7: it occurs on ingestion, assignment, configuration change, and retry, never because playback started.
 
+### 10. Re-uploading superseded bytes is a rollback (amended 2026-08-17)
+
+**AMENDED 2026-08-17, owner decision.** As shipped by Track E, uploading bytes whose content hash matches an already superseded row returned `200` with that superseded record: no new row, the newer variant stayed current, and the operator's rollback attempt was a no-op reported as a success. The mechanism followed decision 1 honestly (identical bytes are the same asset), but it left an upload that changed nothing indistinguishable from one that did, and it left the operator with no way back to a known-good FSEQ on a show night.
+
+**Re-uploading the exact bytes of a superseded asset makes that row current again and supersedes the previously current row, in one transaction.** The response and every client surface state plainly that a rollback occurred; a `200` that changed nothing is not an acceptable shape on this path.
+
+Two properties of the original design change with this, deliberately:
+
+- `POST /assets` has a second meaning. An upload is either an ingestion or a rollback, and the response says which.
+- The supersede history may cycle. A row can become current more than once, so "superseded at" is an event in a history rather than a terminal state, and readers of the history must not assume a row supersedes only forward.
+
+The identity model is untouched. Rollback works precisely because decision 1 made identity content-addressed: the re-upload matches the stored row instead of minting a duplicate, which is what makes "put it back the way it was" expressible at all.
+
 ## Consequences
 
 - **The coordinator moves bytes now**, which it never did before. Upload size limits, timeouts, and disk-exhaustion behaviour are real concerns that did not previously apply to it, and ARCHITECTURE §11 already lists disk exhaustion as a failure mode to handle.

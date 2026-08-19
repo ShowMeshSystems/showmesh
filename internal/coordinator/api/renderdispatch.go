@@ -158,12 +158,59 @@ func (h *handlers) dispatchRenderCommand(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	var params map[string]any
-	if action == "render.surface.apply" {
-		if body.SequenceID == "" {
-			writeProblem(w, h.logger, now, invalidParameterProblem("sequenceId is required"))
+	if action == "render.surface.apply" && body.SequenceID == "" {
+		writeProblem(w, h.logger, now, invalidParameterProblem("sequenceId is required"))
+		return
+	}
+
+	ac := authFromContext(ctx)
+	issuerID := ac.result.Principal.ID
+	issuerName := ac.result.Principal.Name
+	if issuerID == "" {
+		issuerID = renderIssuerPrincipalIDMissing
+	}
+
+	idempotencyKey := body.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = uuid.NewString()
+	}
+
+	in := renderDispatchInput{
+		Action: action, NodeID: nodeID, SurfaceID: surfaceID, SequenceID: body.SequenceID,
+		IdempotencyKey: idempotencyKey, DesiredState: desiredState,
+		IssuerID: issuerID, IssuerName: issuerName,
+		ClientAddr: h.clientAddr(r), Form: ac.result.Form, CredentialID: ac.result.CredentialID,
+	}
+
+	// Idempotency-first, against the caller's own unresolved request
+	// identity — before apply's resolution runs, since resolution reads
+	// mutable state and a replay must never depend on it. A freshly minted
+	// key can never already be bound to a row, so it skips straight through.
+	if body.IdempotencyKey != "" {
+		existing, lookupErr := h.deps.Commands.GetCommandByIdempotencyKey(ctx, idempotencyKey)
+		switch {
+		case lookupErr == nil:
+			result, problem, err := h.resolveRenderCommandReplay(ctx, now, in, existing)
+			if err != nil {
+				h.writeInternalError(w, now, "resolve render command replay", err)
+				return
+			}
+			if problem != nil {
+				writeProblem(w, h.logger, now, *problem)
+				return
+			}
+			jsonWrite(w, v1.RenderCommandResponse{ServerTime: formatTime(h.now()), Command: result})
+			return
+		case errors.Is(lookupErr, store.ErrCommandNotFound):
+			// Genuinely new key — fall through to resolution and dispatch.
+		default:
+			h.writeInternalError(w, now, "look up render command by idempotency key", lookupErr)
 			return
 		}
+	}
+
+	var params map[string]any
+	if action == "render.surface.apply" {
 		var problem *v1.Problem
 		var resolveErr error
 		params, problem, resolveErr = h.resolveRenderApplyParams(ctx, nodeID, surfaceID, body.SequenceID)
@@ -188,32 +235,9 @@ func (h *handlers) dispatchRenderCommand(w http.ResponseWriter, r *http.Request,
 	} else {
 		params = map[string]any{"surfaceId": surfaceID}
 	}
+	in.Params = params
 
-	ac := authFromContext(ctx)
-	issuerID := ac.result.Principal.ID
-	issuerName := ac.result.Principal.Name
-	if issuerID == "" {
-		issuerID = renderIssuerPrincipalIDMissing
-	}
-
-	idempotencyKey := body.IdempotencyKey
-	if idempotencyKey == "" {
-		idempotencyKey = uuid.NewString()
-	}
-
-	outcome, problem, err := h.executeRenderDispatch(ctx, now, renderDispatchInput{
-		Action:         action,
-		NodeID:         nodeID,
-		SurfaceID:      surfaceID,
-		Params:         params,
-		IdempotencyKey: idempotencyKey,
-		DesiredState:   desiredState,
-		IssuerID:       issuerID,
-		IssuerName:     issuerName,
-		ClientAddr:     h.clientAddr(r),
-		Form:           ac.result.Form,
-		CredentialID:   ac.result.CredentialID,
-	})
+	outcome, problem, err := h.executeRenderDispatch(ctx, now, in)
 	if err != nil {
 		h.writeInternalError(w, now, "dispatch render command", err)
 		return
@@ -387,9 +411,12 @@ type renderApplyParamsPayload struct {
 // cleanly separated, matching FPPCommandInput's identical role one file
 // over.
 type renderDispatchInput struct {
-	Action         string
-	NodeID         string
-	SurfaceID      string
+	Action    string
+	NodeID    string
+	SurfaceID string
+	// SequenceID is the caller's own apply request field, part of the
+	// replay identity below. Empty for clear/restart/probe.
+	SequenceID     string
 	Params         map[string]any
 	IdempotencyKey string
 	DesiredState   string
@@ -398,6 +425,20 @@ type renderDispatchInput struct {
 	ClientAddr     string
 	Form           identity.CredentialForm
 	CredentialID   string
+}
+
+// renderRequestIdentity is the caller's own unresolved request shape,
+// stored in commands.requested_revision — never in the mutable params_json
+// a resolution produces.
+type renderRequestIdentity struct {
+	Action     string `json:"action"`
+	NodeID     string `json:"node"`
+	SurfaceID  string `json:"surface"`
+	SequenceID string `json:"sequenceId"`
+}
+
+func renderRequestIdentityFor(in renderDispatchInput) renderRequestIdentity {
+	return renderRequestIdentity{Action: in.Action, NodeID: in.NodeID, SurfaceID: in.SurfaceID, SequenceID: in.SequenceID}
 }
 
 // executeRenderDispatch records the command (idempotency-first: a replayed
@@ -416,27 +457,31 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		return v1.RenderCommandResult{}, nil, errors.New("no render command publisher is configured")
 	}
 
-	paramsJSON, err := json.Marshal(in.Params)
+	// canonicalParamsJSON (fppcommand_primitives.go): sorted keys, so a
+	// stored row and a fresh call are byte-comparable.
+	paramsJSON, err := canonicalParamsJSON(in.Params)
 	if err != nil {
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("encode params: %w", err)
+	}
+	identityJSON, err := json.Marshal(renderRequestIdentityFor(in))
+	if err != nil {
+		return v1.RenderCommandResult{}, nil, fmt.Errorf("encode render request identity: %w", err)
 	}
 
 	commandID := uuid.NewString()
 	rec := store.CommandRecord{
 		ID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
-		TargetKind: "node", TargetID: in.NodeID, ParamsJSON: string(paramsJSON),
+		TargetKind: "node", TargetID: in.NodeID, ParamsJSON: paramsJSON,
 		IssuerPrincipalID: in.IssuerID, IssuerPrincipalName: in.IssuerName,
+		RequestedRevision:  string(identityJSON),
 		ConfirmationMethod: "evidence", State: "pending",
 	}
 	inserted, err := h.deps.Commands.InsertCommand(ctx, rec)
 	if err != nil {
 		var dup *store.DuplicateCommandError
 		if errors.As(err, &dup) {
-			// A replayed idempotency key: render the ALREADY-RESOLVED
-			// outcome rather than dispatching a second time (ADR-008's
-			// "executes exactly once"), matching fppcommand's own
-			// idempotency-first rule.
-			return renderCommandResultFromRecord(dup.Existing, true), nil, nil
+			result, problem, rerr := h.resolveRenderCommandReplay(ctx, now, in, dup.Existing)
+			return result, problem, rerr
 		}
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("insert command: %w", err)
 	}
@@ -830,6 +875,70 @@ func (h *handlers) evaluateRenderTransportProbe(ctx context.Context, nodeID, sur
 	}
 	v, _ := o.Value.(bool)
 	return true, string(state), fmt.Sprintf("surface.transport.available = %v (via %s)", v, src)
+}
+
+// renderCommandReplayConflictProblem mirrors fppCommandReplayConflictProblem
+// (problem.go): a key reused against a different action or node.
+func renderCommandReplayConflictProblem(existingID, existingAction, existingNodeID, requestedAction, requestedNodeID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used for a different command",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (action %q, node %q); this request names a "+
+				"different action %q or node %q. Mint a fresh idempotencyKey for a genuinely new request.",
+			existingID, existingAction, existingNodeID, requestedAction, requestedNodeID),
+	}
+}
+
+// renderCommandReplayIdentityConflictProblem mirrors
+// renderCommandReplayConflictProblem one level down: same action and node,
+// but a different surfaceId or (for apply) sequenceId.
+func renderCommandReplayIdentityConflictProblem(existingID, action, nodeID string, existingSurfaceID, existingSequenceID, requestedSurfaceID, requestedSequenceID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used with different parameters",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (action %q, node %q, surface %q, sequenceId %q); this request "+
+				"has the SAME action and node but names a DIFFERENT surface %q or sequenceId %q. Mint a fresh idempotencyKey "+
+				"for a genuinely new request.",
+			existingID, action, nodeID, existingSurfaceID, existingSequenceID, requestedSurfaceID, requestedSequenceID),
+	}
+}
+
+// resolveRenderCommandReplay answers a replayed idempotency key against
+// existing's own stored row, judged against the caller's request identity
+// rather than any resolution: an identical replay returns existing's own
+// result verbatim; anything else is a conflict, dispatching nothing. Called
+// both pre-resolution and from executeRenderDispatch's post-insert race —
+// the idempotency_key UNIQUE constraint remains the sole authority on
+// whether a duplicate exists; this only decides how to answer one. Every
+// exit writes an AuditReplay entry, matching resolveFPPCommandReplay's
+// entry shape (fppcommand_dispatch.go).
+func (h *handlers) resolveRenderCommandReplay(ctx context.Context, now time.Time, in renderDispatchInput, existing store.CommandRecord) (v1.RenderCommandResult, *v1.Problem, error) {
+	if existing.Action != in.Action || existing.TargetID != in.NodeID {
+		p := renderCommandReplayConflictProblem(existing.ID, existing.Action, existing.TargetID, in.Action, in.NodeID)
+		h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
+		return v1.RenderCommandResult{}, &p, nil
+	}
+
+	want := renderRequestIdentityFor(in)
+	var got renderRequestIdentity
+	matched := false
+	if existing.RequestedRevision != "" {
+		if err := json.Unmarshal([]byte(existing.RequestedRevision), &got); err == nil {
+			matched = got == want
+		}
+	}
+	if !matched {
+		p := renderCommandReplayIdentityConflictProblem(existing.ID, in.Action, in.NodeID, got.SurfaceID, got.SequenceID, want.SurfaceID, want.SequenceID)
+		h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
+		return v1.RenderCommandResult{}, &p, nil
+	}
+
+	h.writeRenderAudit(ctx, now, identity.AuditReplay, in, store.CommandRecord{ID: existing.ID}, "")
+	return renderCommandResultFromRecord(existing, true), nil, nil
 }
 
 // renderCommandResultFromRecord renders a replayed command's already-

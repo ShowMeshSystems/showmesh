@@ -81,7 +81,7 @@ func declareNode(t *testing.T, st *store.Store, nodeID string) {
 
 func createAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
-	rec, err := st.CreateAsset(context.Background(), store.AssetRecord{
+	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
 		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,

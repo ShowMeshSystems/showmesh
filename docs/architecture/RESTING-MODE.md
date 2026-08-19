@@ -108,6 +108,26 @@ Fades the active non-live presentation to stopped. Receipt closes admission imme
 
 Closes the session after ShowMesh has observed that playback stopped and the fade completed. Receipt also closes admission and implies `fade-out-night` if it has not occurred. If presentation-power actions are configured, it performs their configured shutdown, confirmation, and cooldown steps. With no power actions, it records `not_configured` for that optional phase and reaches `stopped` without error. Any configured power action must remain scoped away from environmental protection.
 
+### 4.8 `end-session` (operator recovery, not an FPP-invoked intent)
+
+Abandons the current session, reaches `stopped`, and launches nothing. FPP does not invoke it;
+it exists for an operator facing a session ShowMesh cannot safely resume.
+
+A coordinator restart mid-transition leaves the session degraded, because ShowMesh cannot confirm
+what is safe to resume and will not guess (§4.4, §11). Without a way out that state is permanent.
+`end-session` is the way out: after it, the operator runs `prepare-site` and the ordinary sequence
+with readiness evaluated fresh.
+
+It deliberately does **not** clear the degraded flag and continue, and it cannot start a show,
+resume an unconfirmed session, or skip readiness. The three admission-closing commands
+(`request-final-show`, `fade-out-night`, `power-down-presentation`) remain accepted while
+degraded, because a refusal for want of ShowMesh's own evidence is worse than the coordinator
+being switched off ([ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md)
+decision 7).
+
+See [ADR-041](../decisions/ADR-041-operator-recovery-is-not-a-calendar-intent.md) for why this
+sits alongside §4's closed set rather than inside it.
+
 ## 5. Reference operating day
 
 Times below document the reference installation's shape. They are examples configured in FPP and are not product defaults.
@@ -119,8 +139,8 @@ Times below document the reference installation's shape. They are examples confi
 | 4:15 PM | `run-readiness` | Begin verification as devices become observable. |
 | 4:30 PM | `start-preshow` | Start projections, background music, countdowns, and configured resting presentation. |
 | 5:00 PM | `start-night` | Begin the first transition and then launch the first show playlist. |
-| 10:00 PM | Direct FPP brightness command | Observe the new ceiling where available; do not overwrite it. |
-| 11:00 PM | Direct FPP brightness command | Observe the lower ceiling where available; do not overwrite it. |
+| 10:00 PM | FPP schedule invokes `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` | Preserve the target and fade duration from the existing `fpp-brightness` entry; observe the interpolated ceiling and do not overwrite it with transition gain. |
+| 11:00 PM | FPP schedule invokes `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` | Preserve the lower target and fade duration from the existing `fpp-brightness` entry; observe the interpolated ceiling and do not overwrite it with transition gain. |
 | 11:30 PM | `request-final-show` | Finish the current show or allow the next normally timed show, then close admission. |
 | After final show | Event-driven | Enter end-of-night resting; background music and projections return and the resting FSEQ repeats. |
 | Christmas 12:00 AM; Halloween 1:00 AM | `fade-out-night` | Fade presentation elements to stopped. |
@@ -204,6 +224,8 @@ The default order is:
 The ordering of steps 2–5 is configurable through relative cues, but show completion remains the authoritative anchor.
 
 ### 7.3 Brightness composition
+
+**Selected design, not yet implemented.** [RES-018](../research/RES-018-fpp-brightness-control.md) records the owner-approved two-value FPP component and the FPP 9/10 build plan. Stock FPP and the upstream `fpp-brightness` plugin do not expose this composition. Until the ShowMesh component passes its real-host acceptance matrix, readiness rejects a configuration that requires this seam.
 
 FPP may change the installation brightness ceiling on its own schedule. ShowMesh transition fades are a multiplier, not a replacement:
 

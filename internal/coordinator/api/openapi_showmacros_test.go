@@ -45,6 +45,7 @@ func TestOpenAPIShowConfigResponsesMatchRealResponses(t *testing.T) {
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, svc, admin.ID)
 	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	putActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
 		map[string]string{"Authorization": "Bearer " + token})

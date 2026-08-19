@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -39,6 +40,10 @@ func cmdAction(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdActionShow(rest, stdout, stderr, clock)
 	case "put":
 		return cmdActionPut(rest, stdout, stderr, clock)
+	case "check":
+		return cmdActionCheck(rest, stdout, stderr, clock)
+	case "invoke":
+		return cmdActionInvoke(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl action: unknown subcommand %q\n\n", sub)
 		printActionUsage(stderr)
@@ -55,10 +60,18 @@ launch) that a show.macro's steps reference. Reads require show:macro:run
 OR config:write; put requires config:write (admin only).
 
 Subcommands:
-  list          enumerate action objects (id, label, show, revision)
+  list [--show <id>]
+                enumerate action objects (id, label, show, revision),
+                optionally narrowed to one show
   show <id>     show one action's full definition, including its target
   put <id>      write a new show.action configuration revision (reads a
                 payload from --file, or from stdin if --file is not given)
+  check [<id>] [--show <id>]
+                re-resolve one action's (or, with no id, every action's)
+                stored target against current integration state; exits
+                29 if any checked binding is broken, 0 otherwise
+  invoke <id>   invoke one stored action by id, outside of a macro run;
+                requires show:action:invoke
 
 "action put" accepts a full show.action JSON payload (show, label,
 safetyClass, target) for any integration, including "resolume" — the
@@ -78,6 +91,8 @@ subcommand.
 
 func cmdActionList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl action list", stderr)
+	var show string
+	fs.StringVar(&show, "show", "", "narrow the list to actions belonging to this show id")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action list [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nEnumerate show.action objects (GET /api/v1/config/show.action).")
@@ -101,8 +116,13 @@ func cmdActionList(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
+	var query url.Values
+	if show != "" {
+		query = url.Values{"show": {show}}
+	}
+
 	var resp showConfigObjectsListResponse
-	if err := c.getJSON(ctx, "/api/v1/config/show.action", nil, &resp); err != nil {
+	if err := c.getJSON(ctx, "/api/v1/config/show.action", query, &resp); err != nil {
 		return reportError(stderr, "action list", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -232,4 +252,254 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	printShowActionDetail(stdout, resp)
 	_, _ = fmt.Fprintf(stderr, "\nshowmeshctl action put: revision %d is now active.\n", resp.Revision)
 	return exitOK
+}
+
+// cmdActionCheck implements "showmeshctl action check [<id>] [--show <id>]":
+// GET /api/v1/actions/{id}/binding with one id, or
+// GET /api/v1/actions/bindings otherwise. Exits exitActionBindingBroken
+// (29) when any checked binding is "broken"; "unknown" never exits 29 —
+// it means the check could not be performed, not that anything is
+// broken.
+func cmdActionCheck(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl action check", stderr)
+	var show string
+	fs.StringVar(&show, "show", "", "narrow the check to actions belonging to this show id (only with no <id>)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action check [<id>] [--show <id>] [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nRe-resolve one action's (or every action's) stored target against")
+		_, _ = fmt.Fprintln(stderr, "current integration state. A read: dispatches nothing, no credential")
+		_, _ = fmt.Fprintln(stderr, "required. Exits 29 if any checked binding is broken; \"unknown\" never")
+		_, _ = fmt.Fprintln(stderr, "exits 29.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "action check", err)
+	}
+	rest := fs.Args()
+	if len(rest) > 1 {
+		fs.Usage()
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "action check", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var bindings []actionBinding
+	var serverTime time.Time
+	if len(rest) == 1 {
+		if show != "" {
+			_, _ = fmt.Fprintln(stderr, "showmeshctl action check: --show is ignored when an action id is given")
+		}
+		var resp actionBindingResponse
+		if err := c.getJSON(ctx, "/api/v1/actions/"+url.PathEscape(rest[0])+"/binding", nil, &resp); err != nil {
+			return reportError(stderr, "action check", err)
+		}
+		serverTime = resp.ServerTime
+		bindings = []actionBinding{resp.Binding}
+	} else {
+		var query url.Values
+		if show != "" {
+			query = url.Values{"show": {show}}
+		}
+		var resp actionBindingsResponse
+		if err := c.getJSON(ctx, "/api/v1/actions/bindings", query, &resp); err != nil {
+			return reportError(stderr, "action check", err)
+		}
+		serverTime = resp.ServerTime
+		bindings = resp.Bindings
+	}
+	printClockSkew(stderr, serverTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, bindings); err != nil {
+			return reportError(stderr, "action check", err)
+		}
+		return exitCodeForActionBindings(bindings)
+	}
+	printActionBindings(stdout, bindings)
+	return exitCodeForActionBindings(bindings)
+}
+
+// exitCodeForActionBindings reports exitActionBindingBroken when any
+// binding is "broken", exitOK otherwise. "unknown" is never a reason to
+// exit 29.
+func exitCodeForActionBindings(bindings []actionBinding) int {
+	for _, b := range bindings {
+		if b.State == "broken" {
+			return exitActionBindingBroken
+		}
+	}
+	return exitOK
+}
+
+func printActionBindings(w io.Writer, bindings []actionBinding) {
+	if len(bindings) == 0 {
+		_, _ = fmt.Fprintln(w, "(no actions to check)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tSHOW\tSTATE\tREASON")
+	for _, b := range bindings {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.ActionID, b.Show, b.State, b.Reason)
+	}
+	_ = tw.Flush()
+}
+
+// minActionInvokeClientTimeout is "action invoke"'s minimum request
+// budget, mirroring minResolumeActionClientTimeout's identical reasoning:
+// the coordinator's own write deadline (actionInvokeHTTPWriteDeadline,
+// 150s, internal/coordinator/api/actioninvoke.go) can hold the response
+// open that long. Reconciled against it by
+// TestMinActionInvokeClientTimeoutExceedsServerDeadline.
+const minActionInvokeClientTimeout = 170 * time.Second
+
+func effectiveActionInvokeTimeout(flagTimeout time.Duration) time.Duration {
+	if flagTimeout < minActionInvokeClientTimeout {
+		return minActionInvokeClientTimeout
+	}
+	return flagTimeout
+}
+
+// cmdActionInvoke implements "showmeshctl action invoke <id>" (Track E
+// seam E7-1): POST /api/v1/actions/{id}/invocations, requiring
+// show:action:invoke. Exits 0 confirmed, 9 unconfirmed, 11 unconfirmable,
+// 12 failed, 13 refused — reusing the exact codes "resolume action
+// <verb>" already uses; the ADR-020 outcome vocabulary does not fork per
+// surface.
+func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl action invoke", stderr)
+	var revision int64
+	fs.Int64Var(&revision, "revision", 0, "pin the exact show.action revision to execute (SM-99); 0 (default) "+
+		"means \"whichever revision is active right now\"")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action invoke [flags] <action-id>")
+		_, _ = fmt.Fprintln(stderr, "\nInvoke one stored show.action by id, outside of any macro run")
+		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/actions/{id}/invocations, requires show:action:invoke).")
+		_, _ = fmt.Fprintln(stderr, "The action's own stored target supplies every parameter; this command")
+		_, _ = fmt.Fprintln(stderr, "passes none. --revision pins the exact revision to execute; a queued/")
+		_, _ = fmt.Fprintln(stderr, "durable caller should always set it, an interactive one may omit it.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "action invoke", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+	if revision < 0 {
+		return reportError(stderr, "action invoke", newCLIError(exitUsage, "--revision must be a positive revision number, got %d", revision))
+	}
+
+	timeout := effectiveActionInvokeTimeout(g.timeout)
+	if timeout != g.timeout {
+		_, _ = fmt.Fprintf(stderr,
+			"showmeshctl action invoke: --timeout %s is below this command's own minimum request budget of %s; "+
+				"using %s instead.\n", g.timeout, minActionInvokeClientTimeout, timeout)
+	}
+	c, err := newClient(g.server, g.token, &http.Client{Timeout: timeout})
+	if err != nil {
+		return reportError(stderr, "action invoke", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	key, err := newIdempotencyKey()
+	if err != nil {
+		return reportError(stderr, "action invoke", err)
+	}
+
+	req := actionInvocationRequest{IdempotencyKey: key}
+	if revision > 0 {
+		req.RequestedRevision = &revision
+	}
+	var resp actionInvocationResponse
+	if err := c.postJSON(ctx, "/api/v1/actions/"+url.PathEscape(id)+"/invocations", req, &resp); err != nil {
+		return reportError(stderr, "action invoke", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+	if resp.Result.Replay {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl action invoke: this idempotency key was already used; "+
+			"returning the ORIGINAL invocation's result (id %s), nothing was dispatched\n", resp.Result.ID)
+	}
+	if resp.Result.AttributionDegraded {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl action invoke: WARNING: the coordinator's audit write failed "+
+			"for this invocation; it proceeded anyway with degraded attribution recorded only to its own stderr\n")
+	}
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "action invoke", err)
+		}
+		return exitCodeForActionInvocation(resp.Result)
+	}
+	return reportActionInvocationResult(stdout, resp.Result)
+}
+
+// reportActionInvocationResult prints result's outcome, leading with the
+// outcome word and the reason, and returns the matching exit code.
+// "unconfirmable" is printed with its own distinct word, never merged
+// into "confirmed" — an operator who cannot tell the two apart at a
+// glance stops reading them (ADR-029 decision 4). result.Outcome is nil
+// while result.State is "pending" (SM-100) — a real lifecycle state, not
+// a blank outcome this command used to special-case.
+func reportActionInvocationResult(stdout io.Writer, result actionInvocationResult) int {
+	label := result.Label
+	if label == "" {
+		label = result.ActionID
+	}
+	if result.Outcome == nil {
+		_, _ = fmt.Fprintf(stdout, "pending: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitCommandUnconfirmed
+	}
+	switch *result.Outcome {
+	case "confirmed":
+		_, _ = fmt.Fprintf(stdout, "confirmed: %s (invocation %s): %s\n", label, result.ID, result.OutcomeReason)
+		return exitOK
+	case "unconfirmed":
+		_, _ = fmt.Fprintf(stdout, "unconfirmed: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitCommandUnconfirmed
+	case "unconfirmable":
+		_, _ = fmt.Fprintf(stdout, "unconfirmable: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitActionUnconfirmable
+	case "refused":
+		_, _ = fmt.Fprintf(stdout, "refused: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitActionRefused
+	case "failed":
+		_, _ = fmt.Fprintf(stdout, "failed: %s: %s (invocation %s)\n", label, result.OutcomeReason, result.ID)
+		return exitActionFailed
+	default:
+		_, _ = fmt.Fprintf(stdout, "%s: %s: %s (invocation %s)\n", *result.Outcome, label, result.OutcomeReason, result.ID)
+		return exitCommandUnconfirmed
+	}
+}
+
+func exitCodeForActionInvocation(result actionInvocationResult) int {
+	if result.Outcome == nil {
+		return exitCommandUnconfirmed
+	}
+	switch *result.Outcome {
+	case "confirmed":
+		return exitOK
+	case "unconfirmable":
+		return exitActionUnconfirmable
+	case "refused":
+		return exitActionRefused
+	case "failed":
+		return exitActionFailed
+	default:
+		return exitCommandUnconfirmed
+	}
 }

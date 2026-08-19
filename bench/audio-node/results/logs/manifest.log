@@ -1,0 +1,10 @@
+=== manifest ===
+gst-inspect-1.0 version 1.26.2
+GStreamer 1.26.2
+https://tracker.debian.org/pkg/gstreamer1.0
+13.6
+ii  gstreamer1.0-alsa:arm64         1.26.2-1+deb13u1 arm64        GStreamer plugin for ALSA
+ii  gstreamer1.0-plugins-bad:arm64  1.26.2-3+deb13u2 arm64        GStreamer plugins from the "bad" set
+ii  gstreamer1.0-plugins-base:arm64 1.26.2-1+deb13u1 arm64        GStreamer plugins from the "base" set
+ii  gstreamer1.0-plugins-good:arm64 1.26.2-1+deb13u2 arm64        GStreamer plugins from the "good" set
+ii  libltc11:arm64                  1.3.2-1+b2       arm64        linear timecode library

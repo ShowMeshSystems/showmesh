@@ -53,9 +53,12 @@ type assetRecord struct {
 }
 
 // assetResponse is the body of POST /api/v1/assets and GET /api/v1/assets/{id}.
+// RolledBack mirrors v1.AssetResponse.RolledBack: true only when the POST
+// performed ADR-028 decision 10's rollback.
 type assetResponse struct {
 	ServerTime time.Time   `json:"serverTime"`
 	Asset      assetRecord `json:"asset"`
+	RolledBack bool        `json:"rolledBack"`
 }
 
 // assetsListResponse is the body of GET /api/v1/assets.
@@ -413,8 +416,12 @@ func cmdAssetsUpload(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "\nStream a file into the asset store and register its metadata")
 		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/assets, multipart/form-data). Requires asset:write.")
 		_, _ = fmt.Fprintln(stderr, "\nRe-uploading IDENTICAL bytes for the same show/sequence/target is")
-		_, _ = fmt.Fprintln(stderr, "idempotent (prints the existing asset, no new row). Different bytes for")
-		_, _ = fmt.Fprintln(stderr, "the same identity supersede the previous current asset.")
+		_, _ = fmt.Fprintln(stderr, "idempotent when that identity is still current (prints the existing")
+		_, _ = fmt.Fprintln(stderr, "asset, no new row). Different bytes for the same identity supersede the")
+		_, _ = fmt.Fprintln(stderr, "previous current asset. Re-uploading bytes that match a SUPERSEDED")
+		_, _ = fmt.Fprintln(stderr, "identity is a ROLLBACK (ADR-028 decision 10): that asset becomes")
+		_, _ = fmt.Fprintln(stderr, "current again, superseding whatever was current, in one transaction.")
+		_, _ = fmt.Fprintln(stderr, "The response leads with a ROLLBACK line when this happens.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -485,6 +492,9 @@ func cmdAssetsUpload(args []string, stdout, stderr io.Writer, clock func() time.
 			return reportError(stderr, "assets upload", err)
 		}
 		return exitOK
+	}
+	if resp.RolledBack {
+		_, _ = fmt.Fprintf(stdout, "ROLLBACK: re-uploaded bytes matched a superseded asset; %s is current again and the asset that superseded it is now superseded.\n\n", resp.Asset.ID)
 	}
 	printAssetDetail(stdout, resp.Asset)
 	return exitOK

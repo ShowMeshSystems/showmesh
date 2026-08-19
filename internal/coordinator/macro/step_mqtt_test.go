@@ -75,13 +75,8 @@ func TestResolveMQTTPayloadMatch(t *testing.T) {
 	}
 }
 
-// TestExpectKindNoneNeverConfirms is acceptance criterion 5: an
-// expect.kind:none step reports unconfirmable, on every run, and never
-// confirmed. This is the required break-test 5 (see this builder's own
-// report for the sibling break-tests): broken by making publishAndAwait
-// return outcomeConfirmed for
-// MQTTExpectKindNone instead of outcomeUnconfirmable, which made this
-// test fail as expected before being reverted.
+// TestExpectKindNoneNeverConfirms proves an expect.kind:none step reports
+// unconfirmable, on every run, and never confirmed.
 func TestExpectKindNoneNeverConfirms(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	published := false
@@ -107,9 +102,9 @@ func TestExpectKindNoneNeverConfirms(t *testing.T) {
 	}
 }
 
-// TestMQTTUnknownBrokerIsFailedNotUnconfirmed pins STEP-9-SPEC.md wave 2
-// brief item 4's explicit rule: broker.ErrUnknownBroker is failed, with a
-// reason naming the broker identifier, never unconfirmed.
+// TestMQTTUnknownBrokerIsFailedNotUnconfirmed proves broker.ErrUnknownBroker
+// resolves failed, with a reason naming the broker identifier, never
+// unconfirmed.
 func TestMQTTUnknownBrokerIsFailedNotUnconfirmed(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	brokers := &fakeBrokers{awaitFn: func(ctx context.Context, id string, req broker.ResponseRequest) (broker.Message, error) {
@@ -128,8 +123,8 @@ func TestMQTTUnknownBrokerIsFailedNotUnconfirmed(t *testing.T) {
 	}
 }
 
-// TestMQTTDeadlineExceededIsUnconfirmed pins the other explicit rule from
-// the same item: deadline expiry is unconfirmed, not failed.
+// TestMQTTDeadlineExceededIsUnconfirmed proves deadline expiry resolves
+// unconfirmed, not failed.
 func TestMQTTDeadlineExceededIsUnconfirmed(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	brokers := &fakeBrokers{awaitFn: func(ctx context.Context, id string, req broker.ResponseRequest) (broker.Message, error) {
@@ -148,17 +143,9 @@ func TestMQTTDeadlineExceededIsUnconfirmed(t *testing.T) {
 	}
 }
 
-// TestMQTTRetainedDeliveryDoesNotConfirm is this package's own
-// defense-in-depth over [broker.BrokerManager.AwaitResponse]'s contract
-// (see publishAndAwait's own doc comment): even though AwaitResponse
-// itself guarantees Retained is always false on success, this package
-// does not trust that unconditionally — if a fake (standing in for a
-// future defect one layer down) violates it, the step must still resolve
-// unconfirmed, never confirmed. This is this task's own required
-// break-test 4 (STEP-9-SPEC.md section 7.2's retained-message trap, "the
-// discard path resolving unconfirmed rather than confirmed"): see this
-// builder's own report for what was changed in step_mqtt.go to make this
-// test fail, and that it did.
+// TestMQTTRetainedDeliveryDoesNotConfirm proves that even if a future
+// defect made AwaitResponse return Retained=true on success, the step
+// still resolves unconfirmed, never confirmed.
 func TestMQTTRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	brokers := &fakeBrokers{awaitFn: func(ctx context.Context, id string, req broker.ResponseRequest) (broker.Message, error) {
@@ -180,10 +167,9 @@ func TestMQTTRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	}
 }
 
-// TestMQTTBrokerRoutingUsesOneBrokerForBothPublishAndWait is acceptance
-// criterion 19's unit-level slice: Registry.AwaitResponse is called with
-// the action's own declared broker identifier, never a hardcoded or
-// mismatched one.
+// TestMQTTBrokerRoutingUsesOneBrokerForBothPublishAndWait proves
+// AwaitResponse is called with the action's own declared broker
+// identifier, never a hardcoded or mismatched one.
 func TestMQTTBrokerRoutingUsesOneBrokerForBothPublishAndWait(t *testing.T) {
 	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
 	var gotBrokerID string

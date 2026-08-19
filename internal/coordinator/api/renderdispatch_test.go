@@ -144,12 +144,24 @@ func renderPutActiveShow(t *testing.T, st *store.Store, showID string) {
 	if err != nil {
 		t.Fatalf("encode show.active payload: %v", err)
 	}
-	renderPutConfig(t, st, config.ShowActiveConfigKind, config.ShowActiveObjectID, payload)
+	ctx := context.Background()
+	rev := int64(1)
+	if obj, err := st.GetConfigObject(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID); err == nil {
+		rev = obj.CurrentRevision + 1
+	}
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowActiveConfigKind, ObjectID: config.ShowActiveObjectID, Revision: rev, PayloadJSON: payload, Source: "api",
+	}); err != nil {
+		t.Fatalf("create config revision show.active/active: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID, rev); err != nil {
+		t.Fatalf("activate config revision show.active/active: %v", err)
+	}
 }
 
 func renderCreateAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
-	rec, err := st.CreateAsset(context.Background(), store.AssetRecord{
+	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
 		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
@@ -622,13 +634,445 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 		t.Fatalf("publish count = %d, want exactly 1 — a replayed idempotency key must not dispatch a second time", setup.pub.count())
 	}
 	var result struct {
-		Command struct{ Replay bool } `json:"command"`
+		Command struct {
+			CommandID string `json:"commandId"`
+			Replay    bool   `json:"replay"`
+		} `json:"command"`
 	}
 	if err := json.Unmarshal([]byte(body2), &result); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if !result.Command.Replay {
 		t.Fatalf("replay = false, want true on the second request")
+	}
+	if n := countRenderAuditReplayEntries(t, setup.svc, result.Command.CommandID); n != 1 {
+		t.Fatalf("AuditReplay entries for command %s = %d, want 1", result.Command.CommandID, n)
+	}
+}
+
+// countRenderAuditReplayEntries counts identity.AuditReplay entries
+// recorded against commandID.
+func countRenderAuditReplayEntries(t *testing.T, svc identity.Service, commandID string) int {
+	t.Helper()
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.CommandID == commandID && e.Kind == identity.AuditReplay {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRenderDispatchReplayDifferentNodeIsConflict: the same idempotencyKey
+// reused against a different node is refused as a 409, not silently
+// replayed under a target this request never named.
+func TestRenderDispatchReplayDifferentNodeIsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"conflict-key-node"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+	var first struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody1), &first); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-02/render/surfaces/wall-1/clear", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different node) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "media-01") || !strings.Contains(p.Detail, "media-02") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested node", p.Detail)
+	}
+	if n := countRenderAuditReplayEntries(t, setup.svc, first.Command.CommandID); n != 1 {
+		t.Fatalf("AuditReplay entries for command %s = %d, want 1", first.Command.CommandID, n)
+	}
+}
+
+// TestRenderDispatchReplayDifferentSurfaceIsParamsConflict: surfaceId lives
+// inside params, so a reused key naming a different surface on the same
+// node must be caught by the params comparison.
+func TestRenderDispatchReplayDifferentSurfaceIsParamsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"conflict-key-surface"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+	var first struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody1), &first); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-2/clear", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different surface) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "wall-1") || !strings.Contains(p.Detail, "wall-2") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested params", p.Detail)
+	}
+	if n := countRenderAuditReplayEntries(t, setup.svc, first.Command.CommandID); n != 1 {
+		t.Fatalf("AuditReplay entries for command %s = %d, want 1", first.Command.CommandID, n)
+	}
+}
+
+// TestRenderDispatchReplaySameTargetDifferentActionIsConflict: same node
+// and surface, but a different action, is still a conflict.
+func TestRenderDispatchReplaySameTargetDifferentActionIsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"idempotencyKey":"conflict-key-action"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", body, token)
+	if resp, b := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/restart", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different action) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+}
+
+// TestRenderApplyReplayDifferentSequenceIsParamsConflict: apply's resolved
+// params are non-trivial (the FSEQ identity, not just surfaceId), so this
+// proves the params comparison catches a reused key naming a different
+// sequenceId there too.
+func TestRenderApplyReplayDifferentSequenceIsParamsConflict(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+	renderCreateAsset(t, setup.st, "halloween-2026", "closer", store.AssetTargetKindNode, "media-01", "hash-b", "closer.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"conflict-key-apply"}`, token)
+	if resp, b := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"closer","idempotencyKey":"conflict-key-apply"}`, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different sequenceId) status = %d, want 409; body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "opener") || !strings.Contains(p.Detail, "closer") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested sequenceId", p.Detail)
+	}
+}
+
+// TestRenderApplyReplaySameSequenceReturnsOriginalResultAfterAssetSuperseded
+// is Linear SM-81: a replay must be judged against the CALLER's own request
+// identity (surfaceId, sequenceId), never against resolveRenderApplyParams's
+// MUTABLE resolution. Between the two identical requests the current asset
+// for "opener" is superseded by a new upload with a different content hash —
+// the same caller input would now resolve to different params. The replay
+// must still return the FIRST dispatch's own result (hash-a), never
+// re-resolve and never dispatch a second command.
+func TestRenderApplyReplaySameSequenceReturnsOriginalResultAfterAssetSuperseded(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"sequenceId":"opener","idempotencyKey":"replay-state-changed"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+	var first struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+			Outcome   string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody1), &first); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	// Supersede the current asset for "opener" — the same caller input now
+	// resolves to a DIFFERENT fseqContentHash.
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-b", "opener-v2.fseq")
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200 (identical caller input must replay the original result); body: %s", resp2.StatusCode, respBody2)
+	}
+	var second struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+			Replay    bool   `json:"replay"`
+			Outcome   string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &second); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if !second.Command.Replay {
+		t.Fatalf("replay = false, want true")
+	}
+	if second.Command.CommandID != first.Command.CommandID {
+		t.Fatalf("replay commandId = %q, want the original command %q", second.Command.CommandID, first.Command.CommandID)
+	}
+	if second.Command.Outcome != first.Command.Outcome {
+		t.Fatalf("replay outcome = %q, want the original outcome %q", second.Command.Outcome, first.Command.Outcome)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a replay must never dispatch a second command", setup.pub.count())
+	}
+	if got := setup.pub.payload[0].Payload.Params["fseqContentHash"]; got != "hash-a" {
+		t.Fatalf("dispatched fseqContentHash = %v, want the ORIGINAL hash-a — only one command was ever dispatched", got)
+	}
+}
+
+// TestRenderApplyReplaySameSequenceReturnsOriginalResultEvenWhenResolutionWouldNowFail
+// is SM-81's second wrong behaviour: between the two identical requests the
+// active show changes out from under the surface, so a FRESH resolution of
+// this exact same caller input would now be refused outright ("not the
+// active show"). The replay must still return the first dispatch's own
+// result, never attempt to re-resolve and never surface that refusal.
+func TestRenderApplyReplaySameSequenceReturnsOriginalResultEvenWhenResolutionWouldNowFail(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"sequenceId":"opener","idempotencyKey":"replay-resolution-would-fail"}`
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply", body, token)
+	resp1, respBody1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp1.StatusCode, respBody1)
+	}
+	var first struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody1), &first); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	// The active show changes: a FRESH resolution of "wall-1"/"opener" would
+	// now be refused ("belongs to show ... not the active show").
+	renderPutActiveShow(t, setup.st, "christmas-2026")
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply", body, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200 (a replay must return the original result, never re-resolve and fail); body: %s", resp2.StatusCode, respBody2)
+	}
+	var second struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+			Replay    bool   `json:"replay"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &second); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if !second.Command.Replay {
+		t.Fatalf("replay = false, want true")
+	}
+	if second.Command.CommandID != first.Command.CommandID {
+		t.Fatalf("replay commandId = %q, want the original command %q", second.Command.CommandID, first.Command.CommandID)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a replay must never dispatch a second command", setup.pub.count())
+	}
+}
+
+// TestRenderApplyReplayDifferentSequenceIsConflictEvenWhenNewSequenceFailsToResolve
+// proves the idempotency check runs BEFORE apply's mutable resolution: the
+// second request names a sequenceId with NO asset at all, which — resolved
+// on its own — would be a 400 ("no asset found"). Reused against an
+// idempotency key already bound to a genuinely different sequenceId, it
+// must be answered as a 409 conflict naming the mismatch, and must never
+// even attempt to resolve or dispatch.
+func TestRenderApplyReplayDifferentSequenceIsConflictEvenWhenNewSequenceFailsToResolve(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+	// Deliberately no asset for "missing-sequence".
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req1 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"conflict-key-unresolvable"}`, token)
+	if resp, b := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+
+	req2 := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"missing-sequence","idempotencyKey":"conflict-key-unresolvable"}`, token)
+	resp2, respBody2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second dispatch (different, unresolvable sequenceId) status = %d, want 409 (never a 400 from an attempted resolution); body: %s", resp2.StatusCode, respBody2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1 — a conflicting idempotency key must never dispatch", setup.pub.count())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(respBody2), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "opener") || !strings.Contains(p.Detail, "missing-sequence") {
+		t.Fatalf("detail = %q, want it to name both the existing and the requested sequenceId", p.Detail)
 	}
 }
 

@@ -32,7 +32,7 @@ func TestCreateAssetPersistsAndIsCurrent(t *testing.T) {
 	ctx := context.Background()
 
 	in := newTestAsset("asset-1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
-	out, err := st.CreateAsset(ctx, in)
+	out, _, err := st.CreateAsset(ctx, in)
 	if err != nil {
 		t.Fatalf("create asset: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCreateAssetIdenticalIdentityIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 
 	first := newTestAsset("asset-1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
-	created, err := st.CreateAsset(ctx, first)
+	created, _, err := st.CreateAsset(ctx, first)
 	if err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCreateAssetIdenticalIdentityIsIdempotent(t *testing.T) {
 	second := newTestAsset("asset-2", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
 	second.StorageKey = "ab/different-staging-path"
 
-	_, err = st.CreateAsset(ctx, second)
+	_, _, err = st.CreateAsset(ctx, second)
 	if err == nil {
 		t.Fatalf("second create of an identical identity succeeded, want *AssetIdentityExistsError")
 	}
@@ -127,12 +127,12 @@ func TestCreateAssetSupersedesPriorCurrentInSameTransaction(t *testing.T) {
 	ctx := context.Background()
 
 	first := newTestAsset("asset-1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
-	if _, err := st.CreateAsset(ctx, first); err != nil {
+	if _, _, err := st.CreateAsset(ctx, first); err != nil {
 		t.Fatalf("create first: %v", err)
 	}
 
 	second := newTestAsset("asset-2", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "Thriller.fseq")
-	if _, err := st.CreateAsset(ctx, second); err != nil {
+	if _, _, err := st.CreateAsset(ctx, second); err != nil {
 		t.Fatalf("create second: %v", err)
 	}
 
@@ -158,6 +158,177 @@ func TestCreateAssetSupersedesPriorCurrentInSameTransaction(t *testing.T) {
 	}
 	if len(current) != 1 || current[0].ID != "asset-2" {
 		t.Errorf("current assets = %+v, want exactly [asset-2]", current)
+	}
+}
+
+// TestCreateAssetRollsBackSupersededIdentity proves the rollback path
+// (ADR-028 decision 10): rolledBack=true, no third row inserted.
+func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	a := newTestAsset("asset-a", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || rb {
+		t.Fatalf("create a: rolledBack=%v err=%v, want false/nil", rb, err)
+	}
+	b := newTestAsset("asset-b", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "Thriller.fseq")
+	if _, rb, err := st.CreateAsset(ctx, b); err != nil || rb {
+		t.Fatalf("create b: rolledBack=%v err=%v, want false/nil", rb, err)
+	}
+
+	// Re-upload A's exact identity (same ID, same everything) — the
+	// rollback trigger.
+	rolledBack, rb, err := st.CreateAsset(ctx, a)
+	if err != nil {
+		t.Fatalf("rollback create: %v", err)
+	}
+	if !rb {
+		t.Fatal("rolledBack = false, want true (a's identity was superseded)")
+	}
+	if rolledBack.ID != "asset-a" || rolledBack.SupersededAt != nil {
+		t.Errorf("rollback result = %+v, want asset-a current", rolledBack)
+	}
+
+	gotA, err := st.GetAsset(ctx, "asset-a")
+	if err != nil {
+		t.Fatalf("get a: %v", err)
+	}
+	if gotA.SupersededAt != nil {
+		t.Errorf("asset-a SupersededAt = %v, want nil after rollback", gotA.SupersededAt)
+	}
+	gotB, err := st.GetAsset(ctx, "asset-b")
+	if err != nil {
+		t.Fatalf("get b: %v", err)
+	}
+	if gotB.SupersededAt == nil {
+		t.Error("asset-b SupersededAt = nil, want it superseded by the rollback")
+	}
+
+	all, err := st.ListAssets(ctx, AssetFilter{ShowID: "halloween-2026", SequenceID: "opening"})
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("row count after rollback = %d, want 2 (no third row inserted)", len(all))
+	}
+
+	current, err := st.ListCurrentAssetsForTarget(ctx, "halloween-2026", AssetTargetKindNode, "render-01")
+	if err != nil {
+		t.Fatalf("list current: %v", err)
+	}
+	if len(current) != 1 || current[0].ID != "asset-a" {
+		t.Errorf("current assets = %+v, want exactly [asset-a]", current)
+	}
+}
+
+// TestRollbackCurrentAssetCanHaveOlderCreatedAtThanSuperseded is the
+// durable guard the review asked for: it proves CreatedAt ordering is NOT
+// a valid way to find the current asset. A rollback restores an old row
+// without touching its CreatedAt, so after a rollback the current row's
+// CreatedAt is older than the row it just superseded — the opposite of
+// what "newest by CreatedAt wins" would assume. SupersededAt nil is the
+// only correct test, and this test fails loudly if anyone changes that.
+func TestRollbackCurrentAssetCanHaveOlderCreatedAtThanSuperseded(t *testing.T) {
+	clock := &fakeClock{t: mustTime(t, "2026-01-01T00:00:00Z")}
+	st := openTestStore(t, clock)
+	ctx := context.Background()
+
+	a := newTestAsset("older-a", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "f.fseq")
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || rb {
+		t.Fatalf("create a: rolledBack=%v err=%v", rb, err)
+	}
+
+	clock.advance(time.Hour)
+	b := newTestAsset("newer-b", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "f.fseq")
+	if _, rb, err := st.CreateAsset(ctx, b); err != nil || rb {
+		t.Fatalf("create b: rolledBack=%v err=%v", rb, err)
+	}
+
+	clock.advance(time.Hour)
+	rolledBack, rb, err := st.CreateAsset(ctx, a)
+	if err != nil || !rb {
+		t.Fatalf("rollback to a: rolledBack=%v err=%v, want true/nil", rb, err)
+	}
+
+	current, err := st.GetAsset(ctx, "older-a")
+	if err != nil {
+		t.Fatalf("get current: %v", err)
+	}
+	superseded, err := st.GetAsset(ctx, "newer-b")
+	if err != nil {
+		t.Fatalf("get superseded: %v", err)
+	}
+
+	if current.SupersededAt != nil {
+		t.Fatalf("current.SupersededAt = %v, want nil", current.SupersededAt)
+	}
+	if superseded.SupersededAt == nil {
+		t.Fatalf("superseded.SupersededAt = nil, want set")
+	}
+	if !current.CreatedAt.Before(superseded.CreatedAt) {
+		t.Fatalf("current.CreatedAt %v is not before superseded.CreatedAt %v — this test's whole premise (rollback preserves the restored row's original CreatedAt) no longer holds",
+			current.CreatedAt, superseded.CreatedAt)
+	}
+	if rolledBack.CreatedAt != current.CreatedAt {
+		t.Fatalf("CreateAsset's own return CreatedAt = %v, want it to match the re-fetched row %v", rolledBack.CreatedAt, current.CreatedAt)
+	}
+}
+
+// TestCreateAssetRollbackRollForwardRollbackCycleTerminates proves a
+// rollback/roll-forward/rollback cycle stays at two rows, never a walk.
+func TestCreateAssetRollbackRollForwardRollbackCycleTerminates(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	a := newTestAsset("cycle-a", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "f.fseq")
+	b := newTestAsset("cycle-b", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "f.fseq")
+
+	mustCurrent := func(wantID string) {
+		t.Helper()
+		current, err := st.ListCurrentAssetsForTarget(ctx, "halloween-2026", AssetTargetKindNode, "render-01")
+		if err != nil {
+			t.Fatalf("list current: %v", err)
+		}
+		if len(current) != 1 || current[0].ID != wantID {
+			t.Fatalf("current = %+v, want exactly [%s]", current, wantID)
+		}
+	}
+
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || rb {
+		t.Fatalf("create a: rolledBack=%v err=%v", rb, err)
+	}
+	mustCurrent("cycle-a")
+
+	if _, rb, err := st.CreateAsset(ctx, b); err != nil || rb {
+		t.Fatalf("create b: rolledBack=%v err=%v", rb, err)
+	}
+	mustCurrent("cycle-b")
+
+	// Rollback to A.
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || !rb {
+		t.Fatalf("rollback to a: rolledBack=%v err=%v, want true/nil", rb, err)
+	}
+	mustCurrent("cycle-a")
+
+	// Roll forward to B — mechanically the identical rollback operation
+	// run against B's now-superseded identity.
+	if _, rb, err := st.CreateAsset(ctx, b); err != nil || !rb {
+		t.Fatalf("roll forward to b: rolledBack=%v err=%v, want true/nil", rb, err)
+	}
+	mustCurrent("cycle-b")
+
+	// Rollback to A again — the second time around the cycle.
+	if _, rb, err := st.CreateAsset(ctx, a); err != nil || !rb {
+		t.Fatalf("second rollback to a: rolledBack=%v err=%v, want true/nil", rb, err)
+	}
+	mustCurrent("cycle-a")
+
+	all, err := st.ListAssets(ctx, AssetFilter{ShowID: "halloween-2026", SequenceID: "opening"})
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("row count after a full cycle = %d, want 2 (still no third row)", len(all))
 	}
 }
 
@@ -219,7 +390,7 @@ func TestCreateAssetRequiresFields(t *testing.T) {
 			ctx := context.Background()
 			rec := base
 			tc.break_(&rec)
-			if _, err := st.CreateAsset(ctx, rec); err == nil {
+			if _, _, err := st.CreateAsset(ctx, rec); err == nil {
 				t.Errorf("CreateAsset with empty %s succeeded, want an error", tc.name)
 			}
 		})
@@ -243,7 +414,7 @@ func TestThreeAssetsSameRuntimeFilenameResolveIndependently(t *testing.T) {
 		newTestAsset("asset-garage", "halloween-2026", "opening", AssetTargetKindNode, "media-garage", "sha256:garage", filename),
 	}
 	for _, a := range assets {
-		if _, err := st.CreateAsset(ctx, a); err != nil {
+		if _, _, err := st.CreateAsset(ctx, a); err != nil {
 			t.Fatalf("create %s: %v", a.ID, err)
 		}
 	}
@@ -298,7 +469,7 @@ func TestListAssetsFilters(t *testing.T) {
 		newTestAsset("a5", "halloween-2026", "opening", AssetTargetKindShow, "", "sha256:a5", "announce.mp3"),
 	}
 	for _, a := range seed {
-		if _, err := st.CreateAsset(ctx, a); err != nil {
+		if _, _, err := st.CreateAsset(ctx, a); err != nil {
 			t.Fatalf("create %s: %v", a.ID, err)
 		}
 	}
@@ -347,10 +518,10 @@ func TestListCurrentAssetsForTargetExcludesSuperseded(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
 
-	if _, err := st.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq")); err != nil {
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq")); err != nil {
 		t.Fatalf("create a1: %v", err)
 	}
-	if _, err := st.CreateAsset(ctx, newTestAsset("a2", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a2", "f.fseq")); err != nil {
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a2", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a2", "f.fseq")); err != nil {
 		t.Fatalf("create a2: %v", err)
 	}
 
@@ -379,7 +550,7 @@ func TestCreateAssetTxForm(t *testing.T) {
 	ctx := context.Background()
 
 	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
-		_, err := tx.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq"))
+		_, _, err := tx.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq"))
 		return err
 	})
 	if err != nil {
@@ -407,7 +578,7 @@ func TestCreateAssetTxFormRollsBackOnError(t *testing.T) {
 	rec := newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq")
 
 	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
-		if _, err := tx.CreateAsset(ctx, rec); err != nil {
+		if _, _, err := tx.CreateAsset(ctx, rec); err != nil {
 			return err
 		}
 		// Deliberately fail the transaction after a successful write inside

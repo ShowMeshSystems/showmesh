@@ -1,4 +1,5 @@
 import type {
+  ActionBindingState,
   ControlPlaneState,
   DiscoveryState,
   EventSeverity,
@@ -158,4 +159,26 @@ export function DeclarationBadge({ declared, discoveryState }: { declared: boole
     label: `unrecognized discovery state (${String(discoveryState)})`,
   }
   return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// One show.action's pre-show binding check (ADR-029). "unknown" is never
+// a soft "ok" — the check could not be performed at all, distinct in tone
+// from both "ok" and "broken".
+const ACTION_BINDING_STATE: Record<ActionBindingState, { tone: StatusTone; icon: string; label: string }> = {
+  ok: { tone: 'good', icon: '●', label: 'ok' },
+  broken: { tone: 'bad', icon: '✕', label: 'broken' },
+  unknown: { tone: 'unknown', icon: '?', label: 'unknown' },
+}
+
+export function ActionBindingBadge({ state, reason }: { state: ActionBindingState; reason: string }) {
+  const spec = ACTION_BINDING_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return (
+    <span title={reason}>
+      <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+    </span>
+  )
 }

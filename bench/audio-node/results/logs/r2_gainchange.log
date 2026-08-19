@@ -1,0 +1,2 @@
+=== R2/R4: gain change during playback (the ramp itself; see R4) ===
+Answered by R4 below: the same GstController ramp mechanism is what a live gain/duck change would use, and R4 measures its envelope behaviour directly. Not re-measured separately here.

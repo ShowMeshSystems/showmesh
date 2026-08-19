@@ -14,7 +14,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-004](RES-004-virtual-matrix-renderer-performance.md) | Virtual-matrix renderer performance | planned (reference profile decided; bench L0) | critical | RES-002 |
 | [RES-005](RES-005-ndi-vs-hdmi-transport.md) | NDI versus HDMI transport | testing (single-surface wired NDI soak L2 2026-08-16; alignment, multi-surface, HDMI, recovery L0) | critical | RES-004, RES-006 |
 | [RES-006](RES-006-linux-ndi-support.md) | Linux NDI support | testing (amd64 sender L2 2026-08-16; arm64 and Ubuntu open; plugin built from source) | high | — |
-| [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench, L0) | critical | RES-002 |
+| [RES-007](RES-007-audio-node-architecture.md) | Audio-node architecture | planned (bench; graph/pipeline behaviour **L2** 2026-08-18; device-dependent behaviour L0) | critical | RES-002 |
 | [RES-008](RES-008-configuration-model.md) | Configuration model | planned (constraint survey L1, re-run 2026-08-13 at schema v6; D1–D6 decided, D1/D2 shipped in Step 7; §4 macro decisions L0) | high | — |
 | [RES-009](RES-009-failure-mode-testing.md) | Failure-mode testing | planned | critical | whatever is integrated; the matrix fills in as tracks land |
 | [RES-010](RES-010-projection-preview-monitoring.md) | Projection preview monitoring | planned (L1) | critical | RES-005, RES-006 |
@@ -24,6 +24,8 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-014](RES-014-control-provider-model.md) | Control-provider model | unresearched | medium | RES-012 |
 | [RES-015](RES-015-fpp-plugin-distribution-model.md) | FPP plugin repository, distribution, and on-host integration | planned (L1) | high | — |
 | [RES-016](RES-016-third-party-synchronized-audio-output.md) | Third-party synchronized audio: advance provisioning, playout, and evidence | planned (L0) | high | RES-007 |
+| [RES-017](RES-017-fseq-format.md) | FSEQ format and duration evidence | planned (L1) | medium | RES-002 |
+| [RES-018](RES-018-fpp-brightness-control.md) | FPP brightness composition and plugin runtime | planned (design/source L1; stock-command absence L2; implementation L0) | high | RES-015 |
 
 RES-009 is not a terminal record: each failure row is exercised against the assembled system as soon as the relevant path exists, and findings drive hardening.
 

@@ -491,3 +491,29 @@ func TestReconcileMQTTStepMidFlightIsNotSkipped(t *testing.T) {
 		t.Fatalf("step 1 Outcome = %q, want %q (no dispatch audit entry exists for it)", s1.Outcome, outcomeSkipped)
 	}
 }
+
+// TestRunExecutesWithAShowThatDoesNotExist proves a macro's "show" naming
+// no configured show object still runs — existence is a write-time gate
+// on the config package's own Decode functions, never re-checked here.
+func TestRunExecutesWithAShowThatDoesNotExist(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	dispatch := &fakeDispatcher{dispatchFn: func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
+		now := time.Now()
+		return api.FPPCommandOutcome{
+			CommandID: "cmd-1", Outcome: "confirmed", OutcomeState: "confirmed", OutcomeReason: "observed state moved",
+			DispatchedAt: ptrTime(now), ResolvedAt: ptrTime(now),
+		}, nil, nil
+	}}
+	e, _ := newTestExecutor(t, st, svc, dispatch, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	run := submitAndWait(t, e, api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "k-no-show", Trigger: "api", Issuer: testIssuer()})
+	if run.Run.Completed == nil || !*run.Run.Completed {
+		t.Fatalf("Completed = %v, want true", run.Run.Completed)
+	}
+	if dispatch.callCount() != 1 {
+		t.Fatalf("dispatch called %d times, want 1 (a nonexistent show must not block the run)", dispatch.callCount())
+	}
+}

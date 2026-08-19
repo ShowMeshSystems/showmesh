@@ -94,6 +94,13 @@ type Config struct {
 	// pipeline is show-affecting in a way a stale asset list is not.
 	RenderReportInterval time.Duration
 
+	// AudioReportInterval is how often this agent publishes its audio
+	// discovery report (internal/agent/audioreport.go) when no probe result
+	// has already triggered one. Matches RenderReportInterval's default and
+	// reasoning: a node that never runs audio still costs nothing publishing
+	// an empty report on this cadence.
+	AudioReportInterval time.Duration
+
 	// MultiSyncListenAddr is the local "host:port" the render node's
 	// MultiSync listener binds. Defaults to "" meaning
 	// pkg/multisync.NewListener's own default (":32320", the fixed FPP
@@ -127,6 +134,7 @@ const (
 	envAgentAPIToken          = "SHOWMESH_AGENT_API_TOKEN"
 	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
 	envRenderReportInterval   = "SHOWMESH_RENDER_REPORT_INTERVAL"
+	envAudioReportInterval    = "SHOWMESH_AUDIO_REPORT_INTERVAL"
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 
@@ -135,6 +143,7 @@ const (
 	defaultAssetDir               = "./assets"
 	defaultAssetInventoryInterval = 2 * time.Minute
 	defaultRenderReportInterval   = 15 * time.Second
+	defaultAudioReportInterval    = 15 * time.Second
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -220,6 +229,18 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		renderReportInterval = d
 	}
 
+	audioReportInterval := defaultAudioReportInterval
+	if raw, ok := lookup(envAudioReportInterval); ok && raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s %q is not a valid duration: %w", envAudioReportInterval, raw, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("%s %q must be positive", envAudioReportInterval, raw)
+		}
+		audioReportInterval = d
+	}
+
 	cfg := Config{
 		NodeID:                 nodeID,
 		NodeLabel:              getEnvDefault(lookup, envNodeLabel, ""),
@@ -233,6 +254,7 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AgentAPIToken:          getEnvDefault(lookup, envAgentAPIToken, ""),
 		AssetInventoryInterval: assetInventoryInterval,
 		RenderReportInterval:   renderReportInterval,
+		AudioReportInterval:    audioReportInterval,
 		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
 	}
@@ -365,6 +387,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envRenderReportInterval)
 	}
 
+	if c.AudioReportInterval <= 0 {
+		return fmt.Errorf("%s must be positive", envAudioReportInterval)
+	}
+
 	return nil
 }
 
@@ -408,6 +434,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("agent_api_token", token),
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 		slog.Duration("render_report_interval", c.RenderReportInterval),
+		slog.Duration("audio_report_interval", c.AudioReportInterval),
 		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
 		slog.String("multisync_interface", c.MultiSyncInterface),
 	)

@@ -37,6 +37,7 @@ var migrations = []migration{
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
 	{version: 8, sql: schemaV8},
+	{version: 9, sql: schemaV9},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -963,12 +964,11 @@ CREATE TABLE macro_run_steps (
 //
 // assets_identity (ADR-028 decision 1: "identity is show plus logical
 // sequence plus target plus content hash") is the permanent, never-pruned
-// identity of an artifact — it has no WHERE clause, so it also blocks
-// re-registering a hash that was already used and later superseded, which
-// is correct: that exact identity already has a row, and a caller finding
-// one via this index gets the idempotent "already exists" answer
-// (assets.go's ErrAssetExists) rather than a second row for content this
-// store has already seen under that identity.
+// identity of an artifact — it has no WHERE clause, so re-registering a
+// hash already seen under that identity never inserts a second row.
+// assets.go's createAsset resolves the hit two ways: still current is the
+// idempotent no-op (ErrAssetExists); superseded is ADR-028 decision 10's
+// rollback, which un-supersedes that row instead of inserting a new one.
 //
 // assets_current is the structural half of that same decision: at most one
 // row per (show_id, sequence_id, target_kind, target_id) may have
@@ -1047,6 +1047,26 @@ CREATE TABLE node_asset_reports (
     complete    INTEGER NOT NULL,
     reason      TEXT NOT NULL
 );
+`
+
+// schemaV9 holds one durable row per audio playback session, mirroring
+// the coordinator's own view of desired state (pkg/audio.
+// SessionDesiredState) so a coordinator restart can still tell a stale
+// command replay from a fresh one without asking the node. The node's own
+// agent is a session's actual authority: a running session must survive
+// coordinator loss, so this table is the coordinator's durable RECORD of
+// what it last told a session to be, not a second engine.
+const schemaV9 = `
+CREATE TABLE audio_sessions (
+    id           TEXT PRIMARY KEY,
+    node_id      TEXT NOT NULL,
+    desired_json TEXT NOT NULL,
+    revision     INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX audio_sessions_by_node ON audio_sessions (node_id);
 `
 
 // migrate applies every pending migration inside one transaction and

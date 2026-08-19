@@ -410,6 +410,45 @@ func TestPutFPPMQTTConfigNullPasswordClears(t *testing.T) {
 	}
 }
 
+// TestPutFPPMQTTConfigEmptyStringPasswordClears proves the second half of
+// decodeFPPMQTTConfigPutBody's documented policy: an explicit "" is the
+// scalar-string equivalent of null (JSON has no third way to say "make
+// this field explicitly nothing" for a plain string), so it clears exactly
+// like null, distinctly from an absent key which keeps the stored value.
+func TestPutFPPMQTTConfigEmptyStringPasswordClears(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	deps, secret := fppMQTTConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	setup := `{"brokerURL":"tcp://10.0.1.5:1883","hosts":{"player-01":"FPP-Player"},"password":"original-secret"}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.mqtt", setup, auth)
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	clear := `{"password":""}`
+	req = newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.mqtt", clear, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear PUT status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	payload := m["payload"].(map[string]any)
+	if passwordSet, _ := payload["passwordSet"].(bool); passwordSet {
+		t.Errorf("passwordSet after clearing with \"\" = %v, want false", payload["passwordSet"])
+	}
+	present, err := secret.HasFPPMQTTPassword(context.Background())
+	if err != nil {
+		t.Fatalf("HasFPPMQTTPassword: %v", err)
+	}
+	if present {
+		t.Fatalf("HasFPPMQTTPassword = true after an explicit \"\" clear, want false")
+	}
+}
+
 func TestPutFPPMQTTConfigEnvVarSetRefusesWith409(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
