@@ -190,6 +190,10 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 			return h.nightEndSessionDecide(now, current), nil, nil
 		})
+	case cmd == nightCommandRunReadiness:
+		// Runs its own FPP/asset work outside any transaction — see
+		// [handlers.nightRunReadinessCommand]'s own doc comment.
+		out, problem, opErr = h.nightRunReadinessCommand(ctx, now, issuer)
 	case nightExemptFromDegradedGate[cmd]:
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 			return h.nightDecideExemptCommand(cmd, now, current)
@@ -207,6 +211,15 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
+	}
+
+	// Attribute the night loop's own autonomous FPP dispatches to the
+	// principal who authorized this session (nightissuer.go); an ended
+	// session's attribution must not leak onto whatever id is reused next.
+	if cmd == nightCommandEndSession {
+		forgetNightIssuer(out.result.ID)
+	} else {
+		recordNightIssuer(out.result.ID, nightIssuerFromAudit(issuer))
 	}
 
 	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge)
@@ -239,8 +252,11 @@ func (h *handlers) nightDecideExemptCommand(cmd string, now time.Time, current *
 }
 
 // nightDecideGatedCommand applies invariant 4 (a degraded, non-terminal
-// session refuses every gated command) and then dispatches to the four
-// admission-opening commands' own decide functions.
+// session refuses every gated command) and then dispatches to the
+// admission-opening commands' own decide functions. run-readiness is NOT
+// here: it needs FPP/asset work outside any transaction, so
+// handleNightCommand routes it to [handlers.nightRunReadinessCommand]
+// directly instead.
 func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf("night session is degraded (%s); run end-session, then prepare-site, to recover", current.DegradedReason))
@@ -249,8 +265,6 @@ func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cm
 	switch cmd {
 	case nightCommandPrepareSite:
 		return h.nightPrepareSiteTx(ctx, tx, now, current, idempotencyKey)
-	case nightCommandRunReadiness:
-		return h.nightRunReadinessTx(ctx, tx, now, current)
 	case nightCommandStartPreshow:
 		return h.nightStartPreshow(now, current)
 	case nightCommandStartNight:
@@ -625,82 +639,156 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 
 // --- readiness ---
 
+// nightCheckState is one readiness check's own state — a superset of
+// observation.Health, adding nightCheckStateNotVerifiable for a check that
+// is structurally incapable of ever reporting anything else (owner
+// ruling, ADR-029 decision 4's rule applied to readiness: an indicator
+// that can never change colour teaches the operator to ignore it, and a
+// check that is always "unknown" is that defect wearing the honest
+// label). A not_verifiable check is excluded from the aggregate outcome
+// below but always listed, so "ready" means "everything checkable checked
+// out, and here is what is not checkable" rather than being permanently
+// unreachable.
+type nightCheckState string
+
+const (
+	nightCheckStateNotVerifiable nightCheckState = "not_verifiable"
+)
+
 type nightReadinessCheck struct {
 	name   string
-	health observation.Health
+	health nightCheckState
 	reason string
 }
 
-// nightRunReadinessTx checks exactly one signal, fpp.reachable, for every
-// FPP instance the pinned night.session revision references — see
-// [nightCheckFPPReachable]'s own doc comment for the full scope statement.
-// An outcome here never withholds start-night by itself (invariant 5);
-// only the epoch/freshness gate does, since no blocking-interlock
-// mechanism exists yet.
-func (h *handlers) nightRunReadinessTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-	if current == nil {
+// nightRunReadinessCommand computes readiness OUTSIDE any store
+// transaction and persists the result inside a short one: FPP HTTP reads
+// and the asset blob copy inside nightComputeReadinessChecks can each
+// take seconds, and the store's single connection (SetMaxOpenConns(1))
+// must never be held across that or every other request stalls.
+func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry) (nightCommandOutcome, *v1.Problem, error) {
+	current, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		return nightCommandOutcome{}, nil, err
+	}
+	if problem := nightValidateReadinessEpoch(&current, ok); problem != nil {
+		return nightCommandOutcome{}, problem, nil
+	}
+
+	payload, err := h.getPinnedNightSessionPayload(ctx, current)
+	if err != nil {
+		return nightCommandOutcome{}, nil, err
+	}
+	checks, outcome := h.nightComputeReadinessChecks(ctx, now, payload)
+	checksJSON, err := json.Marshal(nightEncodeChecks(checks))
+	if err != nil {
+		return nightCommandOutcome{}, nil, fmt.Errorf("api: encode night readiness checks: %w", err)
+	}
+
+	return h.nightRunGated(ctx, now, nightCommandRunReadiness, issuer, func(ctx context.Context, tx *store.Tx, curTx *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+		var curVal store.NightSessionRecord
+		if curTx != nil {
+			curVal = *curTx
+		}
+		if problem := nightValidateReadinessEpoch(&curVal, curTx != nil); problem != nil {
+			return nightCommandOutcome{}, problem, nil
+		}
+		if curTx.ID != current.ID {
+			p := nightNotReadyProblem("run-readiness: the preparation epoch changed while readiness was being computed; run run-readiness again")
+			return nightCommandOutcome{}, &p, nil
+		}
+		rec := store.NightReadinessRecord{
+			ID: uuid.NewString(), SessionID: curTx.ID, EpochID: curTx.ID,
+			CompletedAt: now, Outcome: outcome, ChecksJSON: string(checksJSON),
+		}
+		if err := tx.CreateNightReadiness(ctx, rec); err != nil {
+			return nightCommandOutcome{}, nil, err
+		}
+		next := *curTx
+		next.ReadinessID = rec.ID
+		return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+	})
+}
+
+// nightValidateReadinessEpoch is run-readiness's own state gate (invariant
+// 2), shared by the pre-read and the tx-bound re-check.
+func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1.Problem {
+	if !ok || current == nil {
 		p := nightNotReadyProblem("run-readiness: no preparation epoch is open; run prepare-site first")
-		return nightCommandOutcome{}, &p, nil
+		return &p
+	}
+	if current.Degraded && current.State != nightStateStopped {
+		p := nightAmbiguousProblem(fmt.Sprintf("night session is degraded (%s); run end-session, then prepare-site, to recover", current.DegradedReason))
+		return &p
 	}
 	switch current.State {
 	case nightStateInactive, nightStateStopped, nightStateFadingOut:
 		p := nightNotReadyProblem("run-readiness: no preparation epoch is open; run prepare-site first")
-		return nightCommandOutcome{}, &p, nil
+		return &p
 	}
+	return nil
+}
 
-	payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, *current)
-	if err != nil {
-		return nightCommandOutcome{}, nil, err
-	}
-
+// nightComputeReadinessChecks runs fpp.reachable for every FPP instance
+// the pinned night.session revision references, plus the FPP-facing
+// checks in nightasset.go: the pinned resting FSEQ asset's duration, the
+// resting playlist's idle-read shape, the show playlist's presence, and
+// whether the exact deployed FSEQ variant can be confirmed
+// (not_verifiable, excluded from outcome — see [nightCheckState]). None
+// of this touches the store transactionally; every read here is the
+// ordinary non-tx form.
+func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload) ([]nightReadinessCheck, string) {
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
 	var checks []nightReadinessCheck
-	worst := observation.HealthHealthy
+	worst := nightHealthHealthy()
 	for id := range instanceIDs {
 		if id == "" {
 			continue
 		}
 		checks = append(checks, h.nightCheckFPPReachable(ctx, now, id))
 	}
+
+	cueOffsets := append(nightParseCueOffsets(payload.EnterShow.Cues), nightParseCueOffsets(payload.EnterResting.Cues)...)
+	checks = append(checks, nightCheckRestingAssetDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset, cueOffsets))
+	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.Resting.FPPInstanceID); err == nil && ok {
+		checks = append(checks, nightCheckRestingPlaylistShape(ctx, endpoint, payload.Resting.Playlist))
+	} else {
+		checks = append(checks, nightReadinessCheck{name: "resting:playlist-shape:" + payload.Resting.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the resting playlist definition from"})
+	}
+	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.ShowPlaylist.FPPInstanceID); err == nil && ok {
+		checks = append(checks, nightCheckShowPlaylistPresent(ctx, endpoint, payload.ShowPlaylist.Playlist))
+	} else {
+		checks = append(checks, nightReadinessCheck{name: "show:playlist-present:" + payload.ShowPlaylist.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the show playlist definition from"})
+	}
+	checks = append(checks, nightCheckRestingAssetExactVariant(payload.Resting.Playlist))
+
 	for _, c := range checks {
+		if c.health == nightCheckStateNotVerifiable {
+			continue
+		}
 		if nightHealthSeverity(c.health) > nightHealthSeverity(worst) {
 			worst = c.health
 		}
 	}
 	var outcome string
 	switch worst {
-	case observation.HealthHealthy:
+	case nightHealthHealthy():
 		outcome = "ready"
-	case observation.HealthUnknown:
+	case nightHealthUnknown():
 		outcome = "unknown"
 	default:
 		outcome = "not_ready"
 	}
-
-	checksJSON, err := json.Marshal(nightEncodeChecks(checks))
-	if err != nil {
-		return nightCommandOutcome{}, nil, fmt.Errorf("api: encode night readiness checks: %w", err)
-	}
-	rec := store.NightReadinessRecord{
-		ID: uuid.NewString(), SessionID: current.ID, EpochID: current.ID,
-		CompletedAt: now, Outcome: outcome, ChecksJSON: string(checksJSON),
-	}
-	if err := tx.CreateNightReadiness(ctx, rec); err != nil {
-		return nightCommandOutcome{}, nil, err
-	}
-
-	next := *current
-	next.ReadinessID = rec.ID
-	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+	return checks, outcome
 }
 
-func nightHealthSeverity(h observation.Health) int {
+func nightHealthSeverity(h nightCheckState) int {
 	switch h {
-	case observation.HealthFailed:
+	case nightCheckState(observation.HealthFailed):
 		return 3
-	case observation.HealthDegraded:
+	case nightCheckState(observation.HealthDegraded):
 		return 2
-	case observation.HealthUnknown:
+	case nightCheckState(observation.HealthUnknown):
 		return 1
 	default:
 		return 0
@@ -715,10 +803,12 @@ func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 	return out
 }
 
-// nightCheckFPPReachable checks exactly one signal, fpp.reachable. This is
-// deliberately the entire readiness surface this build provides — see the
-// OpenAPI NightReadinessCheck schema for the full statement; a caller must
-// not read a healthy result here as anything broader.
+// nightCheckFPPReachable checks exactly one signal, fpp.reachable, for one
+// FPP instance. It is one of several checks nightRunReadinessTx now runs
+// (Track F seam F3 added the others in nightasset.go) — see the OpenAPI
+// NightReadinessCheck schema for the full, current list; a caller must
+// not read a healthy result on THIS check as evidence any other check
+// passed.
 func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, instanceID string) nightReadinessCheck {
 	kind := observation.ResourceFPP
 	signal := observation.SignalID("fpp.reachable")
@@ -727,10 +817,10 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	})
 	name := "fpp:" + instanceID + ":reachable"
 	if err != nil {
-		return nightReadinessCheck{name: name, health: observation.HealthUnknown, reason: "failed to read fpp.reachable evidence: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "failed to read fpp.reachable evidence: " + err.Error()}
 	}
 	if len(obs) == 0 {
-		return nightReadinessCheck{name: name, health: observation.HealthUnknown, reason: "no fpp.reachable evidence recorded for this instance"}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "no fpp.reachable evidence recorded for this instance"}
 	}
 	health := observation.DeriveHealth(obs[0], now, func(v any) observation.Health {
 		if b, ok := v.(bool); ok && b {
@@ -742,7 +832,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 	if health != observation.HealthHealthy {
 		reason = "fpp.reachable evidence state: " + string(obs[0].StateAt(now))
 	}
-	return nightReadinessCheck{name: name, health: health, reason: reason}
+	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
 }
 
 // --- config resolution ---
@@ -789,21 +879,6 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 	return activePayload.Session, obj.CurrentRevision, nil, nil
 }
 
-// getPinnedNightSessionPayloadTx reads the EXACT revision rec pinned at
-// prepare-site — never the currently-active one, which may have been
-// edited since (session activation pins the revision).
-func (h *handlers) getPinnedNightSessionPayloadTx(ctx context.Context, tx *store.Tx, rec store.NightSessionRecord) (config.NightSessionPayload, error) {
-	rev, err := tx.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
-	if err != nil {
-		return config.NightSessionPayload{}, fmt.Errorf("api: get pinned night.session revision %s/%d: %w", rec.ConfigObjectID, rec.ConfigRevision, err)
-	}
-	var payload config.NightSessionPayload
-	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
-		return config.NightSessionPayload{}, fmt.Errorf("api: decode pinned night.session payload: %w", err)
-	}
-	return payload, nil
-}
-
 // --- wire mapping ---
 
 func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration) v1.NightSessionState {
@@ -814,7 +889,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 		AdmissionClosed: rec.AdmissionClosed, AdmissionClosedAt: formatTimePtr(rec.AdmissionClosedAt),
 		ShutdownIntent: rec.ShutdownIntent, ArmedShowID: rec.ArmedShowID, ShowCommitted: rec.ShowCommitted,
 		Degraded: rec.Degraded, DegradedReason: rec.DegradedReason, AttributionDegraded: rec.AttributionDegraded,
-		Transition: v1.NightPhaseEvidence{State: v1.NightEvidenceNotAvailable, Reason: "content anchor and boundary are not derived until Track F seam F3"},
+		Transition: mapNightTransition(rec),
 	}
 	if !rec.UpdatedAt.IsZero() {
 		out.UpdatedAt = formatTime(rec.UpdatedAt)

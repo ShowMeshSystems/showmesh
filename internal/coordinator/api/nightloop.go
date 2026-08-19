@@ -1,0 +1,558 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+)
+
+// Track F seam F3: the event-driven driver that advances a night session
+// out of the states F2's own command handlers never leave on their own
+// (transition-to-show, live, transition-to-resting, resting-intershow).
+// F4's cue outbox (night_cue_outbox) is untouched here — this seam has no
+// lighting/projection/audio cues to dispatch through it. The one
+// outward-facing action here is launching the show playlist itself, via
+// the existing startPlaylist primitive.
+
+// NightLoop is this seam's own background driver: a periodic, idempotent
+// tick, never a continuous reissue loop (RESTING-MODE.md §11).
+type NightLoop struct {
+	h        *handlers
+	interval time.Duration
+	logger   *slog.Logger
+	inFlight chan struct{} // 1-buffered: acts as a non-blocking mutex.
+}
+
+// NewNightLoop builds a [NightLoop] against deps/opts, mirroring
+// [NewFPPCommandDispatcher]'s own "build a private *handlers, never route
+// through HTTP" construction: this loop needs [handlers.dispatchFPPCommand]
+// and this package's other unexported helpers, with no HTTP request of
+// its own.
+func NewNightLoop(deps Dependencies, opts Options) *NightLoop {
+	deps = deps.withDefaults()
+	opts = opts.withDefaults()
+	return &NightLoop{
+		h: &handlers{
+			deps:                      deps,
+			clock:                     opts.Clock,
+			logger:                    opts.Logger,
+			fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
+			fppCommandPollInterval:    opts.FPPCommandPollInterval,
+			nightReadinessMaxAge:      opts.NightReadinessMaxAge,
+		},
+		interval: opts.NightLoopInterval,
+		logger:   opts.Logger,
+		inFlight: make(chan struct{}, 1),
+	}
+}
+
+// Run ticks until ctx is done, then waits for any in-flight tick to finish
+// before returning — the caller (coordinator.go) treats Run's return as
+// "this loop no longer touches the store," and a detached goroutine still
+// writing after that would violate it.
+func (l *NightLoop) Run(ctx context.Context) {
+	ticker := time.NewTicker(l.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			l.inFlight <- struct{}{} // wait for any in-flight tick to release.
+			return
+		case <-ticker.C:
+			select {
+			case l.inFlight <- struct{}{}:
+				go func() {
+					defer func() { <-l.inFlight }()
+					l.h.nightTick(ctx, l.h.now())
+				}()
+			default:
+				// Previous tick still running; skip this one.
+			}
+		}
+	}
+}
+
+// resolveFPPEndpoint looks up instanceID's currently configured endpoint
+// URL — nightasset.go's playlist-definition reads are the only other
+// caller.
+func (h *handlers) resolveFPPEndpoint(ctx context.Context, instanceID string) (endpoint string, ok bool, err error) {
+	if instanceID == "" {
+		return "", false, nil
+	}
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, v := range views {
+		if v.InstanceID == instanceID {
+			return v.Endpoint, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (h *handlers) nightTick(ctx context.Context, now time.Time) {
+	rec, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		h.logWarn("night loop: failed to read current night session", "error", err)
+		return
+	}
+	if !ok || rec.Degraded {
+		return
+	}
+	switch rec.State {
+	case nightStatePreshow:
+		h.nightAdvancePreshow(ctx, now, rec)
+	case nightStateRestingIntershow:
+		h.nightAdvanceRestingIntershow(ctx, now, rec)
+	case nightStateTransitionToShow:
+		h.nightAdvanceTransitionToShow(ctx, now, rec)
+	case nightStateLive:
+		h.nightAdvanceLive(ctx, now, rec)
+	case nightStateTransitionToResting:
+		h.nightAdvanceTransitionToResting(ctx, now, rec)
+	}
+	// preparing, end-of-night-resting, fading-out, stopped, inactive: no
+	// autonomous action here. end-of-night-resting's repeating resting
+	// playlist was already started on the tick that entered it; its only
+	// exit is fade-out-night, which F2 already handles.
+}
+
+// getPinnedNightSessionPayload reads outside any HTTP request's own
+// transaction, unlike nightsessioncontrol.go's tx-bound equivalent.
+func (h *handlers) getPinnedNightSessionPayload(ctx context.Context, rec store.NightSessionRecord) (config.NightSessionPayload, error) {
+	rev, err := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return config.NightSessionPayload{}, fmt.Errorf("api: get pinned night.session revision %s/%d: %w", rec.ConfigObjectID, rec.ConfigRevision, err)
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return config.NightSessionPayload{}, fmt.Errorf("api: decode pinned night.session payload: %w", err)
+	}
+	return payload, nil
+}
+
+// nightCommit re-reads the current session inside one transaction and
+// applies mutate only if it still matches (sessionID, expectState): a
+// session an HTTP command has since moved out from under this tick is
+// left alone.
+func (h *handlers) nightCommit(ctx context.Context, now time.Time, sessionID, expectState string, mutate func(store.NightSessionRecord) store.NightSessionRecord) {
+	err := h.deps.NightSessions.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		cur, ok, err := tx.GetCurrentNightSession(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok || cur.ID != sessionID || cur.State != expectState {
+			return nil
+		}
+		return tx.UpdateNightSession(ctx, mutate(cur), now)
+	})
+	if err != nil {
+		h.logWarn("night loop: failed to persist night session state", "sessionId", sessionID, "error", err)
+	}
+}
+
+func (h *handlers) nightCommitAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor, boundary nightBoundary) {
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = encodeNightBoundary(boundary)
+		return cur
+	})
+}
+
+func (h *handlers) nightCommitBoundary(ctx context.Context, now time.Time, rec store.NightSessionRecord, boundary nightBoundary) {
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.BoundaryJSON = encodeNightBoundary(boundary)
+		return cur
+	})
+}
+
+// nightAdvancePreshow runs the resting playlist in repeat mode: preshow's
+// own end is the start-night command, never content-driven, so unlike
+// resting-intershow (whose FSEQ end IS the show-transition boundary) it
+// has nothing for a one-shot item to hand off to.
+func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
+		return
+	}
+	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.Playlist, true, 0, fppIfBusyRefuse)
+	if !changed {
+		return
+	}
+	if ready {
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: "pre-show resting has no show-transition deadline; start-night ends it"})
+		return
+	}
+	h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+}
+
+// nightClockBackstepTolerance: a wall clock that reads earlier than an
+// anchor's own ObservedAt by more than this is a clock correction, not
+// measurement noise (poll/dispatch latency is sub-second per F0) — the
+// persisted absolute ExpectedAt survives a restart, but a backward step
+// after it was armed must invalidate rather than silently sit unfired or
+// misfire once the clock catches back up.
+const nightClockBackstepTolerance = 5 * time.Second
+
+// nightAdvanceRestingIntershow is rule 3's own load-bearing invalidation:
+// an anchor already flagged invalid (BoundaryJSON's own persisted state)
+// is never recomputed from — it was invalidated by
+// nightInvalidateAnchor, which cleared the observed half, so
+// nightEnsureAnchor's own pending-observation path re-derives a fresh
+// anchor from new evidence before this function will arm anything again.
+func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
+		return
+	}
+
+	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	if !has || anchor.Purpose != nightAnchorPurposeRestingOneShot || anchor.ObservedAt.IsZero() {
+		var durationMS int64
+		if has && anchor.Purpose == nightAnchorPurposeRestingOneShot && anchor.DurationMS > 0 {
+			durationMS = anchor.DurationMS
+		} else {
+			res := nightResolveFSEQDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset)
+			if res.Reason != "" {
+				h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason})
+				return
+			}
+			durationMS = res.DurationMS
+		}
+		newAnchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingOneShot, payload.Resting.FPPInstanceID, payload.Resting.Playlist, false, durationMS, fppIfBusyRefuse)
+		if !changed {
+			return
+		}
+		boundary := nightBoundary{State: nightBoundaryStateUnknown, Reason: newAnchor.Source}
+		if ready {
+			boundary = deriveNightBoundary(newAnchor)
+		}
+		h.nightCommitAnchor(ctx, now, rec, newAnchor, boundary)
+		return
+	}
+
+	// The anchor carries observed evidence, but a PRIOR tick may already
+	// have invalidated the boundary derived from it (contradiction found
+	// then, evidence agreeing again now) — that invalidation is
+	// load-bearing and must not be silently recomputed past.
+	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
+		return
+	}
+
+	obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
+	if bad, reason := nightBoundaryContradicted(anchor, obsNow); bad {
+		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+		return
+	}
+
+	boundary := deriveNightBoundary(anchor)
+	if boundary.State != nightBoundaryStateArmed || boundary.ExpectedAt == nil {
+		return
+	}
+	if now.Before(anchor.ObservedAt.Add(-nightClockBackstepTolerance)) {
+		reason := "the local clock now reads earlier than this boundary's own anchoring observation; treating as a clock correction"
+		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+		return
+	}
+	if now.Before(*boundary.ExpectedAt) {
+		return
+	}
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.State = nightStateTransitionToShow
+		cur.StateEnteredAt = now
+		cur.ArmedShowID = uuid.NewString()
+		cur.ShowCommitted = false
+		cur.Cycle = cur.Cycle + 1
+		cur.ContentAnchorJSON = ""
+		cur.BoundaryJSON = ""
+		return cur
+	})
+}
+
+func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
+		return
+	}
+	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
+	if now.Sub(rec.StateEnteredAt) < hold {
+		return
+	}
+	// ifBusy is decided ONCE here, from a snapshot read; the dispatch is a
+	// separate moment and is not re-checked a second time before it — see
+	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
+	// safe only because replace is granted solely on positive identity.
+	ifBusy := h.nightShowLaunchIfBusy(ctx, now, payload)
+	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, payload.ShowPlaylist.FPPInstanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
+	if !changed {
+		return
+	}
+	if !ready {
+		// anchor.Source carries the primitive's own refusal detail when
+		// ifBusy was refuse (names what was observed) — see
+		// fppStartPlaylistBusyProblem/fppStartPlaylistEvidenceNotCurrentProblem.
+		// The session stays in transition-to-show; live is never entered.
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+		return
+	}
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.State = nightStateLive
+		cur.StateEnteredAt = now
+		cur.ShowCommitted = true
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = ""
+		return cur
+	})
+}
+
+// nightShowLaunchEvidenceMaxAge is deliberately far tighter than
+// fpp.DefaultValidFor's 45s: stale identity evidence here can license
+// silently replacing whatever FPP's own scheduler started in the gap.
+const nightShowLaunchEvidenceMaxAge = 5 * time.Second
+
+// nightShowLaunchIfBusy returns replace only when ALL hold, checked at
+// this call site rather than trusted from a distant invariant: resting
+// and show share one FPP instance; payload.Resting.Playlist is non-empty;
+// fpp.status is current, not idle, not "unknown"; fpp.playlist.name is
+// current, equals payload.Resting.Playlist, and is no older than
+// nightShowLaunchEvidenceMaxAge. Every other case returns refuse.
+//
+// SAFETY: once this returns replace, nothing else checks again — replace
+// bypasses startPlaylist's own PreDispatchCheck by FPP's own design, so
+// this function is the ONLY guard against replacing an unrelated running
+// playlist. Refuse, not replace, gets a backstop (PreDispatchCheck
+// re-evaluates fresh evidence at dispatch time).
+func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, payload config.NightSessionPayload) string {
+	if payload.Resting.Playlist == "" || payload.Resting.FPPInstanceID == "" ||
+		payload.Resting.FPPInstanceID != payload.ShowPlaylist.FPPInstanceID {
+		return fppIfBusyRefuse
+	}
+	instanceID := payload.ShowPlaylist.FPPInstanceID
+
+	statusVal, _, statusCurrent, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, fppStatusSignal, time.Time{}, now)
+	statusStr, _ := statusVal.(string)
+	if !statusCurrent || statusStr == fppStatusValueIdle || statusStr == fppStatusValueUnknown {
+		return fppIfBusyRefuse
+	}
+
+	nameVal, _, nameCurrent, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, fppPlaylistNameSignal, time.Time{}, now)
+	if !nameCurrent {
+		return fppIfBusyRefuse
+	}
+	nameStr, ok := nameVal.(string)
+	if !ok || nameStr != payload.Resting.Playlist {
+		return fppIfBusyRefuse
+	}
+	collectedAt, ok := nightResolveCollectedAt(ctx, h.deps.Observations, instanceID, fppPlaylistNameSignal, time.Time{}, now)
+	if !ok || now.Sub(collectedAt) > nightShowLaunchEvidenceMaxAge {
+		return fppIfBusyRefuse
+	}
+	return fppIfBusyReplace
+}
+
+// nightAdvanceLive is rule 4: completion evidence, never graceful-stop
+// acceptance. F0's own captured shape is the exact condition checked —
+// status_name is "idle" AND current_playlist has genuinely cleared —
+// which requires the playlist-name evidence to be CURRENT: an absent,
+// stale, or unsupported reading also decodes to "", indistinguishable
+// from genuine idle unless currency is checked separately.
+func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	if !has || anchor.Purpose != nightAnchorPurposeShow {
+		return
+	}
+	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, anchor.ObservedAt, now)
+	if !obs.Current || obs.Status != fppStatusValueIdle {
+		return
+	}
+	if !obs.PlaylistCurrent || obs.Playlist != "" {
+		return
+	}
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.State = nightStateTransitionToResting
+		cur.StateEnteredAt = now
+		cur.ContentAnchorJSON = ""
+		cur.BoundaryJSON = ""
+		return cur
+	})
+}
+
+func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: failed to read pinned night.session payload", "sessionId", rec.ID, "error", err)
+		return
+	}
+	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
+	if now.Sub(rec.StateEnteredAt) < hold {
+		return
+	}
+
+	if rec.FinalShowRequested {
+		anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingRepeat, payload.Resting.FPPInstanceID, payload.Resting.EndOfNightPlaylist, payload.Resting.EndOfNightRepeat, 0, fppIfBusyRefuse)
+		if !changed {
+			return
+		}
+		if !ready {
+			h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+			return
+		}
+		h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+			cur.State = nightStateEndOfNightResting
+			cur.StateEnteredAt = now
+			cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateUnknown, Reason: "end-of-night resting has no show-transition deadline"})
+			return cur
+		})
+		return
+	}
+
+	res := nightResolveFSEQDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset)
+	if res.Reason != "" {
+		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason})
+		return
+	}
+	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeRestingOneShot, payload.Resting.FPPInstanceID, payload.Resting.Playlist, false, res.DurationMS, fppIfBusyRefuse)
+	if !changed {
+		return
+	}
+	if !ready {
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+		return
+	}
+	boundary := deriveNightBoundary(anchor)
+	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.State = nightStateRestingIntershow
+		cur.StateEnteredAt = now
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = encodeNightBoundary(boundary)
+		return cur
+	})
+}
+
+// nightEnsureAnchor is this file's one dispatch/observe primitive. Given
+// rec's current ContentAnchorJSON, it either (a) finds a matching,
+// already-complete anchor and returns it unchanged; (b) finds a matching,
+// dispatched-but-not-yet-observed anchor (DispatchedAt set, ObservedAt
+// zero — including one nightInvalidateAnchor just reset) and polls
+// EXISTING evidence for it to complete, without dispatching again; or (c)
+// dispatches ONE startPlaylist call and folds in whatever evidence is
+// available once dispatchFPPCommand's own bounded confirmation returns.
+//
+// changed reports whether the caller must persist a new anchor value;
+// ready reports whether that anchor now carries post-dispatch observed
+// evidence and is safe to derive a boundary from.
+func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, purpose, instanceID, playlist string, repeat bool, durationMS int64, ifBusy string) (anchor nightContentAnchor, ready, changed bool) {
+	cur, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	if has && cur.Purpose == purpose && cur.Playlist == playlist && !cur.DispatchedAt.IsZero() {
+		if !cur.ObservedAt.IsZero() {
+			return cur, true, false
+		}
+		obs := nightObservePlayback(ctx, h.deps.Observations, instanceID, cur.DispatchedAt, now)
+		if obs.Current && obs.Status == fppStatusValuePlaying && obs.Playlist == playlist {
+			if nightFillAnchorFromObservation(ctx, h.deps.Observations, instanceID, obs, cur.DispatchedAt, now, &cur) {
+				return cur, true, true
+			}
+		}
+		return cur, false, false
+	}
+
+	issuer := nightIssuerFor(rec.ID)
+	if issuer.PrincipalID == "" {
+		// No principal is attributed to this session (a restart mid-preshow
+		// leaves the in-memory issuer map empty — see nightissuer.go). An
+		// autonomous dispatch with a zero issuer would be unattributable in
+		// exactly the way ADR-024 exists to prevent, so this refuses rather
+		// than dispatching. An operator re-issuing the (idempotent)
+		// lifecycle command that started this session re-establishes it.
+		h.logWarn("night loop: refusing to dispatch startPlaylist with no attributed principal", "sessionId", rec.ID, "instanceId", instanceID)
+		return nightContentAnchor{
+			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist, DurationMS: durationMS, RepeatMode: repeat,
+			Source: "no principal is attributed to this session; re-issue the lifecycle command that started it to establish one",
+		}, false, true
+	}
+
+	// idemKey mints a fresh key per tick that reaches this branch (which
+	// only happens once per purpose/cycle in the ordinary path, since a
+	// successful or refused dispatch persists DispatchedAt and the branch
+	// above then owns it): it protects against this ONE call being
+	// retried internally, not against a second tick redispatching — a
+	// failed dispatch (err != nil, nothing persisted) legitimately mints
+	// a new key and retries on a later tick.
+	idemKey := fmt.Sprintf("night:%s:%d:%s:%d", rec.ID, rec.Cycle, purpose, now.UnixNano())
+	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
+		InstanceID:                  instanceID,
+		Action:                      "startPlaylist",
+		Params:                      map[string]any{"playlist": playlist, "repeat": repeat, "ifBusy": ifBusy},
+		IdempotencyKey:              idemKey,
+		Issuer:                      issuer,
+		NeverWithholdOnAuditFailure: true,
+	})
+	if err != nil {
+		h.logWarn("night loop: dispatch startPlaylist failed", "sessionId", rec.ID, "instanceId", instanceID, "error", err)
+		return nightContentAnchor{}, false, false
+	}
+
+	dispatchedAt := now
+	if outcome.DispatchedAt != nil {
+		dispatchedAt = *outcome.DispatchedAt
+	}
+	next := nightContentAnchor{Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist, DurationMS: durationMS, RepeatMode: repeat, DispatchedAt: dispatchedAt}
+	if problem != nil {
+		next.Source = "refused: " + problem.Detail
+		return next, false, true
+	}
+	if outcome.Outcome == "confirmed" {
+		obs := nightObservePlayback(ctx, h.deps.Observations, instanceID, dispatchedAt, now)
+		if obs.Current {
+			if nightFillAnchorFromObservation(ctx, h.deps.Observations, instanceID, obs, dispatchedAt, now, &next) {
+				return next, true, true
+			}
+		}
+	}
+	next.Source = outcome.OutcomeReason
+	return next, false, true
+}
+
+// nightFillAnchorFromObservation completes anchor's observed half from
+// obs, using the POSITION signal's own CollectedAt as ObservedAt rather
+// than the status signal's — the two are read independently and can
+// disagree (finding: a 40s-old position paired with a fresh status
+// reading armed a boundary 40s late while reporting "armed"). Refuses
+// (returns false) when no position evidence is current at all, or when
+// the status and position observations' own CollectedAt differ by more
+// than nightAnchorEvidenceTolerance — either way the caller keeps polling
+// rather than anchor from mismatched evidence.
+func nightFillAnchorFromObservation(ctx context.Context, lister ObservationLister, instanceID string, obs nightPlaybackObservation, notBefore, now time.Time, anchor *nightContentAnchor) bool {
+	if !obs.PositionMSCurrent && !obs.PositionCurrent {
+		return false
+	}
+	statusCollectedAt, sOK := nightResolveCollectedAt(ctx, lister, instanceID, fppStatusSignal, notBefore, now)
+	positionCollectedAt, pOK := nightResolvePositionCollectedAt(ctx, lister, instanceID, notBefore, now)
+	if !sOK || !pOK {
+		return false
+	}
+	diff := statusCollectedAt.Sub(positionCollectedAt)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > nightAnchorEvidenceTolerance {
+		return false
+	}
+	anchor.ObservedAt = positionCollectedAt
+	anchor.Item = obs.Item
+	anchor.PositionSeconds = obs.PositionSeconds
+	anchor.PositionMS, anchor.PositionMSKnown = obs.PositionMS, obs.PositionMSCurrent
+	anchor.RepeatMode = obs.RepeatMode
+	return true
+}

@@ -844,7 +844,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(8)
+	backgroundWG.Add(9)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -900,6 +900,18 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		watchUnclaimedBootstrap(ctx, identitySvc, logger)
+	}()
+
+	// nightLoop.Run owns Track F seam F3's own event-driven driver
+	// (nightloop.go): it advances a night session out of the states F2's
+	// own command handlers never leave on their own (transition-to-show,
+	// live, transition-to-resting, resting-intershow), started
+	// unconditionally like every other reconcile loop above — a session
+	// only ever exists once an operator configures and starts one.
+	nightLoop := api.NewNightLoop(apiDeps, apiOpts)
+	go func() {
+		defer backgroundWG.Done()
+		nightLoop.Run(ctx)
 	}()
 
 	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring

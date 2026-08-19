@@ -1018,6 +1018,18 @@ type Options struct {
 	// hours earlier is not silently treated as still current. Defaults to
 	// 30 minutes.
 	NightReadinessMaxAge time.Duration
+
+	// NightLoopInterval is [NightLoop]'s own tick period (nightloop.go,
+	// Track F seam F3) — how often it checks the current night session for
+	// a state it must autonomously advance. It never dispatches an FPP
+	// command on every tick (nightEnsureAnchor's own idempotency-key reuse
+	// makes a repeat tick a cheap observation poll, not a reissue), so this
+	// is a responsiveness/staleness knob, not a rate limit. A SHOWMESH
+	// HYPOTHESIS, not a measured value: short enough that a boundary is
+	// noticed promptly against F0's own whole-second position precision,
+	// without polling FPP or the store needlessly often. Defaults to 1
+	// second.
+	NightLoopInterval time.Duration
 }
 
 const (
@@ -1043,6 +1055,10 @@ const (
 	// defaultNightReadinessMaxAge backs [Options.NightReadinessMaxAge].
 	// See that field's doc comment — a SHOWMESH HYPOTHESIS.
 	defaultNightReadinessMaxAge = 30 * time.Minute
+
+	// defaultNightLoopInterval backs [Options.NightLoopInterval]. See that
+	// field's doc comment — a SHOWMESH HYPOTHESIS.
+	defaultNightLoopInterval = 1 * time.Second
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -1122,6 +1138,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.NightReadinessMaxAge <= 0 {
 		o.NightReadinessMaxAge = defaultNightReadinessMaxAge
+	}
+	if o.NightLoopInterval <= 0 {
+		o.NightLoopInterval = defaultNightLoopInterval
 	}
 	return o
 }

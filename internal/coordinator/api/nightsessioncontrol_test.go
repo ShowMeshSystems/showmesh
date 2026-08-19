@@ -1,18 +1,22 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/fseq/fseqtest"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -52,14 +56,83 @@ func setupNightControlFixture(t *testing.T, maxAge time.Duration) (api *API, st 
 	opToken := mustIssueToken(t, svc, operator.ID)
 
 	deps, obsLister := nightControlTestDeps(svc, st)
+	// Track F seam F3: run-readiness now also reads a real FSEQ asset
+	// (rule 1) and reads the resting/show playlist definitions off a real
+	// FPP endpoint (F0 §2) — see nightWireFPPForReadiness's own doc
+	// comment. t.Cleanup closes the fake FPP server after the test.
+	deps.FPP = nightWireFPPForReadiness(t)
+	backend := nightTestAssetBackend(t)
+	deps.AssetBackend = backend
+
 	api = New(deps, Options{Clock: now, Logger: testLogger(), NightReadinessMaxAge: maxAge})
 
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
-	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
+	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
 	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
 	mustActivateNightSession(t, api, adminToken, "halloween-main")
 
 	return api, st, opToken, advanceFn, obsLister
+}
+
+// nightWireFPPForReadiness starts a fake FPP HTTP server answering
+// GET /api/playlist/halloween-resting and GET /api/playlist/halloween-show
+// with F0 §2's own captured idle-read shape (one FSEQ-only item), and
+// returns a [FPPLister] naming it as instance "player-01" — matching
+// validNightSessionBody's own fppInstanceId. Without this, every seam F3
+// readiness check that reads a playlist definition reports "unknown" for
+// want of a configured instance, which is honest but makes every test
+// below expecting readiness outcome "ready" fail for a reason unrelated to
+// what it is testing.
+func nightWireFPPForReadiness(t *testing.T) FPPLister {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/playlist/halloween-resting", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"halloween-resting","mainPlaylist":[{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"resting-loop.fseq"}]}`))
+	})
+	mux.HandleFunc("/api/playlist/halloween-show", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"halloween-show","mainPlaylist":[{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"halloween-show.fseq"}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: srv.URL}}}
+}
+
+// nightTestAssetBackend builds a real, disposable assetstore.VolumeBackend
+// for the FSEQ duration checks (rule 1) to open bytes from — these tests
+// verify the readiness surface's actual behavior against real FSEQ
+// content, not a stub that never runs pkg/fseq's own parsing.
+func nightTestAssetBackend(t *testing.T) assetstore.Backend {
+	t.Helper()
+	backend, err := assetstore.NewVolumeBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewVolumeBackend: %v", err)
+	}
+	return backend
+}
+
+// mustCreateNightSessionFSEQAsset is [mustCreateNightSessionAsset]
+// (nightsession_test.go) with real, openable FSEQ bytes staged into
+// backend — 6000 frames * 50ms = 300000ms, F0 §1's own worked example —
+// rather than that helper's placeholder ContentHash/StorageKey, which
+// name no actual blob.
+func mustCreateNightSessionFSEQAsset(t *testing.T, st *store.Store, backend assetstore.Backend, show, sequence, target string) {
+	t.Helper()
+	raw := fseqtest.Build(4, 6000, 50)
+	blob, err := backend.Put(context.Background(), bytes.NewReader(raw), int64(len(raw))+1)
+	if err != nil {
+		t.Fatalf("Put fseq bytes: %v", err)
+	}
+	_, err = st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: show + "-" + sequence + "-" + target, ShowID: show, SequenceID: sequence,
+		TargetKind: store.AssetTargetKindNode, TargetID: target,
+		MediaType: "fseq", ContentHash: blob.ContentHash, RuntimeFilename: sequence + ".fseq",
+		SizeBytes: blob.SizeBytes, Backend: "volume", StorageKey: blob.ContentHash,
+	})
+	if err != nil {
+		t.Fatalf("create asset %s/%s/%s: %v", show, sequence, target, err)
+	}
 }
 
 func nightCommandRawBody(t *testing.T, api *API, token, command, body string) (*http.Response, []byte) {
@@ -810,6 +883,15 @@ func TestInvariant5_ReadinessWithNoEvidenceIsUnknownNotFailure(t *testing.T) {
 	}
 }
 
+// resting:asset-exact-variant is
+// structurally unverifiable (FPP exposes no content hash) and is excluded
+// from the aggregate outcome for exactly that reason (ADR-029 decision
+// 4's rule: an indicator that can never read anything but one colour
+// teaches the operator to ignore it) — it stays listed in the checks
+// array, but never prevents "ready". This test proves both halves: ready
+// is reachable with every checkable check passing, and (invariant 5,
+// still true either way) that readiness never blocks start-night by
+// itself regardless.
 func TestInvariant5_ReadinessWithHealthyEvidenceIsReady(t *testing.T) {
 	api, _, token, _, obs := setupNightControlFixture(t, time.Hour)
 	setHealthyFPPReachable(obs, testNow)
@@ -818,8 +900,23 @@ func TestInvariant5_ReadinessWithHealthyEvidenceIsReady(t *testing.T) {
 
 	got := mustGetNightSession(t, api)
 	if got.Session.Readiness.Outcome != "ready" {
-		t.Fatalf("readiness outcome with healthy evidence = %q, want ready", got.Session.Readiness.Outcome)
+		t.Fatalf("readiness outcome with healthy evidence and every checkable check passing = %q, want ready (resting:asset-exact-variant is not_verifiable and must not hold this back)", got.Session.Readiness.Outcome)
 	}
+	foundNotVerifiable := false
+	for _, c := range got.Session.Readiness.Checks {
+		if c.Name == "resting:asset-exact-variant:"+"halloween-resting" {
+			foundNotVerifiable = true
+			if c.State != "not_verifiable" {
+				t.Fatalf("resting:asset-exact-variant state = %q, want not_verifiable", c.State)
+			}
+		}
+	}
+	if !foundNotVerifiable {
+		t.Fatal("expected resting:asset-exact-variant to still be listed even though it never affects outcome")
+	}
+
+	mustNightCommand(t, api, token, "start-preshow")
+	mustNightCommand(t, api, token, "start-night")
 }
 
 func TestInvariant5_ReadinessWithFailingEvidenceIsNotReady(t *testing.T) {

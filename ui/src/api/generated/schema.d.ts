@@ -3384,14 +3384,14 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description One named signal run-readiness evaluated. This build checks ONLY `fpp.reachable` for the session's referenced FPP instances — `name` is always `fpp:<instanceId>:reachable`; a healthy result here is not evidence anything else was checked. */
+        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape — exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) — the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass — but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
         NightReadinessCheck: {
             name: string;
             /**
-             * @description pkg/observation's Health vocabulary. Missing evidence is always "unknown".
+             * @description pkg/observation's Health vocabulary, plus not_verifiable for a check that is structurally incapable of ever reporting anything else — excluded from the aggregate outcome but always listed. Missing evidence is always "unknown".
              * @enum {string}
              */
-            state: "healthy" | "degraded" | "failed" | "unknown";
+            state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable";
             reason: string;
         };
         /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. */

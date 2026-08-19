@@ -18,12 +18,15 @@ const (
 	NightEvidenceNotAvailable  NightEvidenceState = "not_available"
 )
 
-// NightReadinessCheck is one named signal run-readiness evaluated. In
-// this build that is ONLY fpp.reachable for the session's own referenced
-// FPP instances — see the OpenAPI schema for the full scope statement.
+// NightReadinessCheck is one named signal run-readiness evaluated — see
+// the OpenAPI schema for the current, full list of checks. A healthy
+// result on one check is never evidence any other check passed.
 type NightReadinessCheck struct {
-	Name   string `json:"name"`
-	State  string `json:"state"` // observation.Health vocabulary
+	Name string `json:"name"`
+	// State is observation.Health's vocabulary plus "not_verifiable" for
+	// a check that can never be anything else — excluded from the
+	// aggregate outcome but always listed.
+	State  string `json:"state"`
 	Reason string `json:"reason"`
 }
 

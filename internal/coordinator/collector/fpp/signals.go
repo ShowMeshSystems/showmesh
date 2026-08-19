@@ -93,6 +93,7 @@ func StatusSignals(body []byte) ([]SignalValue, error) {
 		modeName, modeErr, "remote", "a media filename"))
 	out = append(out, modeGovernedTopLevelInt(doc, SignalPositionElapsedSeconds, "seconds_elapsed", "seconds",
 		modeName, modeErr, "remote", "an elapsed-seconds counter"))
+	out = append(out, elapsedMSSignal(doc))
 
 	// Controller and network health.
 	out = append(out, stringSignalValue(doc, SignalFPPDState, "fppd"))
@@ -368,6 +369,28 @@ func intSignalValue(doc rawDoc, sig observation.SignalID, key, unit string) Sign
 		return SignalValue{Signal: sig, Absence: observation.StateCollectionFailed, Reason: err.Error()}
 	}
 	return SignalValue{Signal: sig, Value: v, Unit: unit}
+}
+
+// elapsedMSSignal decodes fpp.position.elapsed.ms ("milliseconds_elapsed")
+// on its own, not through modeGovernedTopLevelInt: F0's own capture found
+// this key present only while status_name is a playing/stopping state and
+// absent (not null, not zero) while idle within PLAYER mode, and absent on
+// this package's own remote-mode fixtures too — a playback-state gate,
+// not the player/remote MODE gate that helper models. An absent key is
+// Unsupported with a reason naming the gate; CollectionFailed stays
+// reserved for a present-but-undecodable field.
+func elapsedMSSignal(doc rawDoc) SignalValue {
+	v, err := doc.intField("milliseconds_elapsed")
+	if err == nil {
+		return SignalValue{Signal: SignalPositionElapsedMS, Value: v, Unit: "ms"}
+	}
+	if isFieldAbsent(err) {
+		return SignalValue{
+			Signal: SignalPositionElapsedMS, Absence: observation.StateUnsupported,
+			Reason: `"milliseconds_elapsed" is present only while FPP is actively playing or stopping; absent here`,
+		}
+	}
+	return SignalValue{Signal: SignalPositionElapsedMS, Absence: observation.StateCollectionFailed, Reason: err.Error()}
 }
 
 // --- mode-governed absence (contract section 3.3) --------------------------

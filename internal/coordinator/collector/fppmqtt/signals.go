@@ -59,6 +59,13 @@ const (
 	SignalMediaFilename          observation.SignalID = "fpp.media.filename"
 	SignalPositionElapsedSeconds observation.SignalID = "fpp.position.elapsed.seconds"
 
+	// SignalPositionElapsedMS mirrors the fpp REST collector's own
+	// addition (Track F seam F3, reserved fpp.position.elapsed.ms) —
+	// decodeStatusTopic (topics.go) reuses fpp.StatusSignals verbatim, so
+	// this constant exists only for statusStaticSignals' own enumeration,
+	// exactly like SignalPositionElapsedSeconds one line up.
+	SignalPositionElapsedMS observation.SignalID = "fpp.position.elapsed.ms"
+
 	// New Step 5 controller/network health signals (contract section 3.1).
 	SignalFppdState             observation.SignalID = "fpp.fppd.state"
 	SignalPowerBad              observation.SignalID = "fpp.power.bad"

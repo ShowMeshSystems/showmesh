@@ -9365,18 +9365,38 @@ components:
     NightReadinessCheck:
       type: object
       description: >-
-        One named signal run-readiness evaluated. This build checks ONLY
-        `fpp.reachable` for the session's referenced FPP instances —
-        `name` is always `fpp:<instanceId>:reachable`; a healthy result
-        here is not evidence anything else was checked.
+        One named signal run-readiness evaluated. This build checks
+        `fpp.reachable` for the session's referenced FPP instances (`name`
+        `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own
+        parseable non-zero duration (`resting:asset-duration`), the
+        resting playlist's idle-read shape — exactly one FSEQ-only item,
+        no FPP audio item (`resting:playlist-shape:<playlist>`) — the show
+        playlist's presence (`show:playlist-present:<playlist>`), and
+        whether the exact deployed FSEQ variant on the FPP host can be
+        confirmed (`resting:asset-exact-variant:<playlist>`). That last
+        check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no
+        content hash, only a filename, so this coordinator can never
+        independently confirm the live host is running the pinned asset's
+        exact bytes, and this is stated rather than folded into the
+        passing shape check or defaulted to a pass — but a check that can
+        never be anything but not_verifiable is excluded from the
+        aggregate `outcome` (it is still always listed), so `outcome` can
+        still read `"ready"` once every checkable check passes. Each
+        check's own `reason` states exactly what it verified and what it
+        could not. A healthy result on one check is never evidence any
+        other check passed.
       required: [name, state, reason]
       properties:
         name:
           type: string
         state:
           type: string
-          description: pkg/observation's Health vocabulary. Missing evidence is always "unknown".
-          enum: [healthy, degraded, failed, unknown]
+          description: >-
+            pkg/observation's Health vocabulary, plus not_verifiable for a
+            check that is structurally incapable of ever reporting
+            anything else — excluded from the aggregate outcome but always
+            listed. Missing evidence is always "unknown".
+          enum: [healthy, degraded, failed, unknown, not_verifiable]
         reason:
           type: string
     NightReadiness:
