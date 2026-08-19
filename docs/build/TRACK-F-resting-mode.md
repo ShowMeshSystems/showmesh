@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: F0 through F4 built, reviewed, gated and committed on `track-f/night-session` (2026-08-18); F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
+Status: F0 through F4 and F7's API/CLI half built, reviewed, gated and committed on `track-f/night-session` (2026-08-18 and 2026-08-19). **F5 is blocked**: it consumes Track C's `pkg/audio`, which is not on `main`. F6 is optional configuration and not started. F7's UI half is not started. F8 cannot be attempted on this machine at all, because every one of its scenarios requires a real FPP and the deployed installation. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
 
 ## Goal
 
@@ -82,13 +82,17 @@ Implement the RES-018 brightness contract through the ShowMesh FPP component: ob
 
 This is a purpose-built relative cue runner inside the night controller, not a general scheduler or a replacement macro language.
 
-### F5. Audio integration
+### F5. Audio integration — BLOCKED, not started
+
+Blocked on Track C's `pkg/audio` reaching `main`; verified absent from `origin/main` on 2026-08-19. The contract itself is pinned on `track-c/audio-node` and has moved twice since pinning, so the drift is recorded on Linear SM-53 for whoever starts this.
 
 Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves with observable completion, exact local asset readiness, loop/resume policy, and the configured duck/mix/interrupt policy. Carry the night controller's stable cue invocation identity and desired revision through the audio command so recovery cannot duplicate an effect or let stale work reverse a newer state.
 
 Validate every output against the formats and reproduction capabilities it honestly declares without narrowing the generic asset store. This includes playlist selection/advancement and the requested sequential, gapless, or crossfade item transition. For an optional synchronized third-party output, missing provisioning/readiness evidence warns and does not block local/FM audio. If configuration marks it required and no status API exists, readiness may accept current attributed operator attestations pinned to the immutable destination-configuration revision or fingerprint and **every** exact audio/announcement content hash required by the pinned Night Session revision. One verified playlist item is insufficient; an attempted or acknowledged upload alone is not `ready`.
 
-### F6. Optional power, thermal, and interlock integration
+### F6. Optional power, thermal, and interlock integration — not started, optional
+
+F1 rejects the `siteControl` and `interlocks` configuration blocks with a problem naming this deliverable, rather than accepting configuration nothing enforces. A deployment that omits site control, which is what the reference installation does, runs the full night loop without it.
 
 Add the optional rule mechanism with `observe`, `block`, and `disabled` postures, the required unavailable-source behavior for blocking rules, and phase-filtered evaluation. A rule may withhold only the lifecycle phase it declares; for example, a cooldown rule remains visible but cannot gate `start-night`.
 
@@ -98,11 +102,17 @@ Every presentation power-off binding explicitly selects `immediate` with an oper
 
 If a deployment configures `force-power-off`, ship it only as an explicit operator action with separate authorization and audit presentation. F6 is not a prerequisite for installations that omit site control.
 
-### F7. Operator surfaces
+### F7. Operator surfaces — API and CLI half built (`50772b3`, 2026-08-19); UI half not started
+
+The API and `showmeshctl` now carry lifecycle state, final-cycle status, the content-derived boundary, pending intents, per-cue evidence (state, outcome, reason, pinned action revision, dispatch and resolution times), the reason a transition is held, and recovery guidance naming the recovery that exists. Optional phases render `not_configured`. Closes Linear SM-98.
+
+**Not yet on any surface**: audio gain (F5), brightness ceiling and multiplier (no provider exists, RES-018), and interlock/site-control state (F6). Those three are absent because the capability behind each is absent, not because the surface was skipped.
 
 Add CLI coverage first, then UI configuration and operation. Show lifecycle state, final-cycle status, content-derived boundary, next cue, pending intents, per-cue evidence, audio gain, brightness ceiling/multiplier, configured interlock/site-control state, and recovery guidance. Optional sections render as `not_configured`, not warnings. The UI contains no orchestration logic.
 
-### F8. Integrated and failure verification
+### F8. Integrated and failure verification — not started, and not startable on a development machine
+
+Every scenario needs a real FPP and the deployed installation. Tracked as Linear SM-66 (the whole loop end to end), SM-50 (the real deployed resting FSEQ) and SM-51 (real per-installation cue timing).
 
 Run every acceptance scenario in `RESTING-MODE.md` first with no site-control/interlock configuration, then against the reference installation's configured MQTT/Home Assistant path. Exercise every posture, both unavailable-source choices, phase isolation, override authorization, domain/provenance rejection, both removal policies, partial-configuration rejection, overnight repetition, and failure injection. Update RES-007 and [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) only to the evidence level actually reached; a mock destination changes no claim about a real service.
 
