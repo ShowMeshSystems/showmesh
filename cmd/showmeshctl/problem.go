@@ -247,11 +247,12 @@ const (
 	// reached end-of-night-resting; finalization is monotonic).
 	exitNightStateRejected = 27
 
-	// exitNightAmbiguous: every "night <verb>" lifecycle command was
-	// refused because the session is degraded — a coordinator restart
-	// left it in a state this build cannot confirm is safe to resume from
-	// (RESTING-MODE.md §11) — and requires operator recovery before any
-	// further command can proceed.
+	// exitNightAmbiguous: a "night <verb>" lifecycle command was refused
+	// because the session is degraded — a restart, or evidence that
+	// contradicted what it was doing, left it in a state this build cannot
+	// confirm is safe to resume from (RESTING-MODE.md §11). Never returned
+	// for request-final-show, fade-out-night, power-down-presentation, or
+	// end-session, which stay accepted while degraded.
 	exitNightAmbiguous = 28
 
 	// exitActionBindingBroken: "action check" found at least one checked

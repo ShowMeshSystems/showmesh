@@ -124,22 +124,22 @@ func cmdNightStart(args []string, stdout, stderr io.Writer, clock func() time.Ti
 
 func cmdNightFinalShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night final-show", "request-final-show",
-		"Close admission after one final complete show (POST\n/api/v1/night/commands/request-final-show). Never starts a second show\nafter the final playlist.")
+		"Close admission after one final complete show (POST\n/api/v1/night/commands/request-final-show). Never starts a second show\nafter the final playlist.\n\nAccepted against a DEGRADED session: it is directional, and refusing it\nwould leave the operator less able to end the night than if this\ncoordinator were switched off. See \"night end-session\" for the full list\nof four.")
 }
 
 func cmdNightFadeOut(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night fade-out", "fade-out-night",
-		"Fade the active non-live presentation to stopped (POST\n/api/v1/night/commands/fade-out-night). Closes admission immediately and\ncancels any armed, uncommitted next show; never refused for want of an\naudit write.")
+		"Fade the active non-live presentation out (POST\n/api/v1/night/commands/fade-out-night). Closes admission immediately and\ncancels any armed, uncommitted next show; never refused for want of an\naudit write.\n\nThe session enters \"fading-out\", not \"stopped\": it runs the configured\nfade cues, issues a real stop to FPP, and reports \"stopped\" only once it\nhas observed FPP idle with no playlist after that stop. An unconfirmed\nstop degrades the session rather than claiming success. During a live or\nalready-committed show the fade is deferred until that show finishes, and\nthe end-of-night resting playlist is then not started.\n\nAccepted against a DEGRADED session: see \"night end-session\" for the full\nlist of four.")
 }
 
 func cmdNightPowerDown(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night power-down", "power-down-presentation",
-		"Close the session after playback and the fade have stopped (POST\n/api/v1/night/commands/power-down-presentation). Implies fade-out-night\nif it has not already occurred; with no power configuration this reaches\n\"stopped\" without error.")
+		"Close the session after playback and the fade have stopped (POST\n/api/v1/night/commands/power-down-presentation). Implies fade-out-night\nif it has not already occurred, so the session enters \"fading-out\" and\nreaches \"stopped\" only on observed idle evidence. With no power\nconfiguration the optional power phase records \"not_configured\" at that\npoint, without error.\n\nAccepted against a DEGRADED session: see \"night end-session\" for the full\nlist of four.")
 }
 
 func cmdNightEndSession(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night end-session", "end-session",
-		"PROVISIONAL operator recovery action (POST /api/v1/night/commands/\nend-session): abandons the current session, reaches \"stopped\", and\nlaunches nothing. The only command that runs against a DEGRADED session\n(the seven ADR-038 commands all refuse). Does not clear the degraded\nrecord; recover with \"night prepare-site\" afterward.")
+		"PROVISIONAL operator recovery action (POST /api/v1/night/commands/\nend-session): abandons the current session, reaches \"stopped\", and\nlaunches nothing. Does not clear the degraded record; recover with\n\"night prepare-site\" afterward.\n\nFour commands are accepted against a DEGRADED session:\n\n  request-final-show        close admission after one more show\n  fade-out-night            fade the presentation out and stop FPP\n  power-down-presentation   the above, plus any configured power phase\n  end-session               abandon the session outright\n\nThe first three are directional safety and shutdown actions and are never\nrefused for want of this coordinator's own evidence. end-session is the\nonly one that abandons the session rather than ending the night through\nit. Every other lifecycle command refuses while degraded.")
 }
 
 // runSimpleNightLifecycleCommand is the flag-parsing wrapper every

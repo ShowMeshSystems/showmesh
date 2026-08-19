@@ -48,6 +48,15 @@ func mustActivateNightSession(t *testing.T, api *API, token, id string) {
 // from.
 func setupNightControlFixture(t *testing.T, maxAge time.Duration) (api *API, st *store.Store, operatorToken string, advance func(time.Duration), obs *fakeObservationLister) {
 	t.Helper()
+	api, st, operatorToken, _, advance, obs = setupNightControlFixtureWithBody(t, maxAge, validNightSessionBody)
+	return api, st, operatorToken, advance, obs
+}
+
+// setupNightControlFixtureWithBody is setupNightControlFixture with the
+// night.session payload chosen by the caller, and the admin token exposed
+// so a test can revise that payload before the first prepare-site pins it.
+func setupNightControlFixtureWithBody(t *testing.T, maxAge time.Duration, body string) (api *API, st *store.Store, operatorToken, adminTok string, advance func(time.Duration), obs *fakeObservationLister) {
+	t.Helper()
 	advanceFn, now := mutableClock(testNow)
 	svc, st, _ := newTestIdentityServiceWithStore(t, now)
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -69,10 +78,10 @@ func setupNightControlFixture(t *testing.T, maxAge time.Duration) (api *API, st 
 	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
-	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
+	mustPutNightSession(t, api, adminToken, "halloween-main", body)
 	mustActivateNightSession(t, api, adminToken, "halloween-main")
 
-	return api, st, opToken, advanceFn, obsLister
+	return api, st, opToken, adminToken, advanceFn, obsLister
 }
 
 // nightWireFPPForReadiness starts a fake FPP HTTP server answering

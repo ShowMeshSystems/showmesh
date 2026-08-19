@@ -83,6 +83,14 @@ const (
 	nightOutcomeIdempotentNoOp = "idempotent_no_op"
 )
 
+// nightDegradedGuidance is what a degraded session tells an operator, and
+// it names every command that still works: refusing one of those would be
+// a successful conversation that fires no fallback, which is worse than
+// this coordinator being switched off.
+const nightDegradedGuidance = "night session is degraded (%s). " +
+	"request-final-show, fade-out-night and power-down-presentation are still accepted and are how you end the night through this session; " +
+	"end-session abandons it instead, and prepare-site then starts a fresh one. Every other lifecycle command is refused until then."
+
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
 // "roll back, no error occurred — a *v1.Problem describes the refusal",
 // distinguishing that from a genuine store/internal error.
@@ -250,7 +258,7 @@ func (h *handlers) nightDecideExemptCommand(cmd string, now time.Time, current *
 // directly instead.
 func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
-		p := nightAmbiguousProblem(fmt.Sprintf("night session is degraded (%s); run end-session, then prepare-site, to recover", current.DegradedReason))
+		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch cmd {
@@ -656,6 +664,13 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 // below but always listed, so "ready" means "everything checkable checked
 // out, and here is what is not checkable" rather than being permanently
 // unreachable.
+// The two resting-playlist check name prefixes. A readiness result names
+// which configured playlist a check was about, since the two can differ.
+const (
+	nightCheckPrefixResting    = "resting"
+	nightCheckPrefixEndOfNight = "resting-end-of-night"
+)
+
 type nightCheckState string
 
 const (
@@ -725,7 +740,7 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 		return &p
 	}
 	if current.Degraded && current.State != nightStateStopped {
-		p := nightAmbiguousProblem(fmt.Sprintf("night session is degraded (%s); run end-session, then prepare-site, to recover", current.DegradedReason))
+		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return &p
 	}
 	switch current.State {
@@ -757,17 +772,30 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 
 	cueOffsets := append(nightParseCueOffsets(payload.EnterShow.Cues), nightParseCueOffsets(payload.EnterResting.Cues)...)
 	checks = append(checks, nightCheckRestingAssetDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset, cueOffsets))
-	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.Resting.FPPInstanceID); err == nil && ok {
-		checks = append(checks, nightCheckRestingPlaylistShape(ctx, endpoint, payload.Resting.Playlist))
-	} else {
-		checks = append(checks, nightReadinessCheck{name: "resting:playlist-shape:" + payload.Resting.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the resting playlist definition from"})
+	// The end-of-night playlist is dispatched by the same controller and so
+	// gets the same checks, under its own names. It defaults to the
+	// ordinary resting playlist, so it is only checked separately when the
+	// operator actually configured a different one.
+	restingPlaylists := []struct{ prefix, playlist string }{{nightCheckPrefixResting, payload.Resting.Playlist}}
+	if payload.Resting.EndOfNightPlaylist != "" && payload.Resting.EndOfNightPlaylist != payload.Resting.Playlist {
+		restingPlaylists = append(restingPlaylists, struct{ prefix, playlist string }{nightCheckPrefixEndOfNight, payload.Resting.EndOfNightPlaylist})
+	}
+	restingEndpoint, restingEndpointOK, restingEndpointErr := h.resolveFPPEndpoint(ctx, payload.Resting.FPPInstanceID)
+	for _, p := range restingPlaylists {
+		if restingEndpointErr == nil && restingEndpointOK {
+			checks = append(checks, nightCheckRestingPlaylistShape(ctx, restingEndpoint, p.prefix, p.playlist))
+		} else {
+			checks = append(checks, nightReadinessCheck{name: p.prefix + ":playlist-shape:" + p.playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the resting playlist definition from"})
+		}
 	}
 	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.ShowPlaylist.FPPInstanceID); err == nil && ok {
 		checks = append(checks, nightCheckShowPlaylistPresent(ctx, endpoint, payload.ShowPlaylist.Playlist))
 	} else {
 		checks = append(checks, nightReadinessCheck{name: "show:playlist-present:" + payload.ShowPlaylist.Playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the show playlist definition from"})
 	}
-	checks = append(checks, nightCheckRestingAssetExactVariant(payload.Resting.Playlist))
+	for _, p := range restingPlaylists {
+		checks = append(checks, nightCheckRestingAssetExactVariant(p.prefix, p.playlist))
+	}
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))

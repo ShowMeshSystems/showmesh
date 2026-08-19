@@ -209,8 +209,8 @@ func nightReadPlaylistDefinition(ctx context.Context, endpoint, name string) (ni
 // [nightCheckRestingAssetExactVariant] for the separate, and separately
 // reported, question of whether the running host is playing THESE exact
 // bytes.
-func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, playlistName string) nightReadinessCheck {
-	name := "resting:playlist-shape:" + playlistName
+func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, playlistName string) nightReadinessCheck {
+	name := namePrefix + ":playlist-shape:" + playlistName
 	def, err := nightReadPlaylistDefinition(ctx, endpoint, playlistName)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not read the resting playlist definition: " + err.Error()}
@@ -233,9 +233,9 @@ func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, playlistName 
 // playlist read exposes only a filename, never a content hash, so this
 // can never be confirmed by this build. Kept separate from the shape
 // check rather than folded into its reason string.
-func nightCheckRestingAssetExactVariant(playlistName string) nightReadinessCheck {
+func nightCheckRestingAssetExactVariant(namePrefix, playlistName string) nightReadinessCheck {
 	return nightReadinessCheck{
-		name: "resting:asset-exact-variant:" + playlistName, health: nightCheckStateNotVerifiable,
+		name: namePrefix + ":asset-exact-variant:" + playlistName, health: nightCheckStateNotVerifiable,
 		reason: "FPP's playlist read exposes only a filename, never a content hash; this coordinator cannot independently confirm the live host is running the pinned asset's exact bytes, and no configuration of this build can make it able to",
 	}
 }

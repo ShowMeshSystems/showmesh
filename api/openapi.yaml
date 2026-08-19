@@ -11131,7 +11131,11 @@ components:
         no FPP audio item (`resting:playlist-shape:<playlist>`) — the show
         playlist's presence (`show:playlist-present:<playlist>`), and
         whether the exact deployed FSEQ variant on the FPP host can be
-        confirmed (`resting:asset-exact-variant:<playlist>`). That last
+        confirmed (`resting:asset-exact-variant:<playlist>`). When
+        `resting.endOfNightPlaylist` names a different playlist from
+        `resting.playlist`, it gets its own shape and exact-variant checks
+        under the `resting-end-of-night:` prefix; when the two are the same
+        playlist, which is the default, it is not checked twice. That last
         check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no
         content hash, only a filename, so this coordinator can never
         independently confirm the live host is running the pinned asset's
