@@ -42,10 +42,10 @@ type nightContentAnchor struct {
 	// anchoring observation — distinct from a genuine 0ms position.
 	PositionMS      int64     `json:"positionMs"`
 	PositionMSKnown bool      `json:"positionMsKnown"`
-	RepeatMode   bool      `json:"repeatMode"`
-	DispatchedAt time.Time `json:"dispatchedAt"`
-	ObservedAt   time.Time `json:"observedAt"`
-	Source       string    `json:"source"`
+	RepeatMode      bool      `json:"repeatMode"`
+	DispatchedAt    time.Time `json:"dispatchedAt"`
+	ObservedAt      time.Time `json:"observedAt"`
+	Source          string    `json:"source"`
 
 	// These three describe a dispatch that never reached the wire.
 	// DispatchedAt stays zero for those; FirstAttemptAt bounds the retry

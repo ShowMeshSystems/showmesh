@@ -3981,7 +3981,7 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape — exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) — the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass — but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
+        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape — exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) — the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass — but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
         NightReadinessCheck: {
             name: string;
             /**
@@ -4066,10 +4066,23 @@ export interface components {
             cues: components["schemas"]["NightCues"];
             degraded: boolean;
             degradedReason?: string;
-            /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11). Never cleared once true. */
+            /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
             attributionDegraded: boolean;
+            authorization: components["schemas"]["NightAuthorization"];
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description Who authorized this session, recorded for provenance and surviving a coordinator restart. The night controller performs autonomous actions as its own session-scoped system actor and never as this principal, so this is a record of authority rather than a live credential. State is "unknown" when nothing has been attributed yet; autonomous actions still run in that case, and the session carries attributionDegraded. */
+        NightAuthorization: {
+            /** @enum {string} */
+            state: "recorded" | "unknown";
+            reason?: string;
+            principalId?: string;
+            principalName?: string;
+            /** @description The lifecycle command that established this attribution. */
+            command?: string;
+            /** Format: date-time */
+            recordedAt: string | null;
         };
         /** @description The body of GET /night/session and GET /night/sessions/{id}. */
         NightSessionResponse: {
