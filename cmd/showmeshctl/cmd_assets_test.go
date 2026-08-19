@@ -264,6 +264,59 @@ func TestCmdAssetsUploadHappyPath(t *testing.T) {
 	}
 }
 
+// TestCmdAssetsUploadRollbackLeadsOutputWithAnnouncement proves a ROLLBACK
+// line precedes the ordinary asset detail (ADR-028 decision 10).
+func TestCmdAssetsUploadRollbackLeadsOutputWithAnnouncement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.fseq")
+	content := []byte("rolled back bytes")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	wantHash := "sha256:" + hex.EncodeToString(sum[:])
+
+	var received receivedUpload
+	ts := fakeAssetUploadServer(t, &received, func(w http.ResponseWriter, up receivedUpload) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		resp := assetResponse{
+			ServerTime: time.Now(),
+			Asset: assetRecord{
+				ID: "asset-rolled-back", Show: up.fields["show"], Sequence: up.fields["sequence"],
+				TargetKind: up.fields["targetKind"], Target: up.fields["target"],
+				MediaType: up.fields["mediaType"], ContentHash: wantHash,
+				RuntimeFilename: up.filename, SizeBytes: int64(len(up.content)),
+				CreatedAt: mustParse(t, "2026-08-10T20:00:00Z"), Current: true,
+			},
+			RolledBack: true,
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	})
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAssets([]string{
+		"upload", "--server", ts.URL,
+		"--show", "halloween-2026", "--sequence", "opening", "--media-type", "fseq",
+		"--target-kind", "node", "--target", "render-01", "--file", path,
+	}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-10T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	out := stdout.String()
+	rollbackLine := strings.Index(out, "ROLLBACK")
+	if rollbackLine == -1 {
+		t.Fatalf("output has no ROLLBACK announcement:\n%s", out)
+	}
+	detailLine := strings.Index(out, "id:")
+	if detailLine == -1 || rollbackLine > detailLine {
+		t.Errorf("ROLLBACK announcement must come BEFORE the asset detail block, got:\n%s", out)
+	}
+}
+
 func TestCmdAssetsUploadMissingFlagsIsUsageError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.fseq")

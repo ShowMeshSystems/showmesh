@@ -31,7 +31,7 @@ All web access 2026-08-12. The corpus survey in §6 covered 56 repositories, 3,9
 
 **Corrected 2026-08-14, during Step 9 wave 3, by reading FPP 9.5.3's source in the running `bench/fpp-multisync` container rather than on the web.** Two items are wrong as first written and are corrected in place, as corrections rather than silent replacements: §5.1's environment-stripping Fact, which is false and had already produced a derived rule that forbade the mechanism that actually works, and §6.1's `preStart.sh` guard form, which cannot detect the failure the same sentence names. **Both survived the original pass because they were plausible and because one was copied from a widely used reference plugin**, which is this record's own reminder that adoption is not evidence. Anything else in this record established only by web reading or by a delegated survey should be treated as owing the same check before it is built on.
 
-**Two version regimes, not three.** `scripts/install_plugin` and `scripts/uninstall_plugin` are byte-identical between FPP 8.4.2 and `9.4`, and `master` is byte-identical to `v10.0-beta`. So the design targets **FPP 9.x and earlier** and **FPP 10**. The fleet is entirely in the first regime and is expected to cross into the second.
+**Two implementation regimes, not three.** `scripts/install_plugin` and `scripts/uninstall_plugin` are byte-identical between FPP 8.4.2 and `9.4`, and `master` is byte-identical to `v10.0-beta`. The approved ShowMesh support range is narrower: **FPP 9.4 through 9.x and FPP 10.x**. FPP 8 is not supported. The fleet is in the first regime and is expected to cross into the second.
 
 **Independently re-verified during fold-in**, because it is the single most load-bearing finding in the record: `src/commands/MediaCommands.cpp` was fetched at all three refs and checked directly. `CURLINFO_RESPONSE_CODE` appears zero times on every ref. `CURLOPT_HTTPHEADER` appears zero times on every ref. On `9.4` and `9.5.3`, line 154 reads `virtual bool isError() override { return m_curl == nullptr || m_curlm == nullptr; }`. FPP's own master comment at line 122 states the consequence: "isError()/isDone() below only look at handle setup and CURLMSG_DONE, not the HTTP status or transfer result."
 
@@ -148,11 +148,11 @@ All four facts below are from the delegated corpus survey.
 
 **This inverts one of this record's own decisions.** The recorded fallback, "vendor a prebuilt binary directly in the plugin repo", is the single strategy with **zero precedent in the listed set**, while the working assumption has three. Retreating to the fallback would be retreating *away* from established practice, for a risk that does not exist. It is struck in §9 rather than left standing unused.
 
-**And it strengthens the working assumption's justification.** The corpus builds from source because FPP's entire plugin toolchain exists to compile C++ against `/opt/fpp/src`. **ShowMesh cannot use that path at all**: the agent is a Go static binary and FPP hosts carry no Go toolchain. So we are outside the dominant model by construction, and fetching a prebuilt artifact is not a preference, it is the only option open to us. That is a far stronger argument than "it seems fine," and it belongs in the record.
+**Correction, 2026-08-18.** The corpus builds from source because FPP's plugin toolchain compiles C++ against `/opt/fpp/src`. The Go helper cannot use that path because FPP hosts carry no Go toolchain, so fetching its prebuilt artifact is required. The new C++ brightness component can and should use the native path to avoid cross-major ABI assumptions. The earlier statement that ShowMesh could not use the path “at all” incorrectly generalized from the Go helper to every future component.
 
 **Two build constraints the corpus supplies, each with a cited failure:**
 
-- **Do not ship a `Makefile`.** FPP's `scripts/functions` runs `make -C` over every plugin directory containing one, unconditionally, on core upgrade. A plugin that fetches a Go binary *and* carries a Makefile has two competing producers of one artifact.
+- **Do not make a `Makefile` a second producer of the prebuilt Go artifact.** FPP's `scripts/functions` runs `make -C` over every plugin directory containing one, unconditionally, on core upgrade. RES-018's C++ build entry point must therefore build only the native component, deterministically and idempotently.
 - **Ship a cheaply guarded `preStart.sh` repair check.** The documented failure it defends against is an SD image cloned from a machine of a different architecture, which is live on any fleet built from Pi images. It must be a no-op in the common case: an unconditional refetch trips two BLOCKERs and delays every `fppd` start, which the reference plugin's own comment records having done.
 
   > **Correction, 2026-08-14.** This item previously specified the guard as `if [ ! -f <artifact> ]; then refetch; fi`, copied from the reference plugin. **That form cannot detect the failure named in the same sentence.** A cloned card carries a binary that is present, executable, and the wrong architecture, so an existence or mode test passes and the repair never runs; the fault surfaces as an exec-format error on the first fired command, at showtime. The reference plugin has the same hole, so this is a defect inherited from the corpus rather than one introduced here, which is exactly why copying a widely used form is not evidence that the form works. A guard for this failure must compare something that differs between architectures: stamp the detected architecture at install time and compare it to a fresh detection at boot. Cheapness is still required, and a stamp comparison is cheaper than the file test it replaces.
@@ -231,8 +231,8 @@ ADR-024 is written around a `scheduler` machine token living on the FPP host. On
 Unchanged in substance, with two amendments from §5.2 and §5.4:
 
 - A plugin repository installs cleanly on a real FPP instance via FPP's own plugin manager UI, not a hand-run script.
-- The installed agent binary matches the pinned release checksum and runs as a supervised service that survives an FPP reboot.
-- Uninstall removes the service and binary with no leftover process or stale MQTT Last Will registration.
+- The installed Go helper and C++ source bundle match the hashes committed in the packaging repository; the helper service and native component survive an FPP reboot.
+- Uninstall removes the service, binary, compiled component, and generated build files with no leftover process or stale MQTT Last Will registration.
 - A protocol-incompatible agent and coordinator pairing fails loudly rather than silently misbehaving. **Nothing in FPP expresses this**, so it is entirely ShowMesh's mechanism to build (§5.4).
 - No second listener on UDP 32320 is introduced; FPP-side observation goes through a documented callback hook. **Use `playlistCallback`, not `MultiSyncPlugin`** (§7.1).
 - **Split from the old "install with no network":** the release host being unreachable must fail cleanly and is testable; fully air-gapped install is out of scope for the Plugin Manager and needs a documented manual procedure (§5.2).
@@ -241,7 +241,13 @@ Unchanged in substance, with two amendments from §5.2 and §5.4:
 
 ## 9. Decision, fallback, and revalidation
 
-**The working assumption stands and is now well supported.** A separate thin plugin repository whose install script fetches a pinned `showmesh-agent` release is recognized practice, has a listed core-developer plugin as a template, and is named as recognized in FPP's own linter source. It is also, for ShowMesh specifically, the **only** available strategy, because the dominant build-on-device model requires a Go toolchain that FPP hosts do not have.
+### Decision update, 2026-08-18
+
+The owner superseded the single-runtime-repository assumption below with the three-repository design in [RES-018](RES-018-fpp-brightness-control.md): `showmesh` owns coordinator surfaces, `fpp-showmesh` is the thin Plugin Manager package, and `showmesh-fpp-plugin` owns the Go helper plus the C++ brightness runtime and release artifacts. The installer verifies filenames and SHA-256 values committed in `fpp-showmesh/artifacts.lock.json`; it installs the architecture-specific Go binary prebuilt and compiles the C++ source bundle locally against the installed FPP headers. This is necessary because the statement below that ShowMesh “cannot use FPP's C++ toolchain at all” applies only to building the Go helper and is false for the selected brightness extension.
+
+Both FPP 9.4–9.x and FPP 10.x are approved support targets, to be implemented through separate C++ adapters around one shared engine. As of 2026-08-18, FPP 10 remains `10.0-beta`; no RC is published. The target architecture is approved, but the third repository, C++ component, release assets, and real-host evidence do not yet exist.
+
+**The thin packaging conclusion stands; the artifact conclusion is superseded.** A separate thin plugin repository whose install script fetches pinned runtime assets is recognized practice, has a listed core-developer plugin as a template, and is named as recognized in FPP's own linter source. The Go helper must remain prebuilt because supported FPP hosts do not provide the required Go toolchain. RES-018 specifies a C++ source bundle that will be compiled locally against installed FPP headers; prebuilding everything is therefore no longer the selected strategy.
 
 **The recorded fallback is struck.** "Vendor a prebuilt binary directly in the plugin repo per tagged release" was reserved against a registry prohibition that does not exist, and it is the one strategy with zero precedent across 56 listed plugins. It is removed rather than left standing, because a fallback nobody should take is a trap for a future reader.
 
@@ -251,7 +257,7 @@ Unchanged in substance, with two amendments from §5.2 and §5.4:
 - "Pinned" must mean **checksum-verified**, not merely a pinned URL. This clears a Best practice finding that would block a first listing, and it puts ShowMesh ahead of every strategy-(c) plugin in the set, since none of the 145 corpus scripts verifies anything.
 - Build artifacts for **armhf** as well as arm64 and amd64, and produce standalone agent releases rather than only container images.
 - **Never select an artifact with `uname -m`.**
-- **Ship no `Makefile`**, and **ship a cheaply guarded `preStart.sh` repair check**.
+- A Makefile is unnecessary for the prebuilt Go helper, but the selected C++ component needs a thin, deterministic local build entry point; **ship a cheaply guarded `preStart.sh` repair check**.
 - Ship `scripts/fpp_upgrade.sh`, honored on FPP 10 and ignored on 9.4, so it is additive and safe.
 - Carry `versions[]` entries for both the 9.x and FPP 10 regimes.
 

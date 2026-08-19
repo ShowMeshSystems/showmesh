@@ -63,7 +63,9 @@ show:macro:run specifically (an admin who has never been granted
 show:macro:run may not fire a show through config:write alone).
 
 Subcommands:
-  list         enumerate macro objects (id, label, show, revision)
+  list [--show <id>]
+               enumerate macro objects (id, label, show, revision),
+               optionally narrowed to one show
   show <id>    show one macro's full definition, including its steps
   run <id>     submit a run (write; accepted asynchronously, 202)
   put <id>     write a new show.macro configuration revision (reads a
@@ -81,6 +83,8 @@ subcommand.
 
 func cmdMacroList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl macro list", stderr)
+	var show string
+	fs.StringVar(&show, "show", "", "narrow the list to macros belonging to this show id")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl macro list [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nEnumerate show.macro objects (GET /api/v1/config/show.macro).")
@@ -104,8 +108,13 @@ func cmdMacroList(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	ctx, cancel := context.WithTimeout(context.Background(), effectiveMacroClientTimeout(g.timeout))
 	defer cancel()
 
+	var query url.Values
+	if show != "" {
+		query = url.Values{"show": {show}}
+	}
+
 	var resp showConfigObjectsListResponse
-	if err := c.getJSON(ctx, "/api/v1/config/show.macro", nil, &resp); err != nil {
+	if err := c.getJSON(ctx, "/api/v1/config/show.macro", query, &resp); err != nil {
 		return reportError(stderr, "macro list", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

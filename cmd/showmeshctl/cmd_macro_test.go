@@ -384,3 +384,50 @@ func TestCmdMacroDispatchesPut(t *testing.T) {
 		t.Errorf("method = %q, want PUT", gotMethod)
 	}
 }
+
+// TestCmdMacroListPassesShowFilter is E7-3 deliverable 4's CLI half for
+// macros, matching TestCmdActionListPassesShowFilter one file over.
+func TestCmdMacroListPassesShowFilter(t *testing.T) {
+	var gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","kind":"show.macro","objects":[
+			{"id":"begin-set","label":"Begin set","show":"halloween-2026","currentRevision":1,"updatedAt":"2026-08-18T20:00:00Z"}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"list", "--server", ts.URL, "--show", "halloween-2026"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotPath != "/api/v1/config/show.macro" {
+		t.Errorf("path = %q, want /api/v1/config/show.macro", gotPath)
+	}
+	if gotQuery != "show=halloween-2026" {
+		t.Errorf("query = %q, want show=halloween-2026", gotQuery)
+	}
+}
+
+func TestCmdMacroListWithoutShowSendsNoQuery(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T21:00:00Z","kind":"show.macro","objects":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdMacro([]string{"list", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotQuery != "" {
+		t.Errorf("query = %q, want empty", gotQuery)
+	}
+}

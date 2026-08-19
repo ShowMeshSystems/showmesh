@@ -51,10 +51,10 @@ func TestMQTTExpectMaxDeadlineSecondsAgreesWithBrokerMaxResponseDeadline(t *test
 
 	// resolver is nil: this test exercises an "mqtt" target only, and
 	// DecodeShowActionPayload never calls it outside the "resolume" branch.
-	if _, verr := config.DecodeShowActionPayload(mk(wantMax), endpoints, brokers, registry, nil); verr != nil {
+	if _, verr := config.DecodeShowActionPayload(mk(wantMax), endpoints, brokers, registry, nil, func(string) bool { return true }); verr != nil {
 		t.Fatalf("deadline == broker.MaxResponseDeadline (%ds) must be accepted, got %+v", wantMax, verr)
 	}
-	if _, verr := config.DecodeShowActionPayload(mk(wantMax+1), endpoints, brokers, registry, nil); verr == nil {
+	if _, verr := config.DecodeShowActionPayload(mk(wantMax+1), endpoints, brokers, registry, nil, func(string) bool { return true }); verr == nil {
 		t.Fatalf("deadline == broker.MaxResponseDeadline+1 (%ds) must be rejected, got no error", wantMax+1)
 	}
 }

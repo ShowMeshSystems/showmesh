@@ -23,6 +23,7 @@ func TestOpenAPIShowActionResolumeResponseMatchesSchema(t *testing.T) {
 	deps := showConfigTestDeps(svc, st)
 	deps.ResolumeReferences = newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -108,6 +109,7 @@ func TestPutShowActionResolumeAcceptedReadBackNoObjectID(t *testing.T) {
 	deps := showConfigTestDeps(svc, st)
 	deps.ResolumeReferences = newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -140,6 +142,7 @@ func TestPutShowActionResolumeClipNotFoundRefused(t *testing.T) {
 	deps := showConfigTestDeps(svc, st)
 	deps.ResolumeReferences = newFakeAPIResolumeResolver() // nothing known
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -165,6 +168,7 @@ func TestGetShowActionListDoesNotLeakObjectIDForResolumeAction(t *testing.T) {
 	deps := showConfigTestDeps(svc, st)
 	deps.ResolumeReferences = newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
 		map[string]string{"Authorization": "Bearer " + token})
@@ -196,6 +200,7 @@ func TestShowActionResolumeIntegrationGuardedBothOrderings(t *testing.T) {
 		deps := showConfigTestDeps(svc, st)
 		deps.ResolumeReferences = newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
 		api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+		mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/launch-main", validShowActionResolumeBody,
 			map[string]string{"Authorization": "Bearer " + token})
@@ -221,6 +226,7 @@ func TestShowActionResolumeIntegrationGuardedBothOrderings(t *testing.T) {
 		deps := showConfigTestDeps(svc, st)
 		deps.ResolumeReferences = newFakeAPIResolumeResolver().withKnown("clip", "Whole House 1")
 		api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+		mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 
 		fppBody := `{"show":"halloween-2026","label":"Pre-show","safetyClass":"none",
 			"target":{"integration":"fpp","instanceId":"player-01","primitive":"startPlaylist","params":{"playlist":"x"}}}`

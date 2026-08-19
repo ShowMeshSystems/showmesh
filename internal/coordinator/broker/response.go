@@ -86,6 +86,15 @@ var ErrPublishNotAuthorized = errors.New("broker: publish rejected by broker (no
 // is expected to map it to its own "unconfirmed" step outcome.
 var ErrResponseDeadlineExceeded = errors.New("broker: deadline exceeded waiting for a live matching response")
 
+// ErrResponseFailedBeforePublish wraps any error AwaitResponse returns
+// before it calls Publish: deadline validation, response-topic validation,
+// a Match nil check, a broker-unavailable subscribe, a rejected SUBSCRIBE,
+// or ctx canceled during subscribe. A caller uses errors.Is against this to
+// tell "nothing reached the wire" from a failure at or after the publish
+// call, which is what determines whether dispatch evidence such as
+// PublishAttempted and dispatchedAt may be recorded as non-null.
+var ErrResponseFailedBeforePublish = errors.New("broker: response wait failed before any publish was attempted")
+
 // ErrInvalidResponseTopic is wrapped by the error AwaitResponse returns
 // when ResponseTopic is empty or contains an MQTT wildcard character ('+'
 // or '#').
@@ -572,15 +581,15 @@ func (b *BrokerManager) releaseResponseWaiter(w *pendingWaiter) {
 // returns a bare error with no stated reason.
 func (b *BrokerManager) AwaitResponse(ctx context.Context, req ResponseRequest) (Message, error) {
 	if req.Deadline <= 0 {
-		return Message{}, fmt.Errorf("broker: AwaitResponse deadline must be positive, got %v", req.Deadline)
+		return Message{}, fmt.Errorf("%w: broker: AwaitResponse deadline must be positive, got %v", ErrResponseFailedBeforePublish, req.Deadline)
 	}
 	if req.Deadline > MaxResponseDeadline {
-		return Message{}, fmt.Errorf("broker: AwaitResponse deadline %v exceeds the maximum of %v", req.Deadline, MaxResponseDeadline)
+		return Message{}, fmt.Errorf("%w: broker: AwaitResponse deadline %v exceeds the maximum of %v", ErrResponseFailedBeforePublish, req.Deadline, MaxResponseDeadline)
 	}
 
 	w, err := b.registerResponseWaiter(ctx, req.ResponseTopic, req.ResponseQoS, req.Match)
 	if err != nil {
-		return Message{}, fmt.Errorf("awaiting response on %q: %w", req.ResponseTopic, err)
+		return Message{}, fmt.Errorf("%w: awaiting response on %q: %w", ErrResponseFailedBeforePublish, req.ResponseTopic, err)
 	}
 	defer b.releaseResponseWaiter(w)
 

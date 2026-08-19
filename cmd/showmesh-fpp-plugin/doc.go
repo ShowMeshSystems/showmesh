@@ -1,7 +1,7 @@
 // Command showmesh-fpp-plugin is a dedicated operational binary that runs
-// ON an FPP host, invoked by FPP's own command mechanism (a script plugin
-// registered through commands/descriptions.json — per RES-015 section 7.2,
-// not a C++ plugin), whose job is to fire a ShowMesh macro and to make what
+// ON an FPP host, invoked by FPP's own command mechanism (a script command
+// registered through commands/descriptions.json — per RES-015 section 7.2),
+// whose job is to fire a ShowMesh macro and to make what
 // happened legible on the FPP host itself, without needing the coordinator
 // to be reachable to read that record.
 //
@@ -80,13 +80,14 @@
 //
 // # Where the packaging lives
 //
-// This directory holds the plugin's Go source only. Its FPP packaging —
-// pluginInfo.json, the command definitions, and the install, upgrade,
-// uninstall and preStart scripts — lives in a separate repository whose
-// long-term home is its own public repository under ShowMeshSystems
-// (owner decision, 2026-08-15; not created yet). Release artifacts stay
-// unpublished until the first real-host install, so an install points
-// SHOWMESH_PLUGIN_ARTIFACT_BASE_URL at a bench path until then.
+// This directory temporarily holds the Go runtime pending extraction to
+// showmesh-fpp-plugin. The approved target has three repositories: showmesh
+// owns coordinator surfaces, fpp-showmesh owns thin Plugin Manager packaging,
+// and showmesh-fpp-plugin owns this Go helper plus a separate C++ brightness
+// component, tests and release artifacts. The C++ component does not replace
+// this script command. Neither the extraction nor the C++ component exists in
+// this checkout yet. Release artifacts stay unpublished until the first
+// real-host install (RES-018).
 //
 // # What this program does NOT prove
 //

@@ -322,8 +322,24 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	var created store.AssetRecord
+	var rolledBack bool
+	var writeNow time.Time
 	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
-		rec, cerr := tx.CreateAsset(ctx, store.AssetRecord{
+		// Timestamped here, not at request start (:246's now): that read
+		// precedes the whole upload stream, so an audit entry stamped from
+		// it can predate the write it records by the upload's entire
+		// duration and misorder concurrent transitions.
+		writeNow = h.now()
+
+		// Read before CreateAsset runs: a rollback supersedes whatever this
+		// returns, and that row is unrecoverable from the tuple alone once
+		// superseded.
+		prevCurrent, prevErr := tx.GetCurrentAssetForTuple(ctx, fields.show, fields.sequence, fields.targetKind, fields.target)
+		if prevErr != nil && !errors.Is(prevErr, store.ErrAssetNotFound) {
+			return identity.AuditEntry{}, prevErr
+		}
+
+		rec, rb, cerr := tx.CreateAsset(ctx, store.AssetRecord{
 			ID:                     uuid.NewString(),
 			ShowID:                 fields.show,
 			SequenceID:             fields.sequence,
@@ -342,33 +358,38 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 			return identity.AuditEntry{}, cerr
 		}
 		created = rec
+		rolledBack = rb
 
+		// A rollback (ADR-028 decision 10) gets its own audit Action.
+		action := "asset.upload"
+		params := map[string]any{
+			"show": fields.show, "sequence": fields.sequence,
+			"targetKind": fields.targetKind, "target": fields.target,
+			"mediaType": fields.mediaType, "contentHash": blob.ContentHash,
+			"sizeBytes": blob.SizeBytes, "runtimeFilename": runtimeFilename,
+			"rolledBack": rb,
+		}
+		if rb {
+			action = "asset.rollback"
+			// The transition this entry records: what stopped being
+			// current and what replaced it (review blocker 1).
+			params["fromAssetId"] = prevCurrent.ID
+			params["toAssetId"] = rec.ID
+		}
 		return identity.AuditEntry{
-			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Timestamp: writeNow, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
-			Action: "asset.upload", Target: rec.ID,
-			Params: map[string]any{
-				"show": fields.show, "sequence": fields.sequence,
-				"targetKind": fields.targetKind, "target": fields.target,
-				"mediaType": fields.mediaType, "contentHash": blob.ContentHash,
-				"sizeBytes": blob.SizeBytes, "runtimeFilename": runtimeFilename,
-			},
-			Kind: identity.AuditAdmin,
+			Action: action, Target: rec.ID,
+			Params: params,
+			Kind:   identity.AuditAdmin,
 		}, nil
 	})
 
 	var existsErr *store.AssetIdentityExistsError
 	switch {
 	case errors.As(writeErr, &existsErr):
-		// Idempotent re-upload of identical bytes for an identity that
-		// already exists (TRACK-E-SESSION-SPEC.md section 3.3): 200 with
-		// the existing asset, no new row, no new audit entry — nothing
-		// changed, so there is nothing to attribute. The staged blob above
-		// is an orphan under this outcome too (identical content already
-		// has a blob under the same content-addressed key — VolumeBackend.Put
-		// renamed over the existing file, per its own doc comment: "a
-		// same-content overwrite, not a conflict").
-		jsonWrite(w, mapAssetResponse(now, existsErr.Existing))
+		// Still-current identity match: idempotent no-op, no audit entry.
+		jsonWrite(w, mapAssetResponse(writeNow, existsErr.Existing, false))
 		return
 	case writeErr != nil:
 		h.writeInternalError(w, now, "write asset", writeErr)
@@ -376,10 +397,11 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	// ADR-028 decision 7: sync runs on upload and on a timer, never at
-	// showtime. Without this the new asset waits out a whole sync interval.
+	// showtime. A rollback changes what the manifest expects exactly like a
+	// fresh upload does, so it nudges the same way.
 	h.deps.AssetSyncNudger.Nudge()
 
-	jsonWrite(w, mapAssetResponse(now, created))
+	jsonWrite(w, mapAssetResponse(writeNow, created, rolledBack))
 }
 
 // --- GET /assets, GET /assets/{id} ---
@@ -421,7 +443,7 @@ func (h *handlers) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "get asset", err)
 		return
 	}
-	jsonWrite(w, mapAssetResponse(now, rec))
+	jsonWrite(w, mapAssetResponse(now, rec, false))
 }
 
 // --- GET /assets/{id}/content ---
@@ -493,6 +515,6 @@ func mapAsset(rec store.AssetRecord) v1.Asset {
 	}
 }
 
-func mapAssetResponse(now time.Time, rec store.AssetRecord) v1.AssetResponse {
-	return v1.AssetResponse{ServerTime: formatTime(now), Asset: mapAsset(rec)}
+func mapAssetResponse(now time.Time, rec store.AssetRecord, rolledBack bool) v1.AssetResponse {
+	return v1.AssetResponse{ServerTime: formatTime(now), Asset: mapAsset(rec), RolledBack: rolledBack}
 }

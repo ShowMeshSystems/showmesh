@@ -61,10 +61,23 @@ taken silently.
 | 23 | `exitRenderPipelineDown` | shipped (Track B seam B2) |
 | 24 | `exitAudioDeviceUnavailable` | reserved (Track C seam C1) |
 | 25 | `exitAudioSessionFailed` | reserved (Track C seam C3) |
-| 26+ | unallocated | free |
+| 26 | `exitNightNotReady` | reserved (Track F seam F2) |
+| 27 | `exitNightStateRejected` | reserved (Track F seam F2) |
+| 28 | `exitNightAmbiguous` | reserved (Track F seam F2) |
+| 29 | `exitActionBindingBroken` | reserved (Track E seam E7) |
+| 30+ | unallocated | free |
 
 **16 to 19 are deliberately free.** The asset codes were placed at 20 to
 leave room below them; do not close that gap without a reason.
+
+**`exitActionBindingBroken` is a distinct code because a broken binding is
+not an action that failed.** Codes 11 to 13 say a dispatched action did not
+confirm, could not be confirmed, or was refused; 29 says the action was
+never dispatchable, because what it names no longer exists in the
+integration (ADR-029's own consequence: an action bound to a deleted clip).
+A pre-show script wants to branch on that difference. Track E seam E7's
+invoke verb reuses 9 and 11 to 13 unchanged — the ADR-020 outcome vocabulary
+does not fork per surface.
 
 ## Configuration kinds
 
@@ -85,8 +98,10 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
 | `render.settings` | `default` singleton | shipped | Track B seam B2 |
-| `audio.settings` | `default` singleton | reserved | Track C seam C1 |
-| `audio.node` | operator-chosen (the node id) | reserved | Track C seam C1 |
+| `audio.settings` | `default` singleton | shipped | Track C seam C1b |
+| `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
+| `night.session` | operator-chosen | reserved | Track F seam F1 |
+| `night.session.active` | `default` singleton | reserved | Track F seam F1 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -112,6 +127,33 @@ surface. **Track C mints no audio-playlist configuration kind**: Track F's
 Night Session configuration embeds the ordered audio slots (TRACK-F F1), and
 a second authoring path for the same list is the collision this register
 exists to prevent.
+
+**Track F mints two kinds and no audio-playlist kind.** `night.session` is
+operator-chosen because a deployment holds more than one (the Christmas and
+the Halloween definition differ in content and in FPP playlist references
+while sharing a shape), and `night.session.active` is the singleton pointer
+saying which one a session activation pins, on the `show`/`show.active`
+precedent. The ordered background-audio slots live inside `night.session`
+per TRACK-F F1; Track C deliberately mints no audio-playlist kind, so a
+second authoring path for the same list cannot appear. **`night.session`
+carries no calendar field of any kind** (ADR-038 decision 1), and F1's
+validation rejecting one is part of the kind rather than a later check.
+`night.session.active` may be released back to `free` if the active-show
+reference turns out to be sufficient to resolve the session; it is reserved
+now because releasing an unused reservation is free and colliding is not.
+
+**Track E seam E7 mints no configuration kind, no schema version, no change
+stream event kind and no observation signal, and that is the finding rather
+than an omission.** ADR-029's logical action and its binding are already
+`show.action` and `show.macro.steps[].action`, shipped in Step 9 and
+extended by Track D seam C. E7 is the part of ADR-029 that was never built
+on top of them: invoking one action outside a macro, checking a binding
+still resolves before a show rather than at showtime, and enforcing the
+ADR-027 show namespace those objects have only ever range-checked. A
+binding check is derived from configuration the coordinator already holds,
+so it is a computed read on the asset-manifest precedent, not an observation
+with provenance and freshness. If a builder finds itself wanting a new kind
+here, the design has drifted and the orchestrator decides, not the builder.
 
 Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
@@ -139,9 +181,51 @@ bundles of these (ADR-024).
 | `principal:write` | shipped | the nine principal/token administration writes (Track G seam G-5) |
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 | `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
+| `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
+| `night:override` | reserved | Track F seam F6: interlock override where a rule declares `authorized-operator` |
+| `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
+
+**`night:override` is separate from `night:command` deliberately.** RESTING-MODE
+§10.1 accepts an override only when the rule itself declares
+`authorized-operator` *and* the caller holds the required permission; folding
+that into `night:command` would mean every principal that can start a night
+can also bypass a blocking interlock, which is the opposite of what a
+blocking interlock is for. Night-session **reads** stay open per ADR-024
+constraint 23; a credential problem never costs the operator visibility of
+the lifecycle state.
 
 `principal:write` sat in the admin bundle unchecked from Step 6 until Track
 G seam G-5 landed its first callers (merged 2026-08-17).
+
+**`show:action:invoke` is separate from `show:macro:run` deliberately, and
+from the per-integration scopes as well.** A macro run is a submission of a
+reviewed, revision-pinned sequence; invoking one action is an operator
+pressing a button on the wall right now, and the two want to be grantable
+independently. It is also not `resolume:action` or `fpp:command`: the whole
+point of ADR-029 is that the caller names an action and never learns which
+protocol it reaches, so a scope named after a protocol would leak the
+binding back into the authorization model. Reads of an action, its
+bindings, and their validation stay open per ADR-024 constraint 23.
+
+**It is umbrella authority, not conjunctive** (owner, 2026-08-19, Linear
+SM-104). A principal holding `show:action:invoke` may invoke any stored
+action, including ones that reach FPP or Resolume, without also holding
+`fpp:command` or `resolume:action`. This paragraph previously claimed the
+opposite, that the dispatch path underneath still checked the
+per-integration scope, and **that was simply false**: authorization lives
+entirely in the HTTP write guard, and neither `dispatchFPPCommand` nor the
+Resolume dispatcher checks a scope. The register described a security
+property the code did not have, which is worse than describing none.
+
+The ruling follows the shape rather than the plumbing. A caller selects a
+stored logical action and supplies no protocol parameters, so what it is
+authorized to do is bounded by what an operator already authored and an
+administrator already accepted. That is the same argument `show:macro:run`
+rests on, and it is ADR-029's own: the caller names an action and never
+learns which protocol it reaches, so requiring a protocol-named scope would
+reintroduce the binding the ADR exists to hide. The grant to watch is
+therefore `config:write`, which decides what an action may be bound to, not
+this one.
 
 ## Collector source ids
 
@@ -157,7 +241,7 @@ the wrong device, because every collector shares one
 | `resolume-rest` | shipped | `collector/resolume` |
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
-| `node-audio` | reserved | Track C seam C6 (`collector/nodeaudio`) |
+| `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -193,7 +277,7 @@ after shipping a breaking change to stored history.
 | `audio.gain.fade` | reserved | Track C seam C4 |
 | `audio.output.mute` | reserved | Track C seam C4 |
 | `audio.output.unmute` | reserved | Track C seam C4 |
-| `audio.device.probe` | reserved | Track C seam C1 |
+| `audio.device.probe` | shipped | Track C seam C1a |
 | `audio.media.probe` | reserved | Track C seam C2 |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
@@ -204,6 +288,71 @@ are properties of the session being applied: an announcement is
 `mix`/`duck`/`interrupt` policy, followed by `audio.session.start`. A
 separate `audio.session.duck` would be a second way to reach the same state
 with no way to say which one won.
+
+## Audit action strings
+
+The `Action` field of an `identity.AuditEntry`, written into the audit
+table and read back by `GET /api/v1/audit`, the `showmeshctl audit` verb,
+and the Operator UI's audit view.
+
+**This section exists because the register had no place for these until
+2026-08-18**, when a review of Track E's asset rollback asked where its new
+`asset.rollback` string had been reserved. The answer was nowhere. The
+"Agent operation names" section above already states the reason this
+matters, and it applies here word for word: the value **is recorded in the
+audit trail, which makes a rename after shipping a breaking change to
+stored history.** An operator asking what happened on the night of the 17th
+is reading strings minted months earlier.
+
+**There is no central constant.** Every call site passes a literal, so
+nothing collides at compile time and nothing would catch two branches
+minting one name with different meanings. That is the same condition that
+produced the exit code 11 and 12 collision, minus the crash.
+
+Written from the code on 2026-08-18 by enumerating `identity.AuditEntry`
+construction sites, following this file's own correction rule that a
+register entry comes from the code and never from a plan.
+
+| Action | Status | Owner |
+|---|---|---|
+| `bootstrap.claim` | shipped | Step 6 |
+| `session.create` | shipped | Step 6 |
+| `session.revoke` | shipped | Step 6 |
+| `credential.resolve` | shipped | Step 6 |
+| `credential_in_url` | shipped | Step 6 |
+| `principal.create` | shipped | Step 6 |
+| `principal.enable` | shipped | Track G seam G-5 |
+| `principal.disable` | shipped | Track G seam G-5 |
+| `principal.set_role` | shipped | Track G seam G-5 |
+| `principal.reset_password` | shipped | Track G seam G-5 |
+| `config.write` | shipped | Step 7 |
+| `config.migrate` | shipped | Step 7 |
+| `node.declare` | shipped | Step 7 |
+| `node.declaration.delete` | shipped | Step 7 |
+| `discovery.run.start` | shipped | Step 7 |
+| `fpp.start_playlist` and the seven other `fpp.<primitive>` names | shipped | Step 8 |
+| `macro.run.submit` | shipped | Step 9 |
+| `mqtt.publish` | shipped | Step 9 |
+| `resolume.<action>` (seven, via `resolumeActionAuditAction`) | shipped | Track D seam D-3 |
+| `resolume.recovery_restore` | shipped | Track D seam D-3a |
+| `render.surface.apply` / `render.surface.clear` / `render.pipeline.restart` / `render.transport.probe` | shipped | Track B |
+| `asset.upload` | shipped | Track E |
+| `asset.fetch` | shipped | Track E |
+| `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+
+**Two naming conventions are in use and neither is being changed
+retroactively.** Most names are `<noun>.<verb>` with an underscore inside
+the verb (`principal.reset_password`, `fpp.stop_playlist_gracefully`).
+`credential_in_url` has no noun segment at all. Renaming any of them
+rewrites the meaning of history that is already stored, so the rule going
+forward is `<noun>.<verb>`, and the existing outliers stay.
+
+**Three of these names are shared with other namespaces, deliberately and
+harmlessly.** `asset.fetch` and the four `render.*` names are also agent
+operation names, and the `fpp.*` and `resolume.*` audit actions echo their
+primitive and action names. They are different tables reached by different
+code, and an audit action that matched its operation is easier to read than
+one that did not. Do not "fix" the duplication.
 
 ## Observation resource kinds and signal namespaces
 
@@ -217,8 +366,9 @@ dotted `SignalID` namespace that hangs off each one.
 | `coordinator` | `coordinator.*` | shipped | Step 3 |
 | `resolume` | `resolume.*` | shipped | Track D |
 | `surface` | `surface.*` | shipped | Track B seam B2 |
-| `node` | `node.audio.*` | reserved | Track C seam C6 (engine, device, buses) |
-| `audio_session` | `audio_session.*` | reserved | Track C seam C6 |
+| `node` | `node.audio.*` | shipped | Track C seam C1a (engine, device, buses) |
+| `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
+| `night_session` | `night_session.*` | reserved | Track F seam F2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -238,9 +388,31 @@ id is the session id. The namespace carries no dynamic segment: the two buses
 are `node.audio.program.*` and `node.audio.ltc.*` by name, never
 `node.audio.output.<id>.*`.
 
+**Track F's `night_session` kind is reserved with its namespace and without
+its individual signal rows.** The rows are written from the code when seam F2
+lands, following this file's own correction below: four of ten `surface.*`
+rows were wrong because they were written from a plan. The resource id is the
+night-session identity, not the `night.session` configuration object id,
+because one definition is activated many times and a signal keyed on the
+definition could not distinguish tonight's session from last night's.
+
 Adding a resource kind is not only a constant: `internal/coordinator/api/
 handlers.go:301` switches over the allowed kinds and silently rejects any
 kind not listed there.
+
+**One `fpp.*` signal reserved 2026-08-18 for Track F.** The shipped FPP
+collector exports `fpp.position.elapsed.seconds`, whole seconds, which is too
+coarse to arm a cue deadline: Track F seam F0 measured FPP's own
+`milliseconds_elapsed` advancing in exact 50 ms quanta (the FSEQ's step time),
+and the night controller's cue tolerance is finer than a second.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `fpp.position.elapsed.ms` | reserved | Track F (night-session cue timing) |
+
+Track F seam F3 built against the existing whole-second signal rather than
+minting this one, and **reported the need instead of inventing the name**,
+which is what this register is for.
 
 **Individual `surface.*` signals**, all inside the namespace reserved above,
 listed because the last row was minted after the others had shipped:
@@ -263,6 +435,98 @@ listed because the last row was minted after the others had shipped:
 | `surface.output.idle_mode` | shipped | Track B review fix, finding 7 |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
+
+**Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
+2026-08-18.** They were reserved before C3 and C4 were written; the table
+below is rewritten from
+`internal/coordinator/collector/nodeaudio/signals.go` after the seam
+landed, and **eight of the reserved spellings changed on the way**. The
+builder emitted its own names, the orchestrator ruled a canonical set
+mixing both (taking the reservation where it was as good or better, and
+the builder's where it carried a fact the reservation could not), and the
+code was renamed to match before anything shipped. Reserving still paid
+for itself: the divergence was caught by comparing code against register
+rather than by two tracks colliding.
+
+All are on the `audio_session` resource kind, resource id the session id:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.state` | shipped | C6/C7 |
+| `audio_session.state.reason` | shipped | C6/C7 (replaces the reserved `.reason`) |
+| `audio_session.source_role` | shipped | C6/C7 |
+| `audio_session.playlist.revision` | shipped | C6/C7 |
+| `audio_session.playlist.item_id` | shipped | C6/C7 |
+| `audio_session.playlist.item_index` | shipped | C6/C7 |
+| `audio_session.position_ms` | shipped | C6/C7 |
+| `audio_session.reference_position_ms` | shipped | C6/C7 |
+| `audio_session.drift_ms` | shipped | C6/C7 |
+| `audio_session.desired_revision` | shipped | C6/C7 |
+| `audio_session.gain.effective` | shipped | C6/C7 |
+| `audio_session.gain.ceiling` | shipped | C6/C7 |
+| `audio_session.fade.state` | shipped | C6/C7 |
+| `audio_session.mix.ducked_by` | shipped | C6/C7 |
+| `audio_session.readiness.state` | shipped | C6/C7 |
+| `audio_session.readiness.reason` | shipped | C6/C7 |
+| `audio_session.fault.kind` | shipped | C6/C7 |
+| `audio_session.fault.reason` | shipped | C6/C7 |
+
+**Reserved and never shipped**, deliberately: `audio_session.media.asset_id`,
+`audio_session.media.content_hash`, `audio_session.playlist.repeat`,
+`audio_session.mix.state`, `audio_session.last_outcome` and
+`audio_session.last_outcome_reason`. The media identity and repeat mode
+travel in the session's desired state rather than as observations;
+`mix.state` was dropped because `mix.ducked_by` empty already means "not
+ducked" and `interrupt` is refused, so a second signal could only
+disagree with the first. They stay reserved rather than released, since
+releasing a name only to re-mint it later is how a spelling drifts.
+
+**Four more node-level `node.audio.ltc.*` signals, reserved 2026-08-19** for
+seam C5, after the owner ruled (SM-69) that LTC is generated live by an
+external libltc process streamed into the pipeline rather than played from
+a pre-rendered file:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.ltc.frame_rate` | reserved | Track C seam C5 |
+| `node.audio.ltc.timecode` | reserved | Track C seam C5 |
+| `node.audio.ltc.generator.state` | reserved | Track C seam C5 |
+| `node.audio.ltc.generator.reason` | reserved | Track C seam C5 |
+
+**The generator gets its own liveness signal deliberately.** A generator
+process inside the media path can die while the pipeline keeps running, and
+silent timecode loss looks exactly like a show sitting between cues. The
+orchestrator raised that cost when recommending against live generation;
+the owner ruled for it anyway on stronger grounds (a pre-rendered file
+cannot carry a per-sequence start offset), so the failure mode is
+engineered rather than argued: generator liveness is observed in its own
+right and never inferred from the pipeline still being up.
+
+**One new node-level signal shipped with them**, on the `node` kind:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.clock.alignment` | shipped | C6/C7 |
+
+**It is always `not_collected`, with a reason, by design.** Nothing in
+software can measure program-to-LTC alignment, so it is never derived
+from both outputs being usable and never from configuration declaring a
+shared clock. A test fails if the signal is made to look measured. The
+whole value of the signal is that a green alignment light means measured
+rather than configured, and only the hardware work can make it say
+anything else.
+
+**`drift_ms` is reported, never acted on continuously.** ADR-017 makes
+audio's divergence from the MultiSync slew/jump model deliberate: the
+signal exists so the threshold can be set from measurement, and a future
+reader who "fixes" audio to chase it has reintroduced the defect the ADR
+exists to prevent.
+
+**A probe result is a command outcome, not an observation.**
+`audio.media.probe` answers about an asset, which is not a session and has
+no resource of its own; only a session's own readiness becomes an
+observation, which is why the two readiness rows above are the seam C2
+entries and there are no node-level probe signals.
 
 **Four rows above were wrong until 2026-08-17 and the review caught it.** The
 register recorded `surface.reason`, `surface.restart.count` and
@@ -307,7 +571,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/cmd` | shipped | Step 2 |
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
-| `showmesh/nodes/<id>/observed/audio` (retained) | reserved | Track C seam C6 |
+| `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -341,7 +605,33 @@ The store schema version, bumped by migrations in
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
 | v9 | reserved | Track C (audio session desired state) |
-| v10+ | unallocated | free |
+| v10 | reserved | Track F (night-session lifecycle, cue outbox) |
+| v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
+| v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
+| v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
+| v14+ | unallocated | free |
+
+**v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
+sequencing constraint rather than a preference. The column's writers are
+split across `main` (the `macro:`-prefixed macro-run revision) and two
+unmerged branches: PR #19 writes an action configuration revision to it, and
+PR #18 writes a JSON caller-identity struct that contains no revision at
+all. A rename branched from `main` today would compile against one writer
+and break when the other two land. Merge first, then rename with every
+writer visible.
+
+Note the column already carries an informal discriminator: values written by
+a macro run begin with `macro:` (`macroRequestedRevisionPrefix`,
+`store/macro_runs.go`). Three shapes now share the column, so v13 should
+formalize that convention rather than leave a fourth reader guessing.
+
+**v12 is reserved defensively and may well come back.** SM-100's lifecycle
+state and SM-102's durable dispatch and outcome attribution may fit in the
+existing `commands.result_json` payload and `commands.requested_revision`,
+in which case no migration is needed and v12 is released. It is reserved
+now because three sessions are running and discovering mid-build that the
+number is taken costs a rename across a branch, while releasing an unused
+reservation costs nothing.
 
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
@@ -350,6 +640,71 @@ was released and went to Step 9.
 A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
 independently is the ADR-034 failure with data attached.
+
+**The stamped version is the maximum migration version, not the count, and
+that distinction is invisible except while a branch holds a gap** (Track C
+and Track F, 2026-08-18, agreed across both sessions). `migrate()` stamps
+`PRAGMA user_version` and skips any migration whose version is `<=` the
+stamp. Those two numbers were interchangeable for the whole life of this
+project because versions were contiguous, and they stopped being
+interchangeable the moment Track F took v10 while Track C's v9 was still
+unwritten: a fresh database on that branch applied nine migrations, the last
+of them v10, and a count-based stamp wrote `9`, which on the other branch
+means "has the audio tables". One number, two schemas, and the equality
+fast-path then skips whichever migration the other branch needs. The change
+to a maximum is a no-op for every database that has ever existed, which is
+why it landed mid-flight rather than at merge.
+
+**Once both branches merge the versions are contiguous again and the fix
+becomes invisible**, which is the reason it is written down here rather than
+left to the line itself.
+
+**A coordinator database created by a branch binary cannot survive a merge,
+in either direction**, and no stamp scheme fixes it: the apply loop's guard
+is `version <= current`, so a database stamped 10 skips v9 and one stamped 9
+skips v10. Per-version tracking (a migrations table rather than one integer)
+is the only thing that would, and that is a change to the store's contract
+rather than a merge-week edit. Discard and recreate branch dev databases.
+The deployed local dev stack is at v8 and is unaffected: a merged binary
+sees 8 and applies v9 then v10 in order.
+
+## Change stream event kinds
+
+The `event:` field of an SSE frame, written by
+`internal/coordinator/api/stream.go`. ADR-020 makes the stream
+additive-only within a major version, so a client ignores a kind it does not
+know — which is exactly why two tracks can mint the same name without
+anything failing loudly.
+
+| Event kind | Status | Owner |
+|---|---|---|
+| `node.changed` | shipped | Step 3 |
+| `fpp.changed` | shipped | Step 3 |
+| `fpp.observations.changed` | shipped | Step 3 |
+| `event.recorded` | shipped | Step 3 |
+| `macroRun.changed` | shipped | Step 9 |
+| `resolume.changed` | shipped | Track D |
+| `resolumeRecovery.changed` | shipped | Track D seam D-3a |
+| `nightSession.changed` | reserved | Track F seam F2 |
+
+**Track F mints one kind, not one per lifecycle transition.** ADR-020 makes
+the stream non-resumable, so a client that misses frames re-fetches the
+authoritative session state rather than reconstructing it from a sequence of
+transition events; a per-transition kind would invite exactly the
+reconstruction the non-resumable rule forbids.
+
+## Research record numbers
+
+`docs/research/RES-NNN-*.md`, tracked in
+[`docs/research/README.md`](../research/README.md). Not previously in this
+register, which is how ADR numbers came to collide, and there are three
+sessions running.
+
+| Number | Status | Subject |
+|---|---|---|
+| RES-001 to RES-017 | shipped | see the research tracker |
+| RES-018 | issued | FPP brightness control and the ADR-038 / RESTING-MODE §7.3 composition seam (Track F) |
+| RES-019+ | unallocated | free |
 
 ## API paths
 

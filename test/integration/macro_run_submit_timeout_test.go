@@ -146,6 +146,11 @@ func TestCLIMacroRunSubmitTimeoutFloorCoversRealSubmissionLatency(t *testing.T) 
 		bearerToken: adminToken, fppEndpoints: instanceID + "=" + fppURL,
 	})
 
+	// The show namespace (ADR-027) both fixtures below name must exist
+	// before either write: show.action and show.macro both refuse a
+	// "show" that does not resolve, at write time.
+	ensureShow(t, coord, adminToken, "bench-show", "Bench Show")
+
 	// One show.action (an FPP "stopPlaylist" step — safetyClass "stop" per
 	// its own registered Decision 11 class) and one one-step show.macro
 	// naming it — the minimum fixture that exercises SubmitRun's real

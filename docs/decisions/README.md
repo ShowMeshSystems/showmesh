@@ -33,8 +33,8 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
 | [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
 | [ADR-027](ADR-027-show-and-surface-model.md) | Show and surface model; xLights owns authoring, ShowMesh owns configuration | Accepted |
-| [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted |
-| [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted |
+| [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted (decision 10 amended in 2026-08-17: re-uploading superseded bytes is a rollback; implemented 2026-08-18 in PR #17, not yet merged) |
+| [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted (decisions 1, 2 and 4 implemented; **decision 3, the raw protocol escape hatch, has never been built** and is an open owner question, Linear SM-61) |
 | [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
 | [ADR-031](ADR-031-macro-execution-model.md) | The macro execution model | Accepted (decision 2's default and decision 5 superseded by ADR-035) |
 | [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
@@ -45,6 +45,7 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-038](ADR-038-fpp-authorizes-night-sessions.md) | FPP authorizes night sessions; ShowMesh advances them | Accepted (owner, 2026-08-16; not yet implemented) |
 | [ADR-039](ADR-039-operator-configuration-is-store-backed.md) | Operator configuration is store-backed; the environment holds only what precedes it | Accepted (owner, 2026-08-17; extends ADR-030 and CLAUDE.md's CLI-parity constraint; implemented by Track G) |
 | ADR-040 | The renderer extracts channels; GStreamer owns every frame the audience sees | Accepted (owner, 2026-08-17; **narrows** ADR-007's per-frame prohibition without superseding it, the way ADR-026 narrowed ADR-005. Implemented by Track B seams B2 and B3; the record itself lands on `main` with the Track B fold. Creates a measurement obligation, not a guard: achieved frame rate at the configured geometry must be reported as evidence.) |
+| [ADR-041](ADR-041-operator-recovery-is-not-a-calendar-intent.md) | Operator recovery is not a calendar intent | Accepted (owner, 2026-08-19; **narrows** ADR-038 decision 2's "closed command vocabulary" to mean the set of lifecycle intents FPP's calendar invokes, leaving that set closed and placing `end-session` alongside it. Carries a rule that outlives the verb: a recovery action may never obtain an outcome the lifecycle commands would have refused. Implemented by Track F seam F2.) |
 
 **There is no ADR-034, and that is deliberate.** ADR-035 and ADR-036 were issued on the `step-9-wave-3` branch as 033 and 034, colliding with show mode, which Track D issued on `main` the same day. They were renumbered when that branch merged on 2026-08-15; 034 was left unused rather than reassigned, so that the number in an older reference is never ambiguous.
 
