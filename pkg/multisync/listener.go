@@ -738,20 +738,18 @@ func localAddressSets() (unicast, broadcast map[string]struct{}) {
 	return unicast, broadcast
 }
 
-// localIPToward reports this host's IPv4 address on the interface that
-// routes toward peer. FPP registers a discovered remote at the address
-// carried INSIDE the ping body, not the datagram's source address, so a
-// response that leaves this field zero announces 0.0.0.0 and is silently
-// ignored: the node never appears in FPP's MultiSync list and never
-// receives unicast sync. Resolved per peer rather than once at startup
-// because a multi-homed node has no single correct answer.
+// localIPToward reports this host's IPv4 address on the interface routing
+// toward peer. FPP registers a discovered remote at the address carried
+// inside the ping body rather than the datagram's source address, so a zero
+// here announces 0.0.0.0 and FPP silently ignores the node. Resolved per
+// peer because a multi-homed host has no single correct answer.
 func localIPToward(peer net.IP) ([4]byte, bool) {
 	var zero [4]byte
 	c, err := net.Dial("udp4", net.JoinHostPort(peer.String(), "9"))
 	if err != nil {
 		return zero, false
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	ua, ok := c.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		return zero, false
