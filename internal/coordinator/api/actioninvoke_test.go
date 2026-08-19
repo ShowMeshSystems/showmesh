@@ -339,6 +339,44 @@ func TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches(t *testing
 	}
 }
 
+// Isolates the pre-dispatch half of the exemption proved above, using
+// installFailDispatchAuditTrigger to fail only the DISPATCH audit insert
+// and let the OUTCOME insert succeed. attributionDegraded is dispatchDegraded
+// || outcomeDegraded, so pinning outcomeDegraded false is what stops this
+// assertion passing for a reason other than the one it names.
+func TestInvokeActionAuditUnavailableExemptSafetyClassDegradesOnDispatchAlone(t *testing.T) {
+	fppSrv, fppFake := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
+	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
+	setup.obs.setObs(nil)
+
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, setup.svc, admin.ID)
+	deps := setup.deps()
+	deps.Config = setup.st
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 20 * 1e6, // 20ms: this test does not care about confirmation, only dispatch.
+	})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "stop-now", validShowActionFPPStopBody)
+
+	installFailDispatchAuditTrigger(t, setup.storeDir)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("stop-now", "stop-key-2", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (stop is exempt from the audit fail-closed rule); body: %s", resp.StatusCode, body)
+	}
+	if fppFake.hitCount() != 1 {
+		t.Errorf("fpp hits = %d, want exactly 1 (the exemption must still dispatch)", fppFake.hitCount())
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
+		t.Errorf("attributionDegraded = %v, want true: the pre-dispatch audit write failed even though the post-dispatch one succeeded", result["attributionDegraded"])
+	}
+}
+
 // TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch proves
 // the fail-closed default: an FPP action whose safetyClass is "none" is
 // refused before anything reaches FPP when the audit store is

@@ -28,6 +28,9 @@ import (
 // and [DispatchMQTTAction], the same seams macro's own step dispatch
 // uses. AuditExempt is read from the stored action's own SafetyClass,
 // never re-derived.
+//
+// A non-exempt audit failure refuses before dispatch; an exempt one
+// re-inserts non-transactionally and proceeds with degraded attribution.
 
 // scopeActionInvoke exists only so api.go's route registration can take
 // its address — see scopeResolumeAction's identical pattern.
