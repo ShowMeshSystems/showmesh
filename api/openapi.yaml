@@ -8212,11 +8212,7 @@ components:
           format: date-time
         kind:
           type: string
-<<<<<<< HEAD
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
-=======
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
->>>>>>> origin/main
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
         revisions:
           type: array
           items:
@@ -9577,15 +9573,10 @@ components:
       type: object
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
-<<<<<<< HEAD
-        /config/show, GET /config/show.surface, and GET
-        /config/night.session.
-=======
-        /config/show, GET /config/show.surface, and GET /config/audio.node
-        (audio.node's own list summary reports its configured programRoute as
-        label and leaves show empty, since audio.node carries no show
-        reference).
->>>>>>> origin/main
+        /config/show, GET /config/show.surface, GET /config/night.session,
+        and GET /config/audio.node (audio.node's own list summary reports its
+        configured programRoute as label and leaves show empty, since
+        audio.node carries no show reference).
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -9593,11 +9584,7 @@ components:
           format: date-time
         kind:
           type: string
-<<<<<<< HEAD
-          enum: [show.action, show.macro, show, show.surface, night.session]
-=======
-          enum: [show.action, show.macro, show, show.surface, audio.node]
->>>>>>> origin/main
+          enum: [show.action, show.macro, show, show.surface, night.session, audio.node]
         objects:
           type: array
           items:

@@ -105,12 +105,10 @@ var dynamicWritePathCoverage = map[string]string{
 	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe": "cmd_render_command.go dispatchRenderCommand " +
 		"builds /api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=transport-probe " +
 		"(showmeshctl render probe)",
-<<<<<<< HEAD
 	"POST /night/commands/{command}": "cmd_night_lifecycle.go nightLifecycleCommand builds " +
 		"/api/v1/night/commands/<command> with command a literal passed through " +
 		"runSimpleNightLifecycleCommand from each of the eight cmdNight* wrappers in the same file " +
 		"(showmeshctl night prepare-site|readiness|preshow|start|final-show|fade-out|power-down)",
-=======
 	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
 		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=apply (showmeshctl audio session apply)",
 	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
@@ -137,7 +135,6 @@ var dynamicWritePathCoverage = map[string]string{
 		"cmdAudioSessionLikeDispatch with pathSuffix=output/mute (showmeshctl audio output mute)",
 	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute": "cmd_audio_gain.go cmdAudioOutput calls " +
 		"cmdAudioSessionLikeDispatch with pathSuffix=output/unmute (showmeshctl audio output unmute)",
->>>>>>> origin/main
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

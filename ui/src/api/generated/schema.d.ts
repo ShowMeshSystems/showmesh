@@ -2846,11 +2846,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-<<<<<<< HEAD
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings";
-=======
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
->>>>>>> origin/main
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3359,20 +3355,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-<<<<<<< HEAD
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, and GET /config/night.session. */
-=======
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
->>>>>>> origin/main
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-<<<<<<< HEAD
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "night.session";
-=======
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "audio.node";
->>>>>>> origin/main
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "night.session" | "audio.node";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
