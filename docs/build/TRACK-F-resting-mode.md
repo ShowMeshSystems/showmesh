@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: F0 through F4 built, reviewed, gated and committed on `track-f/night-session` (2026-08-18); F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
+Status: F0 through F4 built, reviewed, gated and committed on `track-f/night-session` (2026-08-18); F5 through F8 not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
 
 ## Goal
 
@@ -38,7 +38,7 @@ Captured against a dedicated bench `fppd` 9.5.3, never the shared bench containe
 - Measure the cadence required to arm local deadlines within transition tolerance; do not use the ordinary 15-second collector cadence as a cue clock by assumption.
 - Prove the same-filename, target-specific FSEQ resolves to the correct duration source.
 - Record FPP repeat and one-shot behavior used by inter-show and end-of-night resting.
-- Capture the scheduled-brightness command and its observable state, then prove or reject a control path that preserves the FPP ceiling while applying an independent ShowMesh transition multiplier. If FPP exposes only destructive absolute brightness, record that limitation and select a different provider or authored-FSEQ fade before F4.
+- Capture the target percentages, fade durations, and participating hosts for the confirmed 10 PM/11 PM `fpp-brightness` scheduler entries. Prove that the replacement `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` FPP Action is schedulable, interpolates the observable ceiling without a jump, and changes only ceiling, while the coordinator-facing path changes only transition gain, before F4 can accept the provider.
 
 ### F1. Versioned configuration and validation — built (`e48660f`, 2026-08-18)
 
@@ -78,7 +78,7 @@ Run independently offset lighting, projection, audio, announcement, and other-me
 
 Persist `showCommitted` and the first pending cue outbox record atomically before dispatch. Every cue pins its action revision and receives a stable session/cycle/cue invocation identity. On recovery, observe first; retry only an idempotent action with the same end-to-end identity; otherwise mark it ambiguous and stop before the show-launch barrier. Reject a non-idempotent, unconfirmable action as the first outward-facing cue. Exercise both crash sides of the transaction/send boundary rather than relying on timing luck.
 
-Implement the brightness seam selected by F0: a provider must observe the FPP-scheduled ceiling and apply transition gain independently. If the bench proves no such FPP seam exists, the accepted implementation is a different logical lighting provider or an authored-FSEQ fade with the limitation surfaced; an absolute ShowMesh write that can restore an old ceiling is forbidden.
+Implement the RES-018 brightness contract through the ShowMesh FPP component: observe the FPP-scheduled ceiling and apply transition gain independently. The shared engine will use isolated FPP 9 and FPP 10 adapters and remain outside the Go coordinator-client/SDK seam. Until installation and the decisive mid-fade ceiling-change case are proven, readiness rejects this provider. An absolute ShowMesh write that can restore an old ceiling remains forbidden.
 
 This is a purpose-built relative cue runner inside the night controller, not a general scheduler or a replacement macro language.
 

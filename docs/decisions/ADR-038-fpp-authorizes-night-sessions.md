@@ -78,7 +78,7 @@ A future scheduler companion may emit the same lifecycle intents, but only one c
 - Relative timers are permitted and required; calendar timers in ShowMesh core are forbidden.
 - Existing finite macro runs remain finite and retain [ADR-031](ADR-031-macro-execution-model.md)'s restart behavior. The durable night controller has separate persistence and recovery semantics.
 - Coordinator loss never stops an already-running FPP playlist. It can prevent the next ShowMesh-driven transition; recovery is observational and conservative, as specified in [RESTING-MODE](../architecture/RESTING-MODE.md).
-- FPP's direct brightness schedules remain valid. ShowMesh transition gain composes with, rather than overwrites, the current brightness ceiling.
+- FPP remains the calendar authority for brightness schedules, but those entries invoke the ShowMesh FPP plugin's ceiling command because stock FPP has no direct brightness command. ShowMesh transition gain composes with, rather than overwrites, that current ceiling. The component and migration are specified in [RES-018](../research/RES-018-fpp-brightness-control.md) and remain unverified on a real host.
 
 ## Alternatives considered
 
@@ -94,4 +94,4 @@ A future scheduler companion may emit the same lifecycle intents, but only one c
 
 ## Related documents
 
-[Resting Mode and Night Session](../architecture/RESTING-MODE.md) · [ADR-001](ADR-001-fpp-is-authoritative.md) · [ADR-017](ADR-017-showmesh-owns-audience-audio.md) · [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) · [ADR-031](ADR-031-macro-execution-model.md) · [FPP command capture](../bench/fpp-command-vocabulary.md)
+[Resting Mode and Night Session](../architecture/RESTING-MODE.md) · [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-001](ADR-001-fpp-is-authoritative.md) · [ADR-017](ADR-017-showmesh-owns-audience-audio.md) · [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) · [ADR-031](ADR-031-macro-execution-model.md) · [FPP command capture](../bench/fpp-command-vocabulary.md)

@@ -33,8 +33,8 @@ ADRs record durable choices and their consequences. They do not replace research
 | [ADR-025](ADR-025-agent-fallback-cache-is-signed.md) | Agent fallback cache is signed; verifying key pinned at enrollment | Accepted |
 | [ADR-026](ADR-026-renderer-surface-model-and-reference-transport.md) | Renderer models logical surfaces; NDI is the reference transport | Accepted (L0 design intent; narrows ADR-005) |
 | [ADR-027](ADR-027-show-and-surface-model.md) | Show and surface model; xLights owns authoring, ShowMesh owns configuration | Accepted |
-| [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted |
-| [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted |
+| [ADR-028](ADR-028-show-asset-store-and-identity.md) | Show asset store; a filename is not an asset identity | Accepted (decision 10 amended in 2026-08-17: re-uploading superseded bytes is a rollback; implemented 2026-08-18 in PR #17, not yet merged) |
+| [ADR-029](ADR-029-logical-actions-and-integration-bindings.md) | Macros invoke logical actions, never protocol commands | Accepted (decisions 1, 2 and 4 implemented; **decision 3, the raw protocol escape hatch, has never been built** and is an open owner question, Linear SM-61) |
 | [ADR-030](ADR-030-operator-ui-is-the-authoring-surface.md) | The Operator UI becomes the authoring surface | Accepted (extends ADR-014, ADR-015) |
 | [ADR-031](ADR-031-macro-execution-model.md) | The macro execution model | Accepted (decision 2's default and decision 5 superseded by ADR-035) |
 | [ADR-032](ADR-032-resolume-composition-configuration-from-file.md) | Resolume composition configuration comes from the composition file, not the API | Accepted (narrows the adapter specification's §3.8 and §6.4) |
