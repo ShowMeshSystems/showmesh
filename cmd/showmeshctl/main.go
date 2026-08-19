@@ -70,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
 		return cmdRender(rest, stdout, stderr, clock)
+	case "audio":
+		return cmdAudio(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
@@ -206,6 +208,17 @@ Commands:
                                         (write, requires render:command)
   render transport <surfaceId>         read the most recently probed output-transport
                                         evidence already on file (read; never probes)
+  audio settings get                   show the active audio.settings configuration (Track C,
+                                        ADR-039; never 404s — reports the built-in default)
+  audio settings set                   write a new audio.settings revision (write, full
+                                        replacement, requires config:write)
+  audio settings revisions             list audio.settings revision history, newest first
+  audio node list                      enumerate audio.node objects (id is the node id)
+  audio node get <nodeId>              show one node's audio placement
+  audio node set <nodeId>              write a new audio.node revision (write, full
+                                        replacement; refused unless the node has already
+                                        advertised both routes, requires config:write)
+  audio node revisions <nodeId>        list audio.node revision history, newest first
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields

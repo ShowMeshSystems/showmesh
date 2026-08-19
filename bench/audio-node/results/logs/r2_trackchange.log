@@ -1,0 +1,99 @@
+=== R2: track change ===
+ltcgen: start=00:00:00:00 end=00:00:02:00 frames=50
+expected tone2 onset sample (A+B): 72000
+Setting pipeline to PAUSED ...
+Pipeline is PREROLLING ...
+/GstPipeline:pipeline0/GstAudioTestSrc:audiotestsrc3.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert6.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter6.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:ltcc.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:ltcc.GstConcatPad:sink_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter6.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert6.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert5.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter5.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue5.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter5.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert5.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue5.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstInterleave:i.GstInterleavePad:sink_2: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioTestSrc:audiotestsrc0.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert2.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter2.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:ltcc: active-pad = "\(GstConcatPad\)\ sink_1"
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_1: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue2.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc.GstConcatPad:sink_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter2.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert2.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstRawAudioParse:rawaudioparse0.GstPad:src: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstConcat:ltcc.GstPad:src: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:sink: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:sink: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstConcat:ltcc.GstConcatPad:sink_1: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:src: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstQueue:queue4.GstPad:src: caps = audio/x-raw, format=(string)U8, layout=(string)interleaved, rate=(int)48000, channels=(int)1
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter1.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue3.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue3.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue3.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstInterleave:i.GstInterleavePad:sink_1: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue1.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstInterleave:i.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)3, layout=(string)interleaved, channel-mask=(bitmask)0x0000000000000000
+/GstPipeline:pipeline0/GstWavEnc:wavenc0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)3, layout=(string)interleaved, channel-mask=(bitmask)0x0000000000000000
+/GstPipeline:pipeline0/GstInterleave:i.GstInterleavePad:sink_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc: active-pad = "\(GstConcatPad\)\ sink_1"
+/GstPipeline:pipeline0/GstWavEnc:wavenc0.GstPad:src: caps = audio/x-wav
+/GstPipeline:pipeline0/GstFileSink:filesink0.GstPad:sink: caps = audio/x-wav
+/GstPipeline:pipeline0/GstAudioTestSrc:audiotestsrc1.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+Pipeline is PREROLLED ...
+Setting pipeline to PLAYING ...
+Redistribute latency...
+New clock: GstSystemClock
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert3.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter3.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_1: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:ltcc: active-pad = "NULL"
+/GstPipeline:pipeline0/GstQueue:queue2.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue2.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc.GstConcatPad:sink_1: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter3.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert3.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioTestSrc:audiotestsrc2.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert4.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter4.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_0: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstTee:progtee.GstTeePad:src_1: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstQueue:queue0.GstPad:src: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc: active-pad = "\(GstConcatPad\)\ sink_2"
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert1.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert0.GstPad:sink: caps = audio/x-raw, rate=(int)48000, format=(string)S16LE, channels=(int)1, layout=(string)interleaved
+/GstPipeline:pipeline0/GstConcat:progc: active-pad = "NULL"
+Got EOS from element "pipeline0".
+EOS received - stopping pipeline...
+Execution ended after 0:00:00.005343084
+Setting pipeline to NULL ...
+Freeing pipeline ...

@@ -75,7 +75,8 @@
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
       },
-      "render": []
+      "render": [],
+      "audio": []
     },
     {
       "nodeId": "shed-01",
@@ -143,7 +144,8 @@
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
       },
-      "render": []
+      "render": [],
+      "audio": []
     }
   ]
 }

@@ -163,6 +163,13 @@ type Node struct {
 	// node runs N>1, and are not necessarily contiguous with any other
 	// node's entries in GET /api/v1/observations.
 	Render []ObservationEntry `json:"render"`
+
+	// Audio is Track C seam C1a/C1b's addition, additive per ADR-020
+	// decision 8: whatever node.audio.* observations this coordinator
+	// currently holds for this node, one [ObservationEntry] per signal.
+	// Never null — an empty array means this node has never published an
+	// audio discovery report.
+	Audio []ObservationEntry `json:"audio"`
 }
 
 // NodeDeclaration is a node's declaration state: an operator's durable

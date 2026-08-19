@@ -1,0 +1,7 @@
+[
+{"run": "r2_seek", "src_file": "/tmp/audio-bench-scratch/r2_seek_src.wav", "out_file": "/tmp/audio-bench-scratch/r2_seek_out_0.5.wav", "sample_rate": 48000, "requested_target_sample": 24000, "measured_landing_sample": 24000, "seek_error_samples": 0}
+,
+{"run": "r2_seek", "src_file": "/tmp/audio-bench-scratch/r2_seek_src.wav", "out_file": "/tmp/audio-bench-scratch/r2_seek_out_1.0.wav", "sample_rate": 48000, "requested_target_sample": 48000, "measured_landing_sample": 48000, "seek_error_samples": 0}
+,
+{"run": "r2_seek", "src_file": "/tmp/audio-bench-scratch/r2_seek_src.wav", "out_file": "/tmp/audio-bench-scratch/r2_seek_out_2.0.wav", "sample_rate": 48000, "requested_target_sample": 96000, "measured_landing_sample": 96000, "seek_error_samples": 0}
+]

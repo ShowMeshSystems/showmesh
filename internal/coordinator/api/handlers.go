@@ -122,7 +122,7 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -155,7 +155,7 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID))})
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID))})
 			return
 		}
 	}
@@ -298,10 +298,10 @@ func parseObservationFilter(query url.Values) (ObservationFilter, *v1.Problem) {
 	if raw := query.Get("resourceKind"); raw != "" {
 		kind := observation.ResourceKind(raw)
 		switch kind {
-		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface:
+		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession:
 			filter.ResourceKind = &kind
 		default:
-			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", got " + strconv.Quote(raw))
+			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", got " + strconv.Quote(raw))
 			return ObservationFilter{}, &p
 		}
 	}
@@ -438,7 +438,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)
