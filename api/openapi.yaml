@@ -8477,9 +8477,15 @@ components:
         closed fade-curve vocabulary (only "linear" ships today).
         `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0
         is unity gain — applied as the default ceiling on a background bed.
+        `ltcFrameRate` is the closed vocabulary Resolume's timecode input
+        supports; this ships non-drop-frame at every rate because
+        Resolume's drop-frame expectation at 29.97 is unresearched
+        (RES-001 §9) — an explicit ruling, not a silent default.
+        `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start
+        point when its own audio.session.apply carries no override.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
-         defaultMaxBackgroundGain]
+         defaultMaxBackgroundGain, ltcFrameRate, ltcDefaultStartOffset]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -8490,6 +8496,12 @@ components:
           type: integer
         defaultMaxBackgroundGain:
           type: number
+        ltcFrameRate:
+          type: string
+          enum: ["24", "25", "29.97", "30"]
+        ltcDefaultStartOffset:
+          type: string
+          description: HH:MM:SS:FF, non-drop-frame.
     AudioSettingsConfigResponse:
       type: object
       description: >-

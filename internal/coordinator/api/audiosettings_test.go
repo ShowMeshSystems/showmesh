@@ -28,7 +28,7 @@ func TestGetAudioSettingsDefaultsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGain":0.4}`
+const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGain":0.4,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 
 // TestPutAudioSettingsThenGetReflectsWrittenValue proves the zero-to-one
 // transition: an unconfigured kind, one write, and a subsequent GET that

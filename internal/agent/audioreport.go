@@ -22,6 +22,23 @@ type audioSessionSnapshotter interface {
 	Snapshot(ctx context.Context) []audio.SessionSnapshot
 }
 
+// ltcGeneratorSnapshotter is the read side of an [audio.LTCGenerator] this
+// package needs: fresh liveness evidence on every tick, never a command
+// path — matching audioSessionSnapshotter's identical shape. A nil
+// snapshotter reports node.audio.ltc.generator.state "stopped" with a
+// stated reason, never omits the four LTC generator signals: an absent
+// field renders as blank and blank reads as fine (ADR-011).
+type ltcGeneratorSnapshotter interface {
+	Snapshot() audio.LTCGeneratorSnapshot
+}
+
+// noLTCGeneratorReason is what a nil ltcGeneratorSnapshotter reports —
+// distinct from [audio.LTCGeneratorStopped]'s own "never started" reason,
+// because "no generator is wired into this report loop at all" and "one is
+// wired but has never been told to run" are different facts an operator
+// debugging silent timecode loss needs told apart.
+const noLTCGeneratorReason = "no LTC generator is configured on this node"
+
 // runAudioReport publishes this node's audio report to nodeID's
 // observed/audio topic on every tick received from ticks. Hardware
 // discovery runs exactly once, before the loop starts: the throwaway
@@ -41,7 +58,7 @@ type audioSessionSnapshotter interface {
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
 // contract.
-func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
+func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltcGen ltcGeneratorSnapshotter, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "audio")
 	if err != nil {
 		// nodeID is validated at config load, matching runRenderReport's
@@ -63,8 +80,35 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			}
 			payload := discovery
 			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
+			applyLTCGeneratorSnapshot(&payload, ltcGen)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
+	}
+}
+
+// applyLTCGeneratorSnapshot writes ltcGen's current state onto payload's
+// four LTC generator fields, fresh on every call — the same "live, never
+// cached" rule [buildAudioSessionReports] follows and for the identical
+// reason: generator liveness must never be inferred from anything cached.
+func applyLTCGeneratorSnapshot(payload *mqttproto.AudioPayload, ltcGen ltcGeneratorSnapshotter) {
+	if ltcGen == nil {
+		payload.LTCGeneratorState = string(audio.LTCGeneratorStopped)
+		payload.LTCGeneratorReason = noLTCGeneratorReason
+		return
+	}
+	snap := ltcGen.Snapshot()
+	payload.LTCGeneratorState = string(snap.State)
+	payload.LTCGeneratorReason = ""
+	if snap.State != audio.LTCGeneratorRunning {
+		payload.LTCGeneratorReason = snap.Reason
+	}
+	if snap.FrameRateKnown {
+		payload.LTCFrameRateKnown = true
+		payload.LTCFrameRate = string(snap.FrameRate)
+	}
+	if snap.TimecodeKnown {
+		payload.LTCTimecodeKnown = true
+		payload.LTCTimecode = string(snap.Timecode)
 	}
 }
 
@@ -181,6 +225,13 @@ func buildAudioPayload(d audio.Discovery, observedAt time.Time) mqttproto.AudioP
 		EnumeratedCount:          int64(d.EnumeratedCount),
 		ObservedAt:               &observedAt,
 		Sessions:                 []mqttproto.AudioSessionReport{},
+		// Discovery-time default, self-consistent on its own — a caller
+		// that never wires an [audio.LTCGenerator] (or calls this
+		// function directly, as this file's own tests do) still gets a
+		// payload that passes [mqttproto.AudioPayload.Validate]. Every
+		// per-tick publish overwrites this via [applyLTCGeneratorSnapshot].
+		LTCGeneratorState:  string(audio.LTCGeneratorStopped),
+		LTCGeneratorReason: noLTCGeneratorReason,
 	}
 	if !p.EngineAvailable && p.EngineReason == "" {
 		p.EngineReason = "audio engine probe did not reach PLAYING"

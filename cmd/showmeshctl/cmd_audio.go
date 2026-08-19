@@ -25,6 +25,8 @@ type configAudioSettingsPayload struct {
 	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
 	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
+	LTCFrameRate             string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -145,7 +147,10 @@ func printAudioSettingsUsage(w io.Writer) {
 Read or write the coordinator's audio.settings configuration (ADR-039):
 driftIgnoreThresholdMs (never measured — a starting point, not a tuned
 value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
-and defaultMaxBackgroundGain (a linear multiplier, 1.0 is unity gain).
+defaultMaxBackgroundGain (a linear multiplier, 1.0 is unity gain),
+ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
+and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
+ltcStartOffset overrides this).
 Every subcommand requires the config:write scope (admin only) — there is
 no config:read scope.
 
@@ -572,6 +577,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  defaultFadeCurve:         %s\n", resp.Payload.DefaultFadeCurve)
 	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:    %d\n", resp.Payload.DefaultFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGain: %v\n", resp.Payload.DefaultMaxBackgroundGain)
+	_, _ = fmt.Fprintf(w, "  ltcFrameRate:             %s\n", resp.Payload.LTCFrameRate)
+	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:    %s\n", resp.Payload.LTCDefaultStartOffset)
 }
 
 func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {

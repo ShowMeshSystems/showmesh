@@ -2975,13 +2975,17 @@ export interface components {
             /** @description States that idleOutput takes effect on each surface's own next render.surface.apply dispatch, never on an already-applied surface — there is no config-push path to a node beyond that assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always non-empty. */
             idleOutputEffectiveNote: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement — every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0 is unity gain — applied as the default ceiling on a background bed. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement — every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0 is unity gain — applied as the default ceiling on a background bed. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) — an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
             defaultFadeCurve: "linear";
             defaultFadeDurationMs: number;
             defaultMaxBackgroundGain: number;
+            /** @enum {string} */
+            ltcFrameRate: "24" | "25" | "29.97" | "30";
+            /** @description HH:MM:SS:FF, non-drop-frame. */
+            ltcDefaultStartOffset: string;
         };
         /** @description The body of GET and PUT /config/audio.settings. Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written, mirroring RenderSettingsConfigResponse's identical posture. */
         AudioSettingsConfigResponse: {

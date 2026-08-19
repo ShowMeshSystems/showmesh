@@ -14,6 +14,14 @@ type SessionDesiredState struct {
 	MixPolicy  *MixPolicy
 	Outputs    *[]string
 	Bookmark   *Bookmark
+
+	// LTCStartOffset is this session's own override of audio.settings'
+	// default LTC start offset: the generating half of RES-001 §54's
+	// per-clip Offset convention, so a Resolume operator's
+	// per-clip Offset and this field name the same point in one show's
+	// timecode. nil means "use audio.settings' default", never 00:00:00:00
+	// implicitly.
+	LTCStartOffset *LTCTimecode
 }
 
 // ErrSessionHasBothMediaAndPlaylist is returned by
@@ -63,6 +71,11 @@ func (s SessionDesiredState) Validate() error {
 	if s.Bookmark != nil && s.Bookmark.ItemID == "" {
 		return ErrBookmarkStale
 	}
+	if s.LTCStartOffset != nil {
+		if err := s.LTCStartOffset.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -70,15 +83,16 @@ func (s SessionDesiredState) Validate() error {
 // expressed as a [Field] so omitted, explicitly null, and provided are
 // three distinguishable states.
 type ApplyRequest struct {
-	SourceRole Field[SourceRole]
-	Playlist   Field[PlaylistRef]
-	Media      Field[MediaRef]
-	Gain       Field[Gain]
-	Ceiling    Field[Ceiling]
-	Fade       Field[Fade]
-	MixPolicy  Field[MixPolicy]
-	Outputs    Field[[]string]
-	Bookmark   Field[Bookmark]
+	SourceRole     Field[SourceRole]
+	Playlist       Field[PlaylistRef]
+	Media          Field[MediaRef]
+	Gain           Field[Gain]
+	Ceiling        Field[Ceiling]
+	Fade           Field[Fade]
+	MixPolicy      Field[MixPolicy]
+	Outputs        Field[[]string]
+	Bookmark       Field[Bookmark]
+	LTCStartOffset Field[LTCTimecode]
 }
 
 // mergeField resolves one Field against a session's current *T: unset
@@ -145,6 +159,7 @@ func (r ApplyRequest) Merge(s SessionDesiredState) (SessionDesiredState, MergeRe
 	s.MixPolicy = mergeField(s.MixPolicy, r.MixPolicy)
 	s.Outputs = mergeOutputs(s.Outputs, r.Outputs)
 	s.Bookmark = mergeField(s.Bookmark, r.Bookmark)
+	s.LTCStartOffset = mergeField(s.LTCStartOffset, r.LTCStartOffset)
 
 	if err := s.Validate(); err != nil {
 		return SessionDesiredState{}, MergeReport{}, err

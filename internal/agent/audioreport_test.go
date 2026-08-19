@@ -160,7 +160,7 @@ func TestRunAudioReportPublishesOnEachTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -189,6 +189,119 @@ func TestRunAudioReportPublishesOnEachTick(t *testing.T) {
 	}
 }
 
+// stubLTCGeneratorSnapshotter is a scriptable [ltcGeneratorSnapshotter]:
+// each call returns the next entry in results, matching stubSnapshotter's
+// own shape.
+type stubLTCGeneratorSnapshotter struct {
+	results []audio.LTCGeneratorSnapshot
+	calls   int
+}
+
+func (s *stubLTCGeneratorSnapshotter) Snapshot() audio.LTCGeneratorSnapshot {
+	i := s.calls
+	if i >= len(s.results) {
+		i = len(s.results) - 1
+	}
+	s.calls++
+	return s.results[i]
+}
+
+// TestRunAudioReportNilLTCGeneratorReportsStoppedWithReason proves ruling
+// 6's degrade-never-omit rule at the report boundary: a node with no
+// wired LTCGenerator still publishes a self-consistent, Validate-passing
+// payload naming node.audio.ltc.generator.state as stopped, never an
+// absent or zero-value field.
+func TestRunAudioReportNilLTCGeneratorReportsStoppedWithReason(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	got := decodeAudioReport(t, pub.snapshot()[0].payload)
+	if got.LTCGeneratorState != string(audio.LTCGeneratorStopped) {
+		t.Errorf("LTCGeneratorState = %q, want %q", got.LTCGeneratorState, audio.LTCGeneratorStopped)
+	}
+	if got.LTCGeneratorReason == "" {
+		t.Error("LTCGeneratorReason is empty, want a stated reason")
+	}
+	if got.LTCFrameRateKnown || got.LTCTimecodeKnown {
+		t.Errorf("payload = %+v, want no frame rate or timecode evidence", got)
+	}
+}
+
+// TestRunAudioReportRebuildsLTCGeneratorStateEveryTick proves the LTC
+// half of the report is live, matching
+// TestRunAudioReportRebuildsSessionsEveryTick's identical proof for
+// sessions: a generator that transitions from Starting to Running with a
+// fresh heartbeat between two ticks must produce two different published
+// generator states.
+func TestRunAudioReportRebuildsLTCGeneratorStateEveryTick(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	gen := &stubLTCGeneratorSnapshotter{results: []audio.LTCGeneratorSnapshot{
+		{State: audio.LTCGeneratorStarting, Reason: "process launched; no heartbeat yet", FrameRateKnown: true, FrameRate: pkgaudio.LTCFrameRate30},
+		{State: audio.LTCGeneratorRunning, FrameRateKnown: true, FrameRate: pkgaudio.LTCFrameRate30, TimecodeKnown: true, Timecode: "00:00:03:00"},
+	}}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, gen, time.Now, ticks, discardLogger())
+	}()
+
+	for i := 0; i < 2; i++ {
+		ticks <- time.Now()
+		<-pub.notify
+	}
+	cancel()
+	<-done
+
+	publishes := pub.snapshot()
+	if len(publishes) != 2 {
+		t.Fatalf("publish calls = %d, want 2", len(publishes))
+	}
+	first := decodeAudioReport(t, publishes[0].payload)
+	second := decodeAudioReport(t, publishes[1].payload)
+
+	if first.LTCGeneratorState != string(audio.LTCGeneratorStarting) {
+		t.Errorf("first tick LTCGeneratorState = %q, want starting", first.LTCGeneratorState)
+	}
+	if first.LTCTimecodeKnown {
+		t.Error("first tick reports TimecodeKnown, want false (not yet running)")
+	}
+	if second.LTCGeneratorState != string(audio.LTCGeneratorRunning) {
+		t.Errorf("second tick LTCGeneratorState = %q, want running", second.LTCGeneratorState)
+	}
+	if !second.LTCTimecodeKnown || second.LTCTimecode != "00:00:03:00" {
+		t.Errorf("second tick = %+v, want TimecodeKnown 00:00:03:00", second)
+	}
+	if second.LTCGeneratorReason != "" {
+		t.Errorf("second tick (running) LTCGeneratorReason = %q, want empty", second.LTCGeneratorReason)
+	}
+}
+
 // TestRunAudioReportProbesOnceAcrossMultipleTicks proves finding 1's core
 // rule: audioDiscoverer runs exactly once for the life of the loop, no
 // matter how many ticks arrive — a periodic re-probe would re-run this
@@ -209,7 +322,7 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -280,7 +393,7 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {

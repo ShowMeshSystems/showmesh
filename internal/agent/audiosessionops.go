@@ -186,6 +186,7 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // (Pause writes one; nothing here accepts one from a caller).
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
+	"ltcStartOffset": true,
 }
 
 func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequest, error) {
@@ -254,6 +255,18 @@ func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequ
 			outputs = append(outputs, s)
 		}
 		req.Outputs = pkgaudio.SetField(outputs)
+	}
+
+	if raw, ok := body["ltcStartOffset"]; ok {
+		v, ok := raw.(string)
+		if !ok || v == "" {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ltcStartOffset must be a non-empty HH:MM:SS:FF string, got %T", action, raw)
+		}
+		tc := pkgaudio.LTCTimecode(v)
+		if err := tc.Validate(); err != nil {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ltcStartOffset: %w", action, err)
+		}
+		req.LTCStartOffset = pkgaudio.SetField(tc)
 	}
 
 	return req, nil

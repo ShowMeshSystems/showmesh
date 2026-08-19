@@ -27,7 +27,9 @@ func samplePayload() mqttproto.AudioPayload {
 		Routes: []mqttproto.AudioRouteReport{
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
-		ObservedAt: &observedAt,
+		ObservedAt:         &observedAt,
+		LTCGeneratorState:  "stopped",
+		LTCGeneratorReason: "no generator has ever been started on this node",
 	}
 }
 
@@ -182,6 +184,77 @@ func TestPollLTCUnavailableWithUsableProgramReportsBothIndependently(t *testing.
 	ltc := findObs(t, obs, SignalLTCState)
 	if ltc.Value != StateUnavailable {
 		t.Errorf("ltc state = %v, want %q", ltc.Value, StateUnavailable)
+	}
+}
+
+// TestPollLTCGeneratorRunningReportsFrameRateAndTimecodeSuppressesReason
+// proves the four LTC generator signals render independently of engine/device/
+// program state, and that a running generator carries no reason.
+func TestPollLTCGeneratorRunningReportsFrameRateAndTimecodeSuppressesReason(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.LTCGeneratorState = "running"
+	payload.LTCGeneratorReason = ""
+	payload.LTCFrameRateKnown = true
+	payload.LTCFrameRate = "30"
+	payload.LTCTimecodeKnown = true
+	payload.LTCTimecode = "00:00:05:12"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalLTCGeneratorState)
+	if state.Value != "running" {
+		t.Errorf("generator state = %v, want running", state.Value)
+	}
+	reason := findObs(t, obs, SignalLTCGeneratorReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("generator reason while running = %+v, want not_collected", reason)
+	}
+	rate := findObs(t, obs, SignalLTCFrameRate)
+	if rate.Value != "30" {
+		t.Errorf("frame rate = %v, want 30", rate.Value)
+	}
+	tc := findObs(t, obs, SignalLTCTimecode)
+	if tc.Value != "00:00:05:12" {
+		t.Errorf("timecode = %v, want 00:00:05:12", tc.Value)
+	}
+}
+
+// TestPollLTCGeneratorDeadReportsStateAndReasonIndependentlyOfEngineState
+// proves ruling 4: a generator's own state/reason is never inferred from
+// EngineState — the sample payload's engine/device/program all report
+// usable while the generator reports failed.
+func TestPollLTCGeneratorDeadReportsStateAndReasonIndependentlyOfEngineState(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.LTCGeneratorState = "failed"
+	payload.LTCGeneratorReason = "no heartbeat within 3s; generator process may still be running"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	engine := findObs(t, obs, SignalEngineState)
+	if engine.Value != StateUsable {
+		t.Fatalf("engine state = %v, want usable (sanity check)", engine.Value)
+	}
+	state := findObs(t, obs, SignalLTCGeneratorState)
+	if state.Value != "failed" {
+		t.Errorf("generator state = %v, want failed", state.Value)
+	}
+	reason := findObs(t, obs, SignalLTCGeneratorReason)
+	if reason.Value != "no heartbeat within 3s; generator process may still be running" {
+		t.Errorf("generator reason = %v, want the stated reason", reason.Value)
+	}
+	rate := findObs(t, obs, SignalLTCFrameRate)
+	if rate.Absence != observation.StateNotCollected {
+		t.Errorf("frame rate with no generator ever started = %+v, want not_collected", rate)
+	}
+	tc := findObs(t, obs, SignalLTCTimecode)
+	if tc.Absence != observation.StateNotCollected {
+		t.Errorf("timecode with generator not running = %+v, want not_collected", tc)
 	}
 }
 
@@ -377,8 +450,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 12 {
-		t.Errorf("AllSignalIDs has %d entries, want 12", len(AllSignalIDs))
+	if len(AllSignalIDs) != 16 {
+		t.Errorf("AllSignalIDs has %d entries, want 16", len(AllSignalIDs))
 	}
 }
 

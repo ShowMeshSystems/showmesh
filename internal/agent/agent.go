@@ -207,6 +207,15 @@ func Run() int {
 	// every session this node held before this process last stopped,
 	// matching renderOps' identical persisted-assignment reload above.
 	audioMgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
+
+	// ltcGen is this node's supervised external LTC generator process:
+	// constructed unconditionally so node.audio.ltc.* always reports real
+	// evidence rather than an absent signal, but never Started here —
+	// nothing in this repository yet decides WHEN a node should start
+	// generating LTC (that trigger is the pipeline backend Linear SM-68
+	// has not resolved), so it correctly reports Stopped/"never started"
+	// until something calls Start.
+	ltcGen := audio.NewLTCGenerator(time.Now, nil)
 	if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
 	}
@@ -265,7 +274,7 @@ func Run() int {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, ltcGen, time.Now, ticker.C, logger)
 	}()
 
 	<-sigCtx.Done()
@@ -304,6 +313,10 @@ func Run() int {
 	// is deliberately after the shutdown-signal handling above and before
 	// the MQTT offline publish, so it happens on every clean exit path.
 	sup.Shutdown(shutdownCtx)
+
+	// Same rule for the LTC generator: never leave an orphaned process
+	// behind, whether or not it was ever actually started.
+	ltcGen.Shutdown(shutdownCtx)
 
 	shutdownCleanly(shutdownCtx, conn, cfg.NodeID, logger)
 

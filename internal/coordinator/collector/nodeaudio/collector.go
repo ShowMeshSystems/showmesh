@@ -149,6 +149,27 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 
 	obs = append(obs, notCollected(res, SignalClockAlignment, source, noAlignmentMeasurementReason, rep.receivedAt))
 
+	obs = append(obs,
+		buildValue(nodeID, SignalLTCGeneratorState, p.LTCGeneratorState, observedAt, rep),
+	)
+	if p.LTCGeneratorState != "running" {
+		obs = append(obs, buildValue(nodeID, SignalLTCGeneratorReason, p.LTCGeneratorReason, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalLTCGeneratorReason, source, "generator is running; no reason is in effect", rep.receivedAt))
+	}
+
+	if p.LTCFrameRateKnown {
+		obs = append(obs, buildValue(nodeID, SignalLTCFrameRate, p.LTCFrameRate, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalLTCFrameRate, source, "no generator has ever been started on this node", rep.receivedAt))
+	}
+
+	if p.LTCTimecodeKnown {
+		obs = append(obs, buildValue(nodeID, SignalLTCTimecode, p.LTCTimecode, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalLTCTimecode, source, "generator is not confirmed running; no fresh timecode evidence", rep.receivedAt))
+	}
+
 	return obs
 }
 

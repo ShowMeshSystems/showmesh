@@ -19,8 +19,10 @@ func validAudioPayload() AudioPayload {
 		Routes: []AudioRouteReport{
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
-		ObservedAt: &now,
-		Sessions:   []AudioSessionReport{},
+		ObservedAt:         &now,
+		Sessions:           []AudioSessionReport{},
+		LTCGeneratorState:  "stopped",
+		LTCGeneratorReason: "no generator has ever been started on this node",
 	}
 }
 
@@ -171,6 +173,50 @@ func TestAudioPayloadValidateRequiresFaultReasonWhenFaulted(t *testing.T) {
 	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "pipeline_crash", FaultReason: ""}}
 	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
 		t.Errorf("Validate(faulted session with no reason) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresLTCGeneratorState(t *testing.T) {
+	p := validAudioPayload()
+	p.LTCGeneratorState = ""
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(no ltcGeneratorState) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresLTCGeneratorReasonWhenNotRunning(t *testing.T) {
+	p := validAudioPayload()
+	p.LTCGeneratorState = "failed"
+	p.LTCGeneratorReason = ""
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(failed with no reason) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateAllowsRunningWithNoReason(t *testing.T) {
+	p := validAudioPayload()
+	p.LTCGeneratorState = "running"
+	p.LTCGeneratorReason = ""
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(running, no reason) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresFrameRateWhenKnown(t *testing.T) {
+	p := validAudioPayload()
+	p.LTCFrameRateKnown = true
+	p.LTCFrameRate = ""
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(frameRateKnown, no rate) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresTimecodeWhenKnown(t *testing.T) {
+	p := validAudioPayload()
+	p.LTCTimecodeKnown = true
+	p.LTCTimecode = ""
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(timecodeKnown, no timecode) = %v, want ErrPayloadMissingField", err)
 	}
 }
 

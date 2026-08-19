@@ -191,6 +191,8 @@ func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettin
 		DefaultFadeCurve:         p.DefaultFadeCurve,
 		DefaultFadeDurationMs:    p.DefaultFadeDurationMs,
 		DefaultMaxBackgroundGain: p.DefaultMaxBackgroundGain,
+		LTCFrameRate:             p.LTCFrameRate,
+		LTCDefaultStartOffset:    p.LTCDefaultStartOffset,
 	}
 }
 

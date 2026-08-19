@@ -16,6 +16,8 @@ type ConfigAudioSettingsPayload struct {
 	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
 	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
+	LTCFrameRate             string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

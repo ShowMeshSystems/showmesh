@@ -998,6 +998,35 @@ type AudioPayload struct {
 	// SessionsTruncated is true when more sessions existed than fit
 	// within maxAudioSessions — stated, never a silent drop.
 	SessionsTruncated bool `json:"sessionsTruncated"`
+
+	// LTCGeneratorState and LTCGeneratorReason are the supervised
+	// LTC generator's own reported lifecycle (node.audio.ltc.generator.state
+	// / .reason) — never inferred from EngineAvailable, DeviceAvailable, or
+	// any other field above: a generator can die while the rest of this
+	// node's audio reports healthy, and reporting it any other way would
+	// let silent timecode loss look exactly like a show between cues.
+	// Always non-empty.
+	LTCGeneratorState string `json:"ltcGeneratorState"`
+
+	// LTCGeneratorReason is required whenever LTCGeneratorState is not
+	// "running".
+	LTCGeneratorReason string `json:"ltcGeneratorReason"`
+
+	// LTCFrameRateKnown/LTCFrameRate report the closed-vocabulary rate
+	// (node.audio.ltc.frame_rate) the currently- or most-recently-started
+	// generator was started against. False whenever no generator has ever
+	// been started on this node — never a plausible-looking default rate.
+	LTCFrameRateKnown bool   `json:"ltcFrameRateKnown"`
+	LTCFrameRate      string `json:"ltcFrameRate"`
+
+	// LTCTimecodeKnown/LTCTimecode report the generator's own
+	// self-reported current position (node.audio.ltc.timecode) — evidence
+	// this node's supervisor read back from the generator process's own
+	// heartbeat, never decoded off the generated audio (no decoder exists
+	// anywhere in this seam) and never reported while the generator is not
+	// confirmed running.
+	LTCTimecodeKnown bool   `json:"ltcTimecodeKnown"`
+	LTCTimecode      string `json:"ltcTimecode"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1050,6 +1079,18 @@ func (p AudioPayload) Validate() error {
 		if !r.Available && r.Reason == "" {
 			return fmt.Errorf("%w: routes[%d].reason (required whenever available is false)", ErrPayloadMissingField, i)
 		}
+	}
+	if p.LTCGeneratorState == "" {
+		return fmt.Errorf("%w: ltcGeneratorState", ErrPayloadMissingField)
+	}
+	if p.LTCGeneratorState != "running" && p.LTCGeneratorReason == "" {
+		return fmt.Errorf("%w: ltcGeneratorReason (required whenever ltcGeneratorState is not \"running\")", ErrPayloadMissingField)
+	}
+	if p.LTCFrameRateKnown && p.LTCFrameRate == "" {
+		return fmt.Errorf("%w: ltcFrameRate (required whenever ltcFrameRateKnown is true)", ErrPayloadMissingField)
+	}
+	if p.LTCTimecodeKnown && p.LTCTimecode == "" {
+		return fmt.Errorf("%w: ltcTimecode (required whenever ltcTimecodeKnown is true)", ErrPayloadMissingField)
 	}
 	return nil
 }

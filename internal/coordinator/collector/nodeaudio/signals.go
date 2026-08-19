@@ -36,6 +36,19 @@ const (
 	// never from ClockDomain/ClockProvenance declaring a shared clock.
 	// See [nodeObservations].
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
+
+	// SignalLTCFrameRate, SignalLTCTimecode, SignalLTCGeneratorState, and
+	// SignalLTCGeneratorReason are the LTC generator's reserved signals —
+	// exact spellings, no additions without the owner. State
+	// and Reason are the generator's own supervised-liveness evidence
+	// (never inferred from EngineState/DeviceState/ProgramState above:
+	// the generator can die while the rest of this node's audio reports
+	// usable). Timecode is the generator's own self-reported position,
+	// present only while State is "running".
+	SignalLTCFrameRate       observation.SignalID = "node.audio.ltc.frame_rate"
+	SignalLTCTimecode        observation.SignalID = "node.audio.ltc.timecode"
+	SignalLTCGeneratorState  observation.SignalID = "node.audio.ltc.generator.state"
+	SignalLTCGeneratorReason observation.SignalID = "node.audio.ltc.generator.reason"
 )
 
 // AllSignalIDs is every signal this package ever emits, in the order
@@ -53,6 +66,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalClockDomain,
 	SignalClockProvenance,
 	SignalClockAlignment,
+	SignalLTCFrameRate,
+	SignalLTCTimecode,
+	SignalLTCGeneratorState,
+	SignalLTCGeneratorReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

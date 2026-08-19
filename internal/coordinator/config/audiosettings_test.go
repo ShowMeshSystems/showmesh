@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func validAudioSettingsPayloadJSON() string {
-	return `{"driftIgnoreThresholdMs":25,"defaultFadeCurve":"linear","defaultFadeDurationMs":1500,"defaultMaxBackgroundGain":0.5}`
+	return `{"driftIgnoreThresholdMs":25,"defaultFadeCurve":"linear","defaultFadeDurationMs":1500,"defaultMaxBackgroundGain":0.5,"ltcFrameRate":"25","ltcDefaultStartOffset":"00:00:00:00"}`
 }
 
 func TestDecodeAudioSettingsPayloadAccepts(t *testing.T) {
@@ -14,9 +14,43 @@ func TestDecodeAudioSettingsPayloadAccepts(t *testing.T) {
 	want := AudioSettingsPayload{
 		DriftIgnoreThresholdMs: 25, DefaultFadeCurve: "linear",
 		DefaultFadeDurationMs: 1500, DefaultMaxBackgroundGain: 0.5,
+		LTCFrameRate: "25", LTCDefaultStartOffset: "00:00:00:00",
 	}
 	if p != want {
 		t.Errorf("payload = %+v, want %+v", p, want)
+	}
+}
+
+// TestDecodeAudioSettingsPayloadAcceptsEveryLTCFrameRate proves all four
+// rates are accepted and a fifth is refused.
+func TestDecodeAudioSettingsPayloadAcceptsEveryLTCFrameRate(t *testing.T) {
+	for _, rate := range []string{"24", "25", "29.97", "30"} {
+		t.Run(rate, func(t *testing.T) {
+			raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"` + rate + `","ltcDefaultStartOffset":"00:00:00:00"}`
+			p, verr := DecodeAudioSettingsPayload(raw)
+			if verr != nil {
+				t.Fatalf("unexpected error for rate %s: %v", rate, verr)
+			}
+			if p.LTCFrameRate != rate {
+				t.Errorf("LTCFrameRate = %q, want %q", p.LTCFrameRate, rate)
+			}
+		})
+	}
+}
+
+func TestDecodeAudioSettingsPayloadRejectsUnknownLTCFrameRate(t *testing.T) {
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"60","ltcDefaultStartOffset":"00:00:00:00"}`
+	_, verr := DecodeAudioSettingsPayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "ltcFrameRate" {
+		t.Fatalf("verr = %v, want field-invalid on ltcFrameRate (60 is not in the closed vocabulary)", verr)
+	}
+}
+
+func TestDecodeAudioSettingsPayloadRejectsMalformedLTCOffset(t *testing.T) {
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"not-a-timecode"}`
+	_, verr := DecodeAudioSettingsPayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "ltcDefaultStartOffset" {
+		t.Fatalf("verr = %v, want field-invalid on ltcDefaultStartOffset", verr)
 	}
 }
 
@@ -36,7 +70,7 @@ func TestEncodeDecodeAudioSettingsPayloadRoundTrips(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsUnknownTopLevelKey(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"extra":true}`
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","extra":true}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("verr = %v, want ValidationCodeFieldUnknownKey", verr)
@@ -52,10 +86,12 @@ func TestDecodeAudioSettingsPayloadRejectsAbsentField(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"driftIgnoreThresholdMs", `{"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`},
-		{"defaultFadeCurve", `{"driftIgnoreThresholdMs":10,"defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`},
-		{"defaultFadeDurationMs", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultMaxBackgroundGain":0.6}`},
-		{"defaultMaxBackgroundGain", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000}`},
+		{"driftIgnoreThresholdMs", `{"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultFadeCurve", `{"driftIgnoreThresholdMs":10,"defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultFadeDurationMs", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultMaxBackgroundGain", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"ltcFrameRate", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"ltcDefaultStartOffset", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,10 +111,12 @@ func TestDecodeAudioSettingsPayloadRejectsNullField(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"driftIgnoreThresholdMs", `{"driftIgnoreThresholdMs":null,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`},
-		{"defaultFadeCurve", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":null,"defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`},
-		{"defaultFadeDurationMs", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":null,"defaultMaxBackgroundGain":0.6}`},
-		{"defaultMaxBackgroundGain", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":null}`},
+		{"driftIgnoreThresholdMs", `{"driftIgnoreThresholdMs":null,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultFadeCurve", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":null,"defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultFadeDurationMs", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":null,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"defaultMaxBackgroundGain", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":null,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"ltcFrameRate", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":null,"ltcDefaultStartOffset":"00:00:00:00"}`},
+		{"ltcDefaultStartOffset", `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":null}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,7 +129,7 @@ func TestDecodeAudioSettingsPayloadRejectsNullField(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsEmptyFadeCurve(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "defaultFadeCurve" {
 		t.Fatalf("verr = %v, want field-empty on defaultFadeCurve", verr)
@@ -99,7 +137,7 @@ func TestDecodeAudioSettingsPayloadRejectsEmptyFadeCurve(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsUnknownFadeCurve(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"exponential","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"exponential","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "defaultFadeCurve" {
 		t.Fatalf("verr = %v, want field-invalid on defaultFadeCurve (only linear ships)", verr)
@@ -107,7 +145,7 @@ func TestDecodeAudioSettingsPayloadRejectsUnknownFadeCurve(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsOutOfRangeDrift(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":999999,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6}`
+	raw := `{"driftIgnoreThresholdMs":999999,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "driftIgnoreThresholdMs" {
 		t.Fatalf("verr = %v, want field-invalid on driftIgnoreThresholdMs", verr)
@@ -115,7 +153,7 @@ func TestDecodeAudioSettingsPayloadRejectsOutOfRangeDrift(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsNegativeGain(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":-1}`
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":-1,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "defaultMaxBackgroundGain" {
 		t.Fatalf("verr = %v, want field-invalid on defaultMaxBackgroundGain", verr)
@@ -123,7 +161,7 @@ func TestDecodeAudioSettingsPayloadRejectsNegativeGain(t *testing.T) {
 }
 
 func TestDecodeAudioSettingsPayloadRejectsExcessiveGain(t *testing.T) {
-	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":10}`
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":10,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 	_, verr := DecodeAudioSettingsPayload(raw)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "defaultMaxBackgroundGain" {
 		t.Fatalf("verr = %v, want field-invalid on defaultMaxBackgroundGain", verr)
