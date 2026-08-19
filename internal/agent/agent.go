@@ -199,22 +199,14 @@ func Run() int {
 		}
 	}
 
-	// audioMgr is this node's audio session engine, against
-	// [audio.FakeEngine]: the pipeline backend is an open owner decision
-	// (Linear SM-68), so every audio.session.* command this node accepts
-	// reports Unconfirmable rather than a working playback outcome — see
-	// audio.Manager.gateAvailability's doc comment. RestoreAll rebuilds
-	// every session this node held before this process last stopped,
-	// matching renderOps' identical persisted-assignment reload above.
+	// The pipeline backend is undecided, so this runs against
+	// [audio.FakeEngine] and every audio.session.* command reports
+	// Unconfirmable rather than a playback outcome.
 	audioMgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
 
-	// ltcGen is this node's supervised external LTC generator process:
-	// constructed unconditionally so node.audio.ltc.* always reports real
-	// evidence rather than an absent signal, but never Started here —
-	// nothing in this repository yet decides WHEN a node should start
-	// generating LTC (that trigger is the pipeline backend Linear SM-68
-	// has not resolved), so it correctly reports Stopped/"never started"
-	// until something calls Start.
+	// Constructed unconditionally so node.audio.ltc.* reports real
+	// evidence rather than an absent signal, but never started here:
+	// nothing yet decides when a node should generate LTC.
 	ltcGen := audio.NewLTCGenerator(time.Now, nil)
 	if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)

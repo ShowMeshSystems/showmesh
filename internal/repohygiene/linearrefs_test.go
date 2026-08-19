@@ -26,6 +26,10 @@ var linearRefPatterns = []*regexp.Regexp{
 // evasion nobody types on purpose and every 72-column reflow produces.
 var commentWrap = regexp.MustCompile(`\r?\n[ \t]*(?://+|\*|#)?[ \t]*`)
 
+// wrapCandidate is the cheap precondition for that second pass: a key can
+// only be split if the prefix and hyphen survive on the first line.
+var wrapCandidate = regexp.MustCompile(`(?i)SM\x2d`)
+
 // linearRefSweepRoots are the directories this test sweeps, relative to
 // the repository root: everywhere shipped Go and TypeScript source and
 // the public API contract live. docs/ is deliberately excluded — it is
@@ -78,7 +82,13 @@ func TestNoLinearIssueReferencesInShippedSource(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		seen := map[string]bool{}
-		for _, text := range []string{string(raw), commentWrap.ReplaceAllString(string(raw), "")} {
+		texts := []string{string(raw)}
+		// The de-wrapping pass is quadratic on large generated files, so it
+		// only runs where a split key could exist at all.
+		if wrapCandidate.Match(raw) {
+			texts = append(texts, commentWrap.ReplaceAllString(string(raw), ""))
+		}
+		for _, text := range texts {
 			for _, pat := range linearRefPatterns {
 				for _, m := range pat.FindAllString(text, -1) {
 					if seen[m] {
