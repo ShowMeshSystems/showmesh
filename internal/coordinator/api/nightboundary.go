@@ -54,6 +54,10 @@ type nightContentAnchor struct {
 	FirstAttemptAt  time.Time `json:"firstAttemptAt,omitempty"`
 	AttemptedAt     time.Time `json:"attemptedAt,omitempty"`
 	RefusalTerminal bool      `json:"refusalTerminal,omitempty"`
+
+	// Attempts counts dispatches of a shutdown stop that were not
+	// confirmed, so each retry takes its own command identity.
+	Attempts int64 `json:"attempts,omitempty"`
 }
 
 // nightBoundary is the derived expected content-end time E, or the

@@ -104,7 +104,15 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.logWarn("night loop: failed to read current night session", "error", err)
 		return
 	}
-	if !ok || rec.Degraded {
+	if !ok {
+		return
+	}
+	// A degraded session advances nothing, with one exception: fading out
+	// is how the operator stops the show through this session, and the
+	// three shutdown commands are accepted while degraded precisely so
+	// they work. Parking here without ever issuing the stop would take
+	// away the one thing a degraded session must still be able to do.
+	if rec.Degraded && rec.State != nightStateFadingOut {
 		return
 	}
 	switch rec.State {
@@ -274,6 +282,13 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 	if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
 		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+		// Every other contradiction can resolve itself, because something
+		// is still playing to re-observe. A stop cannot: re-observation
+		// waits for playback that is gone, so this would otherwise hold
+		// silently for the rest of the night.
+		if obsNow.Status == fppStatusValueIdle {
+			h.nightDegradeSession(ctx, now, rec, "resting playback stopped before its expected end and nothing is playing to re-derive a boundary from ("+reason+"); run end-session, then prepare-site, to recover")
+		}
 		return
 	}
 
@@ -379,6 +394,10 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 					cur.ArmedShowID = ""
 					cur.ContentAnchorJSON = encodeNightContentAnchor(nightInvalidateAnchor(anchor, reason))
 					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+					if obsNow.Status == fppStatusValueIdle {
+						cur.Degraded = true
+						cur.DegradedReason = "resting playback stopped during the transition into a show and nothing is playing to re-derive a boundary from (" + reason + "); run end-session, then prepare-site, to recover"
+					}
 					return cur
 				})
 				return
@@ -666,16 +685,23 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		return nightContentAnchor{}, false, false
 	}
 
-	if problem != nil {
-		// Nothing reached FPP. DispatchedAt stays zero so the branch above
-		// keeps retrying under this same purpose rather than treating the
-		// refusal as a dispatch whose evidence merely has not arrived.
+	// Nothing reached FPP, either because a guard refused it or because
+	// the host did not accept the request. DispatchedAt stays zero so the
+	// branch above keeps retrying under this same purpose rather than
+	// treating it as a dispatch whose evidence merely has not arrived.
+	if problem != nil || outcome.DispatchFailed {
+		reason := "the request did not reach FPP: " + outcome.OutcomeReason
+		terminal := false
+		if problem != nil {
+			reason = "refused: " + problem.Detail
+			terminal = nightRefusalIsTerminal(problem)
+		}
 		next := nightContentAnchor{
 			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist,
 			DurationMS: durationMS, RepeatMode: repeat,
 			FirstAttemptAt: now, AttemptedAt: now,
-			RefusalTerminal: nightRefusalIsTerminal(problem),
-			Source:          "refused: " + problem.Detail,
+			RefusalTerminal: terminal,
+			Source:          reason,
 		}
 		if matches && !cur.FirstAttemptAt.IsZero() {
 			next.FirstAttemptAt = cur.FirstAttemptAt

@@ -4015,8 +4015,11 @@ export interface components {
         /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" — never "failed". */
         NightCue: {
             name: string;
-            /** @enum {string} */
-            phase: "enterShow" | "enterResting";
+            /**
+             * @description `fadeOut` replays the `enterShow` cue definitions while the session is fading out, under its own outbox identity. Rows in that phase are listed only once they exist.
+             * @enum {string}
+             */
+            phase: "enterShow" | "enterResting" | "fadeOut";
             role: string;
             action: string;
             actionRevision: number | null;

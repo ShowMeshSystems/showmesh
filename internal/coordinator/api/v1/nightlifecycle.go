@@ -55,7 +55,7 @@ type NightPhaseEvidence struct {
 // current cycle. State "not_dispatched" means no outbox row exists yet.
 type NightCue struct {
 	Name           string  `json:"name"`
-	Phase          string  `json:"phase"` // "enterShow" | "enterResting"
+	Phase          string  `json:"phase"` // "enterShow" | "enterResting" | "fadeOut"
 	Role           string  `json:"role"`
 	Action         string  `json:"action"`
 	ActionRevision *int64  `json:"actionRevision"`

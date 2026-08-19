@@ -209,23 +209,33 @@ func nightReadPlaylistDefinition(ctx context.Context, endpoint, name string) (ni
 // [nightCheckRestingAssetExactVariant] for the separate, and separately
 // reported, question of whether the running host is playing THESE exact
 // bytes.
-func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, playlistName string) nightReadinessCheck {
+// singleItem is false for the end-of-night playlist: no boundary is
+// derived from it, so a multi-item repeating loop is a legitimate shape
+// there and must not be reported as a failure.
+func nightCheckRestingPlaylistShape(ctx context.Context, endpoint, namePrefix, playlistName string, singleItem bool) nightReadinessCheck {
 	name := namePrefix + ":playlist-shape:" + playlistName
 	def, err := nightReadPlaylistDefinition(ctx, endpoint, playlistName)
 	if err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not read the resting playlist definition: " + err.Error()}
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not read the definition of playlist %q: %s", playlistName, err.Error())}
 	}
-	if len(def.MainPlaylist) != 1 {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("expected exactly one mainPlaylist item, found %d", len(def.MainPlaylist))}
+	switch {
+	case singleItem && len(def.MainPlaylist) != 1:
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("playlist %q must hold exactly one mainPlaylist item, because the show boundary is derived from that item's own length; found %d", playlistName, len(def.MainPlaylist))}
+	case len(def.MainPlaylist) == 0:
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("playlist %q has no items", playlistName)}
 	}
-	item := def.MainPlaylist[0]
-	if item.Type != "sequence" || item.MediaName != "" {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("the resting playlist's item carries an FPP audio association (type %q, mediaName %q); the resting playlist must be FSEQ-only", item.Type, item.MediaName)}
+	for i, item := range def.MainPlaylist {
+		if item.Type != "sequence" || item.MediaName != "" {
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("item %d of playlist %q carries an FPP audio association (type %q, mediaName %q); a resting playlist must be FSEQ-only", i, playlistName, item.Type, item.MediaName)}
+		}
+		if item.SequenceName == "" {
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("item %d of playlist %q names no sequence", i, playlistName)}
+		}
 	}
-	if item.SequenceName == "" {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: "the resting playlist's item names no sequence"}
+	if singleItem {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "exactly one FSEQ-only item, naming a sequence"}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "exactly one FSEQ-only item, naming a sequence"}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d FSEQ-only item(s), each naming a sequence", len(def.MainPlaylist))}
 }
 
 // nightCheckRestingAssetExactVariant reports whether the exact deployed

@@ -319,9 +319,14 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 		if !cue.Barrier {
 			continue
 		}
+		// A cue's deadline runs from when it becomes due, not from E: an
+		// offset cue is legitimately undispatched until its own offset
+		// elapses, and recording that as a failure would both fabricate
+		// one and stop the cue ever running.
+		dueAt := referenceE.Add(time.Duration(cue.OffsetMs) * time.Millisecond)
 		row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
 		if errors.Is(err, store.ErrNightCueOutboxNotFound) {
-			if now.Sub(referenceE) < nightBarrierResolutionDeadline {
+			if now.Sub(dueAt) < nightBarrierResolutionDeadline {
 				return false, fmt.Sprintf("barrier cue %q has not been dispatched yet", cue.Name), nil
 			}
 			// The row could not be created at all, so the deadline has to
@@ -336,7 +341,7 @@ func (h *handlers) nightBarrierSatisfied(ctx context.Context, now, referenceE ti
 			return false, "", err
 		}
 		timedOutState := row.State == nightCueStateDispatched || row.State == nightCueStatePending
-		if timedOutState && now.Sub(referenceE) >= nightBarrierResolutionDeadline {
+		if timedOutState && now.Sub(dueAt) >= nightBarrierResolutionDeadline {
 			row, err = h.nightTimeoutBarrierCue(ctx, now, row)
 			if err != nil {
 				return false, "", err

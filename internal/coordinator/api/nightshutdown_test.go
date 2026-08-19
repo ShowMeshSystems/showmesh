@@ -216,8 +216,11 @@ func TestNightFadingOut_PreWireRefusalRetriesOnALaterTick(t *testing.T) {
 	now = now.Add(nightShutdownStopRetryBackoff / 2)
 	f.h.nightAdvanceFadingOut(context.Background(), now, mustGetCurrentSession(t, f.store))
 	again, _ := decodeNightContentAnchor(mustGetCurrentSession(t, f.store).ContentAnchorJSON)
-	if !again.ObservedAt.Equal(anchor.ObservedAt) {
-		t.Fatalf("the refusal was retried inside its own backoff window: %v then %v", anchor.ObservedAt, again.ObservedAt)
+	if anchor.AttemptedAt.IsZero() {
+		t.Fatal("the refused attempt recorded no AttemptedAt, so the backoff assertion below would prove nothing")
+	}
+	if !again.AttemptedAt.Equal(anchor.AttemptedAt) {
+		t.Fatalf("the refusal was retried inside its own backoff window: %v then %v", anchor.AttemptedAt, again.AttemptedAt)
 	}
 
 	// Past the backoff, with the instance now reachable, the retry lands.

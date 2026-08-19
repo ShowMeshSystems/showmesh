@@ -11226,7 +11226,11 @@ components:
           type: string
         phase:
           type: string
-          enum: [enterShow, enterResting]
+          description: >-
+            `fadeOut` replays the `enterShow` cue definitions while the
+            session is fading out, under its own outbox identity. Rows in
+            that phase are listed only once they exist.
+          enum: [enterShow, enterResting, fadeOut]
         role:
           type: string
         action:

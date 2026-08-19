@@ -776,16 +776,23 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// gets the same checks, under its own names. It defaults to the
 	// ordinary resting playlist, so it is only checked separately when the
 	// operator actually configured a different one.
-	restingPlaylists := []struct{ prefix, playlist string }{{nightCheckPrefixResting, payload.Resting.Playlist}}
+	type restingPlaylistCheck struct {
+		prefix, playlist string
+		// The inter-show playlist must be a single item, because the show
+		// boundary is derived from that item's length. The end-of-night
+		// loop has no boundary and may hold several.
+		singleItem bool
+	}
+	restingPlaylists := []restingPlaylistCheck{{nightCheckPrefixResting, payload.Resting.Playlist, true}}
 	if payload.Resting.EndOfNightPlaylist != "" && payload.Resting.EndOfNightPlaylist != payload.Resting.Playlist {
-		restingPlaylists = append(restingPlaylists, struct{ prefix, playlist string }{nightCheckPrefixEndOfNight, payload.Resting.EndOfNightPlaylist})
+		restingPlaylists = append(restingPlaylists, restingPlaylistCheck{nightCheckPrefixEndOfNight, payload.Resting.EndOfNightPlaylist, false})
 	}
 	restingEndpoint, restingEndpointOK, restingEndpointErr := h.resolveFPPEndpoint(ctx, payload.Resting.FPPInstanceID)
 	for _, p := range restingPlaylists {
 		if restingEndpointErr == nil && restingEndpointOK {
-			checks = append(checks, nightCheckRestingPlaylistShape(ctx, restingEndpoint, p.prefix, p.playlist))
+			checks = append(checks, nightCheckRestingPlaylistShape(ctx, restingEndpoint, p.prefix, p.playlist, p.singleItem))
 		} else {
-			checks = append(checks, nightReadinessCheck{name: p.prefix + ":playlist-shape:" + p.playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read the resting playlist definition from"})
+			checks = append(checks, nightReadinessCheck{name: p.prefix + ":playlist-shape:" + p.playlist, health: nightHealthUnknown(), reason: "no configured FPP instance to read playlist " + p.playlist + " from"})
 		}
 	}
 	if endpoint, ok, err := h.resolveFPPEndpoint(ctx, payload.ShowPlaylist.FPPInstanceID); err == nil && ok {

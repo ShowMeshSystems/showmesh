@@ -73,11 +73,33 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 		h.nightReachStopped(ctx, now, rec)
 		return
 	}
-	if now.Sub(anchor.DispatchedAt) >= nightShutdownStopConfirmDeadline {
+	if now.Sub(anchor.DispatchedAt) < nightShutdownStopConfirmDeadline {
+		return
+	}
+	if !rec.Degraded {
 		h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
 			"fading out: a stop was issued to FPP instance %q but no idle evidence confirming it arrived within %s; the presentation may still be running, so this session is not reported stopped",
 			anchor.FPPInstanceID, nightShutdownStopConfirmDeadline))
 	}
+	// Degrading records what happened; it does not end the attempt. The
+	// display is still running, so the stop is re-armed for another try
+	// under a fresh attempt number rather than left to sit forever.
+	next := anchor
+	next.DispatchedAt = time.Time{}
+	next.AttemptedAt = now
+	next.Attempts = anchor.Attempts + 1
+	next.Source = "the previous stop was not confirmed; retrying"
+	h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
+}
+
+// nightCommitShutdownAnchorFor persists anchor against whatever state rec
+// is in, which for a re-armed stop may already be degraded.
+func (h *handlers) nightCommitShutdownAnchorFor(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor) {
+	h.nightCommit(ctx, now, rec.ID, nightStateFadingOut, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
+		return cur
+	})
 }
 
 // nightShutdownStopInstance prefers the resting instance, which is what is
@@ -101,10 +123,17 @@ func (h *handlers) nightShutdownRetryDue(anchor nightContentAnchor, now time.Tim
 	return !now.Before(anchor.AttemptedAt.Add(nightShutdownStopRetryBackoff))
 }
 
-// nightShutdownStopIdempotencyKey is stable across ticks and restarts, so
-// a redispatch of the shutdown stop replays rather than sending twice.
-func nightShutdownStopIdempotencyKey(rec store.NightSessionRecord) string {
-	return fmt.Sprintf("night-stop:%s:%d", rec.ID, rec.Cycle)
+// nightShutdownStopIdempotencyKey is stable for one attempt, so a retry
+// of that same attempt (a restart mid-dispatch, say) replays instead of
+// sending twice. A new attempt number takes a new key deliberately: a
+// command row exists under the old one, and replaying it would answer
+// with the old outcome and put nothing on the wire, which is the wrong
+// answer when the display is still running.
+func nightShutdownStopIdempotencyKey(rec store.NightSessionRecord, attempt int64) string {
+	if attempt == 0 {
+		return fmt.Sprintf("night-stop:%s:%d", rec.ID, rec.Cycle)
+	}
+	return fmt.Sprintf("night-stop:%s:%d:%d", rec.ID, rec.Cycle, attempt)
 }
 
 // nightDispatchShutdownStop issues the stop and persists an anchor whose
@@ -112,28 +141,39 @@ func nightShutdownStopIdempotencyKey(rec store.NightSessionRecord) string {
 // refusal records its reason and leaves DispatchedAt zero so a later tick
 // retries under the same key.
 func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time, rec store.NightSessionRecord, instanceID string, anchor nightContentAnchor) {
+	notSent := func(reason string) {
+		// Nothing reached FPP. DispatchedAt stays zero, so the next tick
+		// retries under a fresh attempt rather than waiting out a
+		// confirmation deadline for a command that was never sent.
+		next := anchor
+		next.Purpose, next.FPPInstanceID = nightAnchorPurposeShutdownStop, instanceID
+		next.DispatchedAt = time.Time{}
+		next.AttemptedAt = now
+		next.Attempts = anchor.Attempts + 1
+		next.Source = reason
+		h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
+	}
+
 	outcome, problem, err := h.dispatchFPPCommand(ctx, now, FPPCommandInput{
 		InstanceID:                  instanceID,
 		Action:                      fppActionStopPlaylist,
-		IdempotencyKey:              nightShutdownStopIdempotencyKey(rec),
+		IdempotencyKey:              nightShutdownStopIdempotencyKey(rec, anchor.Attempts),
 		Issuer:                      nightControllerIssuer(rec),
 		NeverWithholdOnAuditFailure: true,
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		h.logWarn("night loop: shutdown stop dispatch failed", "sessionId", rec.ID, "instanceId", instanceID, "error", err)
-		h.nightCommitShutdownAnchor(ctx, now, rec, nightContentAnchor{
-			Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID,
-			AttemptedAt: now, Source: "the stop could not be dispatched: " + err.Error(),
-		})
+		notSent("the stop could not be dispatched: " + err.Error())
 		return
-	}
-	if problem != nil {
-		// Nothing reached FPP: DispatchedAt stays zero and the reason is
-		// visible while later ticks retry under the same key.
-		h.nightCommitShutdownAnchor(ctx, now, rec, nightContentAnchor{
-			Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID,
-			AttemptedAt: now, Source: "the stop was refused before it reached FPP: " + problem.Detail,
-		})
+	case problem != nil:
+		notSent("the stop was refused before it reached FPP: " + problem.Detail)
+		return
+	case outcome.DispatchFailed:
+		// FPP did not accept the request: the host is unreachable or
+		// answered non-2xx. Outcome alone cannot say that, which is what
+		// DispatchFailed exists for.
+		notSent("the stop did not reach FPP: " + outcome.OutcomeReason)
 		return
 	}
 
@@ -141,10 +181,11 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 	if outcome.DispatchedAt != nil {
 		dispatchedAt = *outcome.DispatchedAt
 	}
-	next := nightContentAnchor{
-		Purpose: nightAnchorPurposeShutdownStop, FPPInstanceID: instanceID,
-		DispatchedAt: dispatchedAt, Source: outcome.OutcomeReason,
-	}
+	next := anchor
+	next.Purpose, next.FPPInstanceID = nightAnchorPurposeShutdownStop, instanceID
+	next.DispatchedAt = dispatchedAt
+	next.AttemptedAt = now
+	next.Source = outcome.OutcomeReason
 	if outcome.Outcome == "confirmed" {
 		obs := nightObservePlayback(ctx, h.deps.Observations, instanceID, dispatchedAt, now)
 		if obs.Current && obs.Status == fppStatusValueIdle && obs.PlaylistCurrent && obs.Playlist == "" {
@@ -152,15 +193,7 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 			return
 		}
 	}
-	h.nightCommitShutdownAnchor(ctx, now, rec, next)
-}
-
-func (h *handlers) nightCommitShutdownAnchor(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor) {
-	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
-		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
-		cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
-		return cur
-	})
+	h.nightCommitShutdownAnchorFor(ctx, now, rec, next)
 }
 
 // nightReachStopped is the only path to stopped that is not operator
