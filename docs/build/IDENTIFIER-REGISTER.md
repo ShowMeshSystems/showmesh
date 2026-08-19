@@ -418,66 +418,64 @@ listed because the last row was minted after the others had shipped:
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 
-**Track C's `audio_session.*` signals**, reserved 2026-08-18 for seams C3
-and C4 before either was written, so two seams cannot mint overlapping
-names for one session's state. All are on the `audio_session` resource
-kind, resource id the session id:
+**Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
+2026-08-18.** They were reserved before C3 and C4 were written; the table
+below is rewritten from
+`internal/coordinator/collector/nodeaudio/signals.go` after the seam
+landed, and **eight of the reserved spellings changed on the way**. The
+builder emitted its own names, the orchestrator ruled a canonical set
+mixing both (taking the reservation where it was as good or better, and
+the builder's where it carried a fact the reservation could not), and the
+code was renamed to match before anything shipped. Reserving still paid
+for itself: the divergence was caught by comparing code against register
+rather than by two tracks colliding.
+
+All are on the `audio_session` resource kind, resource id the session id:
 
 | Signal | Status | Owner |
 |---|---|---|
-| `audio_session.state` | reserved | Track C seam C3 |
-| `audio_session.reason` | reserved | Track C seam C3 |
-| `audio_session.source_role` | reserved | Track C seam C3 |
-| `audio_session.media.asset_id` | reserved | Track C seam C3 |
-| `audio_session.media.content_hash` | reserved | Track C seam C3 |
-| `audio_session.position_ms` | reserved | Track C seam C3 |
-| `audio_session.reference_position_ms` | reserved | Track C seam C3 |
-| `audio_session.drift_ms` | reserved | Track C seam C3 |
-| `audio_session.desired_revision` | reserved | Track C seam C3 |
-| `audio_session.playlist.revision` | reserved | Track C seam C3 |
-| `audio_session.playlist.item_id` | reserved | Track C seam C3 |
-| `audio_session.playlist.item_index` | reserved | Track C seam C3 |
-| `audio_session.playlist.repeat` | reserved | Track C seam C3 |
-| `audio_session.readiness.state` | reserved | Track C seam C2 |
-| `audio_session.readiness.reason` | reserved | Track C seam C2 |
-| `audio_session.gain.effective` | reserved | Track C seam C4 |
-| `audio_session.gain.ceiling` | reserved | Track C seam C4 |
-| `audio_session.fade.state` | reserved | Track C seam C4 |
-| `audio_session.mix.state` | reserved | Track C seam C4 |
-| `audio_session.last_outcome` | reserved | Track C seam C3 |
-| `audio_session.last_outcome_reason` | reserved | Track C seam C3 |
+| `audio_session.state` | shipped | C6/C7 |
+| `audio_session.state.reason` | shipped | C6/C7 (replaces the reserved `.reason`) |
+| `audio_session.source_role` | shipped | C6/C7 |
+| `audio_session.playlist.revision` | shipped | C6/C7 |
+| `audio_session.playlist.item_id` | shipped | C6/C7 |
+| `audio_session.playlist.item_index` | shipped | C6/C7 |
+| `audio_session.position_ms` | shipped | C6/C7 |
+| `audio_session.reference_position_ms` | shipped | C6/C7 |
+| `audio_session.drift_ms` | shipped | C6/C7 |
+| `audio_session.desired_revision` | shipped | C6/C7 |
+| `audio_session.gain.effective` | shipped | C6/C7 |
+| `audio_session.gain.ceiling` | shipped | C6/C7 |
+| `audio_session.fade.state` | shipped | C6/C7 |
+| `audio_session.mix.ducked_by` | shipped | C6/C7 |
+| `audio_session.readiness.state` | shipped | C6/C7 |
+| `audio_session.readiness.reason` | shipped | C6/C7 |
+| `audio_session.fault.kind` | shipped | C6/C7 |
+| `audio_session.fault.reason` | shipped | C6/C7 |
 
-**The eleven `node.audio.*` signals as shipped.** Two of them were added 2026-08-18 after review found
-that C1a's truncation and enumeration facts reached the wire payload and
-were then dropped before every operator surface:
+**Reserved and never shipped**, deliberately: `audio_session.media.asset_id`,
+`audio_session.media.content_hash`, `audio_session.playlist.repeat`,
+`audio_session.mix.state`, `audio_session.last_outcome` and
+`audio_session.last_outcome_reason`. The media identity and repeat mode
+travel in the session's desired state rather than as observations;
+`mix.state` was dropped because `mix.ducked_by` empty already means "not
+ducked" and `interrupt` is refused, so a second signal could only
+disagree with the first. They stay reserved rather than released, since
+releasing a name only to re-mint it later is how a spelling drifts.
+
+**One new node-level signal shipped with them**, on the `node` kind:
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.engine.state` | shipped | Track C seam C1a |
-| `node.audio.engine.reason` | shipped | Track C seam C1a |
-| `node.audio.device.state` | shipped | Track C seam C1a |
-| `node.audio.device.reason` | shipped | Track C seam C1a |
-| `node.audio.outputs.count` | shipped | Track C seam C1a |
-| `node.audio.outputs.enumerated` | shipped | Track C seam C1a fix pass |
-| `node.audio.outputs.truncated` | shipped | Track C seam C1a fix pass |
-| `node.audio.program.state` | shipped | Track C seam C1a |
-| `node.audio.ltc.state` | shipped | Track C seam C1a |
-| `node.audio.clock.domain` | shipped | Track C seam C1a fix pass (coordinator-sourced) |
-| `node.audio.clock.provenance` | shipped | Track C seam C1a fix pass (coordinator-sourced) |
+| `node.audio.clock.alignment` | shipped | C6/C7 |
 
-All eleven are written from `internal/coordinator/collector/nodeaudio/signals.go`
-after the fix pass, not from the plan, and the orchestrator checked the
-spelling of each against that file.
-
-**`node.audio.clock.domain` and `node.audio.clock.provenance` change
-producer, not name.** They were emitted from a hardcoded constant in the
-agent while the `audio.node` configuration kind that exists to supply them
-had no reader anywhere, which is ADR-039's store-and-stop failure with
-every surface reporting success. The declaration is operator configuration
-living in the coordinator's own store, so the coordinator emits both
-signals from that configuration, and the node stops claiming a clock
-domain it cannot know. Where no declaration exists the signals are
-`not_collected` with a reason, never `undeclared` presented as a reading.
+**It is always `not_collected`, with a reason, by design.** Nothing in
+software can measure program-to-LTC alignment, so it is never derived
+from both outputs being usable and never from configuration declaring a
+shared clock. A test fails if the signal is made to look measured. The
+whole value of the signal is that a green alignment light means measured
+rather than configured, and only the hardware work can make it say
+anything else.
 
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
