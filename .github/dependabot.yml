@@ -50,6 +50,19 @@ updates:
       # visible, which is where the actual risk is.
       dev-dependencies:
         dependency-type: development
+    ignore:
+      # openapi-typescript peers typescript ^5.x, and it generates
+      # schema.d.ts, which ADR-015 requires rather than hand-maintaining
+      # the types twice. A TypeScript major cannot land before the
+      # generator supports it.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # ESLint 10 needs a flat-config and typescript-eslint migration.
+      # Worth doing, not worth doing between now and the show.
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
 
   # The workflows themselves. Pinned action majors go stale silently and a
   # stale action is how a supply-chain advisory sits unnoticed in CI rather
