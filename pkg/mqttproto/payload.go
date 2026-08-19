@@ -38,6 +38,11 @@ const (
 	// [RenderPayload], published retained on
 	// showmesh/nodes/<node-id>/observed/render.
 	SchemaNodeRenderV1 = "showmesh.node.render/v1"
+
+	// SchemaNodeAudioV1 is the schema for
+	// [AudioPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/audio.
+	SchemaNodeAudioV1 = "showmesh.node.audio/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -819,6 +824,294 @@ func (p RenderPayload) Validate() error {
 	return nil
 }
 
+// maxAudioRoutes bounds [AudioPayload.Routes], the same "an advertisement
+// can't consume its own whole budget" cap [maxRenderSurfaces] enforces one
+// payload over.
+const maxAudioRoutes = 8
+
+// AudioRouteReport is one candidate ALSA device's real probe outcome,
+// inside [AudioPayload.Routes].
+type AudioRouteReport struct {
+	// Device is the ALSA PCM device name probed (e.g. "hw:CARD=PCH,DEV=0").
+	// Never "null" or "default" — see internal/agent/audio.CandidateDevices.
+	Device string `json:"device"`
+
+	// Available is true only when a real pipeline reached PLAYING against
+	// Device — never inferred from enumeration alone.
+	Available bool `json:"available"`
+
+	// Reason is required whenever Available is false.
+	Reason string `json:"reason"`
+
+	// Channels, Rate, and Format are what the pipeline actually negotiated,
+	// never what was requested. Channels is a graph-level property only:
+	// this cannot detect an interface that mirrors one physical pair from
+	// another downstream of anything ALSA exposes (RES-007).
+	Channels int64  `json:"channels"`
+	Rate     int64  `json:"rate"`
+	Format   string `json:"format"`
+}
+
+// maxAudioSessions bounds [AudioPayload.Sessions], the same "an
+// advertisement can't consume its own whole budget" cap [maxAudioRoutes]
+// enforces one field over.
+const maxAudioSessions = 16
+
+// AudioSessionReport is one session's retained telemetry (AUDIO-ENGINE
+// section 15), inside [AudioPayload.Sessions]. Every Has*/*Known field
+// distinguishes "not set" from its paired field's zero value — the wire
+// form of internal/agent/audio.SessionSnapshot.
+type AudioSessionReport struct {
+	SessionID string `json:"sessionId"`
+
+	HasSourceRole bool   `json:"hasSourceRole"`
+	SourceRole    string `json:"sourceRole"`
+
+	HasPlaylist      bool   `json:"hasPlaylist"`
+	PlaylistRevision uint64 `json:"playlistRevision"`
+
+	HasItem   bool   `json:"hasItem"`
+	ItemID    string `json:"itemId"`
+	ItemIndex int64  `json:"itemIndex"`
+
+	// PositionKnown is false immediately after a discontinuity or when no
+	// handle is loaded — never a stale position presented as current.
+	PositionKnown bool  `json:"positionKnown"`
+	PositionMs    int64 `json:"positionMs"`
+
+	State           string `json:"state"`
+	DesiredRevision uint64 `json:"desiredRevision"`
+
+	HasGain    bool    `json:"hasGain"`
+	Gain       float64 `json:"gain"`
+	HasCeiling bool    `json:"hasCeiling"`
+	Ceiling    float64 `json:"ceiling"`
+
+	// FadeState is "none", "in_progress", or "complete" — a state rather
+	// than a boolean because a boolean cannot distinguish "just
+	// completed" from "never started".
+	FadeState string `json:"fadeState"`
+
+	Ducked   bool   `json:"ducked"`
+	DuckedBy string `json:"duckedBy"`
+
+	HasAssetProbe    bool   `json:"hasAssetProbe"`
+	AssetProbeState  string `json:"assetProbeState"`
+	AssetProbeReason string `json:"assetProbeReason"`
+
+	// Fault is "none" or one of the six named AUDIO-ENGINE section 11.4
+	// fault classes; FaultReason is required whenever Fault != "none".
+	Fault       string `json:"fault"`
+	FaultReason string `json:"faultReason"`
+
+	// ObservedAt is the engine's own evidence time for PositionMs, nil
+	// when PositionKnown is false. Never the coordinator's or this
+	// node's own receipt time (ADR-011).
+	ObservedAt *time.Time `json:"observedAt"`
+}
+
+// AudioPayload is the payload of the showmesh.node.audio/v1 schema,
+// published RETAINED to a node's observed/audio topic ([ObservedTopic],
+// [ObservedDeliveryPolicy]): this node's audio discovery evidence and,
+// its current session telemetry.
+type AudioPayload struct {
+	// EngineAvailable is real evidence (a PLAYING transition against the
+	// always-present ALSA "null" device) that this node's GStreamer/ALSA
+	// element chain works, independent of whether real hardware is
+	// attached: false means "this node has no audio engine".
+	EngineAvailable bool `json:"engineAvailable"`
+
+	// EngineReason is required whenever EngineAvailable is false.
+	EngineReason string `json:"engineReason"`
+
+	// HardwareEnumerated is true only when this node's own device and
+	// hardware-card enumeration both completed without error. False makes
+	// DeviceAvailable/ProgramAvailable/LTCAvailable mean "we do not know
+	// yet", never "confirmed absent" — a shell-out failure (permissions,
+	// a missing aplay binary, a transient error) must never be reported
+	// the same way as a clean enumeration that genuinely found no card.
+	HardwareEnumerated bool `json:"hardwareEnumerated"`
+
+	// HardwareEnumeratedReason is required whenever HardwareEnumerated is
+	// false, carrying the actual enumeration error text.
+	HardwareEnumeratedReason string `json:"hardwareEnumeratedReason"`
+
+	// DeviceAvailable is true when at least one real hardware candidate
+	// (never "null"/"default") probed to PLAYING — the middle state: an
+	// engine with no usable output. Only meaningful when HardwareEnumerated
+	// is true.
+	DeviceAvailable bool `json:"deviceAvailable"`
+
+	// DeviceReason is required whenever DeviceAvailable is false.
+	DeviceReason string `json:"deviceReason"`
+
+	// OutputsCount is how many real hardware candidates probed to PLAYING.
+	OutputsCount int64 `json:"outputsCount"`
+
+	// ProgramAvailable is true when at least one real hardware route
+	// achieved 1 or more channels — the program bus (AUDIO-ENGINE
+	// section 6).
+	ProgramAvailable bool `json:"programAvailable"`
+
+	// ProgramReason is required whenever ProgramAvailable is false.
+	ProgramReason string `json:"programReason"`
+
+	// LTCAvailable is true when at least one real hardware route's
+	// SEPARATE, explicitly-constrained probe achieved 3 or more channels
+	// — evidence a discrete LTC channel (ADR-018) is physically reachable
+	// on this node, never a claim that any specific route has been
+	// assigned to carry it, and never inferred from an unconstrained
+	// probe's own achieved channel count alone.
+	LTCAvailable bool `json:"ltcAvailable"`
+
+	// LTCReason is required whenever LTCAvailable is false.
+	LTCReason string `json:"ltcReason"`
+
+	// Routes is every probed real-hardware candidate's outcome, bounded to
+	// maxAudioRoutes. Nil-unsafe like RenderPayload.Surfaces: this
+	// package's own encoder emits "routes":[] for a node with none, never
+	// omits or nulls the key.
+	Routes []AudioRouteReport `json:"routes"`
+
+	// Truncated is true when more real candidate devices were enumerated
+	// than fit within maxAudioRoutes — stated, never a silent drop.
+	Truncated bool `json:"truncated"`
+
+	// EnumeratedCount is the total number of PCM device names this node's
+	// enumerator reported, before virtual-name filtering or truncation.
+	EnumeratedCount int64 `json:"enumeratedCount"`
+
+	// DiscoveredAt is when this node actually ran its one-shot discovery
+	// probes (EngineAvailable, HardwareEnumerated, DeviceAvailable,
+	// ProgramAvailable, LTCAvailable, and Routes), on the node's own
+	// clock — the evidence timestamp ADR-003 requires for THOSE fields.
+	// It is reused unchanged on every report tick this agent process
+	// publishes (see audioreport.go's own doc comment for why) and is
+	// never refreshed to make discovery evidence look fresher than it
+	// is. nil means genuinely unknown, matching pkg/observation.
+	// Observation.ObservedAt's own nil-means-unknown convention
+	// (ADR-011: never defaulted to "now").
+	DiscoveredAt *time.Time `json:"discoveredAt"`
+
+	// ObservedAt is when THIS report tick's live evidence (Sessions,
+	// LTCGeneratorState/Reason, LTCFrameRate, LTCTimecode) was gathered,
+	// on the node's own clock — refreshed on every tick, unlike
+	// DiscoveredAt. Before this field existed it also stood in for the
+	// discovery probe time, which pinned every session and LTC signal to
+	// the agent's startup time forever and made them read stale after 45
+	// seconds no matter how fresh the underlying data actually was. nil
+	// means genuinely unknown, matching pkg/observation.Observation.
+	// ObservedAt's own nil-means-unknown convention (ADR-011: never
+	// defaulted to "now").
+	ObservedAt *time.Time `json:"observedAt"`
+
+	// Sessions is every audio session this node currently holds, rebuilt
+	// fresh on every report tick (unlike the discovery fields above,
+	// which are a one-shot cache — see audioreport.go's own doc comment).
+	// Nil-unsafe like Routes: this package's own encoder emits
+	// "sessions":[] for a node with none.
+	Sessions []AudioSessionReport `json:"sessions"`
+
+	// SessionsTruncated is true when more sessions existed than fit
+	// within maxAudioSessions — stated, never a silent drop.
+	SessionsTruncated bool `json:"sessionsTruncated"`
+
+	// LTCGeneratorState and LTCGeneratorReason are the supervised
+	// LTC generator's own reported lifecycle (node.audio.ltc.generator.state
+	// / .reason) — never inferred from EngineAvailable, DeviceAvailable, or
+	// any other field above: a generator can die while the rest of this
+	// node's audio reports healthy, and reporting it any other way would
+	// let silent timecode loss look exactly like a show between cues.
+	// Always non-empty.
+	LTCGeneratorState string `json:"ltcGeneratorState"`
+
+	// LTCGeneratorReason is required whenever LTCGeneratorState is not
+	// "running".
+	LTCGeneratorReason string `json:"ltcGeneratorReason"`
+
+	// LTCFrameRateKnown/LTCFrameRate report the closed-vocabulary rate
+	// (node.audio.ltc.frame_rate) the currently- or most-recently-started
+	// generator was started against. False whenever no generator has ever
+	// been started on this node — never a plausible-looking default rate.
+	LTCFrameRateKnown bool   `json:"ltcFrameRateKnown"`
+	LTCFrameRate      string `json:"ltcFrameRate"`
+
+	// LTCTimecodeKnown/LTCTimecode report the generator's own
+	// self-reported current position (node.audio.ltc.timecode) — evidence
+	// this node's supervisor read back from the generator process's own
+	// heartbeat, never decoded off the generated audio (no decoder exists
+	// anywhere in this seam) and never reported while the generator is not
+	// confirmed running.
+	LTCTimecodeKnown bool   `json:"ltcTimecodeKnown"`
+	LTCTimecode      string `json:"ltcTimecode"`
+}
+
+// Validate enforces: at most maxAudioRoutes entries, every route's Device
+// non-empty, ObservedAt present, every Reason field required wherever
+// this payload's own doc comments say so, and the same for Sessions —
+// the same shape RenderPayload.Validate enforces one type up.
+func (p AudioPayload) Validate() error {
+	if p.Routes == nil {
+		return fmt.Errorf("%w: routes (a node reports \"routes\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
+	if len(p.Routes) > maxAudioRoutes {
+		return fmt.Errorf("%w: %d routes, max %d", ErrPayloadTooLarge, len(p.Routes), maxAudioRoutes)
+	}
+	if p.Sessions == nil {
+		return fmt.Errorf("%w: sessions (a node reports \"sessions\":[] when it holds none; the key must never be absent or null)", ErrPayloadMissingField)
+	}
+	if len(p.Sessions) > maxAudioSessions {
+		return fmt.Errorf("%w: %d sessions, max %d", ErrPayloadTooLarge, len(p.Sessions), maxAudioSessions)
+	}
+	for i, sess := range p.Sessions {
+		if sess.SessionID == "" {
+			return fmt.Errorf("%w: sessions[%d].sessionId", ErrPayloadMissingField, i)
+		}
+		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
+			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
+		}
+	}
+	if p.ObservedAt == nil {
+		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)
+	}
+	if !p.EngineAvailable && p.EngineReason == "" {
+		return fmt.Errorf("%w: engineReason (required whenever engineAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.HardwareEnumerated && p.HardwareEnumeratedReason == "" {
+		return fmt.Errorf("%w: hardwareEnumeratedReason (required whenever hardwareEnumerated is false)", ErrPayloadMissingField)
+	}
+	if !p.DeviceAvailable && p.DeviceReason == "" {
+		return fmt.Errorf("%w: deviceReason (required whenever deviceAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.ProgramAvailable && p.ProgramReason == "" {
+		return fmt.Errorf("%w: programReason (required whenever programAvailable is false)", ErrPayloadMissingField)
+	}
+	if !p.LTCAvailable && p.LTCReason == "" {
+		return fmt.Errorf("%w: ltcReason (required whenever ltcAvailable is false)", ErrPayloadMissingField)
+	}
+	for i, r := range p.Routes {
+		if r.Device == "" {
+			return fmt.Errorf("%w: routes[%d].device", ErrPayloadMissingField, i)
+		}
+		if !r.Available && r.Reason == "" {
+			return fmt.Errorf("%w: routes[%d].reason (required whenever available is false)", ErrPayloadMissingField, i)
+		}
+	}
+	if p.LTCGeneratorState == "" {
+		return fmt.Errorf("%w: ltcGeneratorState", ErrPayloadMissingField)
+	}
+	if p.LTCGeneratorState != "running" && p.LTCGeneratorReason == "" {
+		return fmt.Errorf("%w: ltcGeneratorReason (required whenever ltcGeneratorState is not \"running\")", ErrPayloadMissingField)
+	}
+	if p.LTCFrameRateKnown && p.LTCFrameRate == "" {
+		return fmt.Errorf("%w: ltcFrameRate (required whenever ltcFrameRateKnown is true)", ErrPayloadMissingField)
+	}
+	if p.LTCTimecodeKnown && p.LTCTimecode == "" {
+		return fmt.Errorf("%w: ltcTimecode (required whenever ltcTimecodeKnown is true)", ErrPayloadMissingField)
+	}
+	return nil
+}
+
 // ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
 // surface's Drawing is set but is not one of [RenderDrawingContent] or
 // [RenderDrawingIdle], matching [ErrPayloadInvalidOutcome]'s identical
@@ -1005,6 +1298,28 @@ func DecodeRenderPayload(env Envelope) (RenderPayload, error) {
 	return p, nil
 }
 
+// DecodeAudioPayload decodes env.Payload as an [AudioPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeAudioV1], an
+// error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
+// error wrapping [ErrPayloadMissingField] or [ErrPayloadTooLarge] (via
+// [AudioPayload.Validate]) if the payload is malformed.
+func DecodeAudioPayload(env Envelope) (AudioPayload, error) {
+	if env.Schema != SchemaNodeAudioV1 {
+		return AudioPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeAudioV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	var p AudioPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return AudioPayload{}, fmt.Errorf("mqttproto: decode audio payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -1104,4 +1419,18 @@ func NewRenderEnvelope(now func() time.Time, nodeID string, payload RenderPayloa
 		return Envelope{}, fmt.Errorf("mqttproto: build render envelope: %w", err)
 	}
 	return newEnvelope(now, SchemaNodeRenderV1, nodeID, payload)
+}
+
+// NewAudioEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+//
+// Like [NewRenderEnvelope], this constructor calls payload.Validate()
+// itself before marshalling, so a caller-built payload
+// [DecodeAudioPayload] would refuse is never published as-is.
+func NewAudioEnvelope(now func() time.Time, nodeID string, payload AudioPayload) (Envelope, error) {
+	if err := payload.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("mqttproto: build audio envelope: %w", err)
+	}
+	return newEnvelope(now, SchemaNodeAudioV1, nodeID, payload)
 }

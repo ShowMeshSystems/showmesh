@@ -109,6 +109,12 @@ type Manager struct {
 	renderMu       sync.Mutex
 	renderBaseline map[string]int64
 	renderFailed   map[string]bool
+
+	// audioSink receives every decoded audio discovery report — see
+	// [WithAudioSink]. nil (the default) means no audio ingestion at all:
+	// an "audio" observed subpath is then dropped exactly like any other
+	// subpath this step does not understand (the default case below).
+	audioSink AudioSink
 }
 
 // RenderSink receives a node's decoded render report as it arrives, so
@@ -124,6 +130,17 @@ type RenderSink interface {
 	// receivedAt are exactly [Manager.classify]'s own retained flag and
 	// receipt time — see [Manager.handleRender].
 	Put(nodeID string, payload mqttproto.RenderPayload, retained bool, receivedAt time.Time)
+}
+
+// AudioSink receives a node's decoded audio discovery report as it
+// arrives, so internal/coordinator/collector/nodeaudio's push cache can be
+// fed without this package importing that collector package directly —
+// [RenderSink]'s identical role, one report type over.
+// *nodeaudio.Store already satisfies this with no adapter needed.
+type AudioSink interface {
+	// Put records payload as nodeID's latest audio report. receivedAt is
+	// this coordinator's own receipt time — see [Manager.handleAudio].
+	Put(nodeID string, payload mqttproto.AudioPayload, receivedAt time.Time)
 }
 
 // Option configures optional Manager behavior at [New]. The zero value
@@ -147,6 +164,14 @@ func WithOnChange(fn func()) Option {
 // like any other subpath this step does not model.
 func WithRenderSink(sink RenderSink) Option {
 	return func(m *Manager) { m.renderSink = sink }
+}
+
+// WithAudioSink registers sink to receive every decoded audio discovery
+// report — see [Manager.audioSink] and [Manager.handleAudio]. Optional:
+// the default (no sink registered) drops "audio" observed messages
+// exactly like any other subpath this step does not model.
+func WithAudioSink(sink AudioSink) Option {
+	return func(m *Manager) { m.audioSink = sink }
 }
 
 // New builds a Manager backed by st. logger may be nil, in which case
@@ -371,6 +396,8 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 			m.handleAssetInventory(ctx, topic.NodeID, msg)
 		case "render":
 			m.handleRender(ctx, topic.NodeID, msg)
+		case "audio":
+			m.handleAudio(topic.NodeID, msg)
 		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
@@ -621,6 +648,35 @@ func (m *Manager) handleRender(ctx context.Context, nodeID string, msg broker.Me
 	// through as if it were this bookkeeping timestamp.
 	m.renderSink.Put(nodeID, render, msg.Retained, m.now())
 	m.observeRenderSurfaces(ctx, nodeID, render)
+	m.notify()
+}
+
+// handleAudio ingests a node's audio discovery report into m.audioSink, if
+// one was registered — see [WithAudioSink]. A nil audioSink silently drops
+// the message. Unlike handleAssetInventory, a RETAINED delivery IS stored:
+// [AudioPayload.ObservedAt] is the node's own evidence timestamp, so age
+// is reasoned about from that, not from delivery kind.
+func (m *Manager) handleAudio(nodeID string, msg broker.Message) {
+	if m.audioSink == nil {
+		m.logger.Debug("ignoring audio report: no audio sink registered", "node_id", nodeID)
+		return
+	}
+
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("audio", nodeID, err)
+		return
+	}
+	audio, err := mqttproto.DecodeAudioPayload(env)
+	if err != nil {
+		m.logMalformed("audio", nodeID, err)
+		return
+	}
+
+	// receivedAt is this coordinator's own receipt time — bookkeeping,
+	// never evidence of the node's own state (see [Manager.handleRender]'s
+	// identical comment on why this bypasses [Manager.classify]).
+	m.audioSink.Put(nodeID, audio, m.now())
 	m.notify()
 }
 

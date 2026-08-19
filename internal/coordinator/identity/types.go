@@ -98,6 +98,15 @@ const (
 	// own vendors.
 	ScopeRenderCommand Scope = "render:command"
 
+	// ScopeAudioCommand guards every audio.session.* and audio.gain/
+	// output.* dispatch: apply, prepare, start, pause, resume, seek,
+	// advance, stop, clear, gain set/fade, and output mute/unmute. Reads
+	// stay open by default (ADR-024) — this scope exists only because
+	// dispatching one of these operations changes what a session plays,
+	// the identical reasoning [ScopeFPPCommand], [ScopeResolumeAction],
+	// and [ScopeRenderCommand] already carry for their own domains.
+	ScopeAudioCommand Scope = "audio:command"
+
 	// ScopeShowActionInvoke gates POST /api/v1/actions/{id}/invocations:
 	// invoke one stored show.action by id, outside of a macro run. Reads
 	// stay open by default (ADR-024) — this scope exists only because
@@ -122,7 +131,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

@@ -1,0 +1,1 @@
+{"run": "r1_channel_separation", "file": "/tmp/audio-bench-scratch/r1.wav", "sample_rate": 48000, "n_channels": 3, "per_channel_rms": [0.0, 0.0, 18535.321943296985], "per_channel_peak": [0, 0, 26213]}

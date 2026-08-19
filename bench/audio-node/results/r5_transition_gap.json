@@ -1,0 +1,12 @@
+{
+  "run": "r5_transition_gap",
+  "concat_total_samples": 96000,
+  "concat_expected_samples_no_gap": 96000,
+  "concat_gap_samples": 0,
+  "concat_note": "concat splices at the exact sample boundary by construction (verified: total length equals sum of the two items exactly, 96000 samples for two 1s/48kHz items); this is GStreamer's own gapless mechanism.",
+  "sequential_cat_total_samples": 96000,
+  "sequential_cat_gap_samples": 0,
+  "sequential_cat_note": "the byte-domain concatenation of two independently-rendered files has zero inserted samples by construction; this is NOT evidence about real playback continuity, only that no bytes were lost or duplicated splicing the files together.",
+  "sequential_process_restart_wall_seconds": 0.009531259536743164,
+  "sequential_process_restart_note": "both source pipelines are non-live (no wall-clock pacing), so \"nominal duration\" is not a real quantity here; this measures the actual wall-clock cost, on this host, of starting a second independent gst-launch-1.0 process for the next item -- ordinary sequential playback's real overhead, which never shows up in the sample domain at all."
+}

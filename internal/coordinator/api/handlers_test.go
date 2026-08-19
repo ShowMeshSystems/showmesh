@@ -453,6 +453,28 @@ func TestObservationsAcceptsResolumeResourceKind(t *testing.T) {
 	}
 }
 
+// TestObservationsAcceptsAudioSessionResourceKind is Track C seam C1a's own
+// regression test for the resourceKind vocabulary, mirroring
+// TestObservationsAcceptsResolumeResourceKind: resourceKind=audio_session
+// must be accepted even though this seam emits no audio_session
+// observations yet (the kind is registered ahead of the seam that
+// populates it — see pkg/observation.ResourceAudioSession's doc comment).
+func TestObservationsAcceptsAudioSessionResourceKind(t *testing.T) {
+	api := buildTestAPI(t)
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/observations?resourceKind=audio_session", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	obs, ok := m["observations"].([]any)
+	if !ok {
+		t.Fatalf("observations field missing or not an array; body: %s", body)
+	}
+	if len(obs) != 0 {
+		t.Errorf("observations = %v, want empty (this seam emits no audio_session observations yet)", obs)
+	}
+}
+
 // --- Raw-JSON assertions the contract's standing rule requires (section 1
 // and section 7 of Task D's spec): these check literal bytes/keys, never a
 // struct round-trip, so a renamed or dropped JSON tag would actually fail

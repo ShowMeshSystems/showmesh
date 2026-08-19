@@ -1,0 +1,13 @@
+{
+  "note": "built and run inside bench/audio-node/Dockerfile's Debian 13 image; per-run sample rate is also in each result JSON",
+  "gstreamer_version": "gst-inspect-1.0 version 1.26.2\nGStreamer 1.26.2\nhttps://tracker.debian.org/pkg/gstreamer1.0",
+  "debian_version": "13.6",
+  "packages": {
+    "gstreamer1.0-alsa": "1.26.2-1+deb13u1",
+    "gstreamer1.0-plugins-bad": "1.26.2-3+deb13u2",
+    "gstreamer1.0-plugins-base": "1.26.2-1+deb13u1",
+    "gstreamer1.0-plugins-good": "1.26.2-1+deb13u2",
+    "libltc11": "1.3.2-1+b2"
+  },
+  "default_sample_rate_hz": 48000
+}

@@ -105,6 +105,32 @@ var dynamicWritePathCoverage = map[string]string{
 	"POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe": "cmd_render_command.go dispatchRenderCommand " +
 		"builds /api/v1/nodes/<nodeId>/render/surfaces/<surfaceId>/<verb> with verb=transport-probe " +
 		"(showmeshctl render probe)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=apply (showmeshctl audio session apply)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=prepare (showmeshctl audio session prepare)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/start": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=start (showmeshctl audio session start)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/pause": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=pause (showmeshctl audio session pause)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/resume": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=resume (showmeshctl audio session resume)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=seek (showmeshctl audio session seek)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=advance (showmeshctl audio session advance)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/stop": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=stop (showmeshctl audio session stop)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
+		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=clear (showmeshctl audio session clear)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain": "cmd_audio_gain.go cmdAudioGain calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=gain (showmeshctl audio gain set)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade": "cmd_audio_gain.go cmdAudioGain calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=gain/fade (showmeshctl audio gain fade)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute": "cmd_audio_gain.go cmdAudioOutput calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=output/mute (showmeshctl audio output mute)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute": "cmd_audio_gain.go cmdAudioOutput calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=output/unmute (showmeshctl audio output unmute)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

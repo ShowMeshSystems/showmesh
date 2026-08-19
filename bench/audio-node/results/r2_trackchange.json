@@ -1,0 +1,1 @@
+{"run": "r2_trackchange", "file": "/tmp/audio-bench-scratch/r2_trackchange.wav", "sample_rate": 48000, "expected_onset_sample": 72000, "measured_onset_sample": 72002, "detection_error_samples": 2}

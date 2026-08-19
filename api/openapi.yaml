@@ -673,12 +673,896 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/ResourceNotFound"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/apply:
+    post:
+      operationId: dispatchAudioSessionApply
+      summary: Dispatch audio.session.apply to a node's playback session
+      description: >-
+        Behind `audio:command`. Merges the request body onto the session's desired state, creating the session if it does not already exist — `revision` and `idempotencyKey` go through the node's own revision/idempotency ledger for this session, so a stale or replayed revision is refused rather than applied out of order. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/prepare:
+    post:
+      operationId: dispatchAudioSessionPrepare
+      summary: Dispatch audio.session.prepare to a node's playback session
+      description: >-
+        Behind `audio:command`. Gates readiness (a missing, changed, or undecodable asset is refused) and loads the session's current item on the node without starting playback. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/start:
+    post:
+      operationId: dispatchAudioSessionStart
+      summary: Dispatch audio.session.start to a node's playback session
+      description: >-
+        Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/pause:
+    post:
+      operationId: dispatchAudioSessionPause
+      summary: Dispatch audio.session.pause to a node's playback session
+      description: >-
+        Behind `audio:command`. Suspends the session's current item, preserving position. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/resume:
+    post:
+      operationId: dispatchAudioSessionResume
+      summary: Dispatch audio.session.resume to a node's playback session
+      description: >-
+        Behind `audio:command`. Continues the session's current item from the position `pause` left it at. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/seek:
+    post:
+      operationId: dispatchAudioSessionSeek
+      summary: Dispatch audio.session.seek to a node's playback session
+      description: >-
+        Behind `audio:command`. Re-anchors the session's current item's position — a discontinuity, never a continuation of pre-seek timing. `params.positionMs` names the target position in milliseconds. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/advance:
+    post:
+      operationId: dispatchAudioSessionAdvance
+      summary: Dispatch audio.session.advance to a node's playback session
+      description: >-
+        Behind `audio:command`. Forces the session to its next playlist item — the same underlying transition the node's own natural-completion watcher drives, so an item is advanced exactly once regardless of what triggered it. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/stop:
+    post:
+      operationId: dispatchAudioSessionStop
+      summary: Dispatch audio.session.stop to a node's playback session
+      description: >-
+        Behind `audio:command`. Commands the session to stop — permanently distinguishable in evidence from a natural end-of-item completion. Never refused for want of node evidence: an idle or unloaded session still reports `stopped`. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/clear:
+    post:
+      operationId: dispatchAudioSessionClear
+      summary: Dispatch audio.session.clear to a node's playback session
+      description: >-
+        Behind `audio:command`. Releases the session entirely on the node and removes its persisted record. Never refused for want of node evidence, matching `stop`. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/gain:
+    post:
+      operationId: dispatchAudioGainSet
+      summary: Dispatch audio.gain.set to a node's playback session
+      description: >-
+        Behind `audio:command`. Sets the session's gain immediately,
+        clamped to its configured ceiling (`params.gain` is linear, not
+        dB — see AUDIO-ENGINE.md). The ceiling is enforced at the point
+        the gain takes effect, not only at validation, and a clamp is
+        reported as evidence rather than silently applied. A `200`
+        response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade:
+    post:
+      operationId: dispatchAudioGainFade
+      summary: Dispatch audio.gain.fade to a node's playback session
+      description: >-
+        Behind `audio:command`. Schedules a gain fade toward
+        `params.targetGain` (linear) over `params.durationMs` along
+        `params.curve` (only `"linear"` ships), clamped to the session's
+        ceiling. This response reports the fade as DISPATCHED, never as
+        complete — `fade_complete` is an outcome the engine reports only
+        once it observes the gain actually reached, never inferred from
+        the requested duration having elapsed, because Track F's
+        transition barrier is built on that distinction. A `200`
+        response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute:
+    post:
+      operationId: dispatchAudioOutputMute
+      summary: Dispatch audio.output.mute to a node's playback session
+      description: >-
+        Behind `audio:command`. Saves the session's current gain and
+        drives it to silence. Idempotent: muting an already-muted session
+        reports the existing mute rather than overwriting the saved
+        pre-mute gain. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
+  /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute:
+    post:
+      operationId: dispatchAudioOutputUnmute
+      summary: Dispatch audio.output.unmute to a node's playback session
+      description: >-
+        Behind `audio:command`. Restores the session's pre-mute gain,
+        re-clamped to whatever ceiling is current now. Idempotent:
+        unmuting a session that is not muted is a no-op success, never a
+        refusal. A `200` response is never itself
+        success: `command.outcome` is the only place that is decided, and
+        it is commonly `"unconfirmable"` today because the pipeline
+        backend behind this seam's session engine is an open owner
+        decision — every dispatch against the shipped agent reports
+        `"unconfirmable"` with a reason, which is a real, expected
+        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioSessionCommandRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSessionCommandResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one — never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action but
+            DIFFERENT `params`/`revision` — also a conflict, never a
+            replay. Mint a fresh `idempotencyKey` for a genuinely new
+            request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -821,7 +1705,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [node, fpp, coordinator, resolume, surface]
+            enum: [node, fpp, coordinator, resolume, surface, audio_session]
           description: Restrict to observations about resources of this kind.
         - name: resourceId
           in: query
@@ -2636,6 +3520,255 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/audio.settings:
+    get:
+      operationId: getAudioSettingsConfig
+      summary: The audio.settings engine-wide singleton (ADR-039)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/render.settings`'s
+        own always-sensitive, never-404 posture: the payload has a
+        well-defined default, so this always answers `200`, with `revision`
+        `0` and `source` `"default"` when nothing has ever been written.
+        `driftIgnoreThresholdMs`'s default has never been measured against
+        real playback and is a starting point, not a tuned value.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putAudioSettingsConfig
+      summary: Write a new audio.settings revision (ADR-039)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: every
+        field is required and non-null on every write — never merged
+        against the previous revision, so an absent key is refused by name
+        rather than silently defaulting or carrying the old value forward.
+        `defaultFadeCurve` must be a member of the audio engine's own
+        closed fade-curve vocabulary (only `"linear"` ships today). On
+        success, appends a new immutable revision and activates it in the
+        SAME transaction as its audit log entry (ADR-024 decision 11's
+        same-transaction rule). A cookie-authenticated request additionally
+        requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigAudioSettingsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.settings/revisions:
+    get:
+      operationId: getAudioSettingsConfigRevisions
+      summary: audio.settings revision history, newest first
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/render.settings/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node:
+    get:
+      operationId: listAudioNodes
+      summary: Enumerate audio.node objects (ADR-018/ADR-039)
+      description: >-
+        Requires `config:write`. Object ids (the node id) with label (the
+        configured programRoute) and current revision number, NOT the full
+        payloads — `show` is always empty, since audio.node carries no
+        show reference.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node/{id}:
+    get:
+      operationId: getAudioNode
+      summary: One audio.node object's active revision
+      description: Requires `config:write`. `id` is the node id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioNodeConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putAudioNode
+      summary: Write a new audio.node revision (ADR-018)
+      description: >-
+        Requires `config:write` (admin only). `id` is the node id and must
+        pass the same syntax a node id must satisfy. This is a FULL
+        REPLACEMENT: every field is required on every write. `programRoute`
+        and `ltcRoute` are each cross-checked, LIVE, against this node's
+        OWN most recent capability advertisement (`audio.output.local` /
+        `audio.output.ltc`) — never accepted on the operator's claim
+        alone. A node that has never advertised any audio capability, or
+        whose advertisement does not include the named route, is refused
+        with `400` naming what evidence was missing (or, when the node has
+        advertised nothing at all, that no probe evidence exists for it).
+        `clockDomain` and `clockDomainProvenance` are operator-declared and
+        never inferred: no software call on this platform proves two
+        outputs share a hardware clock.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigAudioNode"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioNodeConfigResponse"
+        "400":
+          description: >-
+            Either an ordinary payload validation refusal, or the
+            placement refusal described above (the node's own advertised
+            capability evidence does not include the named route).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/audio.node/{id}/revisions:
+    get:
+      operationId: getAudioNodeConfigRevisions
+      summary: audio.node revision history, newest first
+      description: Requires `config:write`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -4422,6 +5555,20 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    AudioCommandAuditUnavailable:
+      description: >-
+        The pre-dispatch write that must durably record this command
+        before it is dispatched could not be appended to this
+        coordinator's audit store. Nothing was recorded and nothing was
+        dispatched to the node; retry once the audit store is writable
+        again.
+      headers:
+        ShowMesh-API-Version:
+          $ref: "#/components/headers/ShowMesh-API-Version"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
   headers:
     ShowMesh-API-Version:
       description: >-
@@ -4585,7 +5732,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [node, fpp, coordinator, resolume, surface]
+          enum: [node, fpp, coordinator, resolume, surface, audio_session]
         id:
           type: string
     Capability:
@@ -4632,7 +5779,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render]
+         declaration, render, audio]
       properties:
         nodeId:
           type: string
@@ -4676,6 +5823,15 @@ components:
             surface a node supervises and attributing its status to a
             surface would report one fact once per surface as though each
             were independent.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+        audio:
+          type: array
+          description: >-
+            Whatever node.audio.* observations this coordinator currently
+            holds for this node, one entry per signal. Never omitted; an
+            empty array means this node has never published an audio
+            discovery report.
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
@@ -5517,6 +6673,127 @@ components:
             node as part of THIS render.surface.apply assignment. Empty for
             render.surface.clear/render.pipeline.restart/render.transport.probe,
             which carry no idleOutput.
+    AudioSessionCommandRequest:
+      type: object
+      description: >-
+        The body of every POST /nodes/{nodeId}/audio/sessions/{sessionId}/{op}
+        endpoint. revision goes through the node's own per-session
+        revision ledger: a value not strictly greater than the session's
+        current desired revision is refused, never silently applied out
+        of order.
+      required: [revision]
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key (same action, same params) dispatches nothing
+            and returns the original command's own result, flagged
+            `replay: true` — see the `409` response for what happens
+            when the SAME key is reused with a DIFFERENT action or
+            params.
+        params:
+          type: object
+          description: >-
+            Operation-specific fields the node validates, not this
+            coordinator: apply's sourceRole/media/playlist/outputs,
+            seek's positionMs. Opaque here by design — see this
+            operation's own description for what it accepts.
+    AudioSessionCommandResponse:
+      type: object
+      description: >-
+        The body of a successful (200) response from any of the nine
+        audio.session.* dispatch endpoints.
+      required: [serverTime, command]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/AudioSessionCommandResult"
+    AudioSessionCommandResult:
+      type: object
+      description: >-
+        What happened to one dispatched (or replayed) audio.session.*
+        command. outcome is never "successful" merely because the
+        publish to the node succeeded (ADR-003): it is decided from the
+        node's own evidence, collected after its own dispatch. A
+        SUCCESSFUL HTTP 200 response commonly carries
+        `outcome: "unconfirmable"` — this is a real, expected outcome
+        while the node's session engine has no working pipeline backend
+        wired in, never an error and never a transport failure. Reading
+        only the HTTP status code is not enough to know whether the
+        command worked; read `outcome`.
+      required:
+        [commandId, idempotencyKey, action, nodeId, sessionId, replay,
+         outcome, reason, dispatchedAt, resolvedAt, attributionDegraded]
+      additionalProperties: false
+      properties:
+        commandId:
+          type: string
+        idempotencyKey:
+          type: string
+        action:
+          type: string
+          enum:
+            ["audio.session.apply", "audio.session.prepare", "audio.session.start",
+             "audio.session.pause", "audio.session.resume", "audio.session.seek",
+             "audio.session.advance", "audio.session.stop", "audio.session.clear",
+             "audio.gain.set", "audio.gain.fade", "audio.output.mute", "audio.output.unmute"]
+        nodeId:
+          type: string
+        sessionId:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            the command described here was NOT dispatched by this
+            request — it is the ORIGINAL command's already-recorded
+            result.
+        outcome:
+          type: string
+          enum:
+            ["started", "position", "stopped", "completed", "refused",
+             "failed", "unconfirmable", ""]
+          description: >-
+            Empty only for a REPLAY response returned before the
+            original request's own dispatch/confirmation has finished,
+            matching FPPCommandResult.outcome's identical accepted-empty
+            case. "refused" and "failed" carry a non-empty reason and
+            were never dispatched to the node as a real command attempt
+            (a bad revision, an unknown session, invalid params).
+            "unconfirmable" WAS dispatched but the node could not
+            corroborate it with fresh evidence — including, today,
+            every dispatch against the shipped agent, whose session
+            engine has no working pipeline backend. gain/fade_complete
+            never appear here: those belong to the separate
+            audio.gain.* dispatch surface.
+        reason:
+          type: string
+          description: >-
+            Required whenever outcome is "refused", "failed", or
+            "unconfirmable"; empty for every other outcome.
+        dispatchedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        attributionDegraded:
+          type: boolean
+          description: >-
+            True when this command's dispatch could not write its audit
+            entry atomically with the command and proceeded anyway under
+            the `audio.session.stop`/`audio.session.clear`/
+            `audio.output.mute` safety-class exemption (ADR-024 decision
+            11), with a degraded, stderr-only attribution record.
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.
@@ -6485,14 +7762,16 @@ components:
         /config/resolume.recovery/revisions, GET
         /config/render.settings/revisions, GET
         /config/resolume.instances/revisions, GET
-        /config/fpp.mqtt/revisions, and GET
-        /config/assets.settings/revisions, newest first — one shape
+        /config/fpp.mqtt/revisions, GET
+        /config/assets.settings/revisions, GET
+        /config/audio.settings/revisions, and GET
+        /config/audio.node/{id}/revisions, newest first — one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained more
         callers; Track E added three more, Track D seam D-3a another,
-        Track B seam B2c another, and Track G seams G-2, G-3, and G-4
-        one each more).
+        Track B seam B2c another, Track G seams G-2, G-3, and G-4 one
+        each more, and audio.settings/audio.node two more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -6500,7 +7779,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
         revisions:
           type: array
           items:
@@ -7435,6 +8714,122 @@ components:
             surface — there is no config-push path to a node beyond that
             assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always
             non-empty.
+    ConfigAudioSettingsPayload:
+      type: object
+      description: >-
+        The "audio.settings" configuration kind's decoded payload (ADR-039): the
+        body PUT /config/audio.settings accepts (a
+        full replacement — every field required and non-null), and the
+        "payload" member of GET /config/audio.settings' response.
+        `driftIgnoreThresholdMs` has never been measured against real
+        playback; its default is a starting point, not a tuned value.
+        `defaultFadeCurve` must be a member of the audio engine's own
+        closed fade-curve vocabulary (only "linear" ships today).
+        `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0
+        is unity gain — applied as the default ceiling on a background bed.
+        `ltcFrameRate` is the closed vocabulary Resolume's timecode input
+        supports; this ships non-drop-frame at every rate because
+        Resolume's drop-frame expectation at 29.97 is unresearched
+        (RES-001 §9) — an explicit ruling, not a silent default.
+        `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start
+        point when its own audio.session.apply carries no override.
+      required:
+        [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
+         defaultMaxBackgroundGain, ltcFrameRate, ltcDefaultStartOffset]
+      properties:
+        driftIgnoreThresholdMs:
+          type: integer
+        defaultFadeCurve:
+          type: string
+          enum: [linear]
+        defaultFadeDurationMs:
+          type: integer
+        defaultMaxBackgroundGain:
+          type: number
+        ltcFrameRate:
+          type: string
+          enum: ["24", "25", "29.97", "30"]
+        ltcDefaultStartOffset:
+          type: string
+          description: HH:MM:SS:FF, non-drop-frame.
+    AudioSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/audio.settings. Never `404`s: the
+        payload has a well-defined default, reported with `revision` `0`
+        and `source` `"default"` when nothing has ever been written,
+        mirroring RenderSettingsConfigResponse's identical posture.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigAudioSettingsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigAudioNode:
+      type: object
+      description: >-
+        The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039):
+        the body PUT /config/audio.node/{id}
+        accepts (a full replacement — every field required, non-null, and
+        non-empty), and the "payload" member of GET
+        /config/audio.node/{id}'s response. `programRoute` and `ltcRoute`
+        name discovered output routes (device identities the node itself
+        reported); `clockDomain` and `clockDomainProvenance` are the
+        operator's own declaration of which hardware clock the two routes
+        share, never inferred.
+      required: [programRoute, ltcRoute, clockDomain, clockDomainProvenance]
+      properties:
+        programRoute:
+          type: string
+        ltcRoute:
+          type: string
+        clockDomain:
+          type: string
+        clockDomainProvenance:
+          type: string
+    AudioNodeConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/audio.node/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigAudioNode"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
     Problem:
       type: object
       description: >-
@@ -7735,7 +9130,10 @@ components:
       type: object
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
-        /config/show, and GET /config/show.surface.
+        /config/show, GET /config/show.surface, and GET /config/audio.node
+        (audio.node's own list summary reports its configured programRoute as
+        label and leaves show empty, since audio.node carries no show
+        reference).
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -7743,7 +9141,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface]
+          enum: [show.action, show.macro, show, show.surface, audio.node]
         objects:
           type: array
           items:

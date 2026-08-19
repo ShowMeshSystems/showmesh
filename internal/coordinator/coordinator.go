@@ -21,6 +21,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -238,7 +239,14 @@ func Run() int {
 	// SAME store, on its own poll cadence.
 	renderStore := noderender.NewStore()
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore))
+	// Track C seam C1a: audio's own push cache, the identical shape as
+	// renderStore above, one report type over — see nodeaudio's package
+	// doc comment. *store.Store already satisfies nodeaudio.ClockDomainSource
+	// directly, so a node never claims its own clock domain (that is
+	// operator-declared audio.node configuration, read live on every poll).
+	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
 
 	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
 	if err != nil {
@@ -339,6 +347,13 @@ func Run() int {
 		logger.Warn("failed to seed node-render known-surfaces from the store; starting with none", "error", err)
 	}
 	fppRunner.Add(noderender.New(renderStore, noderender.WithKnownSurfaces(knownSurfaces)), noderender.DefaultPollInterval)
+
+	// Track C seam C1a: audioStore's own read side, sharing fppRunner for
+	// the identical reason renderStore's does (see noderender's own
+	// comment above) — no per-node dynamic list to seed here (engine/
+	// device/program/ltc are fixed, one-per-node signals), so this needs
+	// no known-surfaces-style restart bookkeeping.
+	fppRunner.Add(nodeaudio.New(audioStore), nodeaudio.DefaultPollInterval)
 
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
@@ -456,6 +471,10 @@ func Run() int {
 		// adapter needed, the same "the real dependency already has this
 		// method set" pattern api.ConfigStore's own wiring below uses.
 		Render: renderStore,
+		// Track C seam C1a/C1b: audioStore already satisfies
+		// api.NodeAudioLister's NodeAudioObservations method directly, no
+		// adapter needed, matching renderStore's identical wiring above.
+		Audio: audioStore,
 		// RenderPublisher is Track B seam B2b-front's own dependency: the
 		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
 		// built from above already satisfies api.RenderPublisher with no
@@ -466,6 +485,14 @@ func Run() int {
 		// error naming the missing wiring, against api.noRenderPublisher's
 		// no-op default.
 		RenderPublisher: bm,
+		// AudioPublisher: the SAME bm already satisfies
+		// api.AudioSessionPublisher (Publish plus AwaitResponse) with no
+		// adapter, matching RenderPublisher's identical wiring immediately
+		// above. AudioSessions is st itself — schemaV9's audio_sessions
+		// table methods already match api.AudioSessionStore's one method
+		// with no adapter either.
+		AudioPublisher: bm,
+		AudioSessions:  st,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.

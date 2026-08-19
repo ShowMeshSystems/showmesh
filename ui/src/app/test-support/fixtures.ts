@@ -104,6 +104,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
     },
     declaration: makeNodeDeclaration(),
     render: [],
+    audio: [],
     ...overrides,
   }
 }
