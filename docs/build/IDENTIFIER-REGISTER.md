@@ -463,6 +463,27 @@ ducked" and `interrupt` is refused, so a second signal could only
 disagree with the first. They stay reserved rather than released, since
 releasing a name only to re-mint it later is how a spelling drifts.
 
+**Four more node-level `node.audio.ltc.*` signals, reserved 2026-08-19** for
+seam C5, after the owner ruled (SM-69) that LTC is generated live by an
+external libltc process streamed into the pipeline rather than played from
+a pre-rendered file:
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.ltc.frame_rate` | reserved | Track C seam C5 |
+| `node.audio.ltc.timecode` | reserved | Track C seam C5 |
+| `node.audio.ltc.generator.state` | reserved | Track C seam C5 |
+| `node.audio.ltc.generator.reason` | reserved | Track C seam C5 |
+
+**The generator gets its own liveness signal deliberately.** A generator
+process inside the media path can die while the pipeline keeps running, and
+silent timecode loss looks exactly like a show sitting between cues. The
+orchestrator raised that cost when recommending against live generation;
+the owner ruled for it anyway on stronger grounds (a pre-rendered file
+cannot carry a per-sequence start offset), so the failure mode is
+engineered rather than argued: generator liveness is observed in its own
+right and never inferred from the pipeline still being up.
+
 **One new node-level signal shipped with them**, on the `node` kind:
 
 | Signal | Status | Owner |
