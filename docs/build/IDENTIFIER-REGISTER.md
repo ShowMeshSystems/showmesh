@@ -608,7 +608,22 @@ The store schema version, bumped by migrations in
 | v10 | reserved | Track F (night-session lifecycle, cue outbox) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
-| v13+ | unallocated | free |
+| v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
+| v14+ | unallocated | free |
+
+**v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
+sequencing constraint rather than a preference. The column's writers are
+split across `main` (the `macro:`-prefixed macro-run revision) and two
+unmerged branches: PR #19 writes an action configuration revision to it, and
+PR #18 writes a JSON caller-identity struct that contains no revision at
+all. A rename branched from `main` today would compile against one writer
+and break when the other two land. Merge first, then rename with every
+writer visible.
+
+Note the column already carries an informal discriminator: values written by
+a macro run begin with `macro:` (`macroRequestedRevisionPrefix`,
+`store/macro_runs.go`). Three shapes now share the column, so v13 should
+formalize that convention rather than leave a fourth reader guessing.
 
 **v12 is reserved defensively and may well come back.** SM-100's lifecycle
 state and SM-102's durable dispatch and outcome attribution may fit in the
