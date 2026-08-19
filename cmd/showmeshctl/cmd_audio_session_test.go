@@ -71,6 +71,82 @@ func TestCmdAudioSessionExplicitRevisionPassesThroughUnchanged(t *testing.T) {
 	}
 }
 
+// TestCmdAudioSessionDefaultRevisionIsCurrentPlusOne verifies that an
+// unset --revision reads this session's own last-observed
+// audio_session.desired_revision (GET /api/v1/observations) and uses
+// current+1, rather than an arbitrary large default such as wall-clock
+// nanoseconds. pkg/audio.RevisionState only ever accepts a strictly
+// increasing revision, so a wall-clock default jumps the session to
+// ~1.7e18 and refuses every later small-integer caller (the UI, a
+// macro, Track F) as stale forever.
+func TestCmdAudioSessionDefaultRevisionIsCurrentPlusOne(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/observations":
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","observations":[
+				{"signal":"audio_session.desired_revision","value":41,"unit":null,"state":"current",
+				 "reason":null,"observedAt":"2026-08-18T21:59:00Z","collectedAt":"2026-08-18T21:59:00Z",
+				 "source":"node.audio-01","quality":"measured","validForSeconds":null}]}`)
+		default:
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &gotBody)
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{
+				"commandId":"cmd-1","idempotencyKey":"k","action":"audio.session.stop","nodeId":"node-a","sessionId":"s1",
+				"replay":false,"outcome":"stopped","reason":"",
+				"dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:00Z"}}`)
+		}
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudioSession([]string{"stop", "--server", ts.URL, "node-a", "s1"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	rev, ok := gotBody["revision"].(float64)
+	if !ok || rev != 42 {
+		t.Fatalf("body revision = %v, want 42 (observed current 41, plus one)", gotBody["revision"])
+	}
+}
+
+// TestCmdAudioSessionDefaultRevisionIsOneForUnobservedSession verifies
+// that a session this coordinator has never reported evidence for (no
+// audio_session.desired_revision observation at all) defaults to
+// revision 1, not 0 (refused by pkg/audio.RevisionState even for a
+// brand-new session) and not an arbitrary large value.
+func TestCmdAudioSessionDefaultRevisionIsOneForUnobservedSession(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/observations":
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","observations":[]}`)
+		default:
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &gotBody)
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{
+				"commandId":"cmd-1","idempotencyKey":"k","action":"audio.session.stop","nodeId":"node-a","sessionId":"s1",
+				"replay":false,"outcome":"stopped","reason":"",
+				"dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:00Z"}}`)
+		}
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudioSession([]string{"stop", "--server", ts.URL, "node-a", "s1"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	rev, ok := gotBody["revision"].(float64)
+	if !ok || rev != 1 {
+		t.Fatalf("body revision = %v, want 1 (no prior observation for this session)", gotBody["revision"])
+	}
+}
+
 // TestReportAudioSessionCommandResultKnownOutcomeExitsOK proves every
 // reserved success-adjacent outcome still exits 0.
 func TestReportAudioSessionCommandResultKnownOutcomeExitsOK(t *testing.T) {

@@ -159,16 +159,20 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			s.persistBestEffortLocked("state change")
 			return err
 		}
-		position, err := s.resolveBookmarkPositionLocked(item)
-		if err != nil {
-			// Same reasoning as the Playing/Preparing branch above: log and
-			// clear rather than fault, since the Start+Pause below (on
-			// success) has no equivalent clear to race against, but
-			// consistency with the sibling branch matters more than a
-			// fault that would only ever be reported once.
-			m.logf("audio session %s: restore bookmark could not be resolved, resuming from 0: %v", id, err)
-			s.bookmark = nil
-			position = 0
+		position := time.Duration(0)
+		if s.bookmark != nil && s.desired.Playlist != nil && s.desired.Playlist.Resume == pkgaudio.ResumePolicyResume {
+			resolved, err := s.resolveBookmarkPositionLocked(item)
+			if err != nil {
+				// Same reasoning as the Playing/Preparing branch above: log
+				// and clear rather than fault, since the Start+Pause below
+				// (on success) has no equivalent clear to race against, but
+				// consistency with the sibling branch matters more than a
+				// fault that would only ever be reported once.
+				m.logf("audio session %s: restore bookmark could not be resolved, resuming from 0: %v", id, err)
+				s.bookmark = nil
+			} else {
+				position = resolved
+			}
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed

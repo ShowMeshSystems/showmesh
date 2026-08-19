@@ -58,7 +58,7 @@ func (AlsaEnumerator) Devices(ctx context.Context) ([]string, error) {
 
 // HasHardwareCards implements [Enumerator]. A permission failure, a
 // missing aplay binary, a timeout, or any other transport error is
-// reported as an error (finding 14) rather than folded into "no
+// reported as an error rather than folded into "no
 // hardware": [Discovery.HardwareEnumerated] already exists precisely to
 // carry "we do not know yet" separately from "confirmed absent", but
 // only if this method actually returns the error instead of discarding

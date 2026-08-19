@@ -163,8 +163,8 @@ func TestStartRepreparesIdentityChangedBetweenPrepareAndStart(t *testing.T) {
 		t.Fatal("loadedIdentity was never set by Prepare")
 	}
 
-	// Apply B AFTER preparing A — this is the exact ordering finding 7
-	// names: the desired media changes between Prepare and Start.
+	// Apply B AFTER preparing A — the desired media changes between
+	// Prepare and Start.
 	m.Apply(ctx, id, "inv-apply-b", 3, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(refB)})
 	m.Start(ctx, id, "inv-start", 4)
 
@@ -182,15 +182,12 @@ func TestStartRepreparesIdentityChangedBetweenPrepareAndStart(t *testing.T) {
 	}
 }
 
-// TestStopReportsFailureAndKeepsHandleForRetry proves finding 15:
-// when Engine.Stop or Engine.Release fails, Manager.Stop must not
-// silently discard the handle and report success — it keeps the handle
-// loaded (so a retry can still address it) and reports the failure.
-// Before the fix, Stop always released the handle and always reported
-// Stopped regardless of what the engine said, so a genuine engine
-// failure during Stop was invisible and unrecoverable: the next Start
-// would have to prepare a brand new handle with no way to confirm the
-// old one was ever actually silenced.
+// TestStopReportsFailureAndKeepsHandleForRetry verifies that when
+// Engine.Stop or Engine.Release fails, Manager.Stop must not silently
+// discard the handle and report success — it keeps the handle loaded
+// (so a retry can still address it) and reports the failure, rather
+// than always releasing the handle and reporting Stopped regardless of
+// what the engine said.
 func TestStopReportsFailureAndKeepsHandleForRetry(t *testing.T) {
 	c := newClock(time.Now())
 	dir := t.TempDir()
@@ -234,7 +231,7 @@ func TestStopReportsFailureAndKeepsHandleForRetry(t *testing.T) {
 	}
 }
 
-// TestStartRefusesNegativeBookmarkPosition proves half of finding 16: a
+// TestStartRefusesNegativeBookmarkPosition verifies that a
 // negative bookmark position must never reach Engine.Start — it is
 // refused visibly and the bookmark is cleared so a subsequent Start is
 // not refused forever by the same bad value.
@@ -320,7 +317,7 @@ func TestStartRefusesStalePlaylistBookmark(t *testing.T) {
 	}
 }
 
-// TestDispatchReportsFailureWhenPersistFails proves finding 10: a
+// TestDispatchReportsFailureWhenPersistFails verifies that a
 // command that executed but could not be durably saved must report
 // failure, not the underlying command's optimistic success — a caller
 // told "started" or "stopped" over a persist that silently failed would
@@ -367,7 +364,7 @@ func TestDispatchReportsFailureWhenPersistFails(t *testing.T) {
 	}
 }
 
-// TestCorruptPersistedSessionRaisesFaultEvidence proves finding 17: a
+// TestCorruptPersistedSessionRaisesFaultEvidence verifies that a
 // malformed or truncated persisted session file must not silently
 // vanish from the fleet — RestoreAll must not stop for it, but
 // Manager.Snapshot must still report it as retained fault evidence, not
@@ -411,7 +408,7 @@ func TestCorruptPersistedSessionRaisesFaultEvidence(t *testing.T) {
 	}
 }
 
-// TestExecutedResultsAreBoundedAndOldestEvicted proves finding 20: a
+// TestExecutedResultsAreBoundedAndOldestEvicted verifies that a
 // session's invocation decisions/results must not grow without bound.
 // After exceeding maxRetainedInvocations, the oldest invocation is
 // evicted, the newest ones survive, and the persisted record's Decisions
@@ -475,8 +472,8 @@ func TestExecutedResultsAreBoundedAndOldestEvicted(t *testing.T) {
 
 // hangingObserveEngine wraps [FakeEngine] and makes Observe against one
 // specific handle block until its context is done, simulating a hung
-// engine — for finding 19, which cannot be reached against a shipped
-// FakeEngine that always answers immediately.
+// engine, which cannot be reached against a shipped FakeEngine that
+// always answers immediately.
 type hangingObserveEngine struct {
 	*FakeEngine
 	hangHandle EngineHandle
@@ -490,12 +487,12 @@ func (e *hangingObserveEngine) Observe(ctx context.Context, handle EngineHandle)
 	return e.FakeEngine.Observe(ctx, handle)
 }
 
-// TestWatchTickBoundsAHungObserveCall proves finding 19: watchTick's
+// TestWatchTickBoundsAHungObserveCall verifies that watchTick's
 // per-session supervision loop must not let one hung Engine.Observe call
-// block supervision of every other session behind it forever. Before the
-// fix, Observe was called with the tick's own (typically un-timeout-
-// bounded) context, so a genuinely hung handle stalled the whole tick —
-// and every session after it — indefinitely.
+// block supervision of every other session behind it forever: Observe
+// must run under a bounded context rather than the tick's own, or a
+// genuinely hung handle stalls the whole tick — and every session after
+// it — indefinitely.
 func TestWatchTickBoundsAHungObserveCall(t *testing.T) {
 	prevTimeout := observeTimeout
 	observeTimeout = 50 * time.Millisecond

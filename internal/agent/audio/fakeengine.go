@@ -13,7 +13,7 @@ import (
 // It names the open owner decision this engine stands in for, so anything
 // that surfaces the reason to an operator points at the actual blocker
 // rather than an unexplained "false".
-const FakeEngineUnavailableReason = "no pipeline backend is implemented (Linear SM-68 is open); FakeEngine never plays audio"
+const FakeEngineUnavailableReason = "no pipeline backend is implemented; nothing plays audio"
 
 // FakeEngine is a deterministic, in-memory [Engine] with no real playback:
 // position is computed from an injected clock, and Available always

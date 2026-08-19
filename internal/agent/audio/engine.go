@@ -11,8 +11,8 @@ import (
 // session layer and opaque to Engine implementations.
 type EngineHandle string
 
-// observeTimeout bounds every supervision-driven [Engine.Observe] call
-// (finding 19): watchTick and checkFadeCompletionLocked poll every
+// observeTimeout bounds every supervision-driven [Engine.Observe] call:
+// watchTick and checkFadeCompletionLocked poll every
 // session's handle in one serial loop, and an unbounded call against one
 // hung handle would stall supervision of every other session behind it.
 // SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for the right

@@ -88,7 +88,7 @@ func (f *FileSessionStore) Delete(id pkgaudio.SessionID) error {
 // [Manager.RestoreAll]. A record whose file fails to decode is skipped
 // here, not fatal to the rest of the listing — but it is never silently
 // dropped: see [FileSessionStore.ListCorrupt], which the same walk feeds
-// (finding 17). Skipping it here alone, with nothing else surfacing it,
+// (see [FileSessionStore.ListCorrupt]'s doc). Skipping it here alone, with nothing else surfacing it,
 // is indistinguishable from the session never having been persisted.
 func (f *FileSessionStore) List() ([]pkgaudio.SessionID, error) {
 	ids, _, err := f.walk()

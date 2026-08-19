@@ -35,6 +35,13 @@ type AudioSessionCommandResult struct {
 
 	DispatchedAt string  `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt"`
+
+	// AttributionDegraded is true when this command's dispatch could not
+	// record its ADR-024 audit entry atomically with the command and
+	// proceeded anyway under the stop/clear/mute safety-class exemption
+	// (ADR-024 decision 11) — mirrors FPPCommandResult/
+	// ResolumeActionResult.AttributionDegraded exactly.
+	AttributionDegraded bool `json:"attributionDegraded"`
 }
 
 // AudioSessionCommandResponse wraps AudioSessionCommandResult with the

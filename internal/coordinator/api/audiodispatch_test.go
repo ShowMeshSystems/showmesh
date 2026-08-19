@@ -515,8 +515,11 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 }
 
 // TestAudioSessionDispatchAuditWriteFailureRefusesDispatch proves the
-// ADR-024 fail-closed default: when the audit store cannot be written,
-// nothing is recorded and nothing is dispatched.
+// ADR-024 fail-closed default for a NON-exempt action: when the audit
+// store cannot be written, nothing is recorded and nothing is
+// dispatched. pause carries no ADR-024 decision 11 safety-class
+// exemption — see TestAudioSessionSafetyExemptActionsDispatchDegraded
+// for stop/clear/output.mute, which do.
 func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
@@ -525,13 +528,60 @@ func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 
 	installFailAuditTrigger(t, setup.storeDir)
 
-	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/pause", `{"revision":1}`, token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 — an audit-write failure must dispatch nothing", setup.pub.count())
+	}
+}
+
+// TestAudioSessionSafetyExemptActionsDispatchDegraded proves ADR-024
+// decision 11's safety-class exemption for this file's audience-audio
+// equivalent of blackout: audio.session.stop, audio.session.clear, and
+// audio.output.mute must still dispatch — with AttributionDegraded true
+// — when the audit store cannot be written, never refused. A refusal
+// here would leave an operator unable to silence the show over a full
+// audit disk, which ADR-024 decision 7 makes strictly worse than the
+// coordinator being switched off.
+func TestAudioSessionSafetyExemptActionsDispatchDegraded(t *testing.T) {
+	for _, path := range []string{"stop", "clear", "output/mute"} {
+		t.Run(path, func(t *testing.T) {
+			setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+			setup.pub.result = mqttproto.ResultPayload{
+				Outcome: mqttproto.OutcomeConfirmed,
+				Evidence: &mqttproto.ResultEvidence{
+					Value: map[string]any{"outcome": "stopped", "reason": ""},
+				},
+			}
+			op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+			token := mustIssueToken(t, setup.svc, op.ID)
+			api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+			installFailAuditTrigger(t, setup.storeDir)
+
+			req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/"+path, `{"revision":1}`, token)
+			resp, body := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (dispatched with degraded attribution, never refused); body: %s", resp.StatusCode, body)
+			}
+			if setup.pub.count() != 1 {
+				t.Fatalf("publish count = %d, want 1 — the safety-class exemption must still dispatch", setup.pub.count())
+			}
+			var decoded struct {
+				Command struct {
+					AttributionDegraded bool `json:"attributionDegraded"`
+				} `json:"command"`
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("decode response: %v; body: %s", err, body)
+			}
+			if !decoded.Command.AttributionDegraded {
+				t.Errorf("attributionDegraded = false, want true (the audit store is failing)")
+			}
+		})
 	}
 }
 

@@ -26,7 +26,7 @@ import (
 //
 // Generator liveness is observed in its own right, never inferred from a
 // pipeline still running. This package has no pipeline to infer from
-// (Linear SM-68 is open — see [Manager]'s own doc comment), so the
+// (see [Manager]'s own doc comment), so the
 // distinction this file actually enforces is narrower but still real: a
 // generator process can be alive (its OS process has not exited) while
 // producing nothing, and [LTCGeneratorSnapshot] never reports Running
@@ -540,7 +540,7 @@ func ltcGeneratorArgs(spec LTCGeneratorSpec) []string {
 // [pipeline.startRealProcess]'s one-shot marker — see
 // [LTCProcessStarter]'s doc comment). Stdout (the raw PCM payload) is
 // drained to io.Discard: no pipeline exists yet in this repository to
-// consume it (Linear SM-68 is open), and a process whose stdout pipe
+// consume it, and a process whose stdout pipe
 // fills blocks in write(2) forever, which would silently defeat this
 // supervisor's own heartbeat-timeout detection.
 func startRealLTCProcess(ctx context.Context, path string, args []string, onHeartbeat func(pkgaudio.LTCTimecode)) (LTCProcessHandle, error) {
@@ -665,9 +665,8 @@ func (h *realLTCProcess) Pid() int {
 // exactly: a session's own override, when present, always wins; otherwise the
 // coordinator's audio.settings default applies. This is the one function
 // that resolution rule lives in, so whatever eventually triggers a
-// generator Start (session prepare/start, once a pipeline backend exists
-// — Linear SM-68) calls this rather than re-deciding the precedence at
-// its own call site.
+// generator Start (session prepare/start, once a pipeline backend exists)
+// calls this rather than re-deciding the precedence at its own call site.
 func ResolveLTCStartOffset(sessionOverride *pkgaudio.LTCTimecode, settingsDefault pkgaudio.LTCTimecode) pkgaudio.LTCTimecode {
 	if sessionOverride != nil {
 		return *sessionOverride

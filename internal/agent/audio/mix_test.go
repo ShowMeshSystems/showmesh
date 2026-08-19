@@ -456,12 +456,12 @@ func TestDuckRestoreExactlyOnce_CrashWhileDuckerStillPlaying(t *testing.T) {
 	}
 }
 
-// TestRestartThenResumeRecoversAPausedSession proves finding 8: a session
+// TestRestartThenResumeRecoversAPausedSession verifies that a session
 // persisted Paused, then restored after a restart, must actually be
 // resumable — Manager.Resume must not refuse and the underlying engine
-// call must not fail. Before the fix, restoreOne reached a paused session
-// only as far as prepareLocked (engine handle Ready, never Paused), so a
-// later Resume's own Engine.Resume call failed against a handle that was
+// call must not fail: restoreOne must drive a paused session past
+// prepareLocked (engine handle Ready) all the way to Paused, or a
+// later Resume's own Engine.Resume call fails against a handle that was
 // never actually paused inside the engine.
 func TestRestartThenResumeRecoversAPausedSession(t *testing.T) {
 	dir := t.TempDir()
@@ -516,12 +516,13 @@ func TestRestartThenResumeRecoversAPausedSession(t *testing.T) {
 	}
 }
 
-// TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores proves
-// finding 9: with two announcements ducking one background session,
+// TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores verifies
+// that with two announcements ducking one background session,
 // stopping the FIRST must not restore the background's gain while the
-// SECOND is still playing. Before the fix, mix.go tracked only a single
-// duckedBy id, so ann2's duck silently no-opped (bg already looked
-// ducked) and ann1's stop restored bg's gain out from under ann2.
+// SECOND is still playing: mix.go must track the full set of duckers,
+// not a single duckedBy id, or a second duck silently no-ops (bg already
+// looks ducked) and the first duck's stop restores bg's gain out from
+// under the second.
 func TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
@@ -572,13 +573,13 @@ func TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores(t *testing.T) {
 	}
 }
 
-// TestFadeSupervisionSurvivesRestart proves finding 18: a fade dispatched
+// TestFadeSupervisionSurvivesRestart verifies that a fade dispatched
 // and then interrupted by a crash must not lose its pending invocation
-// or leave it permanently stuck reporting "not yet complete". Before the
-// fix, fadePending/fadeInvocation/fadeState were never persisted, so a
-// restored session always came back with fadePending=false regardless of
-// what was actually in flight, and watchTick's checkFadeCompletionLocked
-// — gated on fadePending — could never run for that invocation again.
+// or leave it permanently stuck reporting "not yet complete":
+// fadePending/fadeInvocation/fadeState must be persisted, or a restored
+// session comes back with fadePending=false regardless of what was
+// actually in flight, and watchTick's checkFadeCompletionLocked — gated
+// on fadePending — can never run for that invocation again.
 func TestFadeSupervisionSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
 	c := newClock(time.Now())

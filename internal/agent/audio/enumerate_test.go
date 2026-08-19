@@ -57,7 +57,7 @@ func TestParseAplayLHasCardsTrueWithRealCard(t *testing.T) {
 	}
 }
 
-// TestHasHardwareCardsReturnsErrorOnGenuineFailure proves finding 14: a
+// TestHasHardwareCardsReturnsErrorOnGenuineFailure verifies that a
 // transport failure running `aplay -l` — permission denied, missing
 // binary, timeout, anything whose output does not carry the expected
 // "no soundcards found" marker — must be reported as an error, not

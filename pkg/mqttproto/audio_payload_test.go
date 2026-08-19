@@ -116,11 +116,17 @@ func TestAudioPayloadValidateRequiresObservedAt(t *testing.T) {
 	}
 }
 
-func TestAudioPayloadValidateRequiresDiscoveredAt(t *testing.T) {
+// TestAudioPayloadValidateAcceptsNilDiscoveredAt verifies the additive-
+// only contract (ADR-020, constraint 21): a retained payload from an
+// older agent that never sent discoveredAt must still validate, so an
+// upgraded coordinator does not reject the whole payload and lose every
+// discovery-backed signal for that node. nil means genuinely unknown,
+// matching ObservedAt's own convention, never a validation failure.
+func TestAudioPayloadValidateAcceptsNilDiscoveredAt(t *testing.T) {
 	p := validAudioPayload()
 	p.DiscoveredAt = nil
-	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
-		t.Errorf("Validate(nil discoveredAt) = %v, want ErrPayloadMissingField", err)
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(nil discoveredAt) = %v, want no error", err)
 	}
 }
 

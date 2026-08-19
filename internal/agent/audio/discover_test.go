@@ -78,7 +78,7 @@ func channelsRequested(argv []string) int {
 // probe and 4 for any probe that explicitly requested at least 3 — this is
 // what lets a test prove [Discover] issues a SEPARATE, explicitly
 // LTC-constrained probe rather than inferring LTC capability from an
-// unconstrained probe's own achieved channel count (finding 3).
+// unconstrained probe's own achieved channel count.
 func channelAwareRunner() probeRunner {
 	return func(ctx context.Context, path string, argv []string) (string, bool) {
 		if channelsRequested(argv) >= 3 {

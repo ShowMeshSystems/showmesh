@@ -30,7 +30,7 @@ type Manager struct {
 	sessions map[pkgaudio.SessionID]*Session
 
 	// corruptSessions is [Manager.RestoreAll]'s record of every persisted
-	// file it could not decode into a real session (finding 17) — never
+	// file it could not decode into a real session — never
 	// addressable by a command, but reported by [Manager.Snapshot] so it
 	// is retained fault evidence rather than a silent disappearance.
 	corruptSessions []CorruptSessionRecord
@@ -227,7 +227,7 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		}
 		position, err := s.resolveBookmarkPositionLocked(item)
 		if err != nil {
-			// Visible and self-healing (finding 16): the operator sees
+			// Visible and self-healing: the operator sees
 			// exactly why this Start was refused, and the stale bookmark
 			// is cleared so a subsequent Start is not refused forever by
 			// the same dead reference.
@@ -286,7 +286,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePaused
-		s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Index: s.currentIndex, Position: obs.Position}
+		s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Identity: s.loadedIdentity, Index: s.currentIndex, Position: obs.Position}
 		if s.desired.Playlist != nil {
 			s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
 		}
@@ -350,7 +350,7 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt
 		if s.state == pkgaudio.StatePaused {
-			s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Index: s.currentIndex, Position: obs.Position}
+			s.bookmark = &pkgaudio.Bookmark{ItemID: s.currentItemID, Identity: s.loadedIdentity, Index: s.currentIndex, Position: obs.Position}
 			if s.desired.Playlist != nil {
 				s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
 			}
@@ -385,7 +385,7 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 // engine evidence (ADR-024 decision 7): an idle or unloaded session
 // still reports Stopped, and a loaded one always attempts the engine
 // call. But a failed Engine.Stop or Release is not silently treated as
-// success either (finding 15): the handle stays loaded — never released
+// success either: the handle stays loaded — never released
 // — so a retried Stop can still address it, and the outcome is
 // Unconfirmable with the failure's reason, the same "declared, not
 // refused, not fabricated" shape ADR-024 decision 7's other exempt

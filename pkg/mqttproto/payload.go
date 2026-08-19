@@ -1071,9 +1071,6 @@ func (p AudioPayload) Validate() error {
 			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
 		}
 	}
-	if p.DiscoveredAt == nil {
-		return fmt.Errorf("%w: discoveredAt", ErrPayloadMissingField)
-	}
 	if p.ObservedAt == nil {
 		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)
 	}

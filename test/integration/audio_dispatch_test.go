@@ -143,8 +143,8 @@ func TestAudioSessionDispatchApplyThenStopReachesRealAgentAcrossTwoCommands(t *t
 	if applyResp.Command.Outcome == "failed" && strings.Contains(strings.ToLower(applyResp.Command.Reason), "revision") {
 		t.Fatalf("apply reported the pre-fix defect verbatim: outcome=%q reason=%q", applyResp.Command.Outcome, applyResp.Command.Reason)
 	}
-	// FakeEngine.Available() always reports false (Linear SM-68 is open),
-	// so Manager's own gateAvailability rewrites apply's structural
+	// FakeEngine.Available() always reports false (no pipeline backend
+	// exists), so Manager's own gateAvailability rewrites apply's structural
 	// success (Position) to Unconfirmable with FakeEngine's own reason —
 	// still proof revision parsing succeeded, since a params.revision
 	// failure would have reported Outcome "failed" with a DIFFERENT

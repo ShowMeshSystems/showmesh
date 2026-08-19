@@ -65,12 +65,14 @@ advance, stop, clear. params-json, when given, is passed through verbatim
 as this command's "params" body field — the node validates its shape, not
 this program. --revision sets the desired-state revision this command
 carries (pkg/audio.RevisionState); a stale or replayed value is reported
-as "refused", not treated as a transport error.
+as "refused", not treated as a transport error. Left unset, it defaults
+to this session's current observed revision plus one, or 1 for a session
+this coordinator has never observed.
 
-The pipeline backend behind these operations is an open owner decision
-(Linear SM-68); every dispatch against the shipped agent reports
-"unconfirmable" — this is expected and does not mean the request failed
-to reach the node. See "showmeshctl audio session <op> --help".
+The pipeline backend behind these operations is an open owner decision;
+every dispatch against the shipped agent reports "unconfirmable" — this
+is expected and does not mean the request failed to reach the node. See
+"showmeshctl audio session <op> --help".
 
 `)
 }
@@ -106,6 +108,45 @@ type audioSessionCommandResponse struct {
 	Command    audioSessionCommandResult `json:"command"`
 }
 
+// signalAudioSessionDesiredRevision mirrors
+// nodeaudio.SignalSessionDesiredRevision (internal/coordinator/collector/
+// nodeaudio/signals.go) — this program's own independent transcription,
+// matching every other CLI signal-name constant's "reproduced, not
+// imported" rule.
+const signalAudioSessionDesiredRevision = "audio_session.desired_revision"
+
+// currentAudioSessionDesiredRevision returns sessionID's most recently
+// observed revision, or 0 for a session this coordinator has never
+// reported evidence for — over the existing open
+// GET /api/v1/observations surface (resourceKind=audio_session), the
+// same one cmd_render_transport.go already reads. Callers add 1: a
+// revision that does not strictly exceed the session's current one is
+// refused by pkg/audio.RevisionState, so an unset --revision must never
+// resolve to a value that could ever collide with or fall behind
+// whatever this coordinator already holds.
+func currentAudioSessionDesiredRevision(ctx context.Context, c *client, sessionID string) (uint64, error) {
+	query := url.Values{}
+	query.Set("resourceKind", "audio_session")
+	query.Set("resourceId", sessionID)
+
+	var resp observationsResponse
+	if err := c.getJSON(ctx, "/api/v1/observations", query, &resp); err != nil {
+		return 0, err
+	}
+	for _, o := range resp.Observations {
+		if o.Signal != signalAudioSessionDesiredRevision {
+			continue
+		}
+		switch v := o.Value.(type) {
+		case float64:
+			if v >= 0 {
+				return uint64(v), nil
+			}
+		}
+	}
+	return 0, nil
+}
+
 // cmdAudioSessionDispatch dispatches one of the nine audio.session.*
 // operations, whose URL path suffix and CLI label are both the op name.
 func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, op string) int {
@@ -122,9 +163,9 @@ func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func
 // URL path segment ("gain", "output/mute").
 func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
-	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries; defaults to the "+
-		"current time in nanoseconds, which is always greater than a brand-new session's revision 0 and, in "+
-		"ordinary sequential use, greater than whatever this program itself last sent")
+	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries; defaults to this "+
+		"session's current observed revision (GET /api/v1/observations) plus one, or 1 for a session this "+
+		"coordinator has never observed")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s [flags] <node-id> <session-id> [params-json]\n", cmdLabel)
 		fs.PrintDefaults()
@@ -138,17 +179,6 @@ func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock 
 			revisionSet = true
 		}
 	})
-	if !revisionSet {
-		// pkg/audio.RevisionState refuses any revision that does not
-		// strictly exceed the session's current one (0 for a session
-		// that has never been applied), so the literal zero default
-		// above is refused even for a first-ever command. The current
-		// time in nanoseconds is always > 0 and, for one operator issuing
-		// commands one at a time, always greater than the last revision
-		// this program itself sent.
-		v := uint64(clock().UnixNano())
-		revision = &v
-	}
 	if err := validateOutput(g); err != nil {
 		return reportError(stderr, cmdLabel, err)
 	}
@@ -178,6 +208,24 @@ func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	if !revisionSet {
+		// A revision that does not strictly exceed the session's current
+		// one (0 for a session that has never been applied) is refused by
+		// pkg/audio.RevisionState, so an unset --revision reads this
+		// session's own last-observed desired_revision over the existing
+		// GET /api/v1/observations surface and uses current+1 — an
+		// arbitrary large default (e.g. wall-clock nanoseconds) would
+		// instead poison the revision space for every later small-integer
+		// caller (the UI, a macro, Track F), since RevisionState only ever
+		// accepts a strictly increasing value.
+		cur, revErr := currentAudioSessionDesiredRevision(ctx, c, sessionID)
+		if revErr != nil {
+			return reportError(stderr, cmdLabel, revErr)
+		}
+		v := cur + 1
+		revision = &v
+	}
 
 	// newRenderIdempotencyKey (cmd_render_command.go) is a generic
 	// 16-random-byte hex key with no render-specific meaning; reused here

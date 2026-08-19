@@ -44,13 +44,25 @@ import (
 // Insert-plus-dispatch-audit runs atomically via [identity.Service.
 // AuditedWrite], mirroring resolumeaction.go's identical shape: an
 // audit-write failure fails this dispatch closed (nothing was recorded,
-// nothing was dispatched) rather than proceeding unattributed. There is
-// no ADR-024 decision 11 safety-class exemption in this file — every
-// audio.* action fails closed the same way.
+// nothing was dispatched) UNLESS the action is in
+// audioSafetyExemptActions, ADR-024 decision 11's safety-class exemption
+// — audio.session.stop/clear and audio.output.mute are this subsystem's
+// blackout, and a full audit disk must not leave an operator unable to
+// silence the show. Every other audio.* action fails closed.
 
 var scopeAudioCommand = identity.ScopeAudioCommand
 
 var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
+// audioSafetyExemptActions is ADR-024 decision 11's safety class for this
+// file: the audience-audio equivalent of blackout/stop/power-off. Muting
+// the output is this subsystem's blackout, so it is exempt alongside the
+// two ways to silence a session.
+var audioSafetyExemptActions = map[string]bool{
+	"audio.session.stop":  true,
+	"audio.session.clear": true,
+	"audio.output.mute":   true,
+}
 
 // ProblemTypeAudioCommandRefusedAuditUnavailable mirrors
 // ProblemTypeFPPCommandRefusedAuditUnavailable/
@@ -322,18 +334,32 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		return dispatchEntry, nil
 	})
 
+	var dispatchDegraded bool
 	var dup *store.DuplicateCommandError
 	switch {
 	case errors.As(auditErr, &dup):
 		result, problem := resolveAudioSessionReplay(dup.Existing, in.Action, in.NodeID, in.SessionID, string(paramsJSON))
 		return result, problem, nil
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		// Fail closed: the transaction above already rolled back in full,
-		// so nothing is re-inserted and nothing is dispatched. Unlike
-		// fppcommand_dispatch.go/resolumeaction.go, no action in this
-		// file is exempt from this rule.
-		p := audioCommandAuditUnavailableProblem(in.Action, auditErr)
-		return v1.AudioSessionCommandResult{}, &p, nil
+		if !audioSafetyExemptActions[in.Action] {
+			// Fail closed: the transaction above already rolled back in
+			// full, so nothing is re-inserted and nothing is dispatched.
+			p := audioCommandAuditUnavailableProblem(in.Action, auditErr)
+			return v1.AudioSessionCommandResult{}, &p, nil
+		}
+		// Safety-class exemption (ADR-024 decision 11): redo the insert
+		// through the plain, non-transactional store method and proceed
+		// with degraded attribution — mirroring dispatchFPPCommand's/
+		// resolumeaction.go's identical fallback.
+		if _, err := h.deps.Commands.InsertCommand(ctx, rec); err != nil {
+			if errors.As(err, &dup) {
+				result, problem := resolveAudioSessionReplay(dup.Existing, in.Action, in.NodeID, in.SessionID, string(paramsJSON))
+				return result, problem, nil
+			}
+			return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", err)
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		dispatchDegraded = true
 	case auditErr != nil:
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", auditErr)
 	}
@@ -427,13 +453,14 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 				Outcome: "unconfirmable", Reason: "no result received from the node before the deadline",
 				DispatchedAt: formatTime(dispatchedAt),
 			}
-			h.writeBestEffortAuditBounded(bgCtx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
+			outcomeDegraded := h.writeBestEffortAuditBounded(bgCtx, now, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 				Timestamp: now, PrincipalID: in.IssuerID, PrincipalName: in.IssuerName,
 				Form: in.IssuerForm, CredentialID: in.IssuerCredentialID, ClientAddr: in.ClientAddr,
 				Action: in.Action, Target: in.NodeID, IdempotencyKey: in.IdempotencyKey,
 				Kind: identity.AuditOutcome, CommandID: commandID,
 				Outcome: result.Outcome, OutcomeState: "collection_failed", OutcomeReason: result.Reason,
 			})
+			result.AttributionDegraded = dispatchDegraded || outcomeDegraded
 			return result, nil, nil
 		}
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("await result: %w", err)
@@ -463,7 +490,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		h.logWarn("failed to record audio command outcome", "commandId", commandID, "error", err)
 	}
 
-	h.writeBestEffortAuditBounded(bgCtx, resolvedAt, degradedAttributionReasonPostDispatch, identity.AuditEntry{
+	outcomeDegraded := h.writeBestEffortAuditBounded(bgCtx, resolvedAt, degradedAttributionReasonPostDispatch, identity.AuditEntry{
 		Timestamp: resolvedAt, PrincipalID: in.IssuerID, PrincipalName: in.IssuerName,
 		Form: in.IssuerForm, CredentialID: in.IssuerCredentialID, ClientAddr: in.ClientAddr,
 		Action: in.Action, Target: in.NodeID, IdempotencyKey: in.IdempotencyKey,
@@ -481,6 +508,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		NodeID: in.NodeID, SessionID: in.SessionID,
 		Outcome: outcome, Reason: reason,
 		DispatchedAt: formatTime(dispatchedAt), ResolvedAt: &resolvedStr,
+		AttributionDegraded: dispatchDegraded || outcomeDegraded,
 	}, nil, nil
 }
 

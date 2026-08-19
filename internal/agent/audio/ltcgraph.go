@@ -8,8 +8,8 @@ import "fmt"
 // ADR-039) — never mixed into program. It is a structural description only:
 // [LTCMixGraph.BuildArgv] renders gst-launch-1.0 syntax for inspection and
 // tests, but nothing in this package or its callers executes gst-launch-1.0
-// against it (the standing constraint — Linear SM-68 — still holds: there
-// is no pipeline backend, so this graph never reaches a real interface).
+// against it: there is no pipeline backend, so this graph never reaches
+// a real interface.
 // [LTCMixGraph.ProgramChannelIndexes]/[LTCMixGraph.LTCChannelIndex] are
 // this file's own graph-level test surface: they answer "which channel
 // index carries which bus" from the SAME structure BuildArgv renders, so a
@@ -40,8 +40,8 @@ type LTCMixGraph struct {
 	// argv tokens, "!"-free) producing this node's interleaved program
 	// audio, ending in a pad producer named "prog". Left to the caller
 	// because this package does not itself define where program audio
-	// comes from — that is the audio.Engine/pipeline backend Linear SM-68
-	// has not decided yet.
+	// comes from — that is the audio.Engine/pipeline backend, which does
+	// not exist yet.
 	ProgramSourceArgv []string
 
 	// LTCSourceArgv is the gst-launch element chain producing this node's

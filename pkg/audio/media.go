@@ -94,10 +94,15 @@ func (p PlaylistRef) Validate() error {
 }
 
 // Bookmark pins a resume position: playlist revision, item identity,
-// index, and position.
+// index, and position. Identity pins the exact asset content behind
+// ItemID (ADR-028 identity, "itemID|assetID|contentHash") — required for
+// a media (non-playlist) session, whose ItemID is always the constant
+// "media" and so cannot by itself distinguish one Apply'd asset from
+// another.
 type Bookmark struct {
 	PlaylistRevision Revision
 	ItemID           string
+	Identity         string
 	Index            int
 	Position         time.Duration
 }

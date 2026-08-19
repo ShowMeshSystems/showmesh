@@ -60,9 +60,9 @@ func newTestManager(t *testing.T, c *clock) *Manager {
 }
 
 // failingSessionStore wraps a real [SessionStore] and lets a test force
-// the next N Save calls to fail — for finding 10 (a failed persist must
-// not report success) and finding 17 (a malformed persisted file must
-// not be silently skipped), neither of which is reachable against a
+// the next N Save calls to fail — for verifying that a failed persist
+// must not report success, and that a malformed persisted file must
+// not be silently skipped, neither of which is reachable against a
 // SessionStore that never fails.
 type failingSessionStore struct {
 	SessionStore

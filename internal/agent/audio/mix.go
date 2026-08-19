@@ -340,7 +340,7 @@ func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.Sessi
 // from zero duckers to one — a target already ducked by someone else
 // just gains a second member, so a later removal of one ducker does not
 // restore a target the other ducker is still legitimately suppressing
-// (finding 9: two overlapping announcements must not let the first one
+// (two overlapping announcements must not let the first one
 // to stop restore background gain out from under the second). Caller
 // holds t.mu.
 func (m *Manager) duckOneLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {

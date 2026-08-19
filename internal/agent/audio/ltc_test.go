@@ -154,12 +154,10 @@ func TestAHeartbeatBeforeACrashResetsTheLockoutCounter(t *testing.T) {
 	}
 }
 
-// TestContinuousHeartbeatsNeverExpireTheWatchdog proves finding 5: a
-// generator that keeps heartbeating faster than heartbeatTimeout must
-// never be killed and restarted. Before the fix, the watchdog timer was
-// only ever set once (at process start) and never reset on a heartbeat,
-// so a healthy, continuously-emitting generator was killed and restarted
-// on a fixed cadence regardless of how often it heartbeated.
+// TestContinuousHeartbeatsNeverExpireTheWatchdog verifies that a
+// generator that keeps heartbeating faster than heartbeatTimeout is
+// never killed and restarted: the watchdog timer must reset on every
+// heartbeat rather than run once from process start on a fixed cadence.
 func TestContinuousHeartbeatsNeverExpireTheWatchdog(t *testing.T) {
 	alwaysResolvableLTCGen(t)
 	stopHeartbeats := make(chan struct{})

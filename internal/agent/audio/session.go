@@ -53,7 +53,7 @@ type PersistedSession struct {
 	// DuckedByAll is every session whose duck mix policy is currently
 	// suppressing this session's gain — a set, not a single id, because
 	// two overlapping announcements ducking the same background session
-	// must both release it before gain is restored (finding 9). Empty
+	// must both release it before gain is restored. Empty
 	// means this session is not ducked. PreDuckGain is the gain to
 	// restore once the set is empty. This pair is the restore-exactly-
 	// once guard across a restart: a restore removes and persists, so a
@@ -78,7 +78,7 @@ type PersistedSession struct {
 	// FadePending, FadeInvocation, and FadeState mirror the identically
 	// named Session fields: a crash mid-fade must not lose track of the
 	// pending invocation or leave [Manager.watchTick] unable to ever
-	// resolve it (finding 18). Without these, a restart drops back to
+	// resolve it. Without these, a restart drops back to
 	// fadePending=false regardless of desired.Fade still describing an
 	// in-flight ramp, so the dispatching invocation's cached "not yet
 	// complete" outcome would never be corrected to a terminal one.
@@ -100,7 +100,7 @@ type SessionStore interface {
 	// ListCorrupt reports every persisted record List could not decode
 	// well enough to recover a session id from — a malformed or
 	// truncated file — so [Manager.RestoreAll] can raise retained fault
-	// evidence for it (finding 17) instead of List silently omitting it
+	// evidence for it instead of List silently omitting it
 	// from the ids it returns, which is indistinguishable from "this
 	// session was never persisted at all."
 	ListCorrupt() ([]CorruptSessionRecord, error)
@@ -237,7 +237,7 @@ func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 }
 
 // maxRetainedInvocations bounds how many invocation decisions/results one
-// session retains and persists (finding 20): unbounded growth here means
+// session retains and persists: unbounded growth here means
 // unbounded disk growth and an unbounded reload cost on every restart,
 // for history nothing legitimate consults past a client's own retry
 // window. [Session.rememberExecutedResultLocked] evicts the oldest entry
@@ -318,8 +318,8 @@ func (s *Session) persistedLocked() PersistedSession {
 // succeeded. Most callers (advanceLocked, checkFadeCompletionLocked, the
 // mix.go duck helpers, ...) intentionally discard the error: those
 // persists are best-effort bookkeeping on an already-decided transition.
-// [Session.dispatch] is the one caller that must not, per finding 10 —
-// see its own doc comment.
+// [Session.dispatch] is the one caller that must not — see its own doc
+// comment.
 // persistBestEffortLocked persists and logs a failure rather than
 // returning it, for transitions whose outcome is already decided. The
 // caller-facing contract belongs to dispatch, which propagates instead.
@@ -410,7 +410,7 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 	// reported as if it had: on the next crash, this session recovers
 	// from whatever the LAST successful persist held, which is not this
 	// outcome, so telling the caller it succeeded would be a claim this
-	// process cannot back up (finding 10). The command may well have
+	// process cannot back up. The command may well have
 	// taken effect (e.g. the engine actually started) — that evidence is
 	// not erased — but the OUTCOME reported, and cached for a replay of
 	// this same invocation, is the persistence failure, not a success
@@ -513,8 +513,14 @@ func (s *Session) clearFaultLocked() {
 // (for a playlist session) a bookmark whose playlist revision or item no
 // longer matches via [pkgaudio.Bookmark.Resolve], is reported as an
 // error rather than silently substituted with 0 or handed to the engine
-// unexamined (finding 16). A nil bookmark is not an error — it means
-// "start from the top" — and returns (0, nil). Caller holds s.mu.
+// unexamined. A nil bookmark is not an error — it means
+// "start from the top" — and returns (0, nil). For a media (non-
+// playlist) session, ItemID alone is always the constant "media" and
+// cannot distinguish one Apply'd asset from another, so the bookmark's
+// own Identity (set from [Session.loadedIdentity] at the moment it was
+// taken) must also match item's current [itemIdentity] — the same
+// ItemID|AssetID|ContentHash comparison [Manager.Start] already uses to
+// decide whether a loaded engine handle is stale. Caller holds s.mu.
 func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (time.Duration, error) {
 	if s.bookmark == nil {
 		return 0, nil
@@ -534,6 +540,9 @@ func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (tim
 	}
 	if s.bookmark.ItemID != "" && s.bookmark.ItemID != item.ItemID {
 		return 0, fmt.Errorf("%w: bookmark item %q does not match the current item %q", pkgaudio.ErrBookmarkStale, s.bookmark.ItemID, item.ItemID)
+	}
+	if s.bookmark.Identity != "" && s.bookmark.Identity != itemIdentity(item) {
+		return 0, fmt.Errorf("%w: bookmark asset identity %q does not match the current item's %q", pkgaudio.ErrBookmarkStale, s.bookmark.Identity, itemIdentity(item))
 	}
 	return s.bookmark.Position, nil
 }
