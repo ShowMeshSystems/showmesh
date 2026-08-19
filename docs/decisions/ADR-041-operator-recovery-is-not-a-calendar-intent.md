@@ -1,10 +1,10 @@
 # ADR-041: Operator Recovery Is Not a Calendar Intent
 
-Status: **Drafted, awaiting owner acceptance.** The substance was approved by the owner on
-2026-08-19 (Linear SM-82); this record exists because the approval sits against a sentence in
-an accepted ADR that says the opposite, and that tension belongs in a record rather than in a
-reader's interpretation.
+Status: Accepted (owner, 2026-08-19)
 Date: 2026-08-19
+
+This record exists because the approval sat against a sentence in an accepted ADR that said the
+opposite, and that tension belongs in a record rather than in a reader's interpretation.
 
 Narrows [ADR-038](ADR-038-fpp-authorizes-night-sessions.md) decision 2.
 
