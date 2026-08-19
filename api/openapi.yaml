@@ -516,6 +516,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/render/surfaces/{surfaceId}/clear:
@@ -564,6 +566,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/render/surfaces/{surfaceId}/restart:
@@ -612,6 +616,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe:
@@ -669,6 +675,8 @@ paths:
           $ref: "#/components/responses/ResourceNotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/commands:
