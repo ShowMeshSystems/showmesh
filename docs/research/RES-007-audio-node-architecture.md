@@ -128,6 +128,10 @@ So for **whichever interface is in use**: confirm under Linux that a signal sent
 
 **One candidate already on hand, recorded rather than recommended.** The owner has a Behringer X Air mixer, which is a multichannel USB device and is sufficient to generate LTC for [RES-001](RES-001-resolume-smpte-behavior.md)'s bench. Nothing about its Linux behaviour, channel map, or suitability as the show's audio interface has been checked, and this note is not a selection.
 
+### C5 implements live LTC generation, and this is a design decision, not new evidence (2026-08-18)
+
+Track C's C5 seam (`f7743c5`) implements the owner's ruling (Linear SM-69, SM-83) that LTC is generated live by a supervised external `libltc`-based process rather than played from a pre-rendered file, with a closed frame-rate vocabulary of 24/25/29.97/30 and non-drop shipped at every rate. That ruling settles *what ShowMesh builds*; it settles nothing this record measures. C5's generator output reaches a fake pipeline, program on channels 1–2 and LTC on a discrete channel 3 is proven only as a graph-routing fact by its own tests, and no physical output, alignment, or drift number exists behind it. **This does not raise this record's verification split above L0 for anything hardware- or device-dependent**: the mirror problem, physical channel independence, real-device alignment, drift, hot-plug, and PipeWire-versus-ALSA-on-real-hardware remain exactly where the 2026-08-14 note above left them, unreached, and C0b commissioning is still gated on an interface that is not yet selected.
+
 ## Decision, fallback, and revalidation
 
 The architecture is decided (ADR-017, ADR-018, ADR-019) and unverified. If bench work shows the node path cannot meet the acceptance criteria — most plausibly if GStreamer cannot hold LTC alignment to program — the correct response is a superseding ADR, not moving sample generation into ShowMesh code, which [ADR-006](../decisions/ADR-006-go-implementation-language.md) and [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md) forbid.

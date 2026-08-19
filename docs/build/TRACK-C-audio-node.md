@@ -2,7 +2,51 @@
 
 [Build plan](BUILD-PLAN.md) · [Audio engine spec](../architecture/AUDIO-ENGINE.md) · [RES-007](../research/RES-007-audio-node-architecture.md) · [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [ADR-028](../decisions/ADR-028-show-asset-store-and-identity.md)
 
-Status: **C0a-1, C0a-2, C1a, C1b, C2, C3, C4, C6, and C7 complete, 2026-08-18.** Specified 2026-08-13; dependency-complete review 2026-08-17. Pipeline/graph behaviour measured in C0a-1, C1a's real-device probe test, and C2's discoverer-versus-decode measurement is L2 (see RES-007); everything hardware- or device-dependent, and every seam's behaviour against a real pipeline, remains L0 design intent until the benches or seams below run for real. **C4 is built** (mix policy, gain, fades, mute, and the announcement primitives) against the same fake backend the session layer uses, so its semantics are specified and tested and none of it has ever produced sound. **C5 is not built**: it was blocked on where LTC samples come from, which the owner ruled on 2026-08-19 (Linear SM-69 and SM-83). **No seam through C7 ships an audio engine**: the shipped fake reports unavailable everywhere and every outcome is forced to `unconfirmable` except the session layer's own `refused`/`failed`. See "C6 and C7, complete 2026-08-18" below for exactly what that does and does not mean.
+Status: **ALL ELEVEN SEAMS BUILT — C0a-1, C0a-2, C1a, C1b, C2, C3, C4, C5, C6, C7, C8 — on `track-c/audio-node`, not merged to `main`.** Specified 2026-08-13; dependency-complete review 2026-08-17. Pipeline/graph behaviour measured in C0a-1, C1a's real-device probe test, and C2's discoverer-versus-decode measurement is L2 (see RES-007); everything hardware- or device-dependent, and every seam's behaviour against a real pipeline, remains L0 design intent until the benches or seams below run for real. **C4 is built** (mix policy, gain, fades, mute, and the announcement primitives) against the same fake backend the session layer uses, so its semantics are specified and tested and none of it has ever produced sound. **C5 is built** (`f7743c5`): live LTC generation to the owner's ruling on Linear SM-69/SM-83. **C8 is built** (`cb8a45a`): the generic synchronized-remote-output mock against a deterministic fake. **No seam ships an audio engine**: the shipped fake reports unavailable everywhere and every outcome is forced to `unconfirmable` except the session layer's own `refused`/`failed`. **C0b — per-device commissioning — is the only remaining deliverable in this track, and it cannot start until an interface is selected** (RES-007's 2026-08-14 note stands). See "Track C, end state" below for what is, and is not, true across the whole track in one place.
+
+## Track C, end state
+
+This section states plainly, in one place, what the eleven built seams do and do not establish. Everything below is drawn from the seam sections that follow, the two commit messages (`git show f7743c5`, `git show cb8a45a`), and the gates the orchestrator actually ran; it restates nothing that isn't evidenced elsewhere in this document.
+
+**Built.** All eleven seams — C0a-1, C0a-2, C1a, C1b, C2, C3, C4, C5, C6, C7, C8 — are built on `track-c/audio-node`. Every one is gated with `go build ./...`, `go test -race ./...`, `make check`, and an isolated `make test-integration` run:
+
+- C0a-1 through C4, C6, C7 (through `84c4865`): `go build ./...` exit 0, `go test -race ./...` exit 0, `make check` exit 0, `make test-integration` exit 0, 75 tests, `ok github.com/showmeshsystems/showmesh/test/integration 309.808s`, broker isolated.
+- C5 (`f7743c5`): `go build ./...` exit 0, `go test -race ./...` exit 0, `make check` exit 0, `make test-integration` exit 0, 75 tests, `ok github.com/showmeshsystems/showmesh/test/integration 320.719s`, broker isolated.
+- C8 (`cb8a45a`): `go build ./...` exit 0, `go test -race ./...` exit 0, `make check` exit 0 (run by the builder), `make test-integration` exit 0, 75 tests, `ok github.com/showmeshsystems/showmesh/test/integration 300.739s`, broker isolated, run by the orchestrator.
+
+**NOT true, and this is the load-bearing half of this section.** No audio hardware has been touched. No interface is selected (RES-007's 2026-08-14 note stands). No drift has been measured. No real show has run. **Nothing has produced sound.** Every seam is built against a fake engine that reports unavailable, and every session command outcome is `unconfirmable` except the session layer's own `refused`/`failed`. A real pipeline backend is an open owner decision, Linear SM-68, and nothing in this track's own code is what blocks it — every seam here is written against a fake in its place.
+
+**What the bench did establish, at L2 and in a container only.** C0a-1's seven runs plus C1a's and C2's real-device/real-decoder measurements answered the GStreamer graph questions from RES-007's first bench item — pipeline construction from runtime-discovered capabilities, channel mapping, decode, sessions, gain/duck/fade behaviour, discoverer-versus-full-decode metadata — against real GStreamer and ALSA in a Linux container, never against a physical interface. See RES-007 for the full record. This is confidence about GStreamer's own behaviour, never about a show.
+
+**What is owed, and to whom:**
+
+- **C0b commissioning and every hardware measurement** — per-device channel independence, click-free output, full-show program-to-LTC alignment, drift, hot-plug, sample-rate change, and the installed-path alignment acquisition method — is owner/hardware work, tracked as **Linear SM-74**, blocking **SM-15, SM-75, SM-76**; the LTC-generation graph's channel-discreteness claim is **SM-77**.
+- **The Operator UI controls** for `audio.settings`, `audio.node`, and the C6/C7 telemetry this track publishes do not exist — **Linear SM-73**.
+- **Open owner decisions**: the real pipeline-control backend (**SM-68**), whether announcements ever interrupt show audio (**SM-70**), and three more owner decisions this track has raised and not resolved (**SM-71, SM-72, SM-78, SM-84**).
+
+## C5, complete 2026-08-18
+
+`f7743c5`. LTC generated live by a supervised external `libltc`-based process, program on channels 1–2 and LTC on a discrete channel 3. Built to the owner's ruling, Linear SM-69 and SM-83.
+
+- **LTC is generated live by an external `libltc` process the agent supervises, never played from a pre-rendered file** — the owner's ruling (SM-69), because each sequence needs its own configurable start offset and a rendered file cannot carry one without a file per sequence. The bench had measured the pre-rendered path and the orchestrator recommended it on that evidence; the owner ruled against it on stronger grounds, and the objection to live generation — that a generator process inside the media path can die while everything around it looks healthy, and silent timecode loss looks exactly like a show sitting between cues — is engineered around here rather than re-argued.
+- **Frame rate is a closed vocabulary of 24, 25, 29.97, and 30** (SM-83), what Resolume supports.
+- **Non-drop ships explicitly at every rate, including 29.97, with the reason recorded in the configuration field's own description**: RES-001 leaves Resolume's drop-frame expectation at 29.97 unresearched, and 29.97 non-drop and 29.97 drop-frame are different timecodes that drift against each other. The justification sits where an operator sets the value rather than in a document they will not have open.
+- **Generator liveness is observed from a heartbeat the generator emitted after the current attempt started, never from the OS process still existing** — a process can be alive and producing nothing. The builder scoped that claim honestly: with no pipeline backend yet there is no pipeline to infer liveness from, so the distinction actually enforced today is narrower than the rule's eventual form, and the code says so.
+- **The graph places program on channels 1–2 and LTC on a discrete channel 3, and its own tests state what they prove: which channel carries what, and nothing about whether those channels are electrically discrete on any interface.** That stays a C0b commissioning check.
+- **The start offset is the generating half of RES-001 section 54's per-clip Offset convention**, whose receiving half was documented and whose generating half was not until now. Default lives in `audio.settings`, with a per-session override in the apply payload.
+
+Still no audio engine: the generator's output reaches a fake pipeline, and nothing here has produced timecode on a wire.
+
+## C8, complete 2026-08-18
+
+`cb8a45a`. The `AUDIO-ENGINE.md` §8.1 generic synchronized-remote-output boundary, implemented against a deterministic fake destination. No product is named anywhere in the code, the tests, or this report.
+
+- **Provisioning and playout are separate interfaces**, so a component holding only the playout side cannot call `Provision` — "start triggered a transfer" is now a compile error rather than a runtime check.
+- **The evidence vocabulary is exactly the six members section 8.1 names, with no `ready` anywhere**: an upload attempt is never readiness. A destination with no status interface stays attempted forever rather than being promoted, because absence of a readiness API is supported behaviour, not an adapter defect.
+- **Capability support is three-state, and unknown is refused identically to unsupported** — nothing resolves an unknown into an assumption on the adapter's behalf.
+- **Required coverage needs every exact content hash in the pinned revision.** One manually verified item beside one unverified item in a two-item playlist stays unsatisfied, the exact case an operator hits and the case the test names.
+
+Passing the C8 mock proves ShowMesh's side of the AUDIO-ENGINE section 8.1 boundary and nothing else. It proves no real service accepts any format, completes an upload, finishes processing, stays synchronized, or plays on a phone. RES-016 stays L0.
 
 ## C4, complete 2026-08-18
 
@@ -277,13 +321,13 @@ Day-0 is not accepted until all of the following are observed on the assembled l
 14. Coordinator and broker loss do not stop media already playing from local storage; transitions needing unavailable authority fail visibly.
 15. Track F's background, announcement, fade, barrier, and recovery cases pass against the real engine rather than only its fakes.
 
-C8 is accepted separately when its mock trace proves advance provisioning and every capability/evidence profile above without making a real third-party integration or Day-0 claim.
+C8 is accepted separately when its mock trace proves advance provisioning and every capability/evidence profile above without making a real third-party integration or Day-0 claim. C8 is built (`cb8a45a`); see "C8, complete 2026-08-18" above.
 
 ## Decisions still open
 
 - PipeWire or raw ALSA, decided by RES-007 evidence rather than preference.
 - The tolerable drift threshold and whether discrete correction is audibly acceptable.
-- LTC frame-rate configuration, coupled to RES-001 and the actual Resolume input.
+- LTC frame-rate configuration is ruled (closed vocabulary 24/25/29.97/30, non-drop at every rate — Linear SM-69/SM-83, C5); Resolume's drop-frame expectation at 29.97 itself remains unresearched (RES-001 §9).
 - The installed-path program-to-LTC measurement mechanism. C0 must select and bench a repeatable acquisition method that measures the physical outputs and records provenance; until then pre-show alignment is `unknown`, never inferred from shared-clock configuration alone.
 - Per-show announcement policy: mix, duck, interrupt, or unsupported for each output.
 - Real third-party upload, acknowledgement, processing, playback, format, authentication, retention, privacy, and timing behavior in RES-016.
