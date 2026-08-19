@@ -1013,3 +1013,257 @@ func TestAssetSyncIsNudgedOnUploadAndOnActivation(t *testing.T) {
 		t.Fatalf("nudges after activation = %d, want 2: every node's expected set just changed", nudger.n)
 	}
 }
+
+// --- rollback (ADR-028 decision 10) ---
+
+// TestPostAssetUploadRollback proves upload A, B, then A again reports
+// rolledBack=true as its own field, audits it, nudges sync, and the
+// manifest expects A again.
+func TestPostAssetUploadRollback(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	nudger := &countingNudger{}
+	deps := assetsTestDeps(t, svc, st)
+	deps.AssetSyncNudger = nudger
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	bytesA := []byte("version A")
+	bytesB := []byte("version B, different bytes")
+
+	respA1, bodyA1 := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesA, auth)
+	if respA1.StatusCode != http.StatusOK {
+		t.Fatalf("upload A: status = %d, body: %s", respA1.StatusCode, bodyA1)
+	}
+	var firstA v1AssetResponseForTest
+	_ = json.Unmarshal(bodyA1, &firstA)
+
+	respB, bodyB := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesB, auth)
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("upload B: status = %d, body: %s", respB.StatusCode, bodyB)
+	}
+
+	if nudger.n != 2 {
+		t.Fatalf("nudges before rollback = %d, want 2 (one per upload so far)", nudger.n)
+	}
+
+	// Re-upload A: the rollback.
+	respRollback, bodyRollback := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", bytesA, auth)
+	if respRollback.StatusCode != http.StatusOK {
+		t.Fatalf("rollback upload: status = %d, body: %s", respRollback.StatusCode, bodyRollback)
+	}
+
+	var rollbackResp struct {
+		ServerTime string         `json:"serverTime"`
+		Asset      v1AssetForTest `json:"asset"`
+		RolledBack bool           `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(bodyRollback, &rollbackResp); err != nil {
+		t.Fatalf("decode rollback response: %v\nbody: %s", err, bodyRollback)
+	}
+	if !rollbackResp.RolledBack {
+		t.Errorf("rolledBack = false, want true: the response must say a rollback occurred as its own field")
+	}
+	if rollbackResp.Asset.ID != firstA.Asset.ID {
+		t.Errorf("rollback asset id = %q, want the original A id %q (no new row)", rollbackResp.Asset.ID, firstA.Asset.ID)
+	}
+	if !rollbackResp.Asset.Current {
+		t.Error("rollback asset current = false, want true")
+	}
+
+	if nudger.n != 3 {
+		t.Fatalf("nudges after rollback = %d, want 3: the manifest's expectation just changed", nudger.n)
+	}
+
+	// The store holds exactly two rows: A current, B superseded.
+	recs, err := st.ListAssets(context.Background(), store.AssetFilter{ShowID: "halloween-2026", SequenceID: "opening"})
+	if err != nil {
+		t.Fatalf("list assets: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("row count after rollback = %d, want 2 (no third row)", len(recs))
+	}
+
+	// A distinct, auditable action was recorded for the rollback.
+	audit, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	foundRollback := false
+	for _, e := range audit {
+		if e.Action == "asset.rollback" && e.Target == rollbackResp.Asset.ID {
+			foundRollback = true
+
+			var params struct {
+				FromAssetID string `json:"fromAssetId"`
+				ToAssetID   string `json:"toAssetId"`
+			}
+			if err := json.Unmarshal([]byte(e.ParamsJSON), &params); err != nil {
+				t.Fatalf("decode rollback audit params: %v\nparams: %s", err, e.ParamsJSON)
+			}
+			// B was current when A's rollback ran, so B is what got
+			// displaced — the "half the event" blocker 1 asked for.
+			if params.ToAssetID != rollbackResp.Asset.ID {
+				t.Errorf("audit toAssetId = %q, want the restored asset %q", params.ToAssetID, rollbackResp.Asset.ID)
+			}
+			if params.FromAssetID == "" || params.FromAssetID == params.ToAssetID {
+				t.Errorf("audit fromAssetId = %q, want the displaced (B) asset id, distinct from toAssetId %q", params.FromAssetID, params.ToAssetID)
+			}
+		}
+		if e.Action == "asset.rollback" && e.Kind != string(identity.AuditAdmin) {
+			t.Errorf("asset.rollback audit kind = %q, want %q", e.Kind, identity.AuditAdmin)
+		}
+	}
+	if !foundRollback {
+		t.Errorf("no asset.rollback audit entry found for %s among %+v", rollbackResp.Asset.ID, audit)
+	}
+
+	// The manifest expects A's content hash again, through the existing
+	// mechanism — no second sync path.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config/show.active",
+		bytes.NewReader([]byte(`{"show":"halloween-2026"}`)))
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("activate show: status = %d, body: %s", resp.StatusCode, body)
+	}
+
+	current, err := st.ListCurrentAssetsForTarget(context.Background(), "halloween-2026", store.AssetTargetKindNode, "render-01")
+	if err != nil {
+		t.Fatalf("list current for target: %v", err)
+	}
+	if len(current) != 1 || current[0].ContentHash != contentHashOf(bytesA) {
+		t.Fatalf("current assets for render-01 = %+v, want exactly A's content hash %q", current, contentHashOf(bytesA))
+	}
+
+	// A plain GET never reports a rollback that did not just happen.
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/assets/"+rollbackResp.Asset.ID, auth)
+	var getResp struct {
+		RolledBack bool `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(getBody, &getResp); err != nil {
+		t.Fatalf("decode get response: %v\nbody: %s", err, getBody)
+	}
+	if getResp.RolledBack {
+		t.Error("GET /assets/{id} rolledBack = true, want false always")
+	}
+}
+
+// clockAdvancingAssetBackend wraps a real assetstore.Backend and advances clock by
+// delta inside Put, after the bytes are staged — modeling review blocker
+// 2: a real upload's Put can take a long time, and the audit entry's
+// timestamp must reflect when the write actually ran, not when the
+// request started.
+type clockAdvancingAssetBackend struct {
+	assetstore.Backend
+	clock *syncClock
+	delta time.Duration
+}
+
+func (b *clockAdvancingAssetBackend) Put(ctx context.Context, r io.Reader, limit int64) (assetstore.Blob, error) {
+	blob, err := b.Backend.Put(ctx, r, limit)
+	b.clock.advance(b.delta)
+	return blob, err
+}
+
+// TestPostAssetUploadAuditTimestampReflectsWriteNotUploadStart proves
+// review blocker 2's fix: the audit entry's Timestamp is read inside the
+// transaction, after the (possibly slow) upload stream, not once at
+// request start. Before the fix this test's audit entry would carry
+// requestStart rather than a time at or after it.
+func TestPostAssetUploadAuditTimestampReflectsWriteNotUploadStart(t *testing.T) {
+	requestStart := testNow
+	clock := &syncClock{t: requestStart}
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock.now)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	backend, err := assetstore.NewVolumeBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("new volume backend: %v", err)
+	}
+	deps := assetsTestDeps(t, svc, st)
+	deps.AssetBackend = &clockAdvancingAssetBackend{Backend: backend, clock: clock, delta: time.Hour}
+	api := New(deps, Options{Clock: clock.now, Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("version A"), auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+
+	writeTime := clock.now() // advanced by Put; this is what the write actually happened at
+	if !writeTime.After(requestStart) {
+		t.Fatalf("test setup: writeTime %v did not advance past requestStart %v", writeTime, requestStart)
+	}
+
+	audit, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	found := false
+	for _, e := range audit {
+		if e.Action != "asset.upload" {
+			continue
+		}
+		found = true
+		if !e.RecordedAt.Equal(writeTime) {
+			t.Errorf("audit RecordedAt = %v, want %v (the write-time clock read, not requestStart %v)",
+				e.RecordedAt, writeTime, requestStart)
+		}
+	}
+	if !found {
+		t.Fatalf("no asset.upload audit entry found among %+v", audit)
+	}
+}
+
+// TestPostAssetUploadIdenticalCurrentBytesIsNotARollback proves the true
+// idempotent case (re-uploading bytes that are STILL current) is NOT
+// reported as a rollback and writes no new audit entry.
+func TestPostAssetUploadIdenticalCurrentBytesIsNotARollback(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	content := []byte("identical bytes")
+	_, _ = doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", content, auth)
+
+	before, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit before: %v", err)
+	}
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", content, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+	var got struct {
+		RolledBack bool `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v\nbody: %s", err, body)
+	}
+	if got.RolledBack {
+		t.Error("rolledBack = true for a re-upload of identical CURRENT bytes, want false")
+	}
+
+	after, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("audit entry count changed from %d to %d on a true no-op re-upload", len(before), len(after))
+	}
+}
