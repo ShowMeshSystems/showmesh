@@ -662,3 +662,17 @@ The common structure is not a typo in a key. It is that **a durable identity is 
 That points at the question worth asking, and it is not "is this validated". It is **"is it validated across every path that now reaches it"**, which a diff cannot answer because the offending path is usually not in the diff. A caller census can. Ask what happens on the collision too: if the answer is "returns the existing record", the failure is silent by construction and no test exercising one path will ever see it.
 
 **Rule:** when persisting an outcome against an identity, write down what the identity claims to be unique across, then enumerate every path that reaches the check and find the scope it does not cover. Test the collision directly, with two genuinely different pieces of work that should not alias, and assert the second one actually ran rather than that the call returned successfully. A constraint enforced in a narrower scope than its identity is used in is not a constraint, and its failure mode is a green report for work that never happened.
+
+## Isolating one dimension of a shared resource is not isolation
+
+**Track C and Track F, 2026-08-19, diagnosed jointly after both sessions had spent a night blaming host load.**
+
+`scripts/test-integration.sh` takes two independent knobs, `SHOWMESH_TEST_MOSQUITTO_CONTAINER` and `SHOWMESH_TEST_MQTT_PORT`. Track C ran as `showmesh-track-c-mosquitto` on port 11893. Track F ran as `showmesh-test-mosquitto-trackf` on port 11893. All night, on one laptop.
+
+Both sessions believed they were isolated, and both had positive evidence for it: each had deliberately set a distinct container name, which is the knob this project's own parallel-session guidance names first. The port is the thing that actually collides.
+
+Neither diagnosed it at the time, because the symptom was already explained by something true. This repository documents a shared-host flake profile (plausible failures, unrelated to the diff, different on each run) and the failures fit it exactly: Track F's builder saw one FPP timing test time out three times and pass clean later; Track C had a nine-test failure that passed on a re-run they credited to removing a leftover container, and now read as the second run simply not overlapping the other session's. **The existing guidance worked and still left both sessions wrong**, because it tells you how to recognise a collision and says nothing about how two careful sessions manage to create one.
+
+The rule this project already had, one layer down, is the fix: [ADR-013](../decisions/ADR-013-multisync-port-sharing.md) requires a bind conflict on UDP 32320 to fail loudly rather than share the port, precisely because a silent share produces symptoms attributed to something else. The test harness rediscovered the same rule from scratch. It does not check whether its port is already bound, so two sessions can share one broker and each believe it brought its own.
+
+**Rule:** when isolating from a shared resource, name every dimension that can collide and isolate the one that actually arbitrates, not the one that is easiest to see or to name. A distinct label around a shared port is not isolation, it is a false sense of it, which is worse than knowing you share: a session with positive evidence of having taken care stops looking. Where a harness offers several isolation knobs, it should refuse to start on a conflict rather than trust that every caller picked differently, and if two knobs must agree to mean anything, derive one from the other. Tracked as SM-118.
