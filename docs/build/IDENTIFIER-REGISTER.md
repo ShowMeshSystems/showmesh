@@ -317,6 +317,20 @@ Adding a resource kind is not only a constant: `internal/coordinator/api/
 handlers.go:301` switches over the allowed kinds and silently rejects any
 kind not listed there.
 
+**One `fpp.*` signal reserved 2026-08-18 for Track F.** The shipped FPP
+collector exports `fpp.position.elapsed.seconds`, whole seconds, which is too
+coarse to arm a cue deadline: Track F seam F0 measured FPP's own
+`milliseconds_elapsed` advancing in exact 50 ms quanta (the FSEQ's step time),
+and the night controller's cue tolerance is finer than a second.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `fpp.position.elapsed.ms` | reserved | Track F (night-session cue timing) |
+
+Track F seam F3 built against the existing whole-second signal rather than
+minting this one, and **reported the need instead of inventing the name**,
+which is what this register is for.
+
 **Individual `surface.*` signals**, all inside the namespace reserved above,
 listed because the last row was minted after the others had shipped:
 
