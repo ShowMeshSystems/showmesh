@@ -25,7 +25,7 @@ import (
 // adapter, the same property this seam's own report already notes for
 // *broker.Registry itself. It records every call so the parity test can
 // assert both implementations pass the identical request fields through to
-// the broker layer (SM-103), not merely produce the same outcome.
+// the broker layer, not merely produce the same outcome.
 type dualFakeMQTTBroker struct {
 	msg broker.Message
 	err error
@@ -195,11 +195,10 @@ func TestMQTTDispatchParityBetweenMacroAndAPI(t *testing.T) {
 				t.Errorf("publishAttempted: macro = %v, api = %v, want equal", macroRes.publishAttempted, apiRes.PublishAttempted)
 			}
 
-			// SM-103: the fake previously ignored every request field, so the
-			// parity guard could not see whether either implementation
-			// actually forwarded the target's broker, topic, payload, QoS,
-			// retain, response topic, response QoS or deadline. It records
-			// its own two calls (macro's, then api's) and compares them here.
+			// The fake records both calls (macro's, then api's) so this can
+			// compare whether each implementation actually forwarded the
+			// target's broker, topic, payload, QoS, retain, response topic,
+			// response QoS and deadline identically.
 			if tc.target.Expect.Kind == config.MQTTExpectKindNone {
 				if len(tc.broker.publishArgs) != 2 {
 					t.Fatalf("publishArgs = %d entries, want 2 (one per implementation)", len(tc.broker.publishArgs))

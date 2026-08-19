@@ -740,19 +740,13 @@ func Run() int {
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub
 
-	// Step 7 seam C review defect 5: resolve any command a PRIOR process
-	// left dispatched-but-unresolved (a crash, a kill, or an abandoned
-	// client connection between dispatch and outcome) before it can sit
-	// blank forever. Finding 3 (Step 8 review): this used to be
-	// `go func() { ... }()`, which is NOT a happens-before edge against
-	// srv.ListenAndServe() below — api.ReconcileStrandedFPPCommands's own
-	// doc comment claimed "before the HTTP server starts accepting
-	// connections" while the code raced it, and a live request confirming
-	// a command concurrently with this sweep was proved to resolve twice
-	// (two outcome audit entries for the same command_id, one from each
-	// racing path). Called SYNCHRONOUSLY here instead, so it genuinely
-	// completes before the goroutine that calls ListenAndServe is even
-	// started, making that doc comment's claim true rather than aspirational.
+	// Resolve any command a PRIOR process left dispatched-but-unresolved
+	// (a crash, a kill, or an abandoned client connection between dispatch
+	// and outcome) before it can sit blank forever. Called SYNCHRONOUSLY,
+	// so it completes before the goroutine that calls ListenAndServe below
+	// is even started: running it as a bare goroutine let a live request
+	// confirm the same command concurrently with this sweep and resolve it
+	// twice.
 	//
 	// Deliberately NOT fatal on error: this is a bounded local SQLite
 	// scan, which is what makes blocking acceptable, but ADR-024
@@ -803,13 +797,12 @@ func Run() int {
 		logger.Warn("resolved action invocations left stranded by a prior process", "count", n)
 	}
 
-	// SM-102 finding 4: the one-shot sweep above cannot self-heal a row
-	// that becomes stranded AFTER it ran (actioninvoke.go's own
-	// persistErr branch — a commands-table write failing right after a
-	// successful dispatch). This loop retries it periodically for the
-	// rest of this process's life; it is safe to run alongside live
-	// requests because it only ever touches rows older than
-	// actionInvokeReconcileMinAge — see that constant's own doc comment.
+	// This loop self-heals a row that becomes stranded AFTER the one-shot
+	// sweep above ran (actioninvoke.go's own persistErr branch — a
+	// commands-table write failing right after a successful dispatch). It
+	// is safe alongside live requests because it only touches rows older
+	// than actionInvokeReconcileMinAge — see that constant's own doc
+	// comment.
 	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
 
 	// fppHTTPClient and fppRunner were already constructed above (before

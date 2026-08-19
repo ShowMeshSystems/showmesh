@@ -14,25 +14,24 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// This file covers three interlocking findings on the same endpoint:
+// This file covers four interlocking behaviors on the same endpoint:
 //
-//   - SM-99: a durable caller pins the exact show.action revision to
-//     execute (TRACK-F-resting-mode.md §F4); the outer journal, the
-//     nested FPP child journal, the audit, the response, a replay, and a
-//     post-crash reconciliation all name the SAME pinned revision even
-//     after a newer one is activated.
-//   - SM-102 finding 3: startup reconciliation must consult a stranded
-//     invocation's own confirmed FPP child rather than overwriting it
-//     with a guess.
-//   - SM-102 finding 2: a commands-row persist failure after a
-//     successful dispatch must not tell the synchronous caller a
-//     different story than a concurrent replay or a later restart.
-//   - SM-102 finding 4: reconciliation must retry while the process
-//     stays up, without racing a genuinely in-flight request.
+//   - Revision pinning: a durable caller pins the exact show.action
+//     revision to execute (TRACK-F-resting-mode.md §F4); the outer
+//     journal, the nested FPP child journal, the audit, the response, a
+//     replay, and a post-crash reconciliation all name the SAME pinned
+//     revision even after a newer one is activated.
+//   - Startup reconciliation must consult a stranded invocation's own
+//     confirmed FPP child rather than overwriting it with a guess.
+//   - A commands-row persist failure after a successful dispatch must
+//     not tell the synchronous caller a different story than a
+//     concurrent replay or a later restart.
+//   - Periodic reconciliation must retry while the process stays up,
+//     without racing a genuinely in-flight request.
 
-// --- SM-99 acceptance ---
+// --- Revision pinning acceptance ---
 
-// TestActionInvokeRevisionPinningAcceptance is the issue's own scenario:
+// TestActionInvokeRevisionPinningAcceptance covers the target scenario:
 // queue revision 1 targeting adapter A, activate revision 2 targeting B,
 // invoke the queued revision, observe only A called, and confirm every
 // surface — outer journal, child journal, audit, response, replay, and
@@ -225,10 +224,10 @@ func closeAndReopenStore(t *testing.T, setup *fppCommandTestSetup) reopenedStore
 	return reopenedStore{st: st, svc: svc}
 }
 
-// --- SM-102 finding 3: reconciliation consults a confirmed FPP child ---
+// --- Reconciliation consults a confirmed FPP child ---
 
-// TestReconcileConsultsConfirmedFPPChildRatherThanOverwriting is finding
-// 3's own proof: a stranded outer row whose nested FPP child resolves
+// TestReconcileConsultsConfirmedFPPChildRatherThanOverwriting proves
+// a stranded outer row whose nested FPP child resolves
 // CONFIRMED (via ReconcileStrandedFPPCommands' own re-evaluated Confirm
 // predicate, run first, matching coordinator.go's production order) must
 // reconstruct a confirmed outer result, never an unconditional guess.
@@ -302,7 +301,7 @@ func TestReconcileConsultsConfirmedFPPChildRatherThanOverwriting(t *testing.T) {
 	}
 }
 
-// --- SM-102 finding 2: a commands-row persist failure tells one story ---
+// --- A commands-row persist failure tells one story ---
 
 // installFailCommandsUpdateTrigger fails every UPDATE against the
 // commands table (a real SQLite trigger, matching installFailAuditTrigger's
@@ -329,9 +328,9 @@ func installFailCommandsUpdateTrigger(t *testing.T, storeDir string) {
 	}
 }
 
-// TestActionInvokeOutcomePersistFailureRespondsPendingConsistently is
-// finding 2's own proof: when the final commands-row write (marking the
-// row "resolved") fails, THIS caller's own synchronous response must
+// TestActionInvokeOutcomePersistFailureRespondsPendingConsistently proves
+// that when the final commands-row write (marking the row "resolved")
+// fails, THIS caller's own synchronous response must
 // report the SAME "pending" story a concurrent replay would read from
 // the still-pending row — never a "resolved" claim the row itself
 // contradicts.
@@ -387,8 +386,8 @@ func TestActionInvokeOutcomePersistFailureRespondsPendingConsistently(t *testing
 	}
 }
 
-// --- SM-102 finding 4: periodic reconciliation retries while the
-// process stays up, without racing a genuinely in-flight request ---
+// --- Periodic reconciliation retries while the process stays up,
+// without racing a genuinely in-flight request ---
 
 // TestActionInvokeReconcileMinAgeProtectsLiveRequests proves the safety
 // rail a periodic sweep needs that a one-shot startup sweep does not: a
@@ -435,9 +434,9 @@ func TestActionInvokeReconcileMinAgeProtectsLiveRequests(t *testing.T) {
 	}
 }
 
-// TestRunActionInvokeReconciliationLoopRetriesUntilResolved proves
-// finding 4's own headline claim: the loop keeps retrying — it does not
-// give up after one failed or empty pass — for as long as the process
+// TestRunActionInvokeReconciliationLoopRetriesUntilResolved proves the
+// loop keeps retrying — it does not give up after one failed or empty
+// pass — for as long as the process
 // (here, the test's own context) stays up.
 func TestRunActionInvokeReconciliationLoopRetriesUntilResolved(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))

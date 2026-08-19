@@ -396,10 +396,10 @@ func TestCmdActionInvokeUnconfirmableExitsDistinctFromConfirmed(t *testing.T) {
 	}
 }
 
-// TestCmdActionInvokeRevisionFlagIsSent proves SM-99's CLI coverage: a
-// caller pinning --revision sends requestedRevision on the wire, and
-// omitting it sends none (the existing len(gotBody)==1 assertion above
-// already proves the omitted case).
+// TestCmdActionInvokeRevisionFlagIsSent proves the CLI's revision-pinning
+// coverage: a caller pinning --revision sends requestedRevision on the
+// wire, and omitting it sends none (the existing len(gotBody)==1
+// assertion above already proves the omitted case).
 func TestCmdActionInvokeRevisionFlagIsSent(t *testing.T) {
 	var gotBody map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -436,8 +436,8 @@ func TestCmdActionInvokeNegativeRevisionExitsUsage(t *testing.T) {
 	}
 }
 
-// TestCmdActionInvokePendingResultRendersPendingNotABlankOutcome is
-// SM-100's CLI coverage: a null outcome (this command's own
+// TestCmdActionInvokePendingResultRendersPendingNotABlankOutcome proves
+// the CLI's pending-outcome coverage: a null outcome (this command's own
 // *string field) renders as "pending", never as a blank or unrecognized
 // outcome word.
 func TestCmdActionInvokePendingResultRendersPendingNotABlankOutcome(t *testing.T) {

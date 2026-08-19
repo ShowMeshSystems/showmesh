@@ -50,16 +50,16 @@ const (
 
 // Lifecycle states for [v1.ActionInvocationResult.State], mirroring
 // store.CommandRecord.State's own two live values for this command
-// family (SM-100).
+// family.
 const (
 	actionInvokeStatePending  = "pending"
 	actionInvokeStateResolved = "resolved"
 )
 
 // Attribution states for [v1.ActionInvocationResult.DispatchAttribution]/
-// OutcomeAttribution (SM-100): named states with their own reasons,
-// replacing a single aggregate boolean that could not tell a dispatch-
-// audit loss apart from an outcome-audit loss. "pending" applies only to
+// OutcomeAttribution: named states with their own reasons, replacing a
+// single aggregate boolean that could not tell a dispatch-audit loss
+// apart from an outcome-audit loss. "pending" applies only to
 // OutcomeAttribution, before this invocation has resolved.
 const (
 	attributionStatePending  = "pending"
@@ -72,12 +72,12 @@ const actionInvokeOutcomeCompleteReason = "the outcome audit entry was written d
 const actionInvokeOutcomePendingReason = "this invocation has not yet resolved, so no outcome audit entry has been attempted yet"
 
 // actionInvokePendingOutcomeReason is the canned, non-blank OutcomeReason
-// a fresh command row carries between insertion and resolution — SM-100:
-// a pending result must state a real reason, never an empty string a
-// racing replay could observe.
+// a fresh command row carries between insertion and resolution: a pending
+// result must state a real reason, never an empty string a racing replay
+// could observe.
 const actionInvokePendingOutcomeReason = "this invocation has not yet resolved: it is still being dispatched or is awaiting confirmation evidence"
 
-// actionInvokeOutcomeNotPersistedReason is SM-102 finding 2: the outward
+// actionInvokeOutcomeNotPersistedReason covers the case where the outward
 // effect ran and its outcome is known to THIS request, but the write
 // recording that outcome in the command journal failed. Reporting
 // "resolved" here would tell this caller a different story than a
@@ -153,7 +153,7 @@ func actionInvokeReplayConflictProblem(existingID, existingTargetKind, existingT
 // alongside Outcome/Label so a replay or a startup reconciliation reads
 // back the SAME attribution this invocation's own original request
 // determined, rather than recomputing (and potentially disagreeing with)
-// it later (SM-102 finding 1).
+// it later.
 type actionInvokeResultPayload struct {
 	Label   string `json:"label,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
@@ -355,9 +355,9 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	bgCtx := context.WithoutCancel(ctx)
 
 	// Persist the attribution axes known so far immediately, before
-	// dispatch even starts — SM-102 finding 1: a replay racing this
-	// still-in-flight request must read the SAME dispatch attribution
-	// this request just determined, not a default zero value.
+	// dispatch even starts: a replay racing this still-in-flight request
+	// must read the SAME dispatch attribution this request just
+	// determined, not a default zero value.
 	interimResult, _ := json.Marshal(actionInvokeResultPayload{
 		Label:               payload.Label,
 		DispatchAttribution: dispatchAttribution, DispatchAttributionReason: dispatchAttributionReason,
@@ -407,8 +407,8 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		h.logWarn("failed to record action invocation outcome", "commandId", cmdID, "error", persistErr)
 	}
 
-	// SM-102 finding 2: if the row itself never became durably "resolved",
-	// this response must not claim it is — a concurrent replay reads the
+	// If the row itself never became durably "resolved", this response
+	// must not claim it is — a concurrent replay reads the
 	// still-"pending" row, and a later restart's reconciliation resolves
 	// it independently; telling THIS caller "resolved" would be a third,
 	// different story about the same dispatch.
@@ -447,9 +447,9 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 // active revision (requestedRevision == nil, an interactive "run
 // whatever is current" call) or one EXACT pinned revision
 // (requestedRevision != nil, a durable/queued caller naming the exact
-// revision it queued against — SM-99/TRACK-F §F4). Either way, the
-// returned revision is what [v1.ActionInvocationResult.Revision] reports
-// as having actually executed.
+// revision it queued against). Either way, the returned revision is what
+// [v1.ActionInvocationResult.Revision] reports as having actually
+// executed.
 func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, requestedRevision *int64) (store.ConfigRevisionRecord, *v1.Problem, error) {
 	if requestedRevision == nil {
 		rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.ShowActionConfigKind, id)
@@ -481,8 +481,8 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 // dispatch seam its own integration already uses. auditExempt is
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
-// handler's own outer decision. requestedRevision (SM-99) is threaded
-// into the FPP branch's own child command row, so the nested dispatch
+// handler's own outer decision. requestedRevision is threaded into the
+// FPP branch's own child command row, so the nested dispatch
 // carries the SAME pinned revision the outer invocation resolved against.
 //
 // outcomeState is empty for FPP and Resolume (the caller derives a
@@ -571,8 +571,8 @@ func mapResolumeOutcomeWord(o ResolumeActionOutcome) string {
 // is dispatched, and existing's own already-recorded result is returned
 // verbatim — mirroring resolveResolumeActionReplay's identical reasoning.
 // existing's own stored payload carries State/Outcome/attribution exactly
-// as its original request (or a startup reconciliation) left them
-// (SM-100/SM-102 finding 1): this never recomputes them.
+// as its original request (or a startup reconciliation) left them; this
+// never recomputes them.
 func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time, ac authContext, existing store.CommandRecord, requestedActionID string) (v1.ActionInvocationResult, *v1.Problem) {
 	if existing.TargetKind != actionInvokeTargetKind || existing.TargetID != requestedActionID {
 		p := actionInvokeReplayConflictProblem(existing.ID, existing.TargetKind, existing.TargetID, requestedActionID)

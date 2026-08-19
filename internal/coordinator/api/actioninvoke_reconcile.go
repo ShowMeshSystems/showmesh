@@ -15,42 +15,27 @@ import (
 // This file closes the same gap ReconcileStrandedResolumeActions
 // (resolumeaction_reconcile.go) closes for a second command family: an
 // action invocation a prior process left dispatched but never resolved
-// replays outcome="" forever, since nothing else in this package resolves
-// a row whose TargetKind is actionInvokeTargetKind. Same shape, same
-// non-fatal, synchronous, before-ListenAndServe call site, and the same
-// "resolved unconfirmed, never re-derive confirmation retroactively"
-// posture — EXCEPT for one FPP-specific case: SM-102 finding 3 below.
+// replays outcome="" forever. Same shape, same non-fatal, synchronous,
+// before-ListenAndServe call site, and the same "resolved unconfirmed,
+// never re-derive confirmation retroactively" posture, except for an
+// FPP-targeted invocation's nested child command row (see
+// reconcileActionInvokeOutcome).
 //
-// SM-102 finding 3: an FPP-targeted invocation's own nested command row
-// (dispatchActionTarget's FPP branch, keyed
-// actionInvokeFPPChildIdempotencyKeyPrefix+outerID) is a SEPARATE,
-// deterministic durable child. coordinator.go reconciles every stranded
-// FPP command (ReconcileStrandedFPPCommands, which re-runs the FPP
-// primitive's own Confirm predicate against fresh evidence) BEFORE this
-// sweep runs, so by the time an outer row reaches this function, its own
-// FPP child — if one exists — already carries the real, re-evaluated
-// answer. Writing "unconfirmed" here unconditionally, without ever
-// reading that child, would silently discard a legitimately confirmed
-// child in favor of a guess this coordinator has no need to make.
+// Invariant: coordinator.go's ReconcileStrandedFPPCommands reconciles
+// every stranded FPP command before this sweep runs, so this function
+// must read an outer row's FPP child rather than overwrite its outcome.
 func ReconcileStrandedActionInvocations(ctx context.Context, deps Dependencies, now func() time.Time, logger *slog.Logger) (resolved int, err error) {
 	return reconcileStrandedActionInvocations(ctx, deps, now, logger, 0)
 }
 
 // actionInvokeReconcileMinAge is how old an unresolved row must be before
-// [RunActionInvokeReconciliationLoop]'s periodic sweep will touch it —
-// SM-102 finding 4's own safety rail. Unlike the one-shot startup call
-// (which runs before this coordinator accepts its first request, so
-// "unresolved" and "stranded" are provably the same thing —
-// ReconcileStrandedFPPCommands' own doc comment states that reasoning),
-// a PERIODIC sweep runs while genuinely in-flight requests exist: an
-// ordinary invocation can legitimately stay unresolved for up to
-// actionInvokeHTTPWriteDeadline while mqtt or FPP confirmation is still
-// running. Reconciling a row that young would race a live request and
-// resolve it out from under it — exactly the double-resolution defect
-// Step 8 review finding 3 already found once for a different sweep.
-// actionInvokeHTTPWriteDeadline already exceeds any single dispatch's own
-// worst case; this margin is comfortably past even a slow bookkeeping
-// write on top of that.
+// [RunActionInvokeReconciliationLoop]'s periodic sweep will touch it.
+//
+// Invariant: unlike the one-shot startup call (which runs before this
+// coordinator accepts its first request, so "unresolved" and "stranded"
+// are the same thing there), a periodic sweep runs alongside genuinely
+// in-flight requests. Without this minimum age, the sweep could resolve
+// a live request's row out from under it.
 const actionInvokeReconcileMinAge = actionInvokeHTTPWriteDeadline + 30*time.Second
 
 // actionInvokeReconcileInterval is how often [RunActionInvokeReconciliationLoop]
@@ -59,13 +44,12 @@ const actionInvokeReconcileMinAge = actionInvokeHTTPWriteDeadline + 30*time.Seco
 const actionInvokeReconcileInterval = 10 * time.Second
 
 // RunActionInvokeReconciliationLoop retries the action-invocation sweep
-// on actionInvokeReconcileInterval until ctx is done — SM-102 finding 4:
-// the one-shot startup call cannot self-heal a row that becomes stranded
-// AFTER it ran (a commands-table write failing right after a successful
-// dispatch, actioninvoke.go's own persistErr branch) without waiting for
-// a restart. Errors are logged and never fatal, matching the startup
-// call's own posture (ADR-024 constraint 23: "you cannot act", never
-// "you cannot see").
+// on actionInvokeReconcileInterval until ctx is done, so a row that
+// becomes stranded after the one-shot startup sweep ran (a commands-table
+// write failing right after a successful dispatch, actioninvoke.go's own
+// persistErr branch) self-heals without waiting for a restart. Errors are
+// logged and never fatal, matching the startup call's own posture
+// (ADR-024 constraint 23: "you cannot act", never "you cannot see").
 func RunActionInvokeReconciliationLoop(ctx context.Context, deps Dependencies, now func() time.Time, logger *slog.Logger) {
 	runActionInvokeReconciliationLoop(ctx, deps, now, logger, actionInvokeReconcileInterval)
 }
@@ -154,9 +138,7 @@ func reconcileStrandedActionInvocations(ctx context.Context, deps Dependencies, 
 					"commandId", rec.ID, "error", auditErr)
 			}
 			// The reconciliation's own attribution must reflect that the
-			// audit half of this resolution did NOT complete durably —
-			// SM-102 finding 1's own rule applies to this sweep's own
-			// writes just as much as to the original request's.
+			// audit half of this resolution did NOT complete durably.
 			degradedResult, _ := json.Marshal(actionInvokeResultPayload{
 				Label: stored.Label, Outcome: outcomeWord,
 				DispatchAttribution: stored.DispatchAttribution, DispatchAttributionReason: stored.DispatchAttributionReason,
@@ -177,13 +159,12 @@ func reconcileStrandedActionInvocations(ctx context.Context, deps Dependencies, 
 	return resolved, nil
 }
 
-// reconcileActionInvokeOutcome is SM-102 finding 3: consult rec's own
-// deterministic FPP child (if any) before declaring unconfirmed. A
-// confirmed child reconstructs a confirmed outer result; an absent or
-// ambiguous child (no child row, or a child that itself resolved
-// something other than confirmed) yields explicit unconfirmed with a
-// reason — never a silent guess and never an overwrite of stronger
-// evidence.
+// reconcileActionInvokeOutcome consults rec's own deterministic FPP child
+// (if any) before declaring unconfirmed. A confirmed child reconstructs a
+// confirmed outer result; an absent or ambiguous child (no child row, or
+// a child that itself resolved something other than confirmed) yields
+// explicit unconfirmed with a reason — never a silent guess and never an
+// overwrite of stronger evidence.
 func reconcileActionInvokeOutcome(ctx context.Context, deps Dependencies, rec store.CommandRecord) (outcomeWord, outcomeState, reason string) {
 	child, err := deps.Commands.GetCommandByIdempotencyKey(ctx, actionInvokeFPPChildIdempotencyKeyPrefix+rec.ID)
 	switch {
