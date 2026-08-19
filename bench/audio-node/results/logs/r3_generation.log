@@ -1,0 +1,2 @@
+=== R3: LTC generation through candidate b/c -- alignment ===
+Alignment through this candidate is r2_baseline.json / r2_trackchange.json / r2_restart.json / r2_seek.json above (all of them play the ltcgen-produced file). Start/restart: r2_restart.json. Seek: r2_seek.json (program+LTC together; the LTC branch is untouched by the seek target in this test, see README caveats).

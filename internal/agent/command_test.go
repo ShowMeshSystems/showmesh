@@ -197,7 +197,7 @@ func decodeEchoFromCall(t *testing.T, call recordedPublish) mqttproto.AgentEchoP
 // every other signal in this system" requirement.
 func TestHandleMessageAgentEchoConfirmed(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -564,7 +564,7 @@ func TestHandleMessageMalformedPayloadDropsWithNoPublish(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger, buf := capturingLogger()
-			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, clock.now, logger)
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, clock.now, logger)
 			pub := newFakePublisher()
 
 			h.HandleMessage(context.Background(), pub, topic, tt.payload)
@@ -596,7 +596,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, clock.now, discardLogger())
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, clock.now, discardLogger())
 			pub := newFakePublisher()
 
 			cmd := baseEchoCmd("cmd-1", "idem-"+tt.name)
@@ -627,7 +627,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 // unaddressable-message case in this file.
 func TestHandleMessageWrongTopicKindDropped(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
-	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -735,7 +735,7 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	trigger := make(chan struct{}, 1)
 	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := mqttproto.CmdPayload{

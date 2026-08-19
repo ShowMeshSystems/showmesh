@@ -1,0 +1,12 @@
+{
+  "run": "r7_capability_discovery",
+  "aplay_L_devices": [
+    "null",
+    "default"
+  ],
+  "aplay_l_hw_cards_found": false,
+  "gst_device_monitor_1_0_present": false,
+  "negotiated_default_caps": "rate=(int)44100, format=(string)F64LE, channels=(int)2",
+  "note": "container has no /dev/snd and no ALSA hw cards; only the null and default (->null) PCM devices exist. This is the container's virtual stack only, per R7's own scope note.",
+  "full_log": "r7_capability_discovery.log"
+}

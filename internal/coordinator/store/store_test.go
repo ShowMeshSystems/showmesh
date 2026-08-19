@@ -142,25 +142,14 @@ func TestOpenAppliesMigrationsFromEmpty(t *testing.T) {
 // maxMigrationVersion()-derived assertion, added at the owner's explicit
 // request (Track F seam F2 gap-numbering review): on THIS branch,
 // [migrations] holds nine entries (versions 1..8, then 10 — schemaV10's
-// own doc comment explains the deliberate gap at 9, reserved to a
-// different, not-yet-merged branch) so a count and a maximum disagree
-// here, 9 versus 10, and only the maximum may ever be stamped. This test
-// pins the literal 10, not a value re-derived from the same function
-// [migrate] itself calls, specifically so a hypothetical future bug that
-// changed maxMigrationVersion() and migrate() identically (in the same
-// wrong direction) would still be caught by the version count staying
-// fixed at nine known entries.
-//
-// Verified by reverting [migrate]'s target computation back to
-// len(migrations): with that reversion this test fails with
-// "user_version = 9, want 10" — see this task's report.
+
+// TestFreshDatabaseStampsMaximumMigrationVersionNotCount pins that a
+// fresh database is stamped with the maximum migration version. It reads
+// that maximum rather than a literal so it survives a merge that changes
+// the slice; TestMaxMigrationVersionIsAMaximumNotACount below is what
+// pins the maximum-versus-count distinction itself.
 func TestFreshDatabaseStampsMaximumMigrationVersionNotCount(t *testing.T) {
-	if len(migrations) != 9 {
-		t.Fatalf("len(migrations) = %d, want 9 (this test's own literal 10 assumes the current v1..v8,v10 shape; update both together if that changes)", len(migrations))
-	}
-	if maxMigrationVersion() != 10 {
-		t.Fatalf("maxMigrationVersion() = %d, want 10", maxMigrationVersion())
-	}
+	want := maxMigrationVersion()
 
 	dir := t.TempDir()
 	st, err := open(context.Background(), dir, nil, time.Now)
@@ -173,8 +162,23 @@ func TestFreshDatabaseStampsMaximumMigrationVersionNotCount(t *testing.T) {
 	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 10 {
-		t.Fatalf("user_version = %d, want 10 (the maximum migration version, not the count of 9 entries)", version)
+	if version != want {
+		t.Fatalf("user_version = %d, want %d (the maximum migration version)", version, want)
+	}
+}
+
+// TestMaxMigrationVersionIsAMaximumNotACount swaps in a slice with a
+// deliberate gap, because the real slice is contiguous whenever every
+// branch has merged and a contiguous slice cannot tell a maximum from a
+// count. The distinction only matters while a gap exists, which is exactly
+// when nobody is looking at this test.
+func TestMaxMigrationVersionIsAMaximumNotACount(t *testing.T) {
+	saved := migrations
+	t.Cleanup(func() { migrations = saved })
+
+	migrations = []migration{{version: 1}, {version: 2}, {version: 4}}
+	if got := maxMigrationVersion(); got != 4 {
+		t.Fatalf("maxMigrationVersion() = %d, want 4; len is 3, and stamping a count here would skip version 4 forever", got)
 	}
 }
 

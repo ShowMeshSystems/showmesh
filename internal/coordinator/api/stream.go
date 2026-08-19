@@ -442,7 +442,7 @@ func (h *Hub) render(ctx context.Context) {
 		for _, nv := range views {
 			key := "node:" + nv.NodeID
 			present[key] = struct{}{}
-			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID))
+			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID))
 			if h.updateRendered(key, node) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})

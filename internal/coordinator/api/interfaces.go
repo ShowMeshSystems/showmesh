@@ -95,6 +95,19 @@ type NodeRenderLister interface {
 	NodeRenderObservations(nodeID string) []observation.Observation
 }
 
+// NodeAudioLister is [NodeRenderLister]'s analogue for Track C's audio
+// discovery reports. Unlike NodeRenderObservations, this DOES perform a
+// bounded, synchronous local store read on every call — nodeID's active
+// audio.node configuration (ADR-039), the only source its
+// node.audio.clock.domain/provenance observations are ever built from,
+// because a node cannot supply its own clock domain.
+type NodeAudioLister interface {
+	// NodeAudioObservations returns every node.audio.* observation this
+	// coordinator currently holds for nodeID's most recently reported
+	// audio discovery, or nil if none has ever been received.
+	NodeAudioObservations(nodeID string) []observation.Observation
+}
+
 // FPPMQTTHostLister reports the id->HostName map fpp.mqtt currently
 // configures, live — not a startup snapshot. Used by
 // handlePutFPPEndpointsConfig (config.go) to cross-check a proposed

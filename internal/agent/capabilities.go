@@ -38,9 +38,10 @@ var capabilityDetector = detectCapabilities
 // reconnect), never cached at boot, so a runtime installed after this
 // process started is advertised with no agent restart required.
 //
-// Every probe here shells out to a real gst-launch-1.0 subprocess and can
-// take up to three probeTimeouts (pipeline/probe.go) end to end. Since
-// review finding 14, this function is never called on the same context
+// Every probe here shells out to a real gst-launch-1.0 subprocess; see
+// advertise.go's capabilityDetectionTimeout for the current worst-case
+// probe count and its budget arithmetic. Since review finding 14, this
+// function is never called on the same context
 // publishHello's own publish is bounded by: advertise.go runs it in the
 // background, on its own capabilityDetectionTimeout, and republishes hello
 // when it finishes, so a hung probe here degrades this pass's advertised
@@ -73,6 +74,8 @@ func detectCapabilities(ctx context.Context) capability.Set {
 	// for one transport is never evidence for another (ADR-026 decision 4),
 	// and an absent capability is this project's existing vocabulary for
 	// "not usable," not a value this function invents a reason string for.
+
+	set = append(set, detectAudioCapabilities(ctx)...)
 
 	return set
 }

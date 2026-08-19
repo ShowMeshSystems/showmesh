@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -167,8 +168,9 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo", "asset.fetch", and Track B's four render.* operations
-// (seam B2a's apply/clear/restart, seam B4's transport.probe). Per
+// "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
+// "audio.media.probe" (Track C seam C2), and Track B's four render.*
+// operations (seam B2a's apply/clear/restart, seam B4's transport.probe). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism — [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
@@ -177,18 +179,27 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // operations (see renderops.go). Adding a further allowlisted operation
 // later means adding a further entry to this map, not building a second
 // enforcement path.
-func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations) map[string]OperationFunc {
+func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
+	mediaProbe := mediaProbeOperation{dir: assetDir}
 	ops := map[string]OperationFunc{
-		"agent.echo":  state.apply,
-		"asset.fetch": fetch.run,
+		"agent.echo":         state.apply,
+		"asset.fetch":        fetch.run,
+		"audio.device.probe": probeAudioDevice,
+		"audio.media.probe":  mediaProbe.run,
 	}
 	if render != nil {
 		ops["render.surface.apply"] = render.applySurface
 		ops["render.surface.clear"] = render.clearSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
 		ops["render.transport.probe"] = render.probeTransport
+	}
+	for action, op := range audioSessionOperations(audioMgr) {
+		ops[action] = op
+	}
+	for action, op := range audioGainOperations(audioMgr) {
+		ops[action] = op
 	}
 	return ops
 }
@@ -358,10 +369,10 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(assetDir, assetAPIToken, render),
+		ops:               newOperationRegistry(assetDir, assetAPIToken, render, audioMgr),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,

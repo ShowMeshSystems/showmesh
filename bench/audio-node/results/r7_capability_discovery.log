@@ -1,0 +1,27 @@
+=== aplay -L: PCM device names ALSA exposes ===
+null
+    Discard all samples (playback) or generate zero samples (capture)
+default
+
+=== aplay -l: card/device enumeration ===
+aplay: device_list:279: no soundcards found...
+
+=== gst-device-monitor-1.0: NOT present in this Debian 13 package set
+    (gstreamer1.0-tools ships gst-inspect/gst-launch/gst-stats/
+    gst-tester/gst-typefind only -- confirmed via dpkg -L). C1's
+    capability discovery cannot assume this binary exists on the
+    node image without adding a further package; unresearched here. ===
+
+=== alsasink GObject properties (device, device-name defaults) ===
+  device              : ALSA device, as defined in an asound configuration file
+                        flags: readable, writable
+                        String. Default: "default"
+--
+  device-name         : Human-readable name of the sound device
+                        flags: readable
+                        String. Default: null
+
+=== capsfilter negotiation: rates/formats alsasink itself will accept
+    against the null device, probed by letting audioconvert/
+    audioresample negotiate freely and reporting the chosen caps ===
+/GstPipeline:pipeline0/GstAudioConvert:audioconvert0.GstPad:sink: caps = audio/x-raw, rate=(int)44100, format=(string)F64LE, channels=(int)2, layout=(string)interleaved, channel-mask=(bitmask)0x0000000000000003

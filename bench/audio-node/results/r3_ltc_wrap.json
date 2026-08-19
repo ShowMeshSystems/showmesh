@@ -1,0 +1,1 @@
+{"run": "r3_ltc_wrap", "file": "/tmp/audio-bench-scratch/r3_wrap.wav", "sample_rate": 48000, "total_samples": 192100, "wrap_boundary_sample": 96000, "rms_before_wrap": 22765.504082734475, "rms_after_wrap": 22818.789568949534, "rms_far_from_wrap_reference": 22772.219734689897, "max_delta_across_wrap_window": 54271, "max_delta_far_from_wrap_reference": 54271}

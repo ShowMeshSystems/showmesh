@@ -46,6 +46,7 @@ var migrations = []migration{
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
 	{version: 8, sql: schemaV8},
+	{version: 9, sql: schemaV9},
 	{version: 10, sql: schemaV10},
 }
 
@@ -1058,18 +1059,29 @@ CREATE TABLE node_asset_reports (
 );
 `
 
+// schemaV9 holds one durable row per audio playback session, mirroring
+// the coordinator's own view of desired state (pkg/audio.
+// SessionDesiredState) so a coordinator restart can still tell a stale
+// command replay from a fresh one without asking the node. The node's own
+// agent is a session's actual authority: a running session must survive
+// coordinator loss, so this table is the coordinator's durable RECORD of
+// what it last told a session to be, not a second engine.
+const schemaV9 = `
+CREATE TABLE audio_sessions (
+    id           TEXT PRIMARY KEY,
+    node_id      TEXT NOT NULL,
+    desired_json TEXT NOT NULL,
+    revision     INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX audio_sessions_by_node ON audio_sessions (node_id);
+`
+
 // schemaV10 is Track F seam F2's own migration: the night-session
 // lifecycle controller (RESTING-MODE.md, ADR-038) and its cue outbox
-// (filled by Track F seam F4). Reserved as "v10" in docs/build/
-// IDENTIFIER-REGISTER.md; "v9" is separately reserved to Track C and does
-// not exist in this worktree, so this branch's own migrations slice has a
-// deliberate gap at 9 — [migrate]'s target is the MAXIMUM version in the
-// slice, not its length, so a fresh database here is correctly stamped 10.
-// Any coordinator database created by a pre-merge branch binary (this one
-// or Track C's) must be discarded and recreated after the merge, never
-// migrated forward: once both migrations exist in one ordered slice, a
-// database already stamped 10 will never receive the version-9 entry
-// inserted ahead of it.
+// (filled by Track F seam F4).
 //
 // night_sessions: one row per lifecycle session; a session's own id also
 // serves as its preparation epoch (RESTING-MODE.md §4.1). night_readiness_

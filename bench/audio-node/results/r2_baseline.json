@@ -1,0 +1,1 @@
+{"run": "r2_alignment", "label": "baseline", "file": "/tmp/audio-bench-scratch/r2_baseline.wav", "sample_rate": 48000, "program_edge_sample": 24001, "ltc_edge_sample": 24000, "offset_samples": 1, "offset_ms": 0.020833333333333332}

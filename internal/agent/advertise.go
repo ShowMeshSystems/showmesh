@@ -24,11 +24,14 @@ const advertiseTimeout = 10 * time.Second
 
 // capabilityDetectionTimeout bounds one background detection run
 // (scheduleCapabilityDetection), independent of advertiseTimeout.
-// detectCapabilities can run up to three real gst-launch-1.0 probes,
-// each bounded by pipeline.probeTimeout (8s); this leaves headroom for
-// all three plus the republish that follows, without ever being able to
-// compete with the hello publish's own budget for time.
-var capabilityDetectionTimeout = 30 * time.Second
+// detectCapabilities's own worst case is 2 real gst-launch-1.0 probes
+// (render surface format, NDI send) plus detectAudioCapabilities's own
+// worst case of up to 1 + 2*maxProbedDevices ([audio.Discover]'s engine
+// probe, plus an unconstrained and an LTC-constrained probe per candidate
+// route) — 11 probes today, each bounded by its own package's probeTimeout
+// (8s), for 88s worst case. This budget must stay comfortably above that
+// sum; widen it if either probe count or either probeTimeout grows.
+var capabilityDetectionTimeout = 120 * time.Second
 
 // willDisconnectReason is the Reason recorded on the Will payload
 // registered at CONNECT time (see newMQTTConn). It describes what the
