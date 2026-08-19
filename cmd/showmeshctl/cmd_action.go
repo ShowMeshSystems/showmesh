@@ -376,7 +376,7 @@ func effectiveActionInvokeTimeout(flagTimeout time.Duration) time.Duration {
 func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl action invoke", stderr)
 	var revision int64
-	fs.Int64Var(&revision, "revision", 0, "pin the exact show.action revision to execute (SM-99); 0 (default) "+
+	fs.Int64Var(&revision, "revision", 0, "pin the exact show.action revision to execute; 0 (default) "+
 		"means \"whichever revision is active right now\"")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action invoke [flags] <action-id>")
@@ -453,8 +453,8 @@ func cmdActionInvoke(args []string, stdout, stderr io.Writer, clock func() time.
 // "unconfirmable" is printed with its own distinct word, never merged
 // into "confirmed" — an operator who cannot tell the two apart at a
 // glance stops reading them (ADR-029 decision 4). result.Outcome is nil
-// while result.State is "pending" (SM-100) — a real lifecycle state, not
-// a blank outcome this command used to special-case.
+// while result.State is "pending" — a real lifecycle state, not a blank
+// outcome this command used to special-case.
 func reportActionInvocationResult(stdout io.Writer, result actionInvocationResult) int {
 	label := result.Label
 	if label == "" {

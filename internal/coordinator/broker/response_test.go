@@ -507,19 +507,11 @@ func TestAwaitResponseSeesResponsePublishedBetweenSubscribeAndWait(t *testing.T)
 // retained delivery must not resolve AwaitResponse. Only the live delivery,
 // dispatched afterward, may.
 //
-// Review finding 2 on commit 9dcab74: the original version of this test
-// dispatched its retained delivery from subscribeFunc, i.e. before
-// AwaitResponse stamps publishedAt (that happens right before the Publish
-// call, strictly after Subscribe returns — see AwaitResponse's doc
-// comment). That made the delivery predate the publish, so
-// AwaitResponse's own step-5 publish fence (dm.receivedAt.Before(publishedAt))
-// discarded it independently of line 236's RETAIN check — deleting line 236
-// entirely left this test passing, because it was measuring the fence, not
-// the rule it is named for. Dispatching from publishFunc instead — which
-// only runs after publishedAt is already stamped — makes this test require
-// line 236 specifically: with it deleted, a retained delivery arriving
-// after the publish DOES pass the fence, and only the RETAIN check stops it
-// from confirming.
+// The retained delivery is dispatched from publishFunc, not subscribeFunc,
+// so it arrives strictly after AwaitResponse stamps publishedAt. That
+// makes this test exercise the RETAIN check specifically, rather than the
+// separate publish-ordering fence that would otherwise discard an
+// earlier delivery for an unrelated reason.
 func TestAwaitResponseRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	bm := &BrokerManager{now: time.Now}
 	cm := &fakeMQTTClient{
@@ -564,7 +556,7 @@ func TestAwaitResponseRetainedDeliveryDoesNotConfirm(t *testing.T) {
 	}
 }
 
-// --- ErrResponseFailedBeforePublish: SM-105 ---
+// --- ErrResponseFailedBeforePublish ---
 
 // TestAwaitResponseDeadlineValidationFailsBeforePublish proves that an
 // invalid Deadline is rejected before Subscribe or Publish is ever called,
@@ -617,8 +609,8 @@ func TestAwaitResponseSubscribeFailureFailsBeforePublish(t *testing.T) {
 
 // TestAwaitResponseCtxCanceledDuringSubscribeFailsBeforePublish proves that
 // a context already canceled by the time Subscribe runs is reported the
-// same way as any other pre-publish failure — SM-105's third named case,
-// alongside an invalid deadline and a rejected SUBSCRIBE.
+// same way as any other pre-publish failure, alongside an invalid
+// deadline and a rejected SUBSCRIBE.
 func TestAwaitResponseCtxCanceledDuringSubscribeFailsBeforePublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -859,9 +851,9 @@ func TestAwaitResponseReleasesWaiterOnPublishFailure(t *testing.T) {
 	}
 }
 
-// --- Review finding 3 (commit 9dcab74): the release/register race ---
+// --- The release/register race ---
 
-// TestReleaseAndRegisterOnSameTopicDoNotRace reproduces review finding 3:
+// TestReleaseAndRegisterOnSameTopicDoNotRace reproduces a defect where
 // releaseResponseWaiter used to delete a topic's routing-table entry,
 // RELEASE respMu, and only then issue the network UNSUBSCRIBE. A
 // registerResponseWaiter for the same topic landing in that window would
