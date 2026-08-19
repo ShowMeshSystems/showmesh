@@ -23,6 +23,18 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 			m.logf("audio session %s: restore failed: %v", id, err)
 		}
 	}
+
+	corrupt, err := m.store.ListCorrupt()
+	if err != nil {
+		m.logf("audio: list corrupt persisted sessions: %v", err)
+	}
+	for _, c := range corrupt {
+		m.logf("audio: persisted session file %q could not be recovered: %s", c.Filename, c.Reason)
+	}
+	m.mu.Lock()
+	m.corruptSessions = corrupt
+	m.mu.Unlock()
+
 	return nil
 }
 
@@ -50,6 +62,16 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.revState = pkgaudio.RestoreRevisionState(id, rec.Revision, rec.Decisions)
 	if rec.ExecutedResults != nil {
 		s.executedResults = rec.ExecutedResults
+		// True insertion order does not survive a JSON map round trip;
+		// this rebuilds SOME order so the maxRetainedInvocations bound
+		// keeps holding from here on. Which entry a post-restart eviction
+		// picks first is best-effort, not exact recency — see
+		// [Session.rememberExecutedResultLocked]'s doc comment on why
+		// that is an acceptable, documented trade rather than a defect.
+		s.executedOrder = make([]pkgaudio.InvocationID, 0, len(rec.ExecutedResults))
+		for invocation := range rec.ExecutedResults {
+			s.executedOrder = append(s.executedOrder, invocation)
+		}
 	}
 	s.state = rec.SessionState
 	s.currentIndex = rec.CurrentIndex
@@ -57,7 +79,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.bookmark = rec.Bookmark
 	s.muted = rec.Muted
 	s.preMuteGain = rec.PreMuteGain
-	s.duckedBy = rec.DuckedBy
+	if len(rec.DuckedByAll) > 0 {
+		s.duckedByAll = make(map[pkgaudio.SessionID]struct{}, len(rec.DuckedByAll))
+		for _, id := range rec.DuckedByAll {
+			s.duckedByAll[id] = struct{}{}
+		}
+	}
 	s.preDuckGain = rec.PreDuckGain
 	s.fault = rec.Fault
 	if s.fault == "" {
@@ -66,6 +93,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.faultReason = rec.FaultReason
 	s.faultAt = rec.FaultAt
 	s.lastProbe = rec.LastProbe
+	s.fadePending = rec.FadePending
+	s.fadeInvocation = rec.FadeInvocation
+	s.fadeState = rec.FadeState
+	if s.fadeState == "" {
+		s.fadeState = FadeStateNone
+	}
 
 	m.mu.Lock()
 	m.sessions[id] = s
@@ -82,32 +115,76 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		position := time.Duration(0)
 		if s.bookmark != nil && s.desired.Playlist != nil && s.desired.Playlist.Resume == pkgaudio.ResumePolicyResume {
-			position = s.bookmark.Position
+			resolved, err := s.resolveBookmarkPositionLocked(item)
+			if err != nil {
+				// A stale bookmark surviving a restart must not silently
+				// use a garbage position, and must not abort recovery of
+				// an otherwise-healthy session either: it is logged and
+				// cleared, and the item still starts, from 0.
+				// prepareLocked's own success below clears any fault this
+				// branch might set, so a fault is not the right evidence
+				// channel here — the log line is.
+				m.logf("audio session %s: restore bookmark could not be resolved, starting from 0: %v", id, err)
+				s.bookmark = nil
+			} else {
+				position = resolved
+			}
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
-			s.persistLocked()
+			s.persistBestEffortLocked("state change")
 			return err
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
-			s.persistLocked()
+			s.persistBestEffortLocked("state change")
 			return err
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
-		s.persistLocked()
+		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
+		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
+		// never Paused: an engine's own Resume requires a handle it itself
+		// last drove into Paused, so restoring here reproduces that by
+		// starting from the bookmark and immediately pausing again, rather
+		// than leaving the handle at Ready and trusting the session-level
+		// state alone.
 		item, ok := s.currentItemLocked()
 		if !ok {
 			return nil
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
-			s.persistLocked()
+			s.persistBestEffortLocked("state change")
 			return err
 		}
+		position, err := s.resolveBookmarkPositionLocked(item)
+		if err != nil {
+			// Same reasoning as the Playing/Preparing branch above: log and
+			// clear rather than fault, since the Start+Pause below (on
+			// success) has no equivalent clear to race against, but
+			// consistency with the sibling branch matters more than a
+			// fault that would only ever be reported once.
+			m.logf("audio session %s: restore bookmark could not be resolved, resuming from 0: %v", id, err)
+			s.bookmark = nil
+			position = 0
+		}
+		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
+			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			s.persistBestEffortLocked("state change")
+			return err
+		}
+		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
+			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			s.persistBestEffortLocked("state change")
+			return err
+		}
+		s.state = pkgaudio.StatePaused
 		s.timingKnown = false
+		s.persistBestEffortLocked("state change")
 	}
 
 	// A session left ducked when the coordinator crashed is restored
@@ -116,11 +193,21 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	// persisted but before this restore ran. If the ducker IS still
 	// active, s stays ducked, correctly: it will be restored normally
 	// when the ducker later stops. Either way this is the same
-	// exactly-once check [Manager.restoreOneDuckLocked] runs on the live
+	// exactly-once check [Manager.removeDuckerLocked] runs on the live
 	// path, so a session can never be restored twice regardless of which
 	// side of the crash the restore boundary fell on.
-	if s.duckedBy != "" && !m.duckerStillActiveOnDisk(s.duckedBy) {
-		m.restoreOneDuckLocked(ctx, s)
+	// Copy the ids first: removeDuckerLocked mutates s.duckedByAll, and
+	// ranging over a map while deleting other-in-progress entries from a
+	// second, independent pass is easier to reason about than relying on
+	// range-during-delete semantics for a set this method itself owns.
+	duckers := make([]pkgaudio.SessionID, 0, len(s.duckedByAll))
+	for id := range s.duckedByAll {
+		duckers = append(duckers, id)
+	}
+	for _, duckerID := range duckers {
+		if !m.duckerStillActiveOnDisk(duckerID) {
+			m.removeDuckerLocked(ctx, s, duckerID)
+		}
 	}
 	return nil
 }
@@ -172,7 +259,9 @@ func (m *Manager) watchTick(ctx context.Context) {
 		s.mu.Lock()
 		s.checkFadeCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
-			obs, err := m.engine.Observe(ctx, s.handle)
+			obsCtx, cancel := boundedObserveContext(ctx)
+			obs, err := m.engine.Observe(obsCtx, s.handle)
+			cancel()
 			if err != nil {
 				// A background poll failing to read a loaded, playing
 				// handle is itself evidence: this is where a real

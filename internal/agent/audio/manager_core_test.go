@@ -2,6 +2,9 @@ package audio
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -126,5 +129,416 @@ func TestClearNeverRefusedForWantOfEvidence(t *testing.T) {
 	r := m.Clear(ctx, "never-existed", "inv-1", 1)
 	if r.Outcome == pkgaudio.OutcomeRefused {
 		t.Fatalf("Clear on an unknown session must never be Refused, got %+v", r)
+	}
+}
+
+// TestStartReprepresIdentityChangedBetweenPrepareAndStart proves finding
+// 7: preparing item A, then Applying a change to item B, then Start must
+// play B, never A. Before the fix, Start only checked s.handleLoaded and
+// skipped repreparing whenever a handle was already loaded for any
+// reason, so a media change landed by Apply after Prepare was silently
+// ignored and the stale handle for A was started instead.
+func TestStartRepreparesIdentityChangedBetweenPrepareAndStart(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	refA := writeTestAsset(t, m.assetDir, "a.wav", "asset-a", []byte("content-a"))
+	refB := writeTestAsset(t, m.assetDir, "b.wav", "asset-b", []byte("content-b"))
+
+	m.Apply(ctx, id, "inv-apply-a", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(refA)})
+	if r := m.Prepare(ctx, id, "inv-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("prepare A unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	loadedAfterPrepareA := s.loadedIdentity
+	s.mu.Unlock()
+	if loadedAfterPrepareA == "" {
+		t.Fatal("loadedIdentity was never set by Prepare")
+	}
+
+	// Apply B AFTER preparing A — this is the exact ordering finding 7
+	// names: the desired media changes between Prepare and Start.
+	m.Apply(ctx, id, "inv-apply-b", 3, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(refB)})
+	m.Start(ctx, id, "inv-start", 4)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadedIdentity != itemIdentity(pkgaudio.PlaylistItem{ItemID: "media", Media: refB}) {
+		t.Fatalf("loadedIdentity = %q after Start, want it to reflect asset B, not the stale A handle", s.loadedIdentity)
+	}
+	h, err := m.engine.(*FakeEngine).get(s.handle)
+	if err != nil {
+		t.Fatalf("engine has no handle for the started session: %v", err)
+	}
+	if h.media.AssetID != "asset-b" {
+		t.Fatalf("engine handle's loaded media = %q, want asset-b (B), not the stale A load", h.media.AssetID)
+	}
+}
+
+// TestStopReportsFailureAndKeepsHandleForRetry proves finding 15:
+// when Engine.Stop or Engine.Release fails, Manager.Stop must not
+// silently discard the handle and report success — it keeps the handle
+// loaded (so a retry can still address it) and reports the failure.
+// Before the fix, Stop always released the handle and always reported
+// Stopped regardless of what the engine said, so a genuine engine
+// failure during Stop was invisible and unrecoverable: the next Start
+// would have to prepare a brand new handle with no way to confirm the
+// old one was ever actually silenced.
+func TestStopReportsFailureAndKeepsHandleForRetry(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	fake := NewFakeEngine(c.now)
+	m := NewManager(availableFakeEngine{fake}, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+
+	r := m.Stop(ctx, id, "inv-stop", 3)
+	if r.Outcome == pkgaudio.OutcomeStopped {
+		t.Fatalf("Stop reported Stopped despite Engine.Stop failing: %+v", r)
+	}
+	if r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("Stop must never be Refused (ADR-024 decision 7), got %+v", r)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.handleLoaded {
+		t.Fatal("handle was released despite Engine.Stop failing; a retry has nothing left to address")
+	}
+	if s.handle != handle {
+		t.Fatalf("handle changed to %q, want the original %q preserved for retry", s.handle, handle)
+	}
+	if s.fault == pkgaudio.FaultNone {
+		t.Fatal("no fault was recorded for the failed Stop")
+	}
+}
+
+// TestStartRefusesNegativeBookmarkPosition proves half of finding 16: a
+// negative bookmark position must never reach Engine.Start — it is
+// refused visibly and the bookmark is cleared so a subsequent Start is
+// not refused forever by the same bad value.
+func TestStartRefusesNegativeBookmarkPosition(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start-1", 2)
+	m.Pause(ctx, id, "inv-pause", 3)
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if s.bookmark == nil {
+		s.mu.Unlock()
+		t.Fatal("precondition: pause should have set a bookmark")
+	}
+	s.bookmark.Position = -5 * time.Second
+	s.mu.Unlock()
+
+	r := m.Start(ctx, id, "inv-start-2", 4)
+	if r.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("outcome = %+v, want Refused for a negative bookmark position", r)
+	}
+	if r.Reason == "" {
+		t.Fatal("refusal must carry a reason naming the bad bookmark")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bookmark != nil {
+		t.Fatalf("bookmark = %+v, want cleared after being refused so a later Start is not stuck", s.bookmark)
+	}
+}
+
+// TestStartRefusesStalePlaylistBookmark proves the other half of finding
+// 16: a bookmark pinned to a playlist revision that no longer matches the
+// session's current desired playlist must be refused via
+// [pkgaudio.Bookmark.Resolve], never silently used as if it still
+// applied to the new playlist.
+func TestStartRefusesStalePlaylistBookmark(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	playlist := twoItemPlaylist(t, m.assetDir)
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(playlist)})
+	m.Start(ctx, id, "inv-start-1", 2)
+	m.Pause(ctx, id, "inv-pause", 3)
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if s.bookmark == nil || s.bookmark.PlaylistRevision != playlist.OwnerRevision {
+		s.mu.Unlock()
+		t.Fatalf("precondition: bookmark should pin the current playlist revision, got %+v", s.bookmark)
+	}
+	// Simulate the playlist having moved on: the bookmark's own revision
+	// no longer matches, exactly the way a stale reference reaches Start
+	// after an Apply lands a new playlist revision between pause and the
+	// next Start.
+	s.bookmark.PlaylistRevision = playlist.OwnerRevision + 1
+	s.mu.Unlock()
+
+	r := m.Start(ctx, id, "inv-start-2", 4)
+	if r.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("outcome = %+v, want Refused for a stale playlist bookmark", r)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bookmark != nil {
+		t.Fatalf("bookmark = %+v, want cleared after being refused as stale", s.bookmark)
+	}
+}
+
+// TestDispatchReportsFailureWhenPersistFails proves finding 10: a
+// command that executed but could not be durably saved must report
+// failure, not the underlying command's optimistic success — a caller
+// told "started" or "stopped" over a persist that silently failed would
+// believe a guarantee (surviving this process's next crash) that was
+// never actually met.
+func TestDispatchReportsFailureWhenPersistFails(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := &failingSessionStore{SessionStore: NewFileSessionStore(dir)}
+	m := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+
+	store.armSaveFailures(1, nil)
+	r := m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r.Outcome != pkgaudio.OutcomeFailed {
+		t.Fatalf("outcome = %+v, want Failed when persist fails, not the command's own optimistic outcome", r)
+	}
+	if r.Reason == "" {
+		t.Fatal("a persist-failure outcome must carry a reason")
+	}
+
+	// The cached result for THIS invocation must be consistent with what
+	// was reported, not the discarded optimistic one, so a replay of the
+	// same invocation returns the same true answer.
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	cached := s.executedResults["inv-apply"]
+	s.mu.Unlock()
+	if cached.Outcome != pkgaudio.OutcomeFailed {
+		t.Fatalf("cached result = %+v, want Failed to match what was reported", cached)
+	}
+
+	// Once the store recovers, a fresh command must succeed normally —
+	// this failure must not be sticky.
+	r2 := m.Apply(ctx, id, "inv-apply-2", 2, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r2.Outcome == pkgaudio.OutcomeFailed {
+		t.Fatalf("outcome = %+v, want success once the store recovers", r2)
+	}
+}
+
+// TestCorruptPersistedSessionRaisesFaultEvidence proves finding 17: a
+// malformed or truncated persisted session file must not silently
+// vanish from the fleet — RestoreAll must not stop for it, but
+// Manager.Snapshot must still report it as retained fault evidence, not
+// omit it (indistinguishable from "never persisted").
+func TestCorruptPersistedSessionRaisesFaultEvidence(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+
+	// A healthy session, so the corrupt one is proven not to block
+	// restoring anything else.
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	healthyRef := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, "healthy", "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(healthyRef)})
+
+	// Write a truncated/invalid JSON file directly into the session
+	// store's directory, simulating a crash mid-write or disk corruption.
+	sessionDir := filepath.Join(m.assetDir, sessionStateSubdir)
+	if err := os.WriteFile(filepath.Join(sessionDir, "truncated.json"), []byte(`{"ID": "broken", "Desi`), 0o644); err != nil {
+		t.Fatalf("write corrupt session file: %v", err)
+	}
+
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	if _, ok := m2.get("healthy"); !ok {
+		t.Fatal("the healthy session was not restored; a corrupt sibling file must not block it")
+	}
+
+	snaps := m2.Snapshot(ctx)
+	var found bool
+	for _, snap := range snaps {
+		if snap.State == pkgaudio.StateFailed && snap.Fault == pkgaudio.FaultOther && snap.FaultReason != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Snapshot() = %+v, want an entry reporting the corrupt file as fault evidence", snaps)
+	}
+}
+
+// TestExecutedResultsAreBoundedAndOldestEvicted proves finding 20: a
+// session's invocation decisions/results must not grow without bound.
+// After exceeding maxRetainedInvocations, the oldest invocation is
+// evicted, the newest ones survive, and the persisted record's Decisions
+// map never carries an invocation ExecutedResults no longer has (the
+// consistency [Session.retainedDecisionsLocked] exists for).
+func TestExecutedResultsAreBoundedAndOldestEvicted(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	total := maxRetainedInvocations + 25
+	for i := 0; i < total; i++ {
+		rev := pkgaudio.Revision(i + 1)
+		inv := pkgaudio.InvocationID(fmt.Sprintf("inv-%04d", i))
+		m.Apply(ctx, id, inv, rev, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.executedResults) != maxRetainedInvocations {
+		t.Fatalf("len(executedResults) = %d, want bounded to %d", len(s.executedResults), maxRetainedInvocations)
+	}
+	if len(s.executedOrder) != maxRetainedInvocations {
+		t.Fatalf("len(executedOrder) = %d, want %d", len(s.executedOrder), maxRetainedInvocations)
+	}
+
+	// The earliest invocations were evicted...
+	oldest := pkgaudio.InvocationID("inv-0000")
+	if _, ok := s.executedResults[oldest]; ok {
+		t.Fatalf("oldest invocation %q was not evicted", oldest)
+	}
+	// ...and the most recent ones survived.
+	newest := pkgaudio.InvocationID(fmt.Sprintf("inv-%04d", total-1))
+	if _, ok := s.executedResults[newest]; !ok {
+		t.Fatalf("newest invocation %q was evicted, want retained", newest)
+	}
+
+	// The persisted record's two invocation-keyed maps must agree on
+	// membership: no Decision survives for an invocation ExecutedResults
+	// no longer has.
+	rec := s.persistedLocked()
+	if len(rec.Decisions) != len(rec.ExecutedResults) {
+		t.Fatalf("len(Decisions) = %d, len(ExecutedResults) = %d, want equal membership", len(rec.Decisions), len(rec.ExecutedResults))
+	}
+	for invocation := range rec.ExecutedResults {
+		if _, ok := rec.Decisions[invocation]; !ok {
+			t.Fatalf("invocation %q has an ExecutedResult but no matching Decision", invocation)
+		}
+	}
+	if _, ok := rec.Decisions[oldest]; ok {
+		t.Fatalf("evicted invocation %q still has a persisted Decision", oldest)
+	}
+}
+
+// hangingObserveEngine wraps [FakeEngine] and makes Observe against one
+// specific handle block until its context is done, simulating a hung
+// engine — for finding 19, which cannot be reached against a shipped
+// FakeEngine that always answers immediately.
+type hangingObserveEngine struct {
+	*FakeEngine
+	hangHandle EngineHandle
+}
+
+func (e *hangingObserveEngine) Observe(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
+	if handle == e.hangHandle {
+		<-ctx.Done()
+		return EngineObservation{}, ctx.Err()
+	}
+	return e.FakeEngine.Observe(ctx, handle)
+}
+
+// TestWatchTickBoundsAHungObserveCall proves finding 19: watchTick's
+// per-session supervision loop must not let one hung Engine.Observe call
+// block supervision of every other session behind it forever. Before the
+// fix, Observe was called with the tick's own (typically un-timeout-
+// bounded) context, so a genuinely hung handle stalled the whole tick —
+// and every session after it — indefinitely.
+func TestWatchTickBoundsAHungObserveCall(t *testing.T) {
+	prevTimeout := observeTimeout
+	observeTimeout = 50 * time.Millisecond
+	defer func() { observeTimeout = prevTimeout }()
+
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	hung := &hangingObserveEngine{FakeEngine: NewFakeEngine(c.now)}
+	m := NewManager(hung, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	refA := writeTestAsset(t, m.assetDir, "a.wav", "asset-a", []byte("a"))
+	refB := writeTestAsset(t, m.assetDir, "b.wav", "asset-b", []byte("b"))
+	m.Apply(ctx, "hang", "inv-hang-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(refA)})
+	m.Start(ctx, "hang", "inv-hang-start", 2)
+	m.Apply(ctx, "ok", "inv-ok-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(refB)})
+	m.Start(ctx, "ok", "inv-ok-start", 2)
+
+	hangSession, _ := m.get("hang")
+	hangSession.mu.Lock()
+	hung.hangHandle = hangSession.handle
+	hangSession.mu.Unlock()
+
+	okSession, _ := m.get("ok")
+	okSession.mu.Lock()
+	okSession.lastObservedAt = time.Time{}
+	okSession.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		m.watchTick(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchTick did not return within a bounded time despite one hung Observe call")
+	}
+
+	okSession.mu.Lock()
+	defer okSession.mu.Unlock()
+	if okSession.lastObservedAt.IsZero() {
+		t.Fatal("the healthy session was never observed; the hung session's Observe call blocked the whole tick")
 	}
 }

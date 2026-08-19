@@ -267,8 +267,8 @@ func TestDuckOnlyAffectsLowerPriorityRoles(t *testing.T) {
 	show, _ := m.get("show")
 	show.mu.Lock()
 	defer show.mu.Unlock()
-	if show.duckedBy != "" {
-		t.Fatalf("show session was ducked by a lower-priority background session (duckedBy=%q)", show.duckedBy)
+	if len(show.duckedByAll) != 0 {
+		t.Fatalf("show session was ducked by a lower-priority background session (duckedByAll=%v)", show.duckedByAll)
 	}
 }
 
@@ -290,32 +290,33 @@ func TestAnnouncementDucksAndRestoresBackgroundOnStop(t *testing.T) {
 
 	bg, _ := m.get("bg")
 	bg.mu.Lock()
-	duckedBy, gain := bg.duckedBy, *bg.desired.Gain
+	_, duckedByAnn := bg.duckedByAll["ann"]
+	gain := *bg.desired.Gain
 	bg.mu.Unlock()
-	if duckedBy != "ann" || gain != 0 {
-		t.Fatalf("bg after ann started = duckedBy %q gain %v, want ducked by ann to 0", duckedBy, gain)
+	if !duckedByAnn || gain != 0 {
+		t.Fatalf("bg after ann started = duckedByAll %v gain %v, want ducked by ann to 0", bg.duckedByAll, gain)
 	}
 
 	m.Stop(ctx, "ann", "inv-ann-stop", 3)
 
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
-	if bg.duckedBy != "" {
-		t.Fatalf("bg still shows duckedBy=%q after the ducking session stopped", bg.duckedBy)
+	if len(bg.duckedByAll) != 0 {
+		t.Fatalf("bg still shows duckedByAll=%v after the ducking session stopped", bg.duckedByAll)
 	}
 	if *bg.desired.Gain != pkgaudio.Gain(0.8) {
 		t.Fatalf("bg gain after restore = %v, want the pre-duck 0.8", *bg.desired.Gain)
 	}
 }
 
-// mutation target: restoreOneDuckLocked's own `if t.duckedBy == ""`
-// guard, called directly and repeatedly rather than through a caller
-// that already gates on duckedBy — both real callers happen to check
-// duckedBy before calling, so this is the one test that actually
-// exercises the function's own idempotence rather than a caller's.
-// Without the guard, a second restore call after the operator has
-// already set a new gain would incorrectly stomp it back to a default.
-func TestRestoreOneDuckLockedIsIdempotentOnItsOwn(t *testing.T) {
+// mutation target: removeDuckerLocked's own membership guard, called
+// directly and repeatedly rather than through a caller that already
+// gates on duckedByAll — both real callers happen to check membership
+// before calling, so this is the one test that actually exercises the
+// function's own idempotence rather than a caller's. Without the guard,
+// a second removal call after the operator has already set a new gain
+// would incorrectly stomp it back to a default.
+func TestRemoveDuckerLockedIsIdempotentOnItsOwn(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
@@ -329,22 +330,22 @@ func TestRestoreOneDuckLockedIsIdempotentOnItsOwn(t *testing.T) {
 	s.mu.Lock()
 	prior := pkgaudio.Gain(0.6)
 	s.preDuckGain = &prior
-	s.duckedBy = "ann"
-	m.restoreOneDuckLocked(ctx, s) // first restore: clears duckedBy/preDuckGain, sets gain to 0.6
+	s.duckedByAll = map[pkgaudio.SessionID]struct{}{"ann": {}}
+	m.removeDuckerLocked(ctx, s, "ann") // first removal: clears the set/preDuckGain, sets gain to 0.6
 
 	operatorGain := pkgaudio.Gain(0.3)
 	s.desired.Gain = &operatorGain // an operator gain.set arrives after the restore
 
-	m.restoreOneDuckLocked(ctx, s) // must be a no-op: duckedBy is already empty
+	m.removeDuckerLocked(ctx, s, "ann") // must be a no-op: "ann" is already absent
 	got := *s.desired.Gain
 	s.mu.Unlock()
 
 	if got != operatorGain {
-		t.Fatalf("gain after a second restoreOneDuckLocked call = %v, want the operator's %v untouched", got, operatorGain)
+		t.Fatalf("gain after a second removeDuckerLocked call = %v, want the operator's %v untouched", got, operatorGain)
 	}
 }
 
-// mutation target: restoreOneDuckLocked's `if t.duckedBy == ""` guard —
+// mutation target: removeDuckerLocked's membership guard —
 // the entire exactly-once mechanism. Simulates a crash where the
 // announcement's own Stop persisted (its SessionState is Stopped on
 // disk) but the corresponding restore of the background session's gain
@@ -370,12 +371,12 @@ func TestDuckRestoreExactlyOnce_CrashAfterDuckerStopped(t *testing.T) {
 	ann, _ := m.get("ann")
 	ann.mu.Lock()
 	ann.state = pkgaudio.StateStopped
-	ann.persistLocked()
+	_ = ann.persistLocked()
 	ann.mu.Unlock()
 
 	bg, _ := m.get("bg")
 	bg.mu.Lock()
-	if bg.duckedBy != "ann" {
+	if _, ok := bg.duckedByAll["ann"]; !ok {
 		bg.mu.Unlock()
 		t.Fatalf("precondition: bg should still be ducked pre-restart")
 	}
@@ -393,8 +394,8 @@ func TestDuckRestoreExactlyOnce_CrashAfterDuckerStopped(t *testing.T) {
 	}
 	bg2.mu.Lock()
 	defer bg2.mu.Unlock()
-	if bg2.duckedBy != "" {
-		t.Fatalf("bg2.duckedBy = %q after restart, want restored (empty) since ann is gone", bg2.duckedBy)
+	if len(bg2.duckedByAll) != 0 {
+		t.Fatalf("bg2.duckedByAll = %v after restart, want restored (empty) since ann is gone", bg2.duckedByAll)
 	}
 	if bg2.desired.Gain == nil || *bg2.desired.Gain != pkgaudio.Gain(0.6) {
 		t.Fatalf("bg2 gain after restart = %v, want the pre-duck 0.6", bg2.desired.Gain)
@@ -431,10 +432,11 @@ func TestDuckRestoreExactlyOnce_CrashWhileDuckerStillPlaying(t *testing.T) {
 		t.Fatal("bg session was not restored")
 	}
 	bg2.mu.Lock()
-	duckedBy, gain := bg2.duckedBy, bg2.desired.Gain
+	_, duckedByAnn := bg2.duckedByAll["ann"]
+	gain := bg2.desired.Gain
 	bg2.mu.Unlock()
-	if duckedBy != "ann" {
-		t.Fatalf("bg2.duckedBy = %q after restart, want still ducked by ann (ann is still playing)", duckedBy)
+	if !duckedByAnn {
+		t.Fatalf("bg2.duckedByAll = %v after restart, want still ducked by ann (ann is still playing)", bg2.duckedByAll)
 	}
 	if gain == nil || *gain != pkgaudio.Gain(0) {
 		t.Fatalf("bg2 gain after restart = %v, want still ducked to 0", gain)
@@ -446,11 +448,192 @@ func TestDuckRestoreExactlyOnce_CrashWhileDuckerStillPlaying(t *testing.T) {
 
 	bg2.mu.Lock()
 	defer bg2.mu.Unlock()
-	if bg2.duckedBy != "" {
-		t.Fatalf("bg2.duckedBy = %q after ann finally stopped, want restored", bg2.duckedBy)
+	if len(bg2.duckedByAll) != 0 {
+		t.Fatalf("bg2.duckedByAll = %v after ann finally stopped, want restored", bg2.duckedByAll)
 	}
 	if *bg2.desired.Gain != pkgaudio.Gain(0.9) {
 		t.Fatalf("bg2 gain after ann finally stopped = %v, want restored 0.9", *bg2.desired.Gain)
+	}
+}
+
+// TestRestartThenResumeRecoversAPausedSession proves finding 8: a session
+// persisted Paused, then restored after a restart, must actually be
+// resumable — Manager.Resume must not refuse and the underlying engine
+// call must not fail. Before the fix, restoreOne reached a paused session
+// only as far as prepareLocked (engine handle Ready, never Paused), so a
+// later Resume's own Engine.Resume call failed against a handle that was
+// never actually paused inside the engine.
+func TestRestartThenResumeRecoversAPausedSession(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-a", []byte("content-a"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+	c.advance(500 * time.Millisecond)
+
+	if r := m.Pause(ctx, id, "inv-pause", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("pause unexpectedly refused: %+v", r)
+	}
+	s, _ := m.get(id)
+	s.mu.Lock()
+	if s.state != pkgaudio.StatePaused || s.bookmark == nil {
+		s.mu.Unlock()
+		t.Fatal("precondition: session should be paused with a bookmark before the restart")
+	}
+	s.mu.Unlock()
+
+	// "Restart": a fresh Manager and a fresh Engine over the same store —
+	// the engine has no memory of s.handle at all, matching a real process
+	// restart, not just a resume against the same in-memory engine.
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	restoredState := s2.state
+	s2.mu.Unlock()
+	if restoredState != pkgaudio.StatePaused {
+		t.Fatalf("restored state = %q, want paused", restoredState)
+	}
+
+	r := m2.Resume(ctx, id, "inv-resume", 4)
+	if r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("resume after restart unexpectedly refused: %+v", r)
+	}
+
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	if s2.state != pkgaudio.StatePlaying {
+		t.Fatalf("state after resume = %q, want playing (Engine.Resume must have succeeded against a genuinely-paused handle)", s2.state)
+	}
+}
+
+// TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores proves
+// finding 9: with two announcements ducking one background session,
+// stopping the FIRST must not restore the background's gain while the
+// SECOND is still playing. Before the fix, mix.go tracked only a single
+// duckedBy id, so ann2's duck silently no-opped (bg already looked
+// ducked) and ann1's stop restored bg's gain out from under ann2.
+func TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.7))
+
+	ann1Ref := writeTestAsset(t, m.assetDir, "ann1.wav", "asset-ann1", []byte("ann1"))
+	startPlaying(t, m, ctx, "ann1", ann1Ref, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	ann2Ref := writeTestAsset(t, m.assetDir, "ann2.wav", "asset-ann2", []byte("ann2"))
+	startPlaying(t, m, ctx, "ann2", ann2Ref, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	_, byAnn1 := bg.duckedByAll["ann1"]
+	_, byAnn2 := bg.duckedByAll["ann2"]
+	gain := *bg.desired.Gain
+	bg.mu.Unlock()
+	if !byAnn1 || !byAnn2 || gain != 0 {
+		t.Fatalf("bg after both announcements started: duckedByAll=%v gain=%v, want ducked by both ann1 and ann2 at 0", bg.duckedByAll, gain)
+	}
+
+	// ann1 stops first: bg must stay ducked at 0 because ann2 is still
+	// playing.
+	m.Stop(ctx, "ann1", "inv-ann1-stop", 3)
+
+	bg.mu.Lock()
+	_, stillByAnn2 := bg.duckedByAll["ann2"]
+	gainAfterFirstStop := *bg.desired.Gain
+	bg.mu.Unlock()
+	if !stillByAnn2 || gainAfterFirstStop != 0 {
+		t.Fatalf("bg after ann1 stopped (ann2 still playing): duckedByAll=%v gain=%v, want still ducked by ann2 at 0", bg.duckedByAll, gainAfterFirstStop)
+	}
+
+	// ann2 stops second: only now must bg's original gain be restored.
+	m.Stop(ctx, "ann2", "inv-ann2-stop", 3)
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if len(bg.duckedByAll) != 0 {
+		t.Fatalf("bg.duckedByAll = %v after both announcements stopped, want empty", bg.duckedByAll)
+	}
+	if *bg.desired.Gain != pkgaudio.Gain(0.7) {
+		t.Fatalf("bg gain after both announcements stopped = %v, want restored 0.7", *bg.desired.Gain)
+	}
+}
+
+// TestFadeSupervisionSurvivesRestart proves finding 18: a fade dispatched
+// and then interrupted by a crash must not lose its pending invocation
+// or leave it permanently stuck reporting "not yet complete". Before the
+// fix, fadePending/fadeInvocation/fadeState were never persisted, so a
+// restored session always came back with fadePending=false regardless of
+// what was actually in flight, and watchTick's checkFadeCompletionLocked
+// — gated on fadePending — could never run for that invocation again.
+func TestFadeSupervisionSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0))
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	if !s.fadePending || s.fadeInvocation != fadeInvocation || s.fadeState != FadeStateInProgress {
+		s.mu.Unlock()
+		t.Fatalf("precondition: fade should be pending before the restart (pending=%v invocation=%q state=%q)", s.fadePending, s.fadeInvocation, s.fadeState)
+	}
+	s.mu.Unlock()
+
+	// "Restart": a fresh Manager and engine over the same store, with no
+	// intervening watchTick — the crash this finding names.
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	pending, invocation, state := s2.fadePending, s2.fadeInvocation, s2.fadeState
+	s2.mu.Unlock()
+	if !pending || invocation != fadeInvocation || state != FadeStateInProgress {
+		t.Fatalf("fade supervision state lost across restart: pending=%v invocation=%q state=%q, want it preserved", pending, invocation, state)
+	}
+
+	// Now that fadePending survived, the normal watcher must still be
+	// ABLE to resolve the invocation to a terminal outcome — proving the
+	// persisted state is not just present but functional.
+	m2.watchTick(ctx)
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	result, ok := s2.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("fade invocation's cached result is missing after restart")
+	}
+	if result.Outcome == pkgaudio.OutcomeGain && result.Reason == "fade dispatched, not yet complete" {
+		t.Fatalf("fade invocation's outcome is still the pre-restart dispatch outcome %+v, want it resolved by watchTick", result)
+	}
+	if s2.fadePending {
+		t.Fatal("fadePending is still true after watchTick observed the fade is no longer active")
 	}
 }
 

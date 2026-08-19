@@ -28,6 +28,12 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[pkgaudio.SessionID]*Session
+
+	// corruptSessions is [Manager.RestoreAll]'s record of every persisted
+	// file it could not decode into a real session (finding 17) — never
+	// addressable by a command, but reported by [Manager.Snapshot] so it
+	// is retained fault evidence rather than a silent disappearance.
+	corruptSessions []CorruptSessionRecord
 }
 
 // NewManager builds a Manager. decoder is [RealDecoder]{} in production
@@ -77,15 +83,33 @@ func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
 	for _, s := range m.sessions {
 		sessions = append(sessions, s)
 	}
+	corrupt := m.corruptSessions
 	m.mu.Unlock()
 
-	out := make([]SessionSnapshot, 0, len(sessions))
+	out := make([]SessionSnapshot, 0, len(sessions)+len(corrupt))
 	for _, s := range sessions {
 		s.mu.Lock()
 		out = append(out, s.snapshotLocked(ctx))
 		s.mu.Unlock()
 	}
+	for _, c := range corrupt {
+		out = append(out, corruptSessionSnapshot(c))
+	}
 	return out
+}
+
+// corruptSessionSnapshot builds a synthetic, non-addressable
+// [SessionSnapshot] for one [CorruptSessionRecord]: State Failed, Fault
+// Other, and an id derived from the filename so an operator can find and
+// remove the bad file — never a real session id, and never something a
+// command can target, since nothing was actually recovered to act on.
+func corruptSessionSnapshot(c CorruptSessionRecord) SessionSnapshot {
+	return SessionSnapshot{
+		ID:          pkgaudio.SessionID("corrupt-session-file:" + c.Filename),
+		State:       pkgaudio.StateFailed,
+		Fault:       pkgaudio.FaultOther,
+		FaultReason: fmt.Sprintf("persisted session file %q could not be recovered: %s", c.Filename, c.Reason),
+	}
 }
 
 // gateAvailability is the single choke point that keeps this seam honest
@@ -190,16 +214,25 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to start"}
 		}
-		if !s.handleLoaded {
+		// A handle loaded for a now-superseded item identity (a media or
+		// playlist revision landed via Apply between Prepare and Start) is
+		// as stale as no handle at all: starting it would play the OLD
+		// content while every other surface reports the new one.
+		if !s.handleLoaded || s.loadedIdentity != itemIdentity(item) {
 			s.releaseEngineLocked(ctx)
 			if _, err := s.prepareLocked(ctx, item); err != nil {
 				s.state = pkgaudio.StateFailed
 				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 			}
 		}
-		position := time.Duration(0)
-		if s.bookmark != nil {
-			position = s.bookmark.Position
+		position, err := s.resolveBookmarkPositionLocked(item)
+		if err != nil {
+			// Visible and self-healing (finding 16): the operator sees
+			// exactly why this Start was refused, and the stale bookmark
+			// is cleared so a subsequent Start is not refused forever by
+			// the same dead reference.
+			s.bookmark = nil
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
 		}
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Start(ctx, s.handle, position)
@@ -348,9 +381,15 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 
 // Stop is a commanded stop, permanently distinguishable in evidence from
 // natural completion — a session that stopped on its own must never be
-// reported as if it had been commanded to. Never refused for want of
+// reported as if it had been commanded to. Never REFUSED for want of
 // engine evidence (ADR-024 decision 7): an idle or unloaded session
-// still reports Stopped.
+// still reports Stopped, and a loaded one always attempts the engine
+// call. But a failed Engine.Stop or Release is not silently treated as
+// success either (finding 15): the handle stays loaded — never released
+// — so a retried Stop can still address it, and the outcome is
+// Unconfirmable with the failure's reason, the same "declared, not
+// refused, not fabricated" shape ADR-024 decision 7's other exempt
+// safety actions use.
 func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -361,24 +400,33 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		if !s.handleLoaded {
 			s.state = pkgaudio.StateStopped
+			s.bookmark = nil
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 		}
-		obs, err := s.mgr.engine.Stop(ctx, s.handle)
+		s.state = pkgaudio.StateStopping
+		_, stopErr := s.mgr.engine.Stop(ctx, s.handle)
+		var releaseErr error
+		if stopErr == nil {
+			releaseErr = s.mgr.engine.Release(ctx, s.handle)
+		}
+		err := stopErr
+		if err == nil {
+			err = releaseErr
+		}
+		if err != nil {
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
+		}
+		s.handleLoaded = false
+		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
-		s.releaseEngineLocked(ctx)
-		if err != nil {
-			// Stop still reports Stopped: the desired state is achieved
-			// (silence) even when the engine could not confirm cleanly —
-			// never refused for want of our own evidence.
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
-		}
-		_ = obs
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
+	reachedStopped := res.executed && s.state == pkgaudio.StateStopped
 	s.mu.Unlock()
 
-	if res.executed {
+	if reachedStopped {
 		m.restoreDucked(ctx, id)
 	}
 	return res.outcome

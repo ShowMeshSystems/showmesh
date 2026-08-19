@@ -329,7 +329,7 @@ func TestRestartRevalidatesRatherThanBlindlyCarryingAFault(t *testing.T) {
 	}
 	rs.mu.Lock()
 	rs.state = pkgaudio.StatePaused
-	rs.persistLocked()
+	_ = rs.persistLocked()
 	rs.mu.Unlock()
 	fresh2 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
 	if err := fresh2.RestoreAll(ctx); err != nil {

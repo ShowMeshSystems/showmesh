@@ -11,6 +11,23 @@ import (
 // session layer and opaque to Engine implementations.
 type EngineHandle string
 
+// observeTimeout bounds every supervision-driven [Engine.Observe] call
+// (finding 19): watchTick and checkFadeCompletionLocked poll every
+// session's handle in one serial loop, and an unbounded call against one
+// hung handle would stall supervision of every other session behind it.
+// SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data exists for the right
+// bound against a real backend; 5 seconds is chosen to be well above a
+// healthy poll's cost while still bounding a genuinely stuck call to a
+// single missed tick rather than an indefinite stall.
+var observeTimeout = 5 * time.Second // var, not const: shrunk by tests exercising the bound itself
+
+// boundedObserveContext derives a child of ctx bounded by [observeTimeout],
+// for a supervision-driven Observe call. The returned cancel must be
+// called once the call returns, same as any context.WithTimeout use.
+func boundedObserveContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, observeTimeout)
+}
+
 // EngineObservation is what an Engine reports about one handle, collected
 // at ObservedAt. Every state-changing Engine method returns one collected
 // strictly after the change took effect — never the request echoed back —

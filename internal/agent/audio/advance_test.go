@@ -94,7 +94,7 @@ func TestAdvanceCrashAfterPersist(t *testing.T) {
 	s.currentItemID = "item-b"
 	s.state = pkgaudio.StatePreparing
 	s.bookmark = nil
-	s.persistLocked()
+	_ = s.persistLocked()
 	s.mu.Unlock()
 
 	fresh := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)

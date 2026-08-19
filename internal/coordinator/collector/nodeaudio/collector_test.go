@@ -27,6 +27,7 @@ func samplePayload() mqttproto.AudioPayload {
 		Routes: []mqttproto.AudioRouteReport{
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
+		DiscoveredAt:       &observedAt,
 		ObservedAt:         &observedAt,
 		LTCGeneratorState:  "stopped",
 		LTCGeneratorReason: "no generator has ever been started on this node",
@@ -117,15 +118,52 @@ func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 	}
 }
 
+// TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes proves finding 4:
+// a discovery-backed signal (engine.state) stamps its ObservedAt from
+// AudioPayload.DiscoveredAt, the one-shot startup probe time, while a
+// live-tick-backed signal (the LTC generator state, and a session signal
+// one file over) stamps from AudioPayload.ObservedAt, refreshed every
+// tick. Before DiscoveredAt existed both signals shared one field, so a
+// session or generator signal could never report fresher than whatever
+// the agent's discovery probe read at startup — every tick after the
+// first 45 seconds of the process's life reported stale regardless of
+// how current the underlying data actually was.
+func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
+	st := NewStore()
+	discoveredAt := time.Unix(1000, 0).UTC() // the one-shot startup probe
+	observedAt := time.Unix(9000, 0).UTC()   // a much later report tick
+	payload := samplePayload()
+	payload.DiscoveredAt = &discoveredAt
+	payload.ObservedAt = &observedAt
+	payload.LTCGeneratorState = "running"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	engine := findObs(t, obs, SignalEngineState)
+	if engine.ObservedAt == nil || !engine.ObservedAt.Equal(discoveredAt) {
+		t.Errorf("engine.state ObservedAt = %v, want the discovery probe time %v", engine.ObservedAt, discoveredAt)
+	}
+	generator := findObs(t, obs, SignalLTCGeneratorState)
+	if generator.ObservedAt == nil || !generator.ObservedAt.Equal(observedAt) {
+		t.Errorf("ltc.generator.state ObservedAt = %v, want the live tick time %v", generator.ObservedAt, observedAt)
+	}
+	if generator.ObservedAt.Equal(discoveredAt) {
+		t.Error("ltc.generator.state ObservedAt equals the startup probe time; it must never share DiscoveredAt's evidence")
+	}
+}
+
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
-// half of ADR-011: a payload with a zero ObservedAt (never sent by a
+// half of ADR-011: a payload with a zero DiscoveredAt (never sent by a
 // well-formed report, but not something this collector should crash on)
-// stays nil, never defaulted to the receipt time.
+// stays nil for the discovery-backed engine signal, never defaulted to
+// the receipt time.
 func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	payload := samplePayload()
-	payload.ObservedAt = nil
+	payload.DiscoveredAt = nil
 	st.Put("audio-01", payload, receivedAt)
 
 	c := New(st)

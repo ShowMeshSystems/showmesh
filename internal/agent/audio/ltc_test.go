@@ -154,6 +154,64 @@ func TestAHeartbeatBeforeACrashResetsTheLockoutCounter(t *testing.T) {
 	}
 }
 
+// TestContinuousHeartbeatsNeverExpireTheWatchdog proves finding 5: a
+// generator that keeps heartbeating faster than heartbeatTimeout must
+// never be killed and restarted. Before the fix, the watchdog timer was
+// only ever set once (at process start) and never reset on a heartbeat,
+// so a healthy, continuously-emitting generator was killed and restarted
+// on a fixed cadence regardless of how often it heartbeated.
+func TestContinuousHeartbeatsNeverExpireTheWatchdog(t *testing.T) {
+	alwaysResolvableLTCGen(t)
+	stopHeartbeats := make(chan struct{})
+	starter := &fakeLTCStarter{
+		onStart: func(p *fakeLTCProcess, onHeartbeat func(pkgaudio.LTCTimecode)) {
+			go func() {
+				tick := time.NewTicker(10 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					select {
+					case <-tick.C:
+						onHeartbeat(pkgaudio.LTCTimecode("00:00:01:00"))
+					case <-stopHeartbeats:
+						return
+					}
+				}
+			}()
+		},
+	}
+	clock := newFakeLTCClock(time.Unix(1000, 0))
+	// A wide margin (10ms heartbeats against a 150ms timeout) so this test
+	// stays deterministic under -race and a loaded test machine, where
+	// scheduling jitter is measured in tens of milliseconds — the property
+	// under test is "the deadline resets on every heartbeat," not "the
+	// scheduler is fast."
+	policy := fastLTCPolicy()
+	policy.heartbeatTimeout = 150 * time.Millisecond
+	g := newTestLTCGenerator(clock, starter, policy)
+	defer g.Shutdown(context.Background())
+	defer close(stopHeartbeats)
+
+	g.Start(LTCGeneratorSpec{FrameRate: pkgaudio.LTCFrameRate30, StartOffset: "00:00:00:00"})
+	waitForLTCState(t, g, LTCGeneratorRunning)
+
+	// Heartbeats arrive every 10ms against a 150ms timeout: run well past
+	// several timeout windows and confirm the process is never restarted.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		snap := g.Snapshot()
+		if snap.State != LTCGeneratorRunning {
+			t.Fatalf("state = %q while heartbeats keep arriving, want Running the whole time: %+v", snap.State, snap)
+		}
+		if snap.RestartCount != 0 {
+			t.Fatalf("RestartCount = %d, want 0: a continuously-heartbeating generator must never be restarted", snap.RestartCount)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if starter.callCount() != 1 {
+		t.Errorf("starter called %d times, want exactly 1 (no restart)", starter.callCount())
+	}
+}
+
 // TestStopReportsStoppedAndKillsTheProcess proves an operator-issued Stop
 // reaches Stopped and the underlying process is killed, matching
 // pipeline.Supervisor.Clear's identical contract.

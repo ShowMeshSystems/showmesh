@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,4 +57,37 @@ func newTestManager(t *testing.T, c *clock) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 	return NewManager(NewFakeEngine(c.now), NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+}
+
+// failingSessionStore wraps a real [SessionStore] and lets a test force
+// the next N Save calls to fail — for finding 10 (a failed persist must
+// not report success) and finding 17 (a malformed persisted file must
+// not be silently skipped), neither of which is reachable against a
+// SessionStore that never fails.
+type failingSessionStore struct {
+	SessionStore
+	mu        sync.Mutex
+	failSaves int
+	saveErr   error
+}
+
+func (f *failingSessionStore) Save(id pkgaudio.SessionID, rec PersistedSession) error {
+	f.mu.Lock()
+	if f.failSaves > 0 {
+		f.failSaves--
+		err := f.saveErr
+		if err == nil {
+			err = errors.New("failingSessionStore: simulated save failure")
+		}
+		f.mu.Unlock()
+		return err
+	}
+	f.mu.Unlock()
+	return f.SessionStore.Save(id, rec)
+}
+
+func (f *failingSessionStore) armSaveFailures(n int, err error) {
+	f.mu.Lock()
+	f.failSaves, f.saveErr = n, err
+	f.mu.Unlock()
 }

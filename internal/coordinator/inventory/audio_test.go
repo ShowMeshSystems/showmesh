@@ -64,6 +64,7 @@ func sampleAudioPayload() mqttproto.AudioPayload {
 		Routes: []mqttproto.AudioRouteReport{
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
+		DiscoveredAt:       &observedAt,
 		ObservedAt:         &observedAt,
 		Sessions:           []mqttproto.AudioSessionReport{},
 		LTCGeneratorState:  "stopped",

@@ -76,7 +76,7 @@ func (s *Session) setGainLocked(ctx context.Context, requested pkgaudio.Gain) pk
 	}
 	effective := result.Effective
 	s.desired.Gain = &effective
-	s.persistLocked()
+	s.persistBestEffortLocked("state change")
 
 	if !s.handleLoaded {
 		reason := ""
@@ -141,7 +141,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 	s.fadePending = true
 	s.fadeInvocation = invocation
 	s.fadeState = FadeStateInProgress
-	s.persistLocked()
+	s.persistBestEffortLocked("state change")
 
 	dispatchedAt := s.mgr.now()
 	obs, err := s.mgr.engine.Fade(ctx, s.handle, fade)
@@ -176,7 +176,9 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
 		return
 	}
-	obs, err := s.mgr.engine.Observe(ctx, s.handle)
+	obsCtx, cancel := boundedObserveContext(ctx)
+	obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
+	cancel()
 	if err != nil {
 		// A failing Observe here is the same class of evidence
 		// [Manager.watchTick]'s identical poll already treats as a fault:
@@ -202,7 +204,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		}
 	}
 	if s.fadeInvocation != "" {
-		s.executedResults[s.fadeInvocation] = s.mgr.gateAvailability(outcome)
+		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(outcome))
 	}
 
 	gain := obs.Gain
@@ -210,7 +212,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	s.fadePending = false
 	s.fadeInvocation = ""
 	s.fadeState = FadeStateComplete
-	s.persistLocked()
+	s.persistBestEffortLocked("state change")
 }
 
 // gainEpsilon bounds how far an engine's reported gain may sit from a
@@ -292,7 +294,7 @@ func (s *Session) applyGainForMuteLocked(ctx context.Context, requested pkgaudio
 	}
 	effective := result.Effective
 	s.desired.Gain = &effective
-	s.persistLocked()
+	s.persistBestEffortLocked("state change")
 
 	if !s.handleLoaded {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
@@ -320,7 +322,7 @@ func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.Sessi
 	myPriority := sourceRolePriority[duckerRole]
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()
-		if t.state == pkgaudio.StatePlaying && t.duckedBy == "" {
+		if t.state == pkgaudio.StatePlaying {
 			var role pkgaudio.SourceRole
 			if t.desired.SourceRole != nil {
 				role = *t.desired.SourceRole
@@ -333,40 +335,62 @@ func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.Sessi
 	}
 }
 
+// duckOneLocked adds duckerID to t's set of active duckers. t's gain is
+// only ever captured and driven to [duckTargetGain] on the transition
+// from zero duckers to one — a target already ducked by someone else
+// just gains a second member, so a later removal of one ducker does not
+// restore a target the other ducker is still legitimately suppressing
+// (finding 9: two overlapping announcements must not let the first one
+// to stop restore background gain out from under the second). Caller
+// holds t.mu.
 func (m *Manager) duckOneLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
-	prior := t.effectiveGainLocked()
-	t.preDuckGain = &prior
-	t.duckedBy = duckerID
-	t.desired.Gain = ptrGain(duckTargetGain)
-	if t.handleLoaded {
-		if _, err := m.engine.SetGain(ctx, t.handle, duckTargetGain); err != nil {
-			m.logf("audio session %s: duck gain set failed: %v", t.id, err)
+	if _, already := t.duckedByAll[duckerID]; already {
+		return
+	}
+	if len(t.duckedByAll) == 0 {
+		prior := t.effectiveGainLocked()
+		t.preDuckGain = &prior
+		t.desired.Gain = ptrGain(duckTargetGain)
+		if t.handleLoaded {
+			if _, err := m.engine.SetGain(ctx, t.handle, duckTargetGain); err != nil {
+				m.logf("audio session %s: duck gain set failed: %v", t.id, err)
+			}
 		}
 	}
-	t.persistLocked()
+	if t.duckedByAll == nil {
+		t.duckedByAll = make(map[pkgaudio.SessionID]struct{}, 1)
+	}
+	t.duckedByAll[duckerID] = struct{}{}
+	t.persistBestEffortLocked("state change")
 }
 
 // restoreDucked runs after a ducking session leaves Playing (stop,
-// clear, or natural completion): it restores every other session this
-// one was ducking. Same no-lock-held-on-entry discipline as
+// clear, or natural completion): it removes duckerID from every other
+// session's ducking set, restoring gain only for a session that has no
+// duckers left. Same no-lock-held-on-entry discipline as
 // [Manager.duckLowerPriority].
 func (m *Manager) restoreDucked(ctx context.Context, duckerID pkgaudio.SessionID) {
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()
-		if t.duckedBy == duckerID {
-			m.restoreOneDuckLocked(ctx, t)
-		}
+		m.removeDuckerLocked(ctx, t, duckerID)
 		t.mu.Unlock()
 	}
 }
 
-// restoreOneDuckLocked restores t's pre-duck gain and clears the duck
-// bookkeeping, or does nothing when t.duckedBy is already empty — that
-// check is the entire exactly-once guarantee, since it is the same
-// check [Manager.restoreOne] runs on a crash-recovered session, and
-// there is exactly one code path either caller runs. Caller holds t.mu.
-func (m *Manager) restoreOneDuckLocked(ctx context.Context, t *Session) {
-	if t.duckedBy == "" {
+// removeDuckerLocked removes duckerID from t's ducking set, or does
+// nothing when duckerID is not a member — that membership check is the
+// entire exactly-once guarantee, since it is the same check
+// [Manager.restoreOne] runs on a crash-recovered session, and there is
+// exactly one code path either caller runs. t's gain and preDuckGain are
+// only restored once the set becomes empty: any remaining ducker still
+// legitimately owns t's suppressed gain. Caller holds t.mu.
+func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
+	if _, ok := t.duckedByAll[duckerID]; !ok {
+		return
+	}
+	delete(t.duckedByAll, duckerID)
+	if len(t.duckedByAll) > 0 {
+		t.persistBestEffortLocked("state change")
 		return
 	}
 	restore := pkgaudio.Gain(1)
@@ -378,7 +402,6 @@ func (m *Manager) restoreOneDuckLocked(ctx context.Context, t *Session) {
 	if err == nil {
 		effective = result.Effective
 	}
-	t.duckedBy = ""
 	t.preDuckGain = nil
 	t.desired.Gain = &effective
 	if t.handleLoaded {
@@ -386,7 +409,7 @@ func (m *Manager) restoreOneDuckLocked(ctx context.Context, t *Session) {
 			m.logf("audio session %s: duck restore gain set failed: %v", t.id, err)
 		}
 	}
-	t.persistLocked()
+	t.persistBestEffortLocked("state change")
 }
 
 // otherSessions returns every live session except exclude, snapshotted

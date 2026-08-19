@@ -84,33 +84,58 @@ func (f *FileSessionStore) Delete(id pkgaudio.SessionID) error {
 	return nil
 }
 
-// List returns every session id with a persisted record, for
-// [Manager.RestoreAll]. A record whose file fails to decode is skipped,
-// not fatal to the rest of the listing — a caller sweeping every id
-// still has [FileSessionStore.Load] surface that specific record's own
-// error.
+// List returns every session id with a persisted, decodable record, for
+// [Manager.RestoreAll]. A record whose file fails to decode is skipped
+// here, not fatal to the rest of the listing — but it is never silently
+// dropped: see [FileSessionStore.ListCorrupt], which the same walk feeds
+// (finding 17). Skipping it here alone, with nothing else surfacing it,
+// is indistinguishable from the session never having been persisted.
 func (f *FileSessionStore) List() ([]pkgaudio.SessionID, error) {
+	ids, _, err := f.walk()
+	return ids, err
+}
+
+// ListCorrupt reports every persisted file [FileSessionStore.List]'s walk
+// could not decode into a session id — an unreadable file, invalid JSON,
+// or a record with no id — so a truncated write or disk corruption
+// raises evidence instead of vanishing.
+func (f *FileSessionStore) ListCorrupt() ([]CorruptSessionRecord, error) {
+	_, corrupt, err := f.walk()
+	return corrupt, err
+}
+
+// walk is List and ListCorrupt's shared directory scan, so the two views
+// (decodable ids, and everything that was not) can never disagree about
+// which files exist or drift out of sync with each other.
+func (f *FileSessionStore) walk() ([]pkgaudio.SessionID, []CorruptSessionRecord, error) {
 	entries, err := os.ReadDir(f.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("audio: list session state directory: %w", err)
+		return nil, nil, fmt.Errorf("audio: list session state directory: %w", err)
 	}
 	var ids []pkgaudio.SessionID
+	var corrupt []CorruptSessionRecord
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(f.dir, e.Name()))
 		if err != nil {
+			corrupt = append(corrupt, CorruptSessionRecord{Filename: e.Name(), Reason: err.Error()})
 			continue
 		}
 		var rec PersistedSession
-		if err := json.Unmarshal(data, &rec); err != nil || rec.ID == "" {
+		if err := json.Unmarshal(data, &rec); err != nil {
+			corrupt = append(corrupt, CorruptSessionRecord{Filename: e.Name(), Reason: "invalid JSON: " + err.Error()})
+			continue
+		}
+		if rec.ID == "" {
+			corrupt = append(corrupt, CorruptSessionRecord{Filename: e.Name(), Reason: "record decoded with no session id"})
 			continue
 		}
 		ids = append(ids, rec.ID)
 	}
-	return ids, nil
+	return ids, corrupt, nil
 }

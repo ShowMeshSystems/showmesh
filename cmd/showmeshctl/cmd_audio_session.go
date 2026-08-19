@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -121,13 +122,32 @@ func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func
 // URL path segment ("gain", "output/mute").
 func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
-	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries")
+	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries; defaults to the "+
+		"current time in nanoseconds, which is always greater than a brand-new session's revision 0 and, in "+
+		"ordinary sequential use, greater than whatever this program itself last sent")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s [flags] <node-id> <session-id> [params-json]\n", cmdLabel)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
+	}
+	revisionSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "revision" {
+			revisionSet = true
+		}
+	})
+	if !revisionSet {
+		// pkg/audio.RevisionState refuses any revision that does not
+		// strictly exceed the session's current one (0 for a session
+		// that has never been applied), so the literal zero default
+		// above is refused even for a first-ever command. The current
+		// time in nanoseconds is always > 0 and, for one operator issuing
+		// commands one at a time, always greater than the last revision
+		// this program itself sent.
+		v := uint64(clock().UnixNano())
+		revision = &v
 	}
 	if err := validateOutput(g); err != nil {
 		return reportError(stderr, cmdLabel, err)
@@ -190,6 +210,16 @@ func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock 
 // this file's package doc comment — so it maps to exitCommandUnconfirmed
 // rather than any failure exit code, matching how this program already
 // treats FPP/render's own "unconfirmed" outcomes.
+// audioSessionKnownOutcomes is every outcome AudioSessionCommandResult.
+// outcome's own wire description names (mirroring pkg/audio.Outcome's six
+// non-failure members, transcribed independently rather than imported —
+// see this file's own doc comment on why this program never shares Go
+// types with the coordinator). Anything else is a value this program
+// does not recognize, never a silent success.
+var audioSessionKnownOutcomes = map[string]bool{
+	"started": true, "position": true, "gain": true, "fade_complete": true, "stopped": true, "completed": true,
+}
+
 func reportAudioSessionCommandResult(stdout io.Writer, cmdLabel string, result audioSessionCommandResult) int {
 	if result.Replay {
 		_, _ = fmt.Fprintf(stdout, "showmeshctl %s: this idempotency key was already used; "+
@@ -209,6 +239,12 @@ func reportAudioSessionCommandResult(stdout io.Writer, cmdLabel string, result a
 			result.Action, result.NodeID, result.SessionID, result.CommandID)
 		return exitCommandUnconfirmed
 	default:
+		if !audioSessionKnownOutcomes[result.Outcome] {
+			_, _ = fmt.Fprintf(stdout, "showmeshctl %s: the coordinator reported an outcome %q this program does not "+
+				"recognize (command %s); treat this as unverified, not as success\n",
+				cmdLabel, result.Outcome, result.CommandID)
+			return exitAPIError
+		}
 		_, _ = fmt.Fprintf(stdout, "%s: %s on %s/%s (command %s)\n",
 			result.Outcome, result.Action, result.NodeID, result.SessionID, result.CommandID)
 		return exitOK
@@ -220,6 +256,9 @@ func exitCodeForAudioSessionCommandResult(result audioSessionCommandResult) int 
 	case "refused", "failed", "unconfirmable", "":
 		return exitCommandUnconfirmed
 	default:
+		if !audioSessionKnownOutcomes[result.Outcome] {
+			return exitAPIError
+		}
 		return exitOK
 	}
 }

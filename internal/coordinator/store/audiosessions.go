@@ -53,10 +53,11 @@ func scanAudioSession(row interface{ Scan(dest ...any) error }) (AudioSessionRec
 // PutAudioSession creates or replaces id's durable record (INSERT ... ON
 // CONFLICT), setting UpdatedAt to now and preserving the original
 // CreatedAt across an update. This is the coordinator's own mirror of
-// [pkg/audio.RevisionState]'s "revision only advances" rule — enforced by
-// the caller (the dispatch layer, which reads-before-writing under its
-// own request serialization for one session), not by this method, which
-// unconditionally stores whatever it is given.
+// [pkg/audio.RevisionState]'s "revision only advances" rule, enforced
+// here by the ON CONFLICT's own WHERE clause: an update whose Revision
+// does not exceed the stored row's current revision is a silent no-op,
+// never a rewind. The first write for a given id always applies, at
+// whatever revision it names.
 func (s *Store) PutAudioSession(ctx context.Context, rec AudioSessionRecord) error {
 	guardNotInTx(ctx, "Store.PutAudioSession")
 	now := s.now()
@@ -68,6 +69,7 @@ func (s *Store) PutAudioSession(ctx context.Context, rec AudioSessionRecord) err
 			desired_json = excluded.desired_json,
 			revision = excluded.revision,
 			updated_at = excluded.updated_at
+		WHERE excluded.revision > audio_sessions.revision
 	`, rec.ID, rec.NodeID, rec.DesiredJSON, rec.Revision, timeToDB(now), timeToDB(now))
 	if err != nil {
 		return fmt.Errorf("store: put audio session %q: %w", rec.ID, err)

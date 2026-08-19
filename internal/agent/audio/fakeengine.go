@@ -62,7 +62,8 @@ func NewFakeEngine(now func() time.Time) *FakeEngine {
 }
 
 // InjectFailure arms handle so its next call to Load, Start, Pause,
-// Resume, Seek, or Observe returns err instead of running normally, then
+// Resume, Seek, Stop, Release, or Observe returns err instead of running
+// normally, then
 // disarms itself — a one-shot fault, not a standing one, so a test
 // controls exactly which call fails. There is no real backend to produce
 // a pipeline crash, a freeze, a route change, or timing-authority loss
@@ -234,6 +235,9 @@ func (e *FakeEngine) Stop(_ context.Context, handle EngineHandle) (EngineObserva
 	if err != nil {
 		return EngineObservation{}, err
 	}
+	if err := e.takeFailure(handle); err != nil {
+		return EngineObservation{}, err
+	}
 	h.state = pkgaudio.StateStopped
 	h.playStartedAt = time.Time{}
 	return e.obs(h), nil
@@ -266,6 +270,9 @@ func (e *FakeEngine) Fade(_ context.Context, handle EngineHandle, fade pkgaudio.
 func (e *FakeEngine) Release(_ context.Context, handle EngineHandle) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := e.takeFailure(handle); err != nil {
+		return err
+	}
 	delete(e.handles, handle)
 	return nil
 }

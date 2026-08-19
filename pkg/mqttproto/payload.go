@@ -981,8 +981,25 @@ type AudioPayload struct {
 	// enumerator reported, before virtual-name filtering or truncation.
 	EnumeratedCount int64 `json:"enumeratedCount"`
 
-	// ObservedAt is when this node actually ran its discovery probes, on
-	// the node's own clock — the evidence timestamp ADR-003 requires. nil
+	// DiscoveredAt is when this node actually ran its one-shot discovery
+	// probes (EngineAvailable, HardwareEnumerated, DeviceAvailable,
+	// ProgramAvailable, LTCAvailable, and Routes), on the node's own
+	// clock — the evidence timestamp ADR-003 requires for THOSE fields.
+	// It is reused unchanged on every report tick this agent process
+	// publishes (see audioreport.go's own doc comment for why) and is
+	// never refreshed to make discovery evidence look fresher than it
+	// is. nil means genuinely unknown, matching pkg/observation.
+	// Observation.ObservedAt's own nil-means-unknown convention
+	// (ADR-011: never defaulted to "now").
+	DiscoveredAt *time.Time `json:"discoveredAt"`
+
+	// ObservedAt is when THIS report tick's live evidence (Sessions,
+	// LTCGeneratorState/Reason, LTCFrameRate, LTCTimecode) was gathered,
+	// on the node's own clock — refreshed on every tick, unlike
+	// DiscoveredAt. Before this field existed it also stood in for the
+	// discovery probe time, which pinned every session and LTC signal to
+	// the agent's startup time forever and made them read stale after 45
+	// seconds no matter how fresh the underlying data actually was. nil
 	// means genuinely unknown, matching pkg/observation.Observation.
 	// ObservedAt's own nil-means-unknown convention (ADR-011: never
 	// defaulted to "now").
@@ -1053,6 +1070,9 @@ func (p AudioPayload) Validate() error {
 		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
 			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
 		}
+	}
+	if p.DiscoveredAt == nil {
+		return fmt.Errorf("%w: discoveredAt", ErrPayloadMissingField)
 	}
 	if p.ObservedAt == nil {
 		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)

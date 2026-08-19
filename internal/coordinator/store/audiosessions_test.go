@@ -61,6 +61,32 @@ func TestAudioSessionPutIsUpsert(t *testing.T) {
 	}
 }
 
+// TestAudioSessionPutRefusesToRewindRevision proves PutAudioSession's own
+// SQL-layer guard: a write naming a revision no greater than the stored
+// row's current revision must not overwrite it, matching
+// pkg/audio.RevisionState's identical anti-rewind rule one layer down.
+func TestAudioSessionPutRefusesToRewindRevision(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)}
+	st := openTestStore(t, clock)
+	ctx := context.Background()
+
+	if err := st.PutAudioSession(ctx, AudioSessionRecord{ID: "s1", NodeID: "node-a", DesiredJSON: `{"revision":5}`, Revision: 5}); err != nil {
+		t.Fatalf("put revision 5: %v", err)
+	}
+	clock.advance(time.Minute)
+	if err := st.PutAudioSession(ctx, AudioSessionRecord{ID: "s1", NodeID: "node-a", DesiredJSON: `{"revision":3}`, Revision: 3}); err != nil {
+		t.Fatalf("put revision 3: %v", err)
+	}
+
+	got, err := st.GetAudioSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAudioSession: %v", err)
+	}
+	if got.Revision != 5 || got.DesiredJSON != `{"revision":5}` {
+		t.Fatalf("a lower revision rewound the stored record: %+v", got)
+	}
+}
+
 func TestAudioSessionGetNotFound(t *testing.T) {
 	st := openTestStore(t, nil)
 	if _, err := st.GetAudioSession(context.Background(), "nope"); !errors.Is(err, ErrAudioSessionNotFound) {

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -34,6 +36,22 @@ type fakeAudioPublisher struct {
 	result     mqttproto.ResultPayload
 	awaitErr   error
 	publishErr error
+
+	// beforePublishErr, when set, makes AwaitResponse fail exactly the
+	// way broker.BrokerManager.AwaitResponse fails when subscribing (or
+	// deadline validation) fails BEFORE Publish is ever called: wrapped
+	// in broker.ErrResponseFailedBeforePublish, and nothing published.
+	beforePublishErr error
+
+	// noAutoCorrelate disables this fake's own default behavior of
+	// stamping f.result's CommandID/IdempotencyKey/Action from the
+	// dispatched command envelope before returning it — a real agent's
+	// result always carries the SAME identifiers it was dispatched
+	// under, so this fake does the same unless a test deliberately wants
+	// to prove that a result carrying someone else's identifiers is
+	// rejected rather than accepted (see
+	// TestAudioSessionDispatchRejectsUncorrelatedResult).
+	noAutoCorrelate bool
 }
 
 func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool, payload []byte) error {
@@ -53,6 +71,9 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 }
 
 func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.ResponseRequest) (broker.Message, error) {
+	if f.beforePublishErr != nil {
+		return broker.Message{}, fmt.Errorf("%w: %w", broker.ErrResponseFailedBeforePublish, f.beforePublishErr)
+	}
 	if f.publishErr != nil {
 		return broker.Message{}, f.publishErr
 	}
@@ -66,7 +87,24 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	if f.awaitErr != nil {
 		return broker.Message{}, f.awaitErr
 	}
-	env, err := mqttproto.NewResultEnvelope(time.Now, "node-a", f.result)
+
+	cmdEnv, err := mqttproto.DecodeEnvelope(req.PublishPayload)
+	if err != nil {
+		return broker.Message{}, err
+	}
+	cmd, err := mqttproto.DecodeCmdPayload(cmdEnv)
+	if err != nil {
+		return broker.Message{}, err
+	}
+
+	result := f.result
+	if !f.noAutoCorrelate {
+		result.CommandID = cmd.CommandID
+		result.IdempotencyKey = cmd.IdempotencyKey
+		result.Action = cmd.Action
+	}
+
+	env, err := mqttproto.NewResultEnvelope(time.Now, cmdEnv.NodeID, result)
 	if err != nil {
 		return broker.Message{}, err
 	}
@@ -74,7 +112,14 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	if err != nil {
 		return broker.Message{}, err
 	}
-	return broker.Message{Topic: req.ResponseTopic, Payload: raw}, nil
+	msg := broker.Message{Topic: req.ResponseTopic, Payload: raw}
+	// A real broker only ever hands AwaitResponse a message its own
+	// req.Match accepted; this fake enforces the identical contract
+	// rather than handing the caller every message unconditionally.
+	if req.Match != nil && !req.Match(msg) {
+		return broker.Message{}, broker.ErrResponseDeadlineExceeded
+	}
+	return msg, nil
 }
 
 func (f *fakeAudioPublisher) count() int {
@@ -84,21 +129,23 @@ func (f *fakeAudioPublisher) count() int {
 }
 
 type audioDispatchTestSetup struct {
-	st  *store.Store
-	svc identity.Service
-	pub *fakeAudioPublisher
+	st       *store.Store
+	svc      identity.Service
+	pub      *fakeAudioPublisher
+	storeDir string
 }
 
 func newAudioDispatchTestSetup(t *testing.T, now func() time.Time) *audioDispatchTestSetup {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(now))
+	storeDir := filepath.Join(dir, "db")
+	st, err := store.Open(context.Background(), storeDir, nil, store.WithClock(now))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	svc := identity.NewService(st, now, filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
-	return &audioDispatchTestSetup{st: st, svc: svc, pub: &fakeAudioPublisher{}}
+	return &audioDispatchTestSetup{st: st, svc: svc, pub: &fakeAudioPublisher{}, storeDir: storeDir}
 }
 
 func (s *audioDispatchTestSetup) deps() Dependencies {
@@ -300,5 +347,256 @@ func TestAudioSessionDispatchNotReachableByGET(t *testing.T) {
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 — GET must never dispatch", setup.pub.count())
+	}
+}
+
+// TestAudioSessionDispatchSendsRevisionInParams proves the fix for the
+// defect where params["revision"] was never set: internal/agent's own
+// parseAudioSessionCommon (audiosessionops.go) requires it and refuses
+// every dispatch with "params.revision is required" without it, a
+// failure this coordinator-side fake never reproduced because it
+// manufactures the agent's own reply instead of running the real
+// parsing code.
+func TestAudioSessionDispatchSendsRevisionInParams(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeUnconfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":7}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	rev, ok := setup.pub.lastParams["revision"]
+	if !ok {
+		t.Fatal(`dispatched params carry no "revision" key — internal/agent's parseAudioSessionCommon requires it and refuses every dispatch without it`)
+	}
+	if got, ok := rev.(float64); !ok || got != 7 {
+		t.Fatalf("dispatched params.revision = %v, want 7", rev)
+	}
+}
+
+// TestAudioSessionDispatchRejectsUncorrelatedResult proves a message
+// arriving on the command's own result topic but carrying ANOTHER
+// command's identifiers is never accepted as this command's result:
+// this dispatch must time out honestly (reporting unconfirmable) rather
+// than reporting someone else's outcome as its own.
+func TestAudioSessionDispatchRejectsUncorrelatedResult(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.noAutoCorrelate = true
+	setup.pub.result = mqttproto.ResultPayload{
+		CommandID: "some-other-command", IdempotencyKey: "some-other-key", Action: "audio.session.stop",
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var decoded struct {
+		Command struct {
+			Outcome string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.Command.Outcome != "unconfirmable" {
+		t.Fatalf("outcome = %q, want unconfirmable — a mismatched result must never be accepted as this command's own", decoded.Command.Outcome)
+	}
+}
+
+// TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState proves
+// a refused outcome never writes the session store: a low, refused
+// revision must not overwrite a previously-accepted, higher revision's
+// desired state.
+func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "position", "reason": ""},
+		},
+	}
+	req1 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":5,"params":{"media":{"assetId":"clip-1"}}}`, token)
+	if resp, body := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeRefused, Reason: "stale revision",
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "refused", "reason": "stale revision"},
+		},
+	}
+	// Revision 10 here is deliberately HIGHER than the accepted revision
+	// 5 above: a refused result must never be persisted regardless of
+	// whether its OWN revision would otherwise satisfy the store's
+	// separate anti-rewind guard (audiosessions.go's ON CONFLICT WHERE
+	// clause) — this isolates "only an accepted outcome is persisted"
+	// from "revision only advances", which a lower revision would not.
+	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":10,"params":{"media":{"assetId":"clip-EVIL"}}}`, token)
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
+	}
+
+	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession: %v", err)
+	}
+	if rec.Revision != 5 {
+		t.Fatalf("stored revision = %d, want 5 — a refused outcome must never be persisted, even at a higher revision", rec.Revision)
+	}
+	if strings.Contains(rec.DesiredJSON, "clip-EVIL") {
+		t.Fatalf("stored desired state = %q, must not contain the refused request's own params", rec.DesiredJSON)
+	}
+}
+
+// TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState proves
+// a pause command — whose own params carry only
+// sessionId/invocationId/revision — merges onto the session's prior
+// desired state rather than replacing it outright, which would erase
+// the previously-applied media reference.
+func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "position", "reason": ""},
+		},
+	}
+	req1 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":1,"params":{"media":{"assetId":"clip-1"}}}`, token)
+	if resp, body := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/pause",
+		`{"revision":2}`, token)
+	if resp, body := doRawRequest(t, api.Handler, req2); resp.StatusCode != http.StatusOK {
+		t.Fatalf("pause status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession: %v", err)
+	}
+	if rec.Revision != 2 {
+		t.Fatalf("stored revision = %d, want 2", rec.Revision)
+	}
+	if !strings.Contains(rec.DesiredJSON, "clip-1") {
+		t.Fatalf("stored desired state = %q, lost the media applied before the pause", rec.DesiredJSON)
+	}
+}
+
+// TestAudioSessionDispatchAuditWriteFailureRefusesDispatch proves the
+// ADR-024 fail-closed default: when the audit store cannot be written,
+// nothing is recorded and nothing is dispatched.
+func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	installFailAuditTrigger(t, setup.storeDir)
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 — an audit-write failure must dispatch nothing", setup.pub.count())
+	}
+}
+
+// TestAudioSessionDispatchReplayAcrossDifferentNodeIsConflict proves an
+// idempotency key reused against the SAME action but a DIFFERENT target
+// node is a 409 conflict, never answered as a replay of the ORIGINAL
+// node's result — a session reassigned to a different node must not let
+// a redelivered/reused key replay the old node's outcome as if it
+// answered a request to the new one.
+func TestAudioSessionDispatchReplayAcrossDifferentNodeIsConflict(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	key := `{"revision":1,"idempotencyKey":"reused-across-nodes"}`
+	req1 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", key, token)
+	if resp, body := doRawRequest(t, api.Handler, req1); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-b/audio/sessions/night-session/stop", key, token)
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("cross-node reuse status = %d, want 409; body: %s", resp2.StatusCode, body2)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count after cross-node reuse = %d, want still 1 — a conflict must never dispatch", setup.pub.count())
+	}
+}
+
+// TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch proves
+// finding 12's distinction: when AwaitResponse fails before anything is
+// published (broker.ErrResponseFailedBeforePublish), the stored commands
+// row must not claim DispatchedAt — that would assert a publish that
+// never reached the wire, indistinguishable from a genuine dispatch whose
+// result never arrived.
+func TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.beforePublishErr = errors.New("injected subscribe failure")
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop",
+		`{"revision":1,"idempotencyKey":"before-publish-key"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 — nothing reached the wire", setup.pub.count())
+	}
+
+	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), "before-publish-key")
+	if err != nil {
+		t.Fatalf("GetCommandByIdempotencyKey: %v", err)
+	}
+	if rec.DispatchedAt != nil {
+		t.Fatalf("DispatchedAt = %v, want nil — nothing was ever published", *rec.DispatchedAt)
 	}
 }

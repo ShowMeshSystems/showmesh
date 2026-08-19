@@ -25,8 +25,11 @@
 //
 // # ObservedAt (ADR-011)
 //
-// [buildValue] stamps ObservedAt from the payload's own ObservedAt field —
-// the node's own clock at the moment it ran its discovery probes — never
-// the coordinator's own receipt time, matching noderender.buildValue's
-// identical rule.
+// A node's audio report carries two evidence timestamps, not one:
+// DiscoveredAt for the one-shot discovery probe (engine, device, outputs,
+// program, LTC availability) and ObservedAt for this tick's own live
+// evidence (LTC generator state, sessions). [buildValue] and
+// [buildSessionValue] stamp ObservedAt from whichever of the two actually
+// backs the signal being built — never the coordinator's own receipt
+// time, matching noderender.buildValue's identical rule.
 package nodeaudio

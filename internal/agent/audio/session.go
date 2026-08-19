@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -49,14 +50,16 @@ type PersistedSession struct {
 	Muted       bool
 	PreMuteGain *pkgaudio.Gain
 
-	// DuckedBy is the id of the session whose duck mix policy is
-	// currently suppressing this session's gain, empty when this session
-	// is not ducked. PreDuckGain is the gain to restore. This pair is the
-	// restore-exactly-once guard across a restart: a restore clears and
-	// persists both, so a repeated or racing restore attempt finds
-	// DuckedBy already empty and does nothing — see
-	// [Manager.restoreOneDuckLocked].
-	DuckedBy    pkgaudio.SessionID
+	// DuckedByAll is every session whose duck mix policy is currently
+	// suppressing this session's gain — a set, not a single id, because
+	// two overlapping announcements ducking the same background session
+	// must both release it before gain is restored (finding 9). Empty
+	// means this session is not ducked. PreDuckGain is the gain to
+	// restore once the set is empty. This pair is the restore-exactly-
+	// once guard across a restart: a restore removes and persists, so a
+	// repeated or racing restore attempt finds the id already absent and
+	// does nothing — see [Manager.removeDuckerLocked].
+	DuckedByAll []pkgaudio.SessionID
 	PreDuckGain *pkgaudio.Gain
 
 	// Fault, FaultReason, and FaultAt are the last engine fault reported
@@ -71,6 +74,17 @@ type PersistedSession struct {
 	// current item — the asset probe evidence the retained observation
 	// surface reports.
 	LastProbe MediaItemResult
+
+	// FadePending, FadeInvocation, and FadeState mirror the identically
+	// named Session fields: a crash mid-fade must not lose track of the
+	// pending invocation or leave [Manager.watchTick] unable to ever
+	// resolve it (finding 18). Without these, a restart drops back to
+	// fadePending=false regardless of desired.Fade still describing an
+	// in-flight ramp, so the dispatching invocation's cached "not yet
+	// complete" outcome would never be corrected to a terminal one.
+	FadePending    bool
+	FadeInvocation pkgaudio.InvocationID
+	FadeState      FadeState
 }
 
 // SessionStore is the session layer's durability boundary — enough of
@@ -82,6 +96,22 @@ type SessionStore interface {
 	Load(id pkgaudio.SessionID) (PersistedSession, bool, error)
 	Delete(id pkgaudio.SessionID) error
 	List() ([]pkgaudio.SessionID, error)
+
+	// ListCorrupt reports every persisted record List could not decode
+	// well enough to recover a session id from — a malformed or
+	// truncated file — so [Manager.RestoreAll] can raise retained fault
+	// evidence for it (finding 17) instead of List silently omitting it
+	// from the ids it returns, which is indistinguishable from "this
+	// session was never persisted at all."
+	ListCorrupt() ([]CorruptSessionRecord, error)
+}
+
+// CorruptSessionRecord names one persisted record [SessionStore.List]
+// could not decode. Filename, not a session id, is the identifying
+// evidence here: a malformed file may not even contain a readable id.
+type CorruptSessionRecord struct {
+	Filename string
+	Reason   string
 }
 
 // Session is one authoritative playback session: desired state, its
@@ -96,6 +126,10 @@ type Session struct {
 
 	desired         pkgaudio.SessionDesiredState
 	executedResults map[pkgaudio.InvocationID]pkgaudio.OutcomeResult
+	// executedOrder is executedResults' insertion order, oldest first —
+	// what [Session.rememberExecutedResultLocked] evicts against. See
+	// [maxRetainedInvocations].
+	executedOrder []pkgaudio.InvocationID
 
 	state         pkgaudio.State
 	handle        EngineHandle
@@ -103,6 +137,16 @@ type Session struct {
 	currentIndex  int
 	currentItemID string
 	bookmark      *pkgaudio.Bookmark
+
+	// loadedIdentity is the item identity (see [itemIdentity]) the engine
+	// handle currently in s.handle was actually [Session.prepareLocked]
+	// against. It is compared against the CURRENT item's identity before
+	// any path (chiefly [Manager.Start]) would otherwise skip repreparing
+	// just because handleLoaded is true: desired state can change between
+	// a Prepare and a Start (a new Apply landing a different media or
+	// playlist item at the same index/id), and handleLoaded alone cannot
+	// tell that the loaded content is now stale.
+	loadedIdentity string
 
 	// timingKnown is false immediately after any discontinuity (pause,
 	// seek, restart, media change) until a fresh post-dispatch
@@ -130,7 +174,7 @@ type Session struct {
 	muted       bool
 	preMuteGain *pkgaudio.Gain
 
-	duckedBy    pkgaudio.SessionID
+	duckedByAll map[pkgaudio.SessionID]struct{}
 	preDuckGain *pkgaudio.Gain
 
 	fault       pkgaudio.SessionFault
@@ -147,6 +191,38 @@ type Session struct {
 	lastObservedAt time.Time
 }
 
+// duckedBySortedLocked returns set's members as a deterministically
+// ordered slice, for [PersistedSession.DuckedByAll]. Caller holds s.mu.
+func duckedBySortedLocked(set map[pkgaudio.SessionID]struct{}) []pkgaudio.SessionID {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]pkgaudio.SessionID, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// primaryDuckedByLocked picks one member of set for
+// [SessionSnapshot.DuckedBy]'s single-value report — the wire format
+// (pkg/mqttproto) still reports one ducking session, so this is advisory
+// ("ducked by at least this one"), never the full membership; Ducked is
+// what tells a caller ducking is in effect at all. The choice is
+// deterministic (lowest id) so it does not flap between report calls
+// while the same set is unchanged. Caller holds s.mu.
+func primaryDuckedByLocked(set map[pkgaudio.SessionID]struct{}) pkgaudio.SessionID {
+	var best pkgaudio.SessionID
+	first := true
+	for id := range set {
+		if first || id < best {
+			best, first = id, false
+		}
+	}
+	return best
+}
+
 func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 	return &Session{
 		id:              id,
@@ -160,13 +236,65 @@ func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 	}
 }
 
+// maxRetainedInvocations bounds how many invocation decisions/results one
+// session retains and persists (finding 20): unbounded growth here means
+// unbounded disk growth and an unbounded reload cost on every restart,
+// for history nothing legitimate consults past a client's own retry
+// window. [Session.rememberExecutedResultLocked] evicts the oldest entry
+// once this is exceeded. This is safe even for a genuinely late replay
+// of an evicted invocation: [pkgaudio.RevisionState.Apply] refuses ANY
+// invocation, seen or not, whose requested revision is not the session's
+// current one, so an evicted invocation's replay is refused as stale
+// rather than silently re-executed — eviction can only drop the CACHED
+// ANSWER, never the safety property that answer existed to shortcut.
+const maxRetainedInvocations = 200
+
+// rememberExecutedResultLocked records result for invocation, evicting
+// the oldest tracked invocation once s.executedResults would exceed
+// [maxRetainedInvocations]. Overwriting an ALREADY-tracked invocation
+// (checkFadeCompletionLocked resolving a fade's terminal outcome onto
+// the same invocation GainFade already recorded) is not growth and never
+// evicts anything. Caller holds s.mu.
+func (s *Session) rememberExecutedResultLocked(invocation pkgaudio.InvocationID, result pkgaudio.OutcomeResult) {
+	if _, existed := s.executedResults[invocation]; existed {
+		s.executedResults[invocation] = result
+		return
+	}
+	s.executedResults[invocation] = result
+	s.executedOrder = append(s.executedOrder, invocation)
+	for len(s.executedOrder) > maxRetainedInvocations {
+		oldest := s.executedOrder[0]
+		s.executedOrder = s.executedOrder[1:]
+		delete(s.executedResults, oldest)
+	}
+}
+
+// retainedDecisionsLocked returns s.revState's own decisions filtered
+// down to exactly the invocations [Session.rememberExecutedResultLocked]'s
+// eviction still keeps in s.executedResults, so the persisted record's
+// two invocation-keyed maps never disagree about which invocations
+// survived. [pkgaudio.RevisionState] itself has no bound of its own
+// (out of this package's scope to change); this is the boundary this
+// package DOES own, applied at the one place a session's record is ever
+// written to disk.
+func (s *Session) retainedDecisionsLocked() map[pkgaudio.InvocationID]pkgaudio.RevisionDecision {
+	all := s.revState.Decisions()
+	out := make(map[pkgaudio.InvocationID]pkgaudio.RevisionDecision, len(s.executedResults))
+	for id := range s.executedResults {
+		if d, ok := all[id]; ok {
+			out[id] = d
+		}
+	}
+	return out
+}
+
 // persistedLocked snapshots s for [SessionStore.Save]. Caller holds s.mu.
 func (s *Session) persistedLocked() PersistedSession {
 	return PersistedSession{
 		ID:              s.id,
 		Desired:         s.desired,
 		Revision:        s.revState.Current(),
-		Decisions:       s.revState.Decisions(),
+		Decisions:       s.retainedDecisionsLocked(),
 		ExecutedResults: s.executedResults,
 		SessionState:    s.state,
 		CurrentIndex:    s.currentIndex,
@@ -174,19 +302,39 @@ func (s *Session) persistedLocked() PersistedSession {
 		Bookmark:        s.bookmark,
 		Muted:           s.muted,
 		PreMuteGain:     s.preMuteGain,
-		DuckedBy:        s.duckedBy,
+		DuckedByAll:     duckedBySortedLocked(s.duckedByAll),
 		PreDuckGain:     s.preDuckGain,
 		Fault:           s.fault,
 		FaultReason:     s.faultReason,
 		FaultAt:         s.faultAt,
 		LastProbe:       s.lastProbe,
+		FadePending:     s.fadePending,
+		FadeInvocation:  s.fadeInvocation,
+		FadeState:       s.fadeState,
 	}
 }
 
-func (s *Session) persistLocked() {
+// persistLocked saves s's current state and reports whether the save
+// succeeded. Most callers (advanceLocked, checkFadeCompletionLocked, the
+// mix.go duck helpers, ...) intentionally discard the error: those
+// persists are best-effort bookkeeping on an already-decided transition.
+// [Session.dispatch] is the one caller that must not, per finding 10 —
+// see its own doc comment.
+// persistBestEffortLocked persists and logs a failure rather than
+// returning it, for transitions whose outcome is already decided. The
+// caller-facing contract belongs to dispatch, which propagates instead.
+func (s *Session) persistBestEffortLocked(what string) {
+	if err := s.persistLocked(); err != nil && s.mgr != nil && s.mgr.logger != nil {
+		s.mgr.logger.Warn("audio: persisting session state failed", "session", string(s.id), "after", what, "error", err)
+	}
+}
+
+func (s *Session) persistLocked() error {
 	if err := s.mgr.store.Save(s.id, s.persistedLocked()); err != nil {
 		s.mgr.logf("audio session %s: failed to persist state: %v", s.id, err)
+		return err
 	}
+	return nil
 }
 
 // currentItemLocked returns the item at s.currentIndex, from either a
@@ -219,6 +367,7 @@ func (s *Session) releaseEngineLocked(ctx context.Context) {
 		s.mgr.logf("audio session %s: engine release failed: %v", s.id, err)
 	}
 	s.handleLoaded = false
+	s.loadedIdentity = ""
 }
 
 // dispatchedResult is what every dispatch-through-revision method
@@ -256,8 +405,23 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 	}
 
 	result := exec()
-	s.executedResults[invocation] = result
-	s.persistLocked()
+	s.rememberExecutedResultLocked(invocation, result)
+	// A command that ran but could not be durably recorded must not be
+	// reported as if it had: on the next crash, this session recovers
+	// from whatever the LAST successful persist held, which is not this
+	// outcome, so telling the caller it succeeded would be a claim this
+	// process cannot back up (finding 10). The command may well have
+	// taken effect (e.g. the engine actually started) — that evidence is
+	// not erased — but the OUTCOME reported, and cached for a replay of
+	// this same invocation, is the persistence failure, not a success
+	// this store cannot survive.
+	if err := s.persistLocked(); err != nil {
+		result = pkgaudio.OutcomeResult{
+			Outcome: pkgaudio.OutcomeFailed,
+			Reason:  "operation executed but could not be durably persisted: " + err.Error(),
+		}
+		s.rememberExecutedResultLocked(invocation, result)
+	}
 	return dispatchedResult{outcome: result, executed: true}
 }
 
@@ -289,9 +453,18 @@ func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem)
 	s.handle = handle
 	s.handleLoaded = true
 	s.currentItemID = item.ItemID
+	s.loadedIdentity = itemIdentity(item)
 	s.lastObservedAt = obs.ObservedAt
 	s.clearFaultLocked()
 	return obs, nil
+}
+
+// itemIdentity is what makes a loaded engine handle valid or stale: the
+// item slot (ItemID) plus the exact asset content pinned to it (ADR-028
+// identity), so a playlist revision or a media.Apply that replaces the
+// asset behind an unchanged ItemID is detected as a change, not missed.
+func itemIdentity(item pkgaudio.PlaylistItem) string {
+	return item.ItemID + "|" + item.Media.AssetID + "|" + item.Media.ContentHash
 }
 
 // mediaFaultToSessionFault maps a pre-flight [MediaFault] (C2's ProbeAsset
@@ -335,6 +508,36 @@ func (s *Session) clearFaultLocked() {
 	s.faultReason = ""
 }
 
+// resolveBookmarkPositionLocked validates s.bookmark, if any, against
+// item before it may ever reach [Engine.Start]: a negative position, or
+// (for a playlist session) a bookmark whose playlist revision or item no
+// longer matches via [pkgaudio.Bookmark.Resolve], is reported as an
+// error rather than silently substituted with 0 or handed to the engine
+// unexamined (finding 16). A nil bookmark is not an error — it means
+// "start from the top" — and returns (0, nil). Caller holds s.mu.
+func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (time.Duration, error) {
+	if s.bookmark == nil {
+		return 0, nil
+	}
+	if s.bookmark.Position < 0 {
+		return 0, fmt.Errorf("%w: bookmark position %s is negative", pkgaudio.ErrBookmarkStale, s.bookmark.Position)
+	}
+	if s.desired.Playlist != nil {
+		resolved, err := s.bookmark.Resolve(*s.desired.Playlist)
+		if err != nil {
+			return 0, err
+		}
+		if resolved.ItemID != item.ItemID {
+			return 0, fmt.Errorf("%w: bookmark resolves to item %q, current item is %q", pkgaudio.ErrBookmarkStale, resolved.ItemID, item.ItemID)
+		}
+		return s.bookmark.Position, nil
+	}
+	if s.bookmark.ItemID != "" && s.bookmark.ItemID != item.ItemID {
+		return 0, fmt.Errorf("%w: bookmark item %q does not match the current item %q", pkgaudio.ErrBookmarkStale, s.bookmark.ItemID, item.ItemID)
+	}
+	return s.bookmark.Position, nil
+}
+
 // advanceLocked is the one path that moves s past its current item, used
 // identically by a forced [Manager.Advance] and by the natural-completion
 // watcher (forced distinguishes the two only for what happens past the
@@ -359,7 +562,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 		s.releaseEngineLocked(ctx)
 		s.state = pkgaudio.StateCompleted
 		s.bookmark = nil
-		s.persistLocked()
+		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
 	items := s.desired.Playlist.Items
@@ -377,7 +580,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 			s.releaseEngineLocked(ctx)
 			s.state = pkgaudio.StateCompleted
 			s.bookmark = nil
-			s.persistLocked()
+			s.persistBestEffortLocked("state change")
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 		}
 	}
@@ -387,26 +590,28 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	s.currentItemID = item.ItemID
 	s.state = pkgaudio.StatePreparing
 	s.bookmark = nil
-	s.persistLocked() // the persisted advance boundary — see doc comment above.
+	// The persisted advance boundary: a failure here voids the
+	// crash-recovery guarantee, so it is reported rather than dropped.
+	s.persistBestEffortLocked("playlist advance boundary")
 
 	s.releaseEngineLocked(ctx)
 	dispatchedAt := s.mgr.now()
 	if _, err := s.prepareLocked(ctx, item); err != nil {
 		s.state = pkgaudio.StateFailed
-		s.persistLocked()
+		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
 	obs, err := s.mgr.engine.Start(ctx, s.handle, 0)
 	if err != nil {
 		s.state = pkgaudio.StateFailed
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-		s.persistLocked()
+		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
 	s.lastObservedAt = obs.ObservedAt
-	s.persistLocked()
+	s.persistBestEffortLocked("state change")
 	return confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt)
 }
 
@@ -489,8 +694,8 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	if s.desired.Ceiling != nil {
 		snap.HasCeiling, snap.Ceiling = true, *s.desired.Ceiling
 	}
-	snap.Ducked = s.duckedBy != ""
-	snap.DuckedBy = s.duckedBy
+	snap.Ducked = len(s.duckedByAll) > 0
+	snap.DuckedBy = primaryDuckedByLocked(s.duckedByAll)
 
 	if s.lastProbe.State != "" {
 		snap.HasAssetProbe = true
@@ -499,7 +704,9 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	}
 
 	if s.handleLoaded && s.timingKnown {
-		obs, err := s.mgr.engine.Observe(ctx, s.handle)
+		obsCtx, cancel := boundedObserveContext(ctx)
+		obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
+		cancel()
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		} else {

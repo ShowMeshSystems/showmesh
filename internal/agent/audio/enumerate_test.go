@@ -1,6 +1,10 @@
 package audio
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 // aplayLSample is a MEASURED aplay -L shape (r7_capability_discovery.log)
 // with one real card's routes appended, the way a real interface would
@@ -50,6 +54,46 @@ func TestParseAplayLHasCardsTrueWithRealCard(t *testing.T) {
 	sample := "**** List of PLAYBACK Hardware Devices ****\ncard 0: PCH [HDA Intel PCH], device 0: ALC3234 Analog [ALC3234 Analog]\n"
 	if !parseAplayLHasCards(sample) {
 		t.Error("parseAplayLHasCards(real card listing) = false, want true")
+	}
+}
+
+// TestHasHardwareCardsReturnsErrorOnGenuineFailure proves finding 14: a
+// transport failure running `aplay -l` — permission denied, missing
+// binary, timeout, anything whose output does not carry the expected
+// "no soundcards found" marker — must be reported as an error, not
+// silently folded into "confirmed no hardware". [Discover] already
+// treats this error as "we do not know yet" via HardwareEnumerated; this
+// proves AlsaEnumerator actually produces it instead of discarding it.
+func TestHasHardwareCardsReturnsErrorOnGenuineFailure(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "", errors.New("permission denied")
+	}
+
+	_, err := AlsaEnumerator{}.HasHardwareCards(context.Background())
+	if err == nil {
+		t.Fatal("HasHardwareCards() returned no error for a genuine transport failure, want one")
+	}
+}
+
+// TestHasHardwareCardsNoErrorOnLegitimateNoCards proves the other half:
+// the documented, expected "no soundcards found" exit (which aplay -l
+// signals with a non-zero exit code even though it is not a failure)
+// must still report (false, nil), never an error.
+func TestHasHardwareCardsNoErrorOnLegitimateNoCards(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "aplay: device_list:279: no soundcards found...\n", errors.New("exit status 1")
+	}
+
+	has, err := AlsaEnumerator{}.HasHardwareCards(context.Background())
+	if err != nil {
+		t.Fatalf("HasHardwareCards() = %v, want no error for the legitimate no-cards exit", err)
+	}
+	if has {
+		t.Fatal("HasHardwareCards() = true, want false")
 	}
 }
 

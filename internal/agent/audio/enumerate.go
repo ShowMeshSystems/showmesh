@@ -56,11 +56,22 @@ func (AlsaEnumerator) Devices(ctx context.Context) ([]string, error) {
 	return parseAplayL(out), nil
 }
 
-// HasHardwareCards implements [Enumerator].
+// HasHardwareCards implements [Enumerator]. A permission failure, a
+// missing aplay binary, a timeout, or any other transport error is
+// reported as an error (finding 14) rather than folded into "no
+// hardware": [Discovery.HardwareEnumerated] already exists precisely to
+// carry "we do not know yet" separately from "confirmed absent", but
+// only if this method actually returns the error instead of discarding
+// it, as an earlier version did.
 func (AlsaEnumerator) HasHardwareCards(ctx context.Context) (bool, error) {
 	// aplay -l exits non-zero on a card-less host (MEASURED above); that
-	// exit is the expected "no hardware" answer, never a transport error.
-	out, _ := runCommand(ctx, "aplay", "-l")
+	// exit is the expected "no hardware" answer, never a transport error
+	// — distinguished from a genuine failure by the marker text actually
+	// being present, not by the exit code alone.
+	out, err := runCommand(ctx, "aplay", "-l")
+	if err != nil && !strings.Contains(out, aplayNoCardsMarker) {
+		return false, fmt.Errorf("audio: aplay -l: %w", err)
+	}
 	return parseAplayLHasCards(out), nil
 }
 

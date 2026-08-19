@@ -342,8 +342,76 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	}
 	first := decodeAudioReport(t, publishes[0].payload)
 	last := decodeAudioReport(t, publishes[2].payload)
-	if first.ObservedAt == nil || last.ObservedAt == nil || !first.ObservedAt.Equal(*last.ObservedAt) {
-		t.Errorf("ObservedAt changed across republishes (%v -> %v), want the SAME original probe time on every tick", first.ObservedAt, last.ObservedAt)
+	if first.DiscoveredAt == nil || last.DiscoveredAt == nil || !first.DiscoveredAt.Equal(*last.DiscoveredAt) {
+		t.Errorf("DiscoveredAt changed across republishes (%v -> %v), want the SAME original probe time on every tick", first.DiscoveredAt, last.DiscoveredAt)
+	}
+}
+
+// TestRunAudioReportObservedAtAdvancesWhileDiscoveredAtStaysPinned proves
+// finding 4 (the bug this file's ADR-011 lesson names): DiscoveredAt is the
+// one-shot startup probe time and must stay pinned across every tick, but
+// ObservedAt is per-tick live evidence and must actually advance — never
+// share DiscoveredAt's single startup reading, which is what previously
+// left every session and LTC generator signal marked stale after 45
+// seconds regardless of how fresh the underlying data was.
+func TestRunAudioReportObservedAtAdvancesWhileDiscoveredAtStaysPinned(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	base := time.Unix(10_000, 0).UTC()
+	var calls int
+	now := func() time.Time {
+		got := base.Add(time.Duration(calls) * time.Minute)
+		calls++
+		return got
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, now, ticks, discardLogger())
+	}()
+
+	const numTicks = 3
+	for i := 0; i < numTicks; i++ {
+		ticks <- time.Now()
+		<-pub.notify
+	}
+	cancel()
+	<-done
+
+	publishes := pub.snapshot()
+	if len(publishes) != numTicks {
+		t.Fatalf("publish calls = %d, want %d", len(publishes), numTicks)
+	}
+
+	probedAt := decodeAudioReport(t, publishes[0].payload).DiscoveredAt
+	if probedAt == nil {
+		t.Fatal("DiscoveredAt is nil, want the startup probe time")
+	}
+
+	var prevObservedAt *time.Time
+	for i, call := range publishes {
+		got := decodeAudioReport(t, call.payload)
+		if got.DiscoveredAt == nil || !got.DiscoveredAt.Equal(*probedAt) {
+			t.Errorf("tick %d DiscoveredAt = %v, want the pinned startup probe time %v", i, got.DiscoveredAt, probedAt)
+		}
+		if got.ObservedAt == nil {
+			t.Fatalf("tick %d ObservedAt is nil", i)
+		}
+		if got.ObservedAt.Equal(*probedAt) {
+			t.Errorf("tick %d ObservedAt = %v, want a fresh tick time distinct from the startup probe time %v", i, got.ObservedAt, probedAt)
+		}
+		if prevObservedAt != nil && !got.ObservedAt.After(*prevObservedAt) {
+			t.Errorf("tick %d ObservedAt = %v, want it to advance past the previous tick's %v", i, got.ObservedAt, prevObservedAt)
+		}
+		prevObservedAt = got.ObservedAt
 	}
 }
 

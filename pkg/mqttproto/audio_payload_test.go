@@ -19,6 +19,7 @@ func validAudioPayload() AudioPayload {
 		Routes: []AudioRouteReport{
 			{Device: "hw:CARD=PCH,DEV=0", Available: true, Channels: 2, Rate: 48000, Format: "S16LE"},
 		},
+		DiscoveredAt:       &now,
 		ObservedAt:         &now,
 		Sessions:           []AudioSessionReport{},
 		LTCGeneratorState:  "stopped",
@@ -112,6 +113,14 @@ func TestAudioPayloadValidateRequiresObservedAt(t *testing.T) {
 	p.ObservedAt = nil
 	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
 		t.Errorf("Validate(nil observedAt) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresDiscoveredAt(t *testing.T) {
+	p := validAudioPayload()
+	p.DiscoveredAt = nil
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(nil discoveredAt) = %v, want ErrPayloadMissingField", err)
 	}
 }
 

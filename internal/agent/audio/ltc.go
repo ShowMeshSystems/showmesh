@@ -222,12 +222,24 @@ type LTCGenerator struct {
 	starter LTCProcessStarter
 	policy  ltcGeneratorRestartPolicy
 
-	cmds chan ltcCommand
-	stop chan struct{}
-	done chan struct{}
+	cmds       chan ltcCommand
+	heartbeats chan ltcHeartbeat
+	stop       chan struct{}
+	done       chan struct{}
 
 	mu   sync.Mutex
 	snap LTCGeneratorSnapshot
+}
+
+// ltcHeartbeat carries one heartbeat line from watchStderr's goroutine to
+// the loop, tagged with the attempt generation it came from. gen is
+// otherwise loop-owned state; routing every heartbeat through this channel
+// (rather than reading gen from the heartbeat goroutine, as a prior
+// version did under g.mu without the loop ever holding that lock while
+// mutating gen) is what makes the check race-free, not the mutex.
+type ltcHeartbeat struct {
+	gen int64
+	tc  pkgaudio.LTCTimecode
 }
 
 // NewLTCGenerator builds an LTCGenerator. now/starter default to
@@ -247,9 +259,10 @@ func newLTCGeneratorWithPolicy(now func() time.Time, starter LTCProcessStarter, 
 	}
 	g := &LTCGenerator{
 		now: now, starter: starter, policy: policy,
-		cmds: make(chan ltcCommand, 4),
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		cmds:       make(chan ltcCommand, 4),
+		heartbeats: make(chan ltcHeartbeat, 32),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 		snap: LTCGeneratorSnapshot{
 			State: LTCGeneratorStopped, Reason: "never started",
 			Since: now(), ObservedAt: now(),
@@ -308,11 +321,10 @@ func (g *LTCGenerator) setFrameRate(rate pkgaudio.LTCFrameRate) {
 	g.mu.Unlock()
 }
 
-// setHeartbeat records a fresh heartbeat's timecode. Called only while a
-// generation the loop still considers current is alive — see
-// [LTCGenerator.loop]'s onHeartbeat closure — so a heartbeat from an
-// attempt the loop has already moved past can never mark a superseded
-// process Running.
+// setHeartbeat records a fresh heartbeat's timecode. Called only by
+// [LTCGenerator.loop] after it has confirmed the heartbeat's generation is
+// still current, so a heartbeat from an attempt the loop has already moved
+// past can never mark a superseded process Running.
 func (g *LTCGenerator) setHeartbeat(tc pkgaudio.LTCTimecode) {
 	g.mu.Lock()
 	g.snap.State = LTCGeneratorRunning
@@ -377,14 +389,19 @@ func (g *LTCGenerator) loop() {
 
 		myGen := gen
 		ec := make(chan LTCExitResult, 1)
+		// onHeartbeat runs on watchStderr's goroutine, never the loop's, so
+		// it must not read or write gen directly — gen is loop-owned and
+		// unsynchronized. It hands the heartbeat to the loop instead, which
+		// does the generation check and the timer reset itself.
 		onHeartbeat := func(tc pkgaudio.LTCTimecode) {
-			g.mu.Lock()
-			current := gen
-			g.mu.Unlock()
-			if myGen != current {
-				return
+			select {
+			case g.heartbeats <- ltcHeartbeat{gen: myGen, tc: tc}:
+			default:
+				// Channel full: a heartbeat was dropped under an
+				// implausibly fast burst. Harmless — the next one arrives
+				// well within heartbeatTimeout — and never blocks a
+				// process's own stderr-reading goroutine.
 			}
-			g.setHeartbeat(tc)
 		}
 
 		startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -424,6 +441,14 @@ func (g *LTCGenerator) loop() {
 				haveSpec = false
 				g.setState(LTCGeneratorStopped, "stopped by operator")
 			}
+
+		case hb := <-g.heartbeats:
+			if hb.gen != gen {
+				continue // from an attempt the loop has already moved past
+			}
+			g.setHeartbeat(hb.tc)
+			stopTimer(&heartbeatT)
+			heartbeatT = time.NewTimer(g.policy.heartbeatTimeout)
 
 		case res := <-nonNilLTCExitCh(exitCh):
 			proc, exitCh = nil, nil

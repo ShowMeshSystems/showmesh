@@ -44,16 +44,21 @@ const noLTCGeneratorReason = "no LTC generator is configured on this node"
 // discovery runs exactly once, before the loop starts: the throwaway
 // probe pipelines it involves must never repeat on a fixed cadence for
 // the life of the process (finding 1), so every tick republishes the SAME
-// cached discovery evidence, with its own original observation time,
-// never a fresh probe. A live device state change is picked up only at
-// the next agent restart, or by the operator's own explicit
-// "audio.device.probe" command (audioops.go), which probes one named
-// device and is unrelated to this cache.
+// cached discovery evidence, carrying its own original probe time in
+// [mqttproto.AudioPayload.DiscoveredAt], never a fresh probe. A live
+// device state change is picked up only at the next agent restart, or by
+// the operator's own explicit "audio.device.probe" command
+// (audioops.go), which probes one named device and is unrelated to this
+// cache.
 //
-// Session telemetry is the opposite: mgr, when non-nil, is asked for a
-// fresh [audio.Manager.Snapshot] on every tick, because a session's
-// state, position, and fault are live facts a cache would make stale
-// evidence look current.
+// Session and LTC generator telemetry are the opposite: mgr and ltcGen,
+// when non-nil, are asked for fresh evidence on every tick, because a
+// session's state, position, and fault, and a generator's liveness, are
+// live facts a cache would make stale evidence look current. That live
+// evidence is stamped with its own tick time in
+// [mqttproto.AudioPayload.ObservedAt] — distinct from DiscoveredAt so
+// this evidence can never again be reported as though it aged out
+// alongside a startup probe that has nothing to do with it.
 //
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
@@ -79,6 +84,8 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 				return
 			}
 			payload := discovery
+			tickAt := now()
+			payload.ObservedAt = &tickAt
 			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
 			applyLTCGeneratorSnapshot(&payload, ltcGen)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
@@ -214,7 +221,15 @@ func publishAudioPayload(ctx context.Context, pub Publisher, topic, nodeID strin
 // ProgramAvailable/LTCAvailable all report "we do not know", never "no
 // hardware" — a shell-out failure must never be indistinguishable from a
 // clean enumeration that genuinely found nothing.
-func buildAudioPayload(d audio.Discovery, observedAt time.Time) mqttproto.AudioPayload {
+//
+// probedAt is stamped onto DiscoveredAt, the evidence time for every field
+// this function derives. ObservedAt is also seeded from probedAt so a
+// payload built here — including by a caller that never runs it through
+// runAudioReport's per-tick loop, such as this file's own tests — is
+// self-consistently Validate-passing on its own; runAudioReport overwrites
+// ObservedAt with the tick's own time on every publish (see that
+// function's doc comment).
+func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPayload {
 	p := mqttproto.AudioPayload{
 		EngineAvailable:          d.EngineUsable,
 		EngineReason:             d.EngineReason,
@@ -223,7 +238,8 @@ func buildAudioPayload(d audio.Discovery, observedAt time.Time) mqttproto.AudioP
 		Routes:                   make([]mqttproto.AudioRouteReport, 0, len(d.Routes)),
 		Truncated:                d.Truncated,
 		EnumeratedCount:          int64(d.EnumeratedCount),
-		ObservedAt:               &observedAt,
+		DiscoveredAt:             &probedAt,
+		ObservedAt:               &probedAt,
 		Sessions:                 []mqttproto.AudioSessionReport{},
 		// Discovery-time default, self-consistent on its own — a caller
 		// that never wires an [audio.LTCGenerator] (or calls this
