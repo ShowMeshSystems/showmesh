@@ -1173,9 +1173,9 @@ func New(deps Dependencies, opts Options) *API {
 	// the "go find out now" counterpart.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe", h.writeGuard(&scopeRenderCommand, h.handleRenderTransportProbe))
 
-	// Dispatch the nine agent audio.session.* operations
-	// (audiodispatch.go). Guarded by audio:command, matching
-	// render:command's identical "reads open, this write isn't" posture.
+	// Dispatch the agent's audio.session.* operations (audiodispatch.go).
+	// Guarded by audio:command, matching render:command's identical
+	// "reads open, this write isn't" posture.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/apply", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionApply))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPrepare))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/start", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStart))
@@ -1185,6 +1185,13 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/advance", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionAdvance))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/stop", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStop))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/clear", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionClear))
+
+	// The four remaining reserved audio.gain.*/audio.output.* operations,
+	// same dispatch core and same scope.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/gain", h.writeGuard(&scopeAudioCommand, h.handleAudioGainSet))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade", h.writeGuard(&scopeAudioCommand, h.handleAudioGainFade))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/mute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputMute))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputUnmute))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))

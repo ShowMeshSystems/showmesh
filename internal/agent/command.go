@@ -198,6 +198,9 @@ func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperatio
 	for action, op := range audioSessionOperations(audioMgr) {
 		ops[action] = op
 	}
+	for action, op := range audioGainOperations(audioMgr) {
+		ops[action] = op
+	}
 	return ops
 }
 

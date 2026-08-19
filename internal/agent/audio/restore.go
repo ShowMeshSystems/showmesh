@@ -55,6 +55,10 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.currentIndex = rec.CurrentIndex
 	s.currentItemID = rec.CurrentItemID
 	s.bookmark = rec.Bookmark
+	s.muted = rec.Muted
+	s.preMuteGain = rec.PreMuteGain
+	s.duckedBy = rec.DuckedBy
+	s.preDuckGain = rec.PreDuckGain
 
 	m.mu.Lock()
 	m.sessions[id] = s
@@ -98,14 +102,42 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		s.timingKnown = false
 	}
+
+	// A session left ducked when the coordinator crashed is restored
+	// right here if the session that was ducking it did not itself
+	// survive to Playing/Preparing — a crash after the ducker's own stop
+	// persisted but before this restore ran. If the ducker IS still
+	// active, s stays ducked, correctly: it will be restored normally
+	// when the ducker later stops. Either way this is the same
+	// exactly-once check [Manager.restoreOneDuckLocked] runs on the live
+	// path, so a session can never be restored twice regardless of which
+	// side of the crash the restore boundary fell on.
+	if s.duckedBy != "" && !m.duckerStillActiveOnDisk(s.duckedBy) {
+		m.restoreOneDuckLocked(ctx, s)
+	}
 	return nil
+}
+
+// duckerStillActiveOnDisk reports whether id's persisted record shows a
+// session that is still (or will again be, once restored) Playing —
+// i.e. one that legitimately still owns an active duck. Reads the
+// store directly rather than the in-memory session map because restore
+// order across sessions is unspecified.
+func (m *Manager) duckerStillActiveOnDisk(id pkgaudio.SessionID) bool {
+	rec, ok, err := m.store.Load(id)
+	if err != nil || !ok {
+		return false
+	}
+	return rec.SessionState == pkgaudio.StatePlaying || rec.SessionState == pkgaudio.StatePreparing
 }
 
 // RunWatcher polls, once per tick, every Playing session for natural
 // completion and advances it exactly once through [Session.advanceLocked]
-// — the same path [Manager.Advance] uses, per that method's doc comment.
-// This is what lets a playlist keep advancing on its own while the
-// coordinator or broker is unreachable: nothing here depends on either.
+// — the same path [Manager.Advance] uses, per that method's doc comment
+// — and every session with a fade in progress for its completion, per
+// [Session.checkFadeCompletionLocked]. This is what lets a playlist keep
+// advancing, and a fade resolve, on their own while the coordinator or
+// broker is unreachable: nothing here depends on either.
 func (m *Manager) RunWatcher(ctx context.Context, ticks <-chan time.Time) {
 	for {
 		select {
@@ -128,14 +160,26 @@ func (m *Manager) watchTick(ctx context.Context) {
 	}
 	m.mu.Unlock()
 
+	var completed []pkgaudio.SessionID
 	for _, s := range sessions {
 		s.mu.Lock()
+		s.checkFadeCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
 			obs, err := m.engine.Observe(ctx, s.handle)
 			if err == nil && obs.State == pkgaudio.StateCompleted {
 				s.advanceLocked(ctx, false)
 			}
 		}
+		if s.state == pkgaudio.StateCompleted {
+			completed = append(completed, s.id)
+		}
 		s.mu.Unlock()
+	}
+
+	// restoreDucked locks OTHER sessions, so it must run after every
+	// session's own mu from the loop above is released — see
+	// [Manager.duckLowerPriority]'s doc comment.
+	for _, id := range completed {
+		m.restoreDucked(ctx, id)
 	}
 }

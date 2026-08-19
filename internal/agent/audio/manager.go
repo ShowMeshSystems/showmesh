@@ -101,6 +101,12 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		if err != nil {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 		}
+		// interrupt is declared and refused, never silently downgraded to
+		// duck: whether announcements ever interrupt show audio is an
+		// open owner decision.
+		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyInterrupt {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "interrupt" is not supported; use "mix" or "duck"`}
+		}
 		s.desired = merged
 		if s.currentIndex < 0 {
 			s.currentIndex = 0
@@ -154,7 +160,6 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		item, ok := s.currentItemLocked()
@@ -183,6 +188,20 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		s.bookmark = nil
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
+
+	// duck resolution needs to lock OTHER sessions, so it must run after
+	// s.mu is released — see [Manager.duckLowerPriority]'s doc comment on
+	// why this can never hold two sessions' locks at once.
+	duck := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck
+	var role pkgaudio.SourceRole
+	if s.desired.SourceRole != nil {
+		role = *s.desired.SourceRole
+	}
+	s.mu.Unlock()
+
+	if duck {
+		m.duckLowerPriority(ctx, id, role)
+	}
 	return res.outcome
 }
 
@@ -306,7 +325,6 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		if !s.handleLoaded {
@@ -326,6 +344,11 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		_ = obs
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
+	s.mu.Unlock()
+
+	if res.executed {
+		m.restoreDucked(ctx, id)
+	}
 	return res.outcome
 }
 
@@ -350,6 +373,7 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 	s.mu.Unlock()
 
 	if res.executed {
+		m.restoreDucked(ctx, id)
 		if err := m.store.Delete(id); err != nil {
 			m.logf("audio session %s: failed to delete persisted state on clear: %v", id, err)
 		}

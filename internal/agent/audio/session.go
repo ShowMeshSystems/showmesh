@@ -29,6 +29,23 @@ type PersistedSession struct {
 	CurrentIndex  int
 	CurrentItemID string
 	Bookmark      *pkgaudio.Bookmark
+
+	// Muted and PreMuteGain record an operator-issued audio.output.mute
+	// still in effect: PreMuteGain is the gain audio.output.unmute
+	// restores. Nil PreMuteGain with Muted true means mute happened
+	// before any gain was ever set — Unmute restores unity.
+	Muted       bool
+	PreMuteGain *pkgaudio.Gain
+
+	// DuckedBy is the id of the session whose duck mix policy is
+	// currently suppressing this session's gain, empty when this session
+	// is not ducked. PreDuckGain is the gain to restore. This pair is the
+	// restore-exactly-once guard across a restart: a restore clears and
+	// persists both, so a repeated or racing restore attempt finds
+	// DuckedBy already empty and does nothing — see
+	// [Manager.restoreOneDuckLocked].
+	DuckedBy    pkgaudio.SessionID
+	PreDuckGain *pkgaudio.Gain
 }
 
 // SessionStore is the session layer's durability boundary — enough of
@@ -67,6 +84,22 @@ type Session struct {
 	// observation resolves it. It is reporting-only state, never used to
 	// gate a transition.
 	timingKnown bool
+
+	// fadePending is true from the moment audio.gain.fade dispatches a
+	// fade until [Manager.watchTick] observes it complete. Reporting-only,
+	// like timingKnown: it never gates a transition. fadeInvocation is the
+	// invocation that dispatched it, so the eventual completion (or
+	// unconfirmable non-completion) can be written back onto that exact
+	// invocation's cached [pkgaudio.OutcomeResult] — see
+	// [Session.checkFadeCompletionLocked].
+	fadePending    bool
+	fadeInvocation pkgaudio.InvocationID
+
+	muted       bool
+	preMuteGain *pkgaudio.Gain
+
+	duckedBy    pkgaudio.SessionID
+	preDuckGain *pkgaudio.Gain
 }
 
 func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
@@ -92,6 +125,10 @@ func (s *Session) persistedLocked() PersistedSession {
 		CurrentIndex:    s.currentIndex,
 		CurrentItemID:   s.currentItemID,
 		Bookmark:        s.bookmark,
+		Muted:           s.muted,
+		PreMuteGain:     s.preMuteGain,
+		DuckedBy:        s.duckedBy,
+		PreDuckGain:     s.preDuckGain,
 	}
 }
 

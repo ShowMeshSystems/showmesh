@@ -74,6 +74,10 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdAudioNode(rest, stdout, stderr, clock)
 	case "session":
 		return cmdAudioSession(rest, stdout, stderr, clock)
+	case "gain":
+		return cmdAudioGain(rest, stdout, stderr, clock)
+	case "output":
+		return cmdAudioOutput(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio: unknown subcommand %q\n\n", sub)
 		printAudioUsage(stderr)
@@ -84,7 +88,7 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 func printAudioUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio <subcommand> [flags]
 
-The audio engine's own configuration (Track C, ADR-039). "settings" is the
+The audio engine's own configuration (ADR-039). "settings" is the
 audio.settings singleton: engine-wide operator defaults (drift ignore
 threshold, default fade curve/duration, default background gain ceiling).
 "node" is the audio.node collection: which discovered output route on one
@@ -100,6 +104,10 @@ Subcommands:
                                 "showmeshctl audio node --help")
   session <op>                 dispatch a playback session command (see
                                 "showmeshctl audio session --help")
+  gain set|fade                dispatch audio.gain.set/audio.gain.fade (see
+                                "showmeshctl audio gain --help")
+  output mute|unmute           dispatch audio.output.mute/audio.output.unmute
+                                (see "showmeshctl audio output --help")
 
 Run "showmeshctl audio <subcommand> --help" for flags specific to one
 subcommand.

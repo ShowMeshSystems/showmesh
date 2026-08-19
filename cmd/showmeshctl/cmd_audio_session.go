@@ -105,8 +105,21 @@ type audioSessionCommandResponse struct {
 	Command    audioSessionCommandResult `json:"command"`
 }
 
+// cmdAudioSessionDispatch dispatches one of the nine audio.session.*
+// operations, whose URL path suffix and CLI label are both the op name.
 func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, op string) int {
-	cmdLabel := "audio session " + op
+	return cmdAudioSessionLikeDispatch(args, stdout, stderr, clock, "audio session "+op, op)
+}
+
+// cmdAudioSessionLikeDispatch is every audio session-shaped command's
+// shared core: it POSTs to
+// /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/{pathSuffix} with a
+// {"revision", "idempotencyKey", "params"} body and reports the result.
+// cmdLabel and pathSuffix are separate because the four audio.gain.*/
+// audio.output.* operations are reachable as "showmeshctl audio gain
+// set"/"showmeshctl audio output mute" — a different CLI verb than their
+// URL path segment ("gain", "output/mute").
+func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries")
 	fs.Usage = func() {
@@ -154,7 +167,7 @@ func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func
 		return reportError(stderr, cmdLabel, err)
 	}
 
-	path := "/api/v1/nodes/" + url.PathEscape(nodeID) + "/audio/sessions/" + url.PathEscape(sessionID) + "/" + op
+	path := "/api/v1/nodes/" + url.PathEscape(nodeID) + "/audio/sessions/" + url.PathEscape(sessionID) + "/" + pathSuffix
 	var resp audioSessionCommandResponse
 	reqErr := c.postJSON(ctx, path, audioSessionCommandRequest{Revision: *revision, IdempotencyKey: key, Params: params}, &resp)
 	if reqErr != nil {

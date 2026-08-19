@@ -19,15 +19,15 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// This file is the coordinator-side dispatch for the nine
-// audio.session.* operations internal/agent/audiosessionops.go ships:
-// apply, prepare, start, pause, resume, seek, advance, stop, clear. It is
-// deliberately ONE shared dispatch core behind nine thin routes, unlike
-// renderdispatch.go's own richer per-action param resolution — a session
-// apply's params already arrive complete from the caller (no
-// coordinator-side asset lookup the way render.surface.apply's sequenceId
-// needs), so there is nothing this file needs to resolve on the
-// operator's behalf.
+// This file is the coordinator-side dispatch for every audio.session.*,
+// audio.gain.*, and audio.output.* operation the agent ships: apply,
+// prepare, start, pause, resume, seek, advance, stop, clear, gain.set,
+// gain.fade, output.mute, output.unmute. It is deliberately ONE shared
+// dispatch core behind thin per-action routes, unlike renderdispatch.go's
+// own richer per-action param resolution — a session command's params
+// already arrive complete from the caller (no coordinator-side asset
+// lookup the way render.surface.apply's sequenceId needs), so there is
+// nothing this file needs to resolve on the operator's behalf.
 //
 // Confirmation here does NOT poll a collector the way render dispatch
 // does: it waits on the dispatched command's own result topic
@@ -433,4 +433,16 @@ func (h *handlers) handleAudioSessionStop(w http.ResponseWriter, r *http.Request
 }
 func (h *handlers) handleAudioSessionClear(w http.ResponseWriter, r *http.Request) {
 	h.dispatchAudioSessionCommand(w, r, "audio.session.clear")
+}
+func (h *handlers) handleAudioGainSet(w http.ResponseWriter, r *http.Request) {
+	h.dispatchAudioSessionCommand(w, r, "audio.gain.set")
+}
+func (h *handlers) handleAudioGainFade(w http.ResponseWriter, r *http.Request) {
+	h.dispatchAudioSessionCommand(w, r, "audio.gain.fade")
+}
+func (h *handlers) handleAudioOutputMute(w http.ResponseWriter, r *http.Request) {
+	h.dispatchAudioSessionCommand(w, r, "audio.output.mute")
+}
+func (h *handlers) handleAudioOutputUnmute(w http.ResponseWriter, r *http.Request) {
+	h.dispatchAudioSessionCommand(w, r, "audio.output.unmute")
 }

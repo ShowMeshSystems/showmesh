@@ -37,6 +37,22 @@ type fakeHandle struct {
 	// time since playStartedAt, computed lazily on read.
 	position      time.Duration
 	playStartedAt time.Time // zero when not currently playing
+
+	// gain is the handle's output gain as of the last resolved change;
+	// while fade is non-nil, the true current gain is interpolated
+	// lazily on read exactly as position is derived from playStartedAt.
+	gain pkgaudio.Gain
+	fade *fakeFade
+}
+
+// fakeFade is one in-progress [Engine.Fade] ramp: linear interpolation
+// between the gain the fade started at and its target, over its
+// duration, timed against the engine's own injected clock.
+type fakeFade struct {
+	startGain  pkgaudio.Gain
+	targetGain pkgaudio.Gain
+	duration   time.Duration
+	startedAt  time.Time
 }
 
 // NewFakeEngine returns a FakeEngine using now for its internal clock.
@@ -50,7 +66,31 @@ func (e *FakeEngine) Available() (bool, string) {
 }
 
 func (e *FakeEngine) obs(h *fakeHandle) EngineObservation {
-	return EngineObservation{State: h.state, Position: e.currentPosition(h), ObservedAt: e.now()}
+	position := e.currentPosition(h)
+	gain := e.currentGain(h)
+	return EngineObservation{
+		State: h.state, Position: position, ObservedAt: e.now(),
+		Gain: gain, FadeActive: h.fade != nil,
+	}
+}
+
+// currentGain resolves h.fade to h.gain and clears it, exactly once, the
+// instant the ramp's elapsed wall time reaches its duration — never
+// before, and never inferred by the caller from duration alone. Callers
+// hold e.mu.
+func (e *FakeEngine) currentGain(h *fakeHandle) pkgaudio.Gain {
+	if h.fade == nil {
+		return h.gain
+	}
+	elapsed := e.now().Sub(h.fade.startedAt)
+	if elapsed >= h.fade.duration {
+		h.gain = h.fade.targetGain
+		h.fade = nil
+		return h.gain
+	}
+	frac := float64(elapsed) / float64(h.fade.duration)
+	span := float64(h.fade.targetGain) - float64(h.fade.startGain)
+	return pkgaudio.Gain(float64(h.fade.startGain) + span*frac)
 }
 
 // currentPosition advances h.state to Completed, and clamps position to
@@ -73,7 +113,7 @@ func (e *FakeEngine) currentPosition(h *fakeHandle) time.Duration {
 func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	h := &fakeHandle{media: media, duration: duration, state: pkgaudio.StateReady}
+	h := &fakeHandle{media: media, duration: duration, state: pkgaudio.StateReady, gain: 1}
 	e.handles[handle] = h
 	return e.obs(h), nil
 }
@@ -152,6 +192,30 @@ func (e *FakeEngine) Stop(_ context.Context, handle EngineHandle) (EngineObserva
 	}
 	h.state = pkgaudio.StateStopped
 	h.playStartedAt = time.Time{}
+	return e.obs(h), nil
+}
+
+func (e *FakeEngine) SetGain(_ context.Context, handle EngineHandle, gain pkgaudio.Gain) (EngineObservation, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, err := e.get(handle)
+	if err != nil {
+		return EngineObservation{}, err
+	}
+	h.gain = gain
+	h.fade = nil
+	return e.obs(h), nil
+}
+
+func (e *FakeEngine) Fade(_ context.Context, handle EngineHandle, fade pkgaudio.Fade) (EngineObservation, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, err := e.get(handle)
+	if err != nil {
+		return EngineObservation{}, err
+	}
+	start := e.currentGain(h)
+	h.fade = &fakeFade{startGain: start, targetGain: fade.TargetGain, duration: fade.Duration, startedAt: e.now()}
 	return e.obs(h), nil
 }
 

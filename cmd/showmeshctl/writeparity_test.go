@@ -123,6 +123,14 @@ var dynamicWritePathCoverage = map[string]string{
 		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=stop (showmeshctl audio session stop)",
 	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear": "cmd_audio_session.go cmdAudioSessionDispatch builds " +
 		"/api/v1/nodes/<nodeId>/audio/sessions/<sessionId>/<op> with op=clear (showmeshctl audio session clear)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain": "cmd_audio_gain.go cmdAudioGain calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=gain (showmeshctl audio gain set)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade": "cmd_audio_gain.go cmdAudioGain calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=gain/fade (showmeshctl audio gain fade)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute": "cmd_audio_gain.go cmdAudioOutput calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=output/mute (showmeshctl audio output mute)",
+	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute": "cmd_audio_gain.go cmdAudioOutput calls " +
+		"cmdAudioSessionLikeDispatch with pathSuffix=output/unmute (showmeshctl audio output unmute)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

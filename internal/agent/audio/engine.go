@@ -21,6 +21,16 @@ type EngineObservation struct {
 	Position   time.Duration
 	ObservedAt time.Time
 	Reason     string
+
+	// Gain is the handle's effective output gain as of ObservedAt.
+	Gain pkgaudio.Gain
+
+	// FadeActive reports whether a gain fade dispatched via [Engine.Fade]
+	// is still in progress. A caller detects fade completion by observing
+	// this transition true-to-false with Gain equal to the fade's target —
+	// never by assuming a fade finished because its requested duration has
+	// elapsed.
+	FadeActive bool
 }
 
 // Engine drives a single media backend playing one asset at a time. It
@@ -63,6 +73,21 @@ type Engine interface {
 	// two permanently different values — a session that stops on its own
 	// must never be reported as if it had been commanded to stop.
 	Stop(ctx context.Context, handle EngineHandle) (EngineObservation, error)
+
+	// SetGain changes handle's output gain immediately, cancelling any
+	// fade in progress on it. The caller is responsible for ceiling
+	// enforcement before calling this — Engine trusts the gain it is
+	// given and does not itself hold a ceiling.
+	SetGain(ctx context.Context, handle EngineHandle, gain pkgaudio.Gain) (EngineObservation, error)
+
+	// Fade begins ramping handle's output gain toward fade.TargetGain over
+	// fade.Duration along fade.Curve, replacing any fade already in
+	// progress. It returns immediately with the fade just started, not its
+	// eventual result — completion is read back later via [Engine.Observe]
+	// or a subsequent Fade/SetGain call, per [EngineObservation.FadeActive]
+	// and [EngineObservation.Gain], never inferred from fade.Duration
+	// alone.
+	Fade(ctx context.Context, handle EngineHandle, fade pkgaudio.Fade) (EngineObservation, error)
 
 	// Release discards handle and any engine-side resources it holds.
 	// Idempotent: releasing an already-released or never-loaded handle is
