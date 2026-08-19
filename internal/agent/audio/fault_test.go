@@ -117,6 +117,41 @@ func TestMediaDisappearedFault(t *testing.T) {
 	}
 }
 
+// TestMediaMismatchFaultDistinctFromDisappeared proves the two file-on-disk
+// problems prepareLocked can detect stay distinct: an asset present on disk
+// but whose content no longer matches the pinned reference's content hash
+// must report FaultMediaMismatch, never FaultMediaDisappeared — the file
+// did not disappear, it changed, and telling an operator to look for a
+// missing file sends them the wrong way. mediaFaultToSessionFault
+// previously collapsed MediaFaultMissing and MediaFaultHashMismatch into
+// the same SessionFault; this asserts they diverge.
+func TestMediaMismatchFaultDistinctFromDisappeared(t *testing.T) {
+	ctx := context.Background()
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	id := pkgaudio.SessionID("s-mismatch")
+
+	ref := writeTestAsset(t, m.assetDir, "item1.wav", "item1", []byte("original"))
+	// Corrupt the assigned reference's own declared hash — the file on
+	// disk is present and readable, it just does not match what the
+	// session was pinned to, which is a real ADR-028 identity failure
+	// distinct from the file being gone.
+	ref.ContentHash = "sha256:deadbeef"
+	req := pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}
+	m.Apply(ctx, id, "apply", 1, req)
+	m.Start(ctx, id, "start", 2)
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fault != pkgaudio.FaultMediaMismatch {
+		t.Fatalf("fault = %q, want %q (reason: %s)", s.fault, pkgaudio.FaultMediaMismatch, s.faultReason)
+	}
+	if s.fault == pkgaudio.FaultMediaDisappeared {
+		t.Fatalf("a content-hash mismatch must never report as FaultMediaDisappeared: the file is present")
+	}
+}
+
 // TestFaultClearsOnlyOnRevalidation is AUDIO-ENGINE section 11.4's "a device that
 // reappears stays unavailable until revalidated" requirement, at session
 // scope: a fault set by an injected engine failure must survive an

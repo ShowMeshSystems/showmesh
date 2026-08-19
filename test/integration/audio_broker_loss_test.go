@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -189,6 +191,31 @@ func subscribeAudioReports(t *testing.T, nodeID string) *audioReportSubscriber {
 	return w
 }
 
+// waitForBrokerTCPUp blocks until brokerURL accepts a bare TCP connection,
+// or fails t after timeout. `docker start` returns as soon as the
+// container process is launched, not once Mosquitto is actually listening
+// again, so a dial issued immediately after it can still race a listener
+// that has not bound yet.
+func waitForBrokerTCPUp(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	u, err := url.Parse(brokerURL)
+	if err != nil {
+		t.Fatalf("parse broker URL %q: %v", brokerURL, err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.DialTimeout("tcp", u.Host, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("broker at %s did not accept a TCP connection within %s: %v", u.Host, timeout, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // TestLocalAudioSessionSurvivesBrokerLoss proves ADR-019's failure-containment intent: a
 // running local session must continue through coordinator/broker loss
 // for media already present, and the FIRST evidence available once the
@@ -215,7 +242,12 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	nodeID := "audio-node-" + uniqueSuffix()
 	startAgent(t, agentConfig{nodeID: nodeID, assetDir: assetDir})
 
-	cli, _ := startCmdClient(t, nodeID)
+	cli, w := startCmdClient(t, nodeID)
+	// The agent's SUBSCRIBE to its own cmd topic races this function's
+	// return (see awaitAgentReceivingCommands's doc comment); without this
+	// barrier, apply/start below can land in that window and be silently
+	// dropped, never reaching the agent at all.
+	awaitAgentReceivingCommands(t, cli, w, nodeID)
 	audioSub := subscribeAudioReports(t, nodeID)
 
 	const sessionID = "show-session-1"
@@ -239,6 +271,19 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	time.Sleep(4 * time.Second)
 
 	startBroker(t)
+	waitForBrokerTCPUp(t, 15*time.Second)
+
+	// audioSub's own raw client (rawConnect) is a bare TCP session with no
+	// reconnect logic of its own — unlike the agent under test, which
+	// reconnects via autopaho. Stopping the broker container severs that
+	// TCP session for good, so the ORIGINAL audioSub can never observe
+	// anything published after the restart: reusing it here would make
+	// this test block until its own 30s timeout regardless of what the
+	// agent does, which proved nothing about the agent and everything
+	// about a stale observer. A fresh subscription, opened only once the
+	// broker is confirmed reachable again, is what actually watches for
+	// the evidence this test is about.
+	audioSub = subscribeAudioReports(t, nodeID)
 
 	// The first report to arrive after the broker returns must already
 	// show Completed — proving the transition happened locally, during

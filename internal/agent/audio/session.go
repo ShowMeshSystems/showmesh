@@ -295,15 +295,20 @@ func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem)
 }
 
 // mediaFaultToSessionFault maps a pre-flight [MediaFault] (C2's ProbeAsset
-// vocabulary) onto the closest of the six runtime [pkgaudio.SessionFault]
-// classes, for the two cases prepareLocked can itself detect: the asset is
-// gone or was replaced under a pinned reference, or it will not decode.
+// vocabulary) onto the closest runtime [pkgaudio.SessionFault] class, for
+// the cases prepareLocked can itself detect: the asset is gone, the asset
+// is present but its content no longer matches the pinned reference, or
+// it will not decode. Missing and mismatched stay distinct outcomes —
+// collapsing them previously sent an operator looking for an absent file
+// when the file was present with the wrong content.
 // [MediaFaultDurationUnknown] never reaches here — that probe state is
 // [MediaReady] with an advisory Reason, not a prepareLocked failure.
 func mediaFaultToSessionFault(f MediaFault) pkgaudio.SessionFault {
 	switch f {
-	case MediaFaultMissing, MediaFaultHashMismatch:
+	case MediaFaultMissing:
 		return pkgaudio.FaultMediaDisappeared
+	case MediaFaultHashMismatch:
+		return pkgaudio.FaultMediaMismatch
 	case MediaFaultUndecodable, MediaFaultUnsupportedFormat:
 		return pkgaudio.FaultDecodeFailure
 	default:
@@ -330,18 +335,32 @@ func (s *Session) clearFaultLocked() {
 	s.faultReason = ""
 }
 
-// advanceLocked is the one path that moves s to its next playlist item,
-// used identically by a forced [Manager.Advance] and by the natural-
-// completion watcher (forced distinguishes the two only for what happens
-// past the last item with [pkgaudio.RepeatNone] — see below). It persists
-// the new current item BEFORE touching the engine: a crash between those
-// two steps recovers, on [Manager.RestoreAll], to the newly-persisted
-// item rather than replaying the one that just completed
-// or losing track of the boundary. Single-item (Media, not Playlist)
-// sessions have no next item and refuse.
+// advanceLocked is the one path that moves s past its current item, used
+// identically by a forced [Manager.Advance] and by the natural-completion
+// watcher (forced distinguishes the two only for what happens past the
+// last item with [pkgaudio.RepeatNone] — see below). It persists the new
+// current item BEFORE touching the engine: a crash between those two
+// steps recovers, on [Manager.RestoreAll], to the newly-persisted item
+// rather than replaying the one that just completed or losing track of
+// the boundary. A single-item (Media, not Playlist) session has no next
+// item to forced-advance to, but it still has an end: the natural-
+// completion watcher calling this unforced is exactly how it learns
+// playback reached it, and that must still move the session to
+// Completed — leaving it refused here left every single-Media session
+// reporting Playing forever once the engine was actually done.
 func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.OutcomeResult {
 	if s.desired.Playlist == nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no playlist to advance"}
+		if s.desired.Media == nil {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to advance"}
+		}
+		if forced {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no next item to advance to"}
+		}
+		s.releaseEngineLocked(ctx)
+		s.state = pkgaudio.StateCompleted
+		s.bookmark = nil
+		s.persistLocked()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
 	items := s.desired.Playlist.Items
 	next := s.currentIndex

@@ -49,14 +49,14 @@ func findSessionObs(t *testing.T, obs []observation.Observation, sig observation
 	return observation.Observation{}
 }
 
-// TestSessionFaultSignalsDistinguishAllSix proves the distinct-faults rule at the
-// observation surface: each of the six named fault classes reports
+// TestSessionFaultSignalsDistinguishAllSeven proves the distinct-faults rule at the
+// observation surface: each of the seven named fault classes reports
 // distinctly on SignalSessionFaultKind, and FaultReason is only ever
 // not_collected when the fault kind is "none".
-func TestSessionFaultSignalsDistinguishAllSix(t *testing.T) {
+func TestSessionFaultSignalsDistinguishAllSeven(t *testing.T) {
 	faults := []string{
 		"pipeline_crash", "freeze", "decode_failure",
-		"media_disappeared", "route_changed", "timing_authority_lost",
+		"media_disappeared", "media_mismatch", "route_changed", "timing_authority_lost",
 	}
 	seen := map[string]bool{}
 	for _, f := range faults {

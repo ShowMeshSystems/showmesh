@@ -4,10 +4,13 @@ import "errors"
 
 // SessionFault is one session's currently reported engine-level fault
 // (AUDIO-ENGINE section 11.4). FaultNone means no fault is in effect. The
-// other six are permanently distinct and none may collapse into another,
-// or into [StateStopped]: a session that stops on its own, a session an
-// operator stopped, and a session a fault silenced are three different
-// facts.
+// other seven are permanently distinct and none may collapse into
+// another, or into [StateStopped]: a session that stops on its own, a
+// session an operator stopped, and a session a fault silenced are three
+// different facts. FaultMediaDisappeared and FaultMediaMismatch are
+// likewise distinct: the asset being absent and the asset being present
+// with the wrong content send an operator to different places (C2's
+// probe already tells them apart; this type must not un-tell them).
 type SessionFault string
 
 const (
@@ -16,11 +19,12 @@ const (
 	FaultFreeze              SessionFault = "freeze"
 	FaultDecodeFailure       SessionFault = "decode_failure"
 	FaultMediaDisappeared    SessionFault = "media_disappeared"
+	FaultMediaMismatch       SessionFault = "media_mismatch"
 	FaultRouteChanged        SessionFault = "route_changed"
 	FaultTimingAuthorityLost SessionFault = "timing_authority_lost"
 
 	// FaultOther is an engine error that occurred but does not match any
-	// of the six named classes above. It exists so an unrecognized error
+	// of the seven named classes above. It exists so an unrecognized error
 	// still reports as a distinct fault rather than silently falling back
 	// to a generic Failed outcome with no fault classification at all —
 	// see [ClassifyFault].
@@ -29,11 +33,11 @@ const (
 
 var sessionFaults = map[string]struct{}{
 	string(FaultNone): {}, string(FaultPipelineCrash): {}, string(FaultFreeze): {},
-	string(FaultDecodeFailure): {}, string(FaultMediaDisappeared): {},
+	string(FaultDecodeFailure): {}, string(FaultMediaDisappeared): {}, string(FaultMediaMismatch): {},
 	string(FaultRouteChanged): {}, string(FaultTimingAuthorityLost): {}, string(FaultOther): {},
 }
 
-// Validate reports whether f is one of the eight reserved fault values.
+// Validate reports whether f is one of the nine reserved fault values.
 func (f SessionFault) Validate() error {
 	return closedSet("audio.SessionFault", string(f), sessionFaults)
 }

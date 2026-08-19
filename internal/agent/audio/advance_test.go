@@ -165,6 +165,45 @@ func TestNaturalCompletionAdvancesExactlyOnceAndDiffersFromStop(t *testing.T) {
 	}
 }
 
+// TestNaturalCompletionOfASingleMediaSession proves the non-playlist
+// path the previous test's playlist cannot exercise: applied via
+// ApplyRequest.Media rather than a PlaylistRef, currentItemLocked treats
+// the single ref as a one-item virtual playlist, but advanceLocked used
+// to refuse unconditionally whenever s.desired.Playlist was nil — which
+// is every Media-only session, always — so watchTick's call to
+// advanceLocked(ctx, false) on natural completion did nothing, and the
+// session reported Playing forever after the engine actually finished.
+// This asserts the fix: unforced advance on a Media-only session moves
+// it to Completed exactly like a playlist running off its end with no
+// repeat.
+func TestNaturalCompletionOfASingleMediaSession(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	m := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("single-media-session")
+
+	ref := writeTestAsset(t, dir, "solo.wav", "asset-solo", []byte("solo"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	c.advance(3 * time.Second) // past the asset's 2s duration
+
+	// Several ticks in a row must land on Completed exactly once, never
+	// bounce back to Playing or stay stuck there.
+	for i := 0; i < 5; i++ {
+		m.watchTick(ctx)
+	}
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StateCompleted {
+		t.Fatalf("state after a single-media session's natural completion = %q, want completed", s.state)
+	}
+}
+
 func TestCommandedStopIsDistinctFromCompletion(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
