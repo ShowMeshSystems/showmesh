@@ -31,11 +31,13 @@ The same line already governs the rest of the audio graph: mixing, fades, duckin
 
 The generator is not supervised, restarted, or heartbeat-checked, because it is not a process. It is a source inside the one output pipeline the node already runs, which is what makes "program and LTC share one clock domain" a property of the topology rather than a claim about two clocks staying close.
 
-**The channel never starves.** `interleave` blocks until every sink pad has data, so an LTC channel that stopped producing would stall program audio. The LTC channel therefore always produces: silence when no run is active, LTC when one is.
+**The LTC channel must never pace the pipeline.** `interleave` blocks until every sink pad has data, so an LTC channel that stops producing stalls program audio, and one that produces slightly slower than real time drags the whole output below real time. Measured on the first implementation: a Go loop that pushed a buffer and slept for that buffer's duration ran the LTC pad 4.3% behind and pulled program audio down to 88% of real time, before any LTC run was even requested.
+
+So the channel always produces, silence when no run is active and LTC when one is, and it is paced by the pipeline's own backpressure rather than by any wall-clock sleep in Go. A Go timer may never decide the rate the audience hears.
 
 ### 4. Liveness is evidence that samples were emitted, never that a run was requested
 
-A run that was asked for and has produced nothing is not `running`. The reported timecode is the timecode of samples actually pushed, and a stopped generator reports no timecode at all rather than carrying its last one forward. This is the same rule that took four subsystems to learn: absence of evidence is not evidence of absence, and its mirror, a request is not an outcome.
+A run that was asked for and has produced nothing is not `running`. The reported timecode belongs to samples the pipeline has confirmed consuming, not to samples merely handed to a queue, because a full queue can accept and discard in the same call. A stopped generator reports no timecode at all rather than carrying its last one forward. This is the same rule that took four subsystems to learn: absence of evidence is not evidence of absence, and its mirror, a request is not an outcome.
 
 ### 5. An LTC failure never stops program audio
 
@@ -46,4 +48,5 @@ If the encoder cannot be created or a run cannot start, the failure is reported 
 - The agent's build dependencies gain `libltc-dev` alongside the GStreamer development headers; Debian 13 runtime gains `libltc11`. No ShowMesh LTC generator executable exists, is built, or is packaged.
 - The agent requires GLib 2.80 or newer, measured: it does not build on Debian 12.
 - `make build` produces every binary with `CGO_ENABLED=0`, so the agent has its own native build target; a build that forgets it compiles the audio engine out and the node reports itself honestly unable to play anything.
+- One LTC run exists per node, and it is never taken from a session that still holds it: silently re-anchoring a running show's timecode is worse than a second show session having none, and the refusal is stated.
 - Nothing here is evidence about sound. Every gate behind this record runs against a non-hardware sink; the interface, the channel discreteness, and the program-to-LTC alignment stay commissioning measurements.

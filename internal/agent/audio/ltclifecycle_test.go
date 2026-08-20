@@ -27,6 +27,25 @@ func fakeOf(t *testing.T, m *Manager) *FakeEngine {
 	return fake
 }
 
+// requestedLTC returns the fake engine's most recent LTC run request.
+// Lifecycle transitions are asserted against the REQUEST, because that is
+// all a lifecycle transition can be held to: whether frames then reach the
+// output is the backend's own evidence, and a fake that confirmed its own
+// request would pass against a backend emitting nothing.
+func requestedLTC(t *testing.T, m *Manager) (LTCSpec, bool) {
+	t.Helper()
+	return fakeOf(t, m).LastLTCRequest()
+}
+
+// assertLTCRequestedAt asserts a run is currently requested at tc.
+func assertLTCRequestedAt(t *testing.T, m *Manager, tc pkgaudio.LTCTimecode) {
+	t.Helper()
+	spec, ok := requestedLTC(t, m)
+	if !ok || spec.StartTimecode != tc {
+		t.Fatalf("LTC request = %+v requested=%v, want a run at %s", spec, ok, tc)
+	}
+}
+
 // itemIdentityFor builds the exact identity [Session.resolveBookmarkPositionLocked]
 // requires a single-media session's bookmark to carry.
 func itemIdentityFor(ref pkgaudio.MediaRef) string {
@@ -42,15 +61,15 @@ func TestLTCStartsForShowSessionAtZeroPosition(t *testing.T) {
 	ref := writeTestAsset(t, m.assetDir, "show.wav", "asset-show", []byte("show"))
 	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCRunning {
-		t.Fatalf("LTC state = %q, want running", obs.State)
+	spec, ok := requestedLTC(t, m)
+	if !ok {
+		t.Fatal("no LTC run was requested for a playing show session")
 	}
-	if !obs.TimecodeKnown || obs.Timecode != "01:00:00:00" {
-		t.Fatalf("LTC timecode = %q known=%v, want 01:00:00:00", obs.Timecode, obs.TimecodeKnown)
+	if spec.StartTimecode != "01:00:00:00" {
+		t.Fatalf("LTC start timecode = %q, want 01:00:00:00", spec.StartTimecode)
 	}
-	if !obs.FrameRateKnown || obs.FrameRate != pkgaudio.LTCFrameRate30 {
-		t.Fatalf("LTC frame rate = %q known=%v, want 30", obs.FrameRate, obs.FrameRateKnown)
+	if spec.FrameRate != pkgaudio.LTCFrameRate30 {
+		t.Fatalf("LTC frame rate = %q, want 30", spec.FrameRate)
 	}
 }
 
@@ -81,10 +100,7 @@ func TestLTCStartsAtNonZeroPositionFromBookmark(t *testing.T) {
 		t.Fatalf("start refused: %+v", r)
 	}
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCRunning || !obs.TimecodeKnown || obs.Timecode != "00:00:05:00" {
-		t.Fatalf("LTC observation = %+v, want running at 00:00:05:00", obs)
-	}
+	assertLTCRequestedAt(t, m, "00:00:05:00")
 }
 
 func TestLTCResumesAtThePausedPosition(t *testing.T) {
@@ -109,10 +125,7 @@ func TestLTCResumesAtThePausedPosition(t *testing.T) {
 	c.advance(10 * time.Second)
 	m.Resume(ctx, "show", "resume", 4)
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCRunning || !obs.TimecodeKnown || obs.Timecode != "00:00:03:00" {
-		t.Fatalf("LTC observation after resume = %+v, want running at 00:00:03:00", obs)
-	}
+	assertLTCRequestedAt(t, m, "00:00:03:00")
 }
 
 func TestLTCSeekReanchorsToTheSeekedPosition(t *testing.T) {
@@ -125,16 +138,13 @@ func TestLTCSeekReanchorsToTheSeekedPosition(t *testing.T) {
 	ref := writeTestAsset(t, dir, "show.wav", "asset-show", []byte("show"))
 	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
 
-	if obs := fakeOf(t, m).ObserveLTC(ctx); !obs.TimecodeKnown || obs.Timecode == "00:00:07:00" {
-		t.Fatalf("precondition: LTC already at the seek target: %+v", obs)
+	if spec, ok := requestedLTC(t, m); !ok || spec.StartTimecode == "00:00:07:00" {
+		t.Fatalf("precondition: LTC request %+v requested=%v is already at the seek target", spec, ok)
 	}
 
 	m.Seek(ctx, "show", "seek", 3, 7*time.Second)
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCRunning || !obs.TimecodeKnown || obs.Timecode != "00:00:07:00" {
-		t.Fatalf("LTC observation after seek = %+v, want running re-anchored at 00:00:07:00", obs)
-	}
+	assertLTCRequestedAt(t, m, "00:00:07:00")
 }
 
 func TestLTCStopsOnPause(t *testing.T) {
@@ -236,9 +246,8 @@ func TestLTCRestoreLeavesLTCConsistentWithWhatActuallyResumed(t *testing.T) {
 		t.Fatalf("restored session state = %q, want playing", state)
 	}
 
-	obs := fakeOf(t, fresh).ObserveLTC(ctx)
-	if obs.State != LTCRunning {
-		t.Fatalf("LTC state after restore = %q, want running (the session actually resumed playing)", obs.State)
+	if _, ok := requestedLTC(t, fresh); !ok {
+		t.Fatal("no LTC run was requested after restoring a session that resumed playing")
 	}
 }
 
@@ -289,8 +298,10 @@ func TestLTCNeverDrivenByABackgroundSession(t *testing.T) {
 	ref := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
 	startPlaying(t, m, ctx, "bg", ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCStopped {
+	if spec, ok := requestedLTC(t, m); ok {
+		t.Fatalf("a background session requested an LTC run at %s, want none", spec.StartTimecode)
+	}
+	if obs := fakeOf(t, m).ObserveLTC(ctx); obs.State != LTCStopped {
 		t.Fatalf("LTC state after a background session started = %q, want stopped (never touched)", obs.State)
 	}
 }
@@ -373,9 +384,7 @@ func TestLTCRealignsAcrossAPlaylistAdvance(t *testing.T) {
 	// Move item-a's LTC off 0 so a genuine realignment at item-b is
 	// distinguishable from LTC simply never having been touched again.
 	m.Seek(ctx, "night-session", "seek", 3, 5*time.Second)
-	if obs := fakeOf(t, m).ObserveLTC(ctx); obs.Timecode != "00:00:05:00" {
-		t.Fatalf("precondition: LTC after seek = %+v, want 00:00:05:00", obs)
-	}
+	assertLTCRequestedAt(t, m, "00:00:05:00")
 
 	c.advance(11 * time.Second) // past item-a's 10s duration, seeked position included
 	m.watchTick(ctx)
@@ -388,10 +397,7 @@ func TestLTCRealignsAcrossAPlaylistAdvance(t *testing.T) {
 		t.Fatalf("session after natural advance: item=%q state=%q, want item-b playing", itemID, state)
 	}
 
-	obs := fakeOf(t, m).ObserveLTC(ctx)
-	if obs.State != LTCRunning || !obs.TimecodeKnown || obs.Timecode != "00:00:00:00" {
-		t.Fatalf("LTC after advancing to item-b = %+v, want running at 00:00:00:00 (realigned, not stale from item-a)", obs)
-	}
+	assertLTCRequestedAt(t, m, "00:00:00:00")
 }
 
 // TestLTCStopsWhenAPlaylistRunsOut proves the OTHER completion branch:
@@ -426,5 +432,84 @@ func TestLTCStopsWhenAPlaylistRunsOut(t *testing.T) {
 	}
 	if obs := fakeOf(t, m).ObserveLTC(ctx); obs.State != LTCStopped {
 		t.Fatalf("LTC state after the playlist ran out = %q, want stopped", obs.State)
+	}
+}
+
+// TestLTCDispatchAloneNeverReportsRunning is the rule the rest of this
+// file is calibrated against: a requested run reports itself unconfirmed
+// with a reason until the backend says a frame was emitted. A fake that
+// confirmed its own request would make every test above pass against a
+// backend producing silence.
+func TestLTCDispatchAloneNeverReportsRunning(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+
+	ref := writeTestAsset(t, m.assetDir, "show.wav", "asset-show", []byte("show"))
+	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	fake := fakeOf(t, m)
+	obs := fake.ObserveLTC(ctx)
+	if obs.State == LTCRunning {
+		t.Fatalf("LTC reported running from a dispatch alone: %+v", obs)
+	}
+	if obs.Reason == "" {
+		t.Fatalf("LTC observation %+v carries no reason for not running", obs)
+	}
+	if obs.TimecodeKnown {
+		t.Fatalf("LTC reported a timecode with no frame emitted: %+v", obs)
+	}
+
+	fake.EmitLTCFrame()
+	if obs := fake.ObserveLTC(ctx); obs.State != LTCRunning || obs.Timecode != "00:00:00:00" {
+		t.Fatalf("LTC after an emitted frame = %+v, want running at 00:00:00:00", obs)
+	}
+}
+
+// TestSecondShowSessionNeverTakesLTCFromTheFirst reproduces what an
+// unguarded claim did: a second show session re-anchored LTC to its own
+// timeline while the first was still playing, and its stop then killed
+// LTC outright while the first still played.
+func TestSecondShowSessionNeverTakesLTCFromTheFirst(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	m := NewManager(NewFakeEngine(c.now), NewFileSessionStore(dir), dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+
+	refA := writeTestAsset(t, dir, "a.wav", "asset-a", []byte("a"))
+	refB := writeTestAsset(t, dir, "b.wav", "asset-b", []byte("b"))
+	startPlaying(t, m, ctx, "show-a", refA, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	// show-b's own start offset makes a takeover visible: an unguarded
+	// claim would leave the request at show-b's hour, not show-a's zero.
+	c.advance(4 * time.Second)
+	offsetB := pkgaudio.LTCTimecode("01:00:00:00")
+	reqB := pkgaudio.ApplyRequest{
+		SourceRole:     pkgaudio.SetField(pkgaudio.SourceRoleShow),
+		Media:          pkgaudio.SetField(refB),
+		LTCStartOffset: pkgaudio.SetField(offsetB),
+	}
+	if r := m.Apply(ctx, "show-b", "apply-b", 7, reqB); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply show-b refused: %+v", r)
+	}
+	if r := m.Start(ctx, "show-b", "start-b", 8); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start show-b refused: %+v", r)
+	}
+
+	assertLTCRequestedAt(t, m, "00:00:00:00")
+
+	m.Stop(ctx, "show-b", "stop-b", 9)
+
+	s, _ := m.get("show-a")
+	s.mu.Lock()
+	stateA := s.state
+	s.mu.Unlock()
+	if stateA != pkgaudio.StatePlaying {
+		t.Fatalf("show-a state = %q, want playing", stateA)
+	}
+	if _, ok := requestedLTC(t, m); !ok {
+		t.Fatal("show-b's stop killed the LTC run show-a still owns")
 	}
 }

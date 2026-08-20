@@ -97,11 +97,8 @@ func (m *Manager) invalidateActiveSessions(reason string) {
 			s.handle = ""
 			s.handleLoaded = false
 			s.timingKnown = false
-			// The outgoing engine is discarded whole by the caller right
-			// after this returns (see [Manager.RebindEngine]), so there is
-			// nothing to gain from calling StopLTC on it — only from
-			// making sure the new engine starts with no owner carried
-			// forward.
+			// The outgoing engine is discarded whole, so only the new
+			// engine's state matters: it starts with no owner.
 			m.ltc.release(s.id)
 			s.persistBestEffortLocked("engine rebind")
 		}

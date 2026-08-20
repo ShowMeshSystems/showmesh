@@ -152,14 +152,10 @@ func (e *SwitchableEngine) Observe(ctx context.Context, handle EngineHandle) (En
 	return cur.Observe(ctx, handle)
 }
 
-// StartLTC, StopLTC, and ObserveLTC make SwitchableEngine itself an
-// [LTCGenerator], forwarding to whatever engine is currently bound. This
-// is what lets [Manager]'s LTC lifecycle type-assert m.engine once at
-// startup and keep working across every [SwitchableEngine.Set] rebind: an
-// assertion against the never-changing SwitchableEngine value, not
-// against whichever concrete engine happens to be bound today. A never-
-// bound engine, or a bound one that cannot generate LTC at all, reports
-// [LTCUnsupported] rather than executing anything.
+// StartLTC, StopLTC, and ObserveLTC forward to whatever engine is
+// currently bound, so an [LTCGenerator] assertion against this value
+// survives every rebind. A never-bound engine, or a bound one that cannot
+// generate LTC, reports [LTCUnsupported] rather than executing anything.
 func (e *SwitchableEngine) StartLTC(ctx context.Context, spec LTCSpec) (LTCObservation, error) {
 	cur, ok := e.get()
 	if !ok {

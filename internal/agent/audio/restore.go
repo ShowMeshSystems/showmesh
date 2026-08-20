@@ -200,9 +200,8 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			s.persistBestEffortLocked("state change")
 			return err
 		}
-		// This branch's Start+Pause sequence (see the case comment above)
-		// never leaves LTC running: the engine handle ends Paused, never
-		// Playing, so no startLTCLocked call belongs here.
+		// The handle ends Paused, never Playing, so no LTC run belongs
+		// to this branch.
 		s.state = pkgaudio.StatePaused
 		s.timingKnown = false
 		s.persistBestEffortLocked("state change")

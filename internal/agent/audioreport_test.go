@@ -537,6 +537,7 @@ func TestRunAudioReportPublishesFreshLTCFromRealManager(t *testing.T) {
 	if _, err := engine.StartLTC(ctx, audio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate30, StartTimecode: "01:00:00:00"}); err != nil {
 		t.Fatalf("StartLTC: %v", err)
 	}
+	engine.EmitLTCFrame()
 	ticks <- time.Now()
 	<-pub.notify
 

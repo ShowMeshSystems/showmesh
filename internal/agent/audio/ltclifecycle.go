@@ -19,10 +19,19 @@ type ltcOwner struct {
 	owned bool
 }
 
-func (o *ltcOwner) set(id pkgaudio.SessionID) {
+// claim gives id the LTC run when it is free or already id's own,
+// reporting the current owner when another session holds it. LTC is never
+// taken from a session that still holds it: re-anchoring a running show's
+// timecode from under it is a show-visible failure, and doing it silently
+// is worse than not doing it at all.
+func (o *ltcOwner) claim(id pkgaudio.SessionID) (holder pkgaudio.SessionID, ok bool) {
 	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.owned && o.id != id {
+		return o.id, false
+	}
 	o.id, o.owned = id, true
-	o.mu.Unlock()
+	return id, true
 }
 
 // release clears ownership when id currently holds it, reporting whether
@@ -87,11 +96,14 @@ func (m *Manager) startLTCLocked(ctx context.Context, s *Session, position time.
 		m.logLTC(s.id, "audio: could not resolve this session's LTC start timecode", err.Error())
 		return
 	}
-	if _, err := gen.StartLTC(ctx, LTCSpec{FrameRate: rate, StartTimecode: tc}); err != nil {
-		m.logLTC(s.id, "audio: StartLTC failed", err.Error())
+	if holder, free := m.ltc.claim(s.id); !free {
+		m.logLTC(s.id, "audio: LTC not started", "this node's one LTC run is held by session "+string(holder))
 		return
 	}
-	m.ltc.set(s.id)
+	if _, err := gen.StartLTC(ctx, LTCSpec{FrameRate: rate, StartTimecode: tc}); err != nil {
+		m.ltc.release(s.id)
+		m.logLTC(s.id, "audio: StartLTC failed", err.Error())
+	}
 }
 
 // stopLTCLocked stops this node's LTC run when s currently owns it — a
