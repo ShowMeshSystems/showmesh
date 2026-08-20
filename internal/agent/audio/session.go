@@ -595,6 +595,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 		s.releaseEngineLocked(ctx)
 		s.state = pkgaudio.StateCompleted
 		s.bookmark = nil
+		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
@@ -613,6 +614,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 			s.releaseEngineLocked(ctx)
 			s.state = pkgaudio.StateCompleted
 			s.bookmark = nil
+			s.mgr.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 		}
@@ -631,6 +633,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	dispatchedAt := s.mgr.now()
 	if _, err := s.prepareLocked(ctx, item); err != nil {
 		s.state = pkgaudio.StateFailed
+		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
@@ -638,12 +641,14 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	if err != nil {
 		s.state = pkgaudio.StateFailed
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
 	s.lastObservedAt = obs.ObservedAt
+	s.mgr.startLTCLocked(ctx, s, 0)
 	s.persistBestEffortLocked("state change")
 	return confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt)
 }

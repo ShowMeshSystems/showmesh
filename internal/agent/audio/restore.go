@@ -140,16 +140,19 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
+		m.startLTCLocked(ctx, s, position)
 		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
 		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
@@ -164,6 +167,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
@@ -185,15 +189,20 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
+		// This branch's Start+Pause sequence (see the case comment above)
+		// never leaves LTC running: the engine handle ends Paused, never
+		// Playing, so no startLTCLocked call belongs here.
 		s.state = pkgaudio.StatePaused
 		s.timingKnown = false
 		s.persistBestEffortLocked("state change")

@@ -274,7 +274,7 @@ func Run() int {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, nil, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, time.Now, ticker.C, logger)
 	}()
 
 	<-sigCtx.Done()

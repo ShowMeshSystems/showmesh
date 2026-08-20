@@ -6,14 +6,18 @@ import (
 
 // Settings is the subset of the coordinator's audio.settings
 // configuration (ADR-039) this package's session logic consults: the
-// default fade a gain fade uses when a caller names none, and the
-// default ceiling applied to a background session that declares none.
-// The drift threshold and LTC fields have no consumer in this package
-// yet.
+// default fade a gain fade uses when a caller names none, the default
+// ceiling applied to a background session that declares none, and the
+// LTC frame rate and default start offset a show session's LTC run uses
+// absent its own override. The drift threshold has no consumer in this
+// package yet.
 type Settings struct {
 	DefaultFadeCurve         pkgaudio.FadeCurve
 	DefaultFadeDurationMs    int
 	DefaultMaxBackgroundGain pkgaudio.Ceiling
+
+	LTCFrameRate          pkgaudio.LTCFrameRate
+	LTCDefaultStartOffset pkgaudio.LTCTimecode
 
 	// Configured reports whether these values came from a real
 	// audio.settings.configure push (true) or are still [DefaultSettings]
@@ -38,6 +42,8 @@ var DefaultSettings = Settings{
 	DefaultFadeCurve:         pkgaudio.FadeCurveLinear,
 	DefaultFadeDurationMs:    1000,
 	DefaultMaxBackgroundGain: pkgaudio.Ceiling(0.6),
+	LTCFrameRate:             pkgaudio.LTCFrameRate30,
+	LTCDefaultStartOffset:    pkgaudio.LTCTimecode("00:00:00:00"),
 }
 
 // SetSettings replaces m's current Settings — [internal/agent]'s

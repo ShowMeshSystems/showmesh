@@ -506,3 +506,66 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 		t.Error("first tick PositionKnown = true, want false (no engine evidence was ever supplied)")
 	}
 }
+
+// TestRunAudioReportPublishesFreshLTCFromRealManager proves the wiring
+// agent.go actually performs — passing a real [*audio.Manager] as the
+// report loop's ltcObserver, not a stub — carries fresh engine evidence
+// through [audio.Manager.ObserveLTC] on every tick. The fake engine's LTC
+// state is driven directly, standing in for what the session lifecycle
+// would otherwise trigger; that lifecycle itself is exercised in
+// internal/agent/audio's own tests.
+func TestRunAudioReportPublishesFreshLTCFromRealManager(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	dir := t.TempDir()
+	engine := audio.NewFakeEngine(time.Now)
+	mgr := audio.NewManager(engine, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", mgr, mgr, time.Now, ticks, discardLogger())
+	}()
+
+	if _, err := engine.StartLTC(ctx, audio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate30, StartTimecode: "01:00:00:00"}); err != nil {
+		t.Fatalf("StartLTC: %v", err)
+	}
+	ticks <- time.Now()
+	<-pub.notify
+
+	if _, err := engine.StopLTC(ctx); err != nil {
+		t.Fatalf("StopLTC: %v", err)
+	}
+	ticks <- time.Now()
+	<-pub.notify
+
+	cancel()
+	<-done
+
+	publishes := pub.snapshot()
+	if len(publishes) != 2 {
+		t.Fatalf("publish calls = %d, want 2", len(publishes))
+	}
+	first := decodeAudioReport(t, publishes[0].payload)
+	second := decodeAudioReport(t, publishes[1].payload)
+
+	if first.LTCGeneratorState != string(audio.LTCRunning) {
+		t.Errorf("first tick LTCGeneratorState = %q, want running", first.LTCGeneratorState)
+	}
+	if !first.LTCTimecodeKnown || first.LTCTimecode != "01:00:00:00" {
+		t.Errorf("first tick = %+v, want TimecodeKnown 01:00:00:00", first)
+	}
+	if second.LTCGeneratorState != string(audio.LTCStopped) {
+		t.Errorf("second tick LTCGeneratorState = %q, want stopped", second.LTCGeneratorState)
+	}
+	if second.LTCTimecodeKnown {
+		t.Error("second tick reports TimecodeKnown, want false: the real Manager's engine evidence must be re-read, not cached from the first tick")
+	}
+}
