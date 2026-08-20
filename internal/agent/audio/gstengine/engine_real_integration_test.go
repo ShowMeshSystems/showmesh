@@ -486,3 +486,61 @@ func TestLoadUndecodableFileIsDecodeFailure(t *testing.T) {
 		t.Fatalf("Load of an undecodable file was classified as media_disappeared, want decode_failure only")
 	}
 }
+
+// TestBrokenOutputPipelineStopsAnsweringWithStaleState proves a session
+// on a dead output pipeline never keeps answering with the state it last
+// held. Telemetry does not pass through the session layer's availability
+// gate, so an engine that reports playing here reports playing to the
+// operator while the output is dead.
+func TestBrokenOutputPipelineStopsAnsweringWithStaleState(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "bp1", mediaRef(wav), 3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "bp1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "bp1", 100*time.Millisecond, 5*time.Second)
+
+	e.markBroken("output sink failed")
+
+	if ok, reason := e.Available(); ok {
+		t.Fatal("Available reports true after the output pipeline failed")
+	} else if reason == "" {
+		t.Fatal("Available reports false with no reason")
+	}
+
+	calls := map[string]func() (agentaudio.EngineObservation, error){
+		"Observe": func() (agentaudio.EngineObservation, error) { return e.Observe(ctx, "bp1") },
+		"Start":   func() (agentaudio.EngineObservation, error) { return e.Start(ctx, "bp1", 0) },
+		"Pause":   func() (agentaudio.EngineObservation, error) { return e.Pause(ctx, "bp1") },
+		"Resume":  func() (agentaudio.EngineObservation, error) { return e.Resume(ctx, "bp1") },
+		"Seek":    func() (agentaudio.EngineObservation, error) { return e.Seek(ctx, "bp1", 0) },
+		"Stop":    func() (agentaudio.EngineObservation, error) { return e.Stop(ctx, "bp1") },
+		"SetGain": func() (agentaudio.EngineObservation, error) { return e.SetGain(ctx, "bp1", 0.5) },
+	}
+	for name, call := range calls {
+		obs, err := call()
+		if err == nil {
+			t.Errorf("%s on a broken pipeline returned state %q with no error", name, obs.State)
+			continue
+		}
+		if pkgaudio.ClassifyFault(err) != pkgaudio.FaultPipelineCrash {
+			t.Errorf("%s error classified %q, want pipeline_crash: %v", name, pkgaudio.ClassifyFault(err), err)
+		}
+	}
+
+	if _, err := e.Load(ctx, "bp2", mediaRef(wav), 3*time.Second); err == nil {
+		t.Error("Load on a broken pipeline succeeded")
+	}
+	if err := e.Release(ctx, "bp1"); err != nil {
+		t.Errorf("Release on a broken pipeline: %v, want it to stay possible", err)
+	}
+}

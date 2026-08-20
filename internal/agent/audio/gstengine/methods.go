@@ -21,7 +21,27 @@ func (e *Engine) unavailableErr() error {
 	return fmt.Errorf("%w: %s", errUnavailable, reason)
 }
 
+// brokenErr reports the shared output pipeline's own failure, classified
+// so a caller sees a pipeline crash rather than a generic error. Empty
+// reason means the pipeline is fine.
+func (e *Engine) brokenErr() error {
+	e.brokenMu.Lock()
+	reason := e.brokenReason
+	e.brokenMu.Unlock()
+	if reason == "" {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", pkgaudio.ErrEnginePipelineCrash, reason)
+}
+
+// branchFor is the choke point every handle-addressed method passes
+// through, so the broken-pipeline check lives here rather than being
+// repeated and eventually forgotten in one of them. A branch on a dead
+// output pipeline must never answer with the state it last held.
 func (e *Engine) branchFor(handle agentaudio.EngineHandle) (*branch, error) {
+	if err := e.brokenErr(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, ok := e.handles[handle]
@@ -37,6 +57,9 @@ func (e *Engine) branchFor(handle agentaudio.EngineHandle) (*branch, error) {
 // PAUSED, and waits for either every dynamic pad to link or a decode
 // error, bounded by ctx.
 func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (agentaudio.EngineObservation, error) {
+	if err := e.brokenErr(); err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
 	if ok, _ := e.Available(); !ok {
 		return agentaudio.EngineObservation{}, e.unavailableErr()
 	}
