@@ -229,46 +229,43 @@ func measureProgramRate(t *testing.T, e *Engine, window time.Duration) float64 {
 	return advanced.Seconds() / wallElapsed.Seconds()
 }
 
-// measureProgramRateFromStart is [measureProgramRate] without the initial
-// wait for position to pass 100ms: the window starts at the Start call
-// itself, so a bounded catch-up burst right after Start falls inside the
-// measured window instead of settling out before measurement begins.
-func measureProgramRateFromStart(t *testing.T, e *Engine, window time.Duration) float64 {
+// startRunAheadSettle is how long [measureStartRunAhead] waits after
+// Start before sampling position — well past the point the catch-up
+// burst has settled, measured directly (see TestLTCConfiguredDoesNotSlowProgramPlayback).
+const startRunAheadSettle = 500 * time.Millisecond
+
+// measureStartRunAhead reports how far program position has run ahead
+// of wall time startRunAheadSettle after Start, isolating the queue's
+// own catch-up burst directly rather than amortizing it over a longer
+// window.
+func measureStartRunAhead(t *testing.T, e *Engine) time.Duration {
 	t.Helper()
 	dir := t.TempDir()
 	wav := filepath.Join(dir, "fixture.wav")
-	generateWAV(t, wav, window.Seconds()+3)
+	generateWAV(t, wav, startRunAheadSettle.Seconds()+3)
 
 	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
 	defer cancel()
 
-	if _, err := e.Load(ctx, "ratefromstart", mediaRef(wav), window+3*time.Second); err != nil {
+	if _, err := e.Load(ctx, "runahead", mediaRef(wav), startRunAheadSettle+3*time.Second); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
 	wallStart := time.Now()
-	if _, err := e.Start(ctx, "ratefromstart", 0); err != nil {
+	if _, err := e.Start(ctx, "runahead", 0); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	startObs, err := e.Observe(ctx, "ratefromstart")
+	time.Sleep(startRunAheadSettle)
+
+	obs, err := e.Observe(ctx, "runahead")
 	if err != nil {
-		t.Fatalf("Observe (start): %v", err)
+		t.Fatalf("Observe: %v", err)
 	}
+	elapsed := time.Since(wallStart)
 
-	if remaining := window - time.Since(wallStart); remaining > 0 {
-		time.Sleep(remaining)
-	}
+	_ = e.Release(context.Background(), "runahead")
 
-	endObs, err := e.Observe(ctx, "ratefromstart")
-	if err != nil {
-		t.Fatalf("Observe (end): %v", err)
-	}
-	wallElapsed := time.Since(wallStart)
-	advanced := endObs.Position - startObs.Position
-
-	_ = e.Release(context.Background(), "ratefromstart")
-
-	return advanced.Seconds() / wallElapsed.Seconds()
+	return obs.Position - elapsed
 }
 
 // TestLTCConfiguredDoesNotSlowProgramPlayback proves an LTC channel never
@@ -303,12 +300,19 @@ func TestLTCConfiguredDoesNotSlowProgramPlayback(t *testing.T) {
 		}
 	})
 
+	// minRunAhead/maxRunAhead bound measureStartRunAhead's isolated
+	// catch-up burst directly rather than as a fraction of a window.
+	// Measured under -race: the shipped 100ms cap settles to ~219ms, a
+	// doubled 200ms cap to ~298ms; 260ms sits with real headroom in the
+	// middle of that ~80ms gap.
+	const minRunAhead, maxRunAhead = -100 * time.Millisecond, 260 * time.Millisecond
+
 	t.Run("no LTC run started, measured from Start", func(t *testing.T) {
 		e := newLTCTestEngine(t)
-		rate := measureProgramRateFromStart(t, e, window)
-		t.Logf("program rate from Start, LTCChannel configured, no run started: %.4f", rate)
-		if rate < minRate || rate > maxRate {
-			t.Fatalf("program rate = %.4f, want within [%.2f, %.2f] of real time", rate, minRate, maxRate)
+		runAhead := measureStartRunAhead(t, e)
+		t.Logf("run-ahead %s after Start, LTCChannel configured, no run started: %v", startRunAheadSettle, runAhead)
+		if runAhead < minRunAhead || runAhead > maxRunAhead {
+			t.Fatalf("run-ahead = %v, want within [%v, %v]", runAhead, minRunAhead, maxRunAhead)
 		}
 	})
 
@@ -321,10 +325,10 @@ func TestLTCConfiguredDoesNotSlowProgramPlayback(t *testing.T) {
 		}
 		waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
 
-		rate := measureProgramRateFromStart(t, e, window)
-		t.Logf("program rate from Start, LTC running: %.4f", rate)
-		if rate < minRate || rate > maxRate {
-			t.Fatalf("program rate = %.4f, want within [%.2f, %.2f] of real time", rate, minRate, maxRate)
+		runAhead := measureStartRunAhead(t, e)
+		t.Logf("run-ahead %s after Start, LTC running: %v", startRunAheadSettle, runAhead)
+		if runAhead < minRunAhead || runAhead > maxRunAhead {
+			t.Fatalf("run-ahead = %v, want within [%v, %v]", runAhead, minRunAhead, maxRunAhead)
 		}
 	})
 }

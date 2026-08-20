@@ -369,6 +369,138 @@ func TestFadeReachesTargetGain(t *testing.T) {
 	_ = e.Release(context.Background(), "f1")
 }
 
+// TestFadeCompletesAcrossPause proves FadeActive still clears when Pause
+// interrupts a fade, since the fade is anchored to the shared pipeline's
+// running time, which keeps advancing while this branch is frozen.
+func TestFadeCompletesAcrossPause(t *testing.T) {
+	const fadeDuration = 300 * time.Millisecond
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "fp1", mediaRef(wav), 5*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "fp1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "fp1", 100*time.Millisecond, 5*time.Second)
+
+	if _, err := e.Fade(ctx, "fp1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	pauseObs, err := e.Pause(ctx, "fp1")
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	t.Logf("stopped mid-fade: state=%s gain=%v fadeActive=%v", pauseObs.State, pauseObs.Gain, pauseObs.FadeActive)
+
+	for i := 1; i <= 3; i++ {
+		time.Sleep(time.Second)
+		obs, err := e.Observe(ctx, "fp1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		t.Logf("  +%ds: state=%s gain=%v fadeActive=%v", i, obs.State, obs.Gain, obs.FadeActive)
+		if i == 3 && obs.FadeActive {
+			t.Fatalf("%d seconds after Pause interrupted a %s fade: FadeActive = true, want false", i, fadeDuration)
+		}
+	}
+
+	_ = e.Release(context.Background(), "fp1")
+}
+
+// TestFadeCompletesAcrossStop proves FadeActive still clears when Stop
+// interrupts a fade, the canonical fade-out-then-stop show operation.
+func TestFadeCompletesAcrossStop(t *testing.T) {
+	const fadeDuration = 300 * time.Millisecond
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "fs1", mediaRef(wav), 5*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "fs1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "fs1", 100*time.Millisecond, 5*time.Second)
+
+	if _, err := e.Fade(ctx, "fs1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	stopObs, err := e.Stop(ctx, "fs1")
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	t.Logf("stopped mid-fade: state=%s gain=%v fadeActive=%v", stopObs.State, stopObs.Gain, stopObs.FadeActive)
+
+	var last agentaudio.EngineObservation
+	for i := 1; i <= 3; i++ {
+		time.Sleep(time.Second)
+		obs, err := e.Observe(ctx, "fs1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		last = obs
+		t.Logf("  +%ds: state=%s gain=%v fadeActive=%v", i, obs.State, obs.Gain, obs.FadeActive)
+	}
+	if last.FadeActive {
+		t.Fatalf("3 seconds after Stop interrupted a %s fade: FadeActive = true, want false", fadeDuration)
+	}
+
+	_ = e.Release(context.Background(), "fs1")
+}
+
+// TestFadeIssuedBeforeStartCompletes proves a fade dispatched on a branch
+// that has never been Start'd still clears FadeActive, since the ramp is
+// anchored to the shared pipeline's running time rather than to any
+// per-branch play state.
+func TestFadeIssuedBeforeStartCompletes(t *testing.T) {
+	const fadeDuration = 300 * time.Millisecond
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "fb1", mediaRef(wav), 5*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	fadeObs, err := e.Fade(ctx, "fb1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0.4})
+	if err != nil {
+		t.Fatalf("Fade before Start: %v", err)
+	}
+	if !fadeObs.FadeActive {
+		t.Fatalf("immediately after Fade issued before Start: FadeActive = false, want true")
+	}
+
+	time.Sleep(fadeDuration + 500*time.Millisecond)
+	obs, err := e.Observe(ctx, "fb1")
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if obs.FadeActive {
+		t.Fatalf("after a %s fade issued before Start: FadeActive = true, want false", fadeDuration)
+	}
+
+	_ = e.Release(context.Background(), "fb1")
+}
+
 func TestNaturalCompletionReportsCompleted(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()
@@ -713,10 +845,15 @@ func TestRepeatStartWhilePlayingReanchorsToNamedPosition(t *testing.T) {
 	_ = e.Release(context.Background(), "r1")
 }
 
-// TestResumeReanchorsAfterPause proves Resume re-invokes resyncMixerPads
-// by checking playback resumes tightly from where Pause left it, rather
-// than from a stale offset Start or a previous Resume set.
-func TestResumeReanchorsAfterPause(t *testing.T) {
+// TestResumeReanchorsImmediatelyAfterPause proves Resume re-invokes
+// resyncMixerPads by checking playback continues tightly from Pause's
+// reported position when Resume follows it back to back, with no held
+// interval between them. It does NOT prove Resume is correct across an
+// actual pause of nonzero duration — the branch's own clock keeps
+// advancing while paused (a separate, known, and out-of-scope defect),
+// so a real held pause folds its own duration into Resume's re-anchored
+// position, which this test never exercises.
+func TestResumeReanchorsImmediatelyAfterPause(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()
 	wav := filepath.Join(dir, "fixture.wav")

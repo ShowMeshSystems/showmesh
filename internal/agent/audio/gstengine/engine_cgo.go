@@ -170,9 +170,15 @@ func (e *Engine) Close() error {
 			delete(e.handles, h)
 		}
 		e.mu.Unlock()
+		var wg sync.WaitGroup
 		for _, b := range branches {
-			bestEffortTeardown(b)
+			wg.Add(1)
+			go func(b *branch) {
+				defer wg.Done()
+				bestEffortTeardown(b)
+			}(b)
 		}
+		wg.Wait()
 
 		// Signal first, then flush the pipeline to NULL: a feeder blocked
 		// inside PushBuffer under backpressure only returns once the
@@ -182,7 +188,17 @@ func (e *Engine) Close() error {
 		}
 		e.markBroken(closedReason)
 		if e.pipeline != nil {
-			e.pipeline.SetState(gst.StateNull)
+			ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+			err := boundedCall(ctx, func() error {
+				if e.pipeline.SetState(gst.StateNull) == gst.StateChangeFailure {
+					return errors.New("output pipeline refused to reach NULL")
+				}
+				return nil
+			})
+			cancel()
+			if err != nil {
+				slog.Warn("gstengine: output pipeline did not reach NULL within the shutdown timeout", "error", err)
+			}
 		}
 		if e.ltc != nil {
 			if e.ltc.feedStarted.Load() {

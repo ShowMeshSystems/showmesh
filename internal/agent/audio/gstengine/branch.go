@@ -63,12 +63,13 @@ type branch struct {
 	segmentStart time.Duration
 
 	fadeActive bool
-	// fadeStartLocal is the branch-local running time (see localRunningTime)
-	// the fade's control points were set against, not a wall-clock time:
-	// the GstController driving b.volume is synced against buffer running
-	// time, not real time.
-	fadeStartLocal time.Duration
-	fadeDuration   time.Duration
+	// fadeStartLocal anchors the GstController ramp itself (see
+	// localRunningTime); fadeStartRunning (see pipelineRunningTime)
+	// additionally bounds FadeActive while frozen, when fadeStartLocal's
+	// own clock does not advance.
+	fadeStartLocal   time.Duration
+	fadeStartRunning time.Duration
+	fadeDuration     time.Duration
 
 	released bool
 }
@@ -134,12 +135,8 @@ func (b *branch) build(path string) error {
 	b.filesrc.SetObjectProperty("location", path)
 	b.capsfilter.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", e.cfg.SampleRate, n)))
 	b.volume.SetObjectProperty("volume", 1.0)
-	// queue's own defaults (200 buffers / 10MB / 1s) let decode race far
-	// ahead of the mixer's real-time consumption whenever nothing else
-	// backpressures it — measured filling the full 1s depth within single-digit
-	// milliseconds of a (re)start — after which the mixer drains that backlog
-	// faster than real time until it catches up. Bounding depth by time alone,
-	// tightly, bounds how much can ever be banked ahead this way.
+	// queue's byte/buffer caps are disabled so only queueMaxSizeTime
+	// bounds how far decode may run ahead of the mixer's consumption.
 	b.queue.SetObjectProperty("max-size-buffers", uint32(0))
 	b.queue.SetObjectProperty("max-size-bytes", uint32(0))
 	b.queue.SetObjectProperty("max-size-time", uint64(queueMaxSizeTime.Nanoseconds()))
@@ -262,21 +259,13 @@ func (b *branch) onEOS() {
 	b.eosOnce.Do(func() { close(b.eosCh) })
 }
 
-// setElementsState sets every branch element to state, bounded by ctx. If
-// after is non-nil it runs once every element has reached state, on the
-// same goroutine and before this call returns to its caller, so a
-// caller anchoring the mixer offset in after is not also paying for a
-// second goroutine wakeup's scheduling delay on top of the state change
-// itself.
-func (b *branch) setElementsState(ctx context.Context, state gst.State, after func()) error {
+// setElementsState sets every branch element to state, bounded by ctx.
+func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 	return boundedCall(ctx, func() error {
 		for _, el := range b.elements() {
 			if el.SetState(state) == gst.StateChangeFailure {
 				return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
 			}
-		}
-		if after != nil {
-			after()
 		}
 		return nil
 	})
@@ -313,28 +302,26 @@ func (b *branch) localRunningTime(atPos time.Duration) time.Duration {
 	return local
 }
 
-// resyncMixerPads re-anchors every channel mixer sink pad this branch
-// feeds so the next buffer, carrying atPos in the branch's own segment,
-// lands at the shared pipeline's current running time rather than in
-// GstAudioAggregator's past. Required whenever this branch's data flow
-// (re)starts, since the aggregator advances its output running time in
-// real time regardless of whether anything is playing. Callers run this
-// from inside the same goroutine that performed the seek or state change
-// which resumes data flow (setElementsState's after, seekTo's own call),
-// not after a further channel handoff back to the original caller, so no
-// avoidable scheduling delay sits between the two.
-//
-// A pad probe on this branch's own output was tried to catch the exact
-// instant a buffer arrives instead of relying on that placement: on this
-// pipeline, any gst.Pad probe there — buffer or event, however briefly
-// attached — permanently disables the downstream queue element's own
-// backpressure, measured directly, so it is not used here.
-func (b *branch) resyncMixerPads(atPos time.Duration) {
-	target := b.engine.pipeline.GetCurrentRunningTime()
-	if target == gst.ClockTimeNone {
-		target = 0
+// pipelineRunningTime returns the shared output pipeline's current
+// running time, or 0 if the pipeline has none yet (before it first
+// reaches PLAYING). This is the clock GstController evaluates every
+// control binding against, independent of any single branch's own state.
+func (b *branch) pipelineRunningTime() time.Duration {
+	rt := b.engine.pipeline.GetCurrentRunningTime()
+	if rt == gst.ClockTimeNone {
+		return 0
 	}
-	offset := int64(target) - b.localRunningTime(atPos).Nanoseconds()
+	return time.Duration(rt)
+}
+
+// resyncMixerPads re-anchors every channel mixer sink pad this branch
+// feeds so the next buffer lands at the shared pipeline's current
+// running time rather than in GstAudioAggregator's past, which keeps
+// advancing in real time regardless of whether this branch is playing.
+// Callers run this synchronously, before the state change that resumes
+// data flow.
+func (b *branch) resyncMixerPads(atPos time.Duration) {
+	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
 	for _, pad := range b.channelMixerPads {
 		if pad != nil {
 			pad.SetOffset(offset)
@@ -354,11 +341,12 @@ func (b *branch) currentGain() pkgaudio.Gain {
 func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	pos := b.queryPosition()
 	local := b.localRunningTime(pos)
+	running := b.pipelineRunningTime()
 
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && local-b.fadeStartLocal >= b.fadeDuration {
+	if fadeActive && (local-b.fadeStartLocal >= b.fadeDuration || running-b.fadeStartRunning >= b.fadeDuration) {
 		fadeActive = false
 		b.fadeActive = false
 	}
@@ -398,7 +386,7 @@ func (b *branch) unfreeze() {
 // latter maps a 0..1 control value onto the property's full 0..10 range
 // and turns a requested gain of 1.0 into a 10x boost (measured in the
 // phase 1 spike, bench/audio-node/spike-phase1).
-func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime time.Duration) error {
+func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Duration) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -414,7 +402,7 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime time.Duration) er
 	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
 
 	start := float64(b.currentGain())
-	base := gst.ClockTime(baseRunningTime.Nanoseconds())
+	base := gst.ClockTime(baseLocal.Nanoseconds())
 	tvcs.Set(base, start)
 	tvcs.Set(base+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
 
@@ -425,7 +413,8 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime time.Duration) er
 
 	b.mu.Lock()
 	b.fadeActive = true
-	b.fadeStartLocal = baseRunningTime
+	b.fadeStartLocal = baseLocal
+	b.fadeStartRunning = baseRunning
 	b.fadeDuration = fade.Duration
 	b.mu.Unlock()
 	return nil
