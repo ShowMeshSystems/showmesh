@@ -5,6 +5,7 @@ package gstengine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -79,17 +80,20 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
 
-	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
-		bestEffortTeardown(b)
+	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
+		_ = b.teardown(ctx)
 		return agentaudio.EngineObservation{}, err
 	}
 
 	select {
 	case <-b.readyCh:
 	case err := <-b.loadErrCh:
-		bestEffortTeardown(b)
+		_ = b.teardown(ctx)
 		return agentaudio.EngineObservation{}, err
 	case <-ctx.Done():
+		// ctx is already exhausted here, unlike the two cases above, so
+		// teardown needs a budget of its own rather than one that has
+		// already run out.
 		bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, ctx.Err()
 	}
@@ -105,7 +109,9 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 // runs even for position 0: a branch loaded ahead of Start may have kept
 // decoding while frozen, so only an unconditional seek guarantees Start
 // begins producing from the position it names rather than from wherever
-// the branch had drifted to.
+// the branch had drifted to. A source that refuses this seek — including
+// at position 0 — fails Start as [pkgaudio.ErrEngineDecodeFailure],
+// indistinguishable from an undecodable asset.
 func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -115,7 +121,7 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 		return agentaudio.EngineObservation{}, err
 	}
 	b.unfreeze()
-	if err := b.setElementsState(ctx, gst.StatePlaying, nil); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.setState(pkgaudio.StatePlaying)
@@ -131,7 +137,7 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.freezeAt(pos)
@@ -148,7 +154,7 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	resumeAt := b.queryPosition()
 	b.resyncMixerPads(resumeAt)
 	b.unfreeze()
-	if err := b.setElementsState(ctx, gst.StatePlaying, nil); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.setState(pkgaudio.StatePlaying)
@@ -176,7 +182,7 @@ func (e *Engine) Stop(ctx context.Context, handle agentaudio.EngineHandle) (agen
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.freezeAt(pos)
@@ -200,10 +206,9 @@ func (e *Engine) SetGain(ctx context.Context, handle agentaudio.EngineHandle, ga
 }
 
 // Fade begins a GstController-driven ramp toward fade.TargetGain,
-// replacing any fade already in progress. The ramp is anchored to the
-// branch's own running time, not the shared pipeline's: b.volume sits
-// upstream of resyncMixerPads' pad offset, so it runs on the branch's
-// local segment clock.
+// replacing any fade already in progress. FadeActive clears once the
+// ramp completes or, failing that, once a Pause or Stop has held it
+// short of fade.TargetGain for the fade's own duration (see startFade).
 func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade pkgaudio.Fade) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -212,8 +217,9 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 	if err := fade.Validate(); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	base := b.localRunningTime(b.queryPosition())
-	if err := b.startFade(fade, base); err != nil {
+	baseLocal := b.localRunningTime(b.queryPosition())
+	baseRunning := b.pipelineRunningTime()
+	if err := b.startFade(fade, baseLocal, baseRunning); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEnginePipelineCrash, err)
 	}
 	return b.observe(e.cfg.now()), nil
@@ -244,30 +250,29 @@ func (e *Engine) Observe(ctx context.Context, handle agentaudio.EngineHandle) (a
 }
 
 // seekTo issues a flushing, accurate seek on the branch and re-anchors
-// its frozen position when the branch is not currently playing. If after
-// is non-nil it runs once the seek succeeds and segmentStart is updated,
-// on the same goroutine and before this call returns to its caller.
+// its frozen position when the branch is not currently playing.
+// segmentStart, after, and the frozen position are mutated only once
+// boundedCall has returned successfully, so a seek abandoned to ctx's
+// deadline never rewrites them later from its still-running goroutine.
 func (b *branch) seekTo(ctx context.Context, position time.Duration, after func()) error {
 	err := boundedCall(ctx, func() error {
-		ok := b.decodebin.Seek(1.0, gst.FormatTime, gst.SeekFlagFlush|gst.SeekFlagAccurate,
-			gst.SeekTypeSet, position.Nanoseconds(), gst.SeekTypeNone, -1)
-		if !ok {
+		if !b.decodebin.Seek(1.0, gst.FormatTime, gst.SeekFlagFlush|gst.SeekFlagAccurate,
+			gst.SeekTypeSet, position.Nanoseconds(), gst.SeekTypeNone, -1) {
 			return fmt.Errorf("%w: seek to %s was refused", pkgaudio.ErrEngineDecodeFailure, position)
-		}
-		b.mu.Lock()
-		b.segmentStart = position
-		b.mu.Unlock()
-		if after != nil {
-			after()
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+
 	b.mu.Lock()
+	b.segmentStart = position
 	frozen := b.frozen
 	b.mu.Unlock()
+	if after != nil {
+		after()
+	}
 	if frozen {
 		b.freezeAt(position)
 	}
@@ -289,8 +294,9 @@ func bestEffortTeardown(b *branch) {
 }
 
 // teardown halts and removes every element this branch owns and releases
-// its channel mixer request pads. Bounded by ctx; best-effort beyond
-// that, since a handle being released should not become unreleasable.
+// its channel mixer request pads. Bounded by ctx. On timeout it returns
+// without touching a pad or an element, leaking them rather than
+// manipulating elements a still-running abandoned goroutine holds.
 func (b *branch) teardown(ctx context.Context) error {
 	b.mu.Lock()
 	if b.released {
@@ -301,7 +307,10 @@ func (b *branch) teardown(ctx context.Context) error {
 	b.mu.Unlock()
 
 	b.engine.unindexBranch(b)
-	_ = b.setElementsState(ctx, gst.StateNull, nil)
+	if err := b.setElementsState(ctx, gst.StateNull); err != nil {
+		slog.Warn("gstengine: branch teardown did not reach NULL in time; leaving its elements in the pipeline rather than removing them concurrently with the abandoned state change", "branch", b.id, "error", err)
+		return err
+	}
 
 	bin, ok := b.engine.pipeline.(gst.Bin)
 	if ok {

@@ -19,10 +19,7 @@ func TestLocalRunningTimeClampsToZero(t *testing.T) {
 	}{
 		{"no seek yet", 0, 3 * time.Second, 3 * time.Second},
 		{"elapsed since seek", 5 * time.Second, 8 * time.Second, 3 * time.Second},
-		// Start always calls seekTo(position) before resyncMixerPads(position),
-		// so segmentStart and atPos are always equal here; this is what keeps
-		// resyncMixerPads' offset from going negative on a repeat Start.
-		{"Start's seek-then-resync sequence", 5 * time.Second, 5 * time.Second, 0},
+		{"segmentStart equals atPos", 5 * time.Second, 5 * time.Second, 0},
 		{"position behind segment start", 5 * time.Second, 2 * time.Second, 0},
 	}
 	for _, tc := range cases {
