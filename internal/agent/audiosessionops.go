@@ -178,15 +178,15 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // audio.media.probe's own field names), playlist (ownerKind, ownerId,
 // ownerRevision, repeat, resume, requestedTransition, items — items reuse
 // the exact object shape audio.media.probe's params.items already
-// defines), and outputs (a string array). media and playlist are mutually
-// exclusive, matching [pkgaudio.SessionDesiredState.Validate]. Gain,
-// ceiling, fade, mixPolicy, and bookmark are not wired here — the first
-// three belong to the separate audio.gain.set/audio.gain.fade surface,
+// defines), outputs (a string array), and mixPolicy. media and playlist
+// are mutually exclusive, matching [pkgaudio.SessionDesiredState.Validate].
+// Gain, ceiling, fade, and bookmark are not wired here: the first three
+// belong to the separate audio.gain.set/audio.gain.fade surface,
 // and a bookmark is session-internal state this package manages itself
 // (Pause writes one; nothing here accepts one from a caller).
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
-	"ltcStartOffset": true,
+	"ltcStartOffset": true, "mixPolicy": true,
 }
 
 func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequest, error) {
@@ -209,6 +209,18 @@ func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequ
 			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.sourceRole must be a non-empty string, got %T", action, raw)
 		}
 		req.SourceRole = pkgaudio.SetField(pkgaudio.SourceRole(v))
+	}
+
+	if raw, ok := body["mixPolicy"]; ok {
+		v, ok := raw.(string)
+		if !ok || v == "" {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.mixPolicy must be a non-empty string, got %T", action, raw)
+		}
+		policy := pkgaudio.MixPolicy(v)
+		if err := policy.Validate(); err != nil {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.mixPolicy: %w", action, err)
+		}
+		req.MixPolicy = pkgaudio.SetField(policy)
 	}
 
 	_, hasMedia := body["media"]

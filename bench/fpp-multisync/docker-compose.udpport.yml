@@ -1,0 +1,10 @@
+# Bench-only override: publish 32320/udp so a MultiSync remote living on the
+# physical LAN can answer fpp-master's unicast discovery ping through Docker
+# Desktop's NAT. The base compose deliberately leaves this unpublished
+# because a published port carries no multicast and would misrepresent a
+# RES-002 multicast capture. This file is for driving a real remote from a
+# macOS host, never for a RES-002 capture.
+services:
+  fpp-master:
+    ports:
+      - "32320:32320/udp"

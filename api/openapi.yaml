@@ -6705,8 +6705,8 @@ components:
           type: object
           description: >-
             Operation-specific fields the node validates, not this
-            coordinator: apply's sourceRole/media/playlist/outputs,
-            seek's positionMs. Opaque here by design — see this
+            coordinator: apply's sourceRole/media/playlist/outputs/
+            mixPolicy, seek's positionMs. Opaque here by design — see this
             operation's own description for what it accepts.
     AudioSessionCommandResponse:
       type: object
