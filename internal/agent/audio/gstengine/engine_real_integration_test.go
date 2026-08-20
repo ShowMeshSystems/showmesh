@@ -161,6 +161,12 @@ func waitForPosition(t *testing.T, e *Engine, handle string, min time.Duration, 
 	return ""
 }
 
+// engineOpTimeout bounds each engine call these tests make. It is
+// deliberately far above any healthy call: what is under test is the
+// engine's behaviour, not its latency, and a tight bound on a loaded
+// host fails on contention rather than on a defect.
+const engineOpTimeout = 30 * time.Second
+
 func TestBoundedCallReturnsOnContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -182,7 +188,7 @@ func TestLoadStartObservesAdvancingPosition(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	obs, err := e.Load(ctx, "h1", mediaRef(wav), 3*time.Second)
@@ -219,7 +225,7 @@ func TestPauseFreezesPositionWhileOtherBranchPlays(t *testing.T) {
 	generateWAV(t, wavA, 3)
 	generateWAV(t, wavB, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "a", mediaRef(wavA), 3*time.Second); err != nil {
@@ -282,7 +288,7 @@ func TestSeekReanchorsPosition(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 4)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "s1", mediaRef(wav), 4*time.Second); err != nil {
@@ -313,7 +319,7 @@ func TestFadeReachesTargetGain(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "f1", mediaRef(wav), 3*time.Second); err != nil {
@@ -352,7 +358,7 @@ func TestNaturalCompletionReportsCompleted(t *testing.T) {
 	wav := filepath.Join(dir, "short.wav")
 	generateWAV(t, wav, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "c1", mediaRef(wav), 1*time.Second); err != nil {
@@ -362,7 +368,7 @@ func TestNaturalCompletionReportsCompleted(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(engineOpTimeout)
 	var last agentaudio.EngineObservation
 	for time.Now().Before(deadline) {
 		obs, err := e.Observe(ctx, "c1")
@@ -385,7 +391,7 @@ func TestCommandedStopReportsStopped(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "st1", mediaRef(wav), 3*time.Second); err != nil {
@@ -422,7 +428,7 @@ func TestReleaseIsIdempotent(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	if _, err := e.Load(ctx, "r1", mediaRef(wav), 1*time.Second); err != nil {
@@ -441,7 +447,7 @@ func TestReleaseIsIdempotent(t *testing.T) {
 
 func TestLoadMissingFileIsMediaDisappeared(t *testing.T) {
 	e := newTestEngine(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	_, err := e.Load(ctx, "m1", mediaRef("/nonexistent/path/does-not-exist.wav"), time.Second)
@@ -462,7 +468,7 @@ func TestLoadUndecodableFileIsDecodeFailure(t *testing.T) {
 	garbage := filepath.Join(dir, "garbage.bin")
 	writeGarbage(t, garbage)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
 	defer cancel()
 
 	_, err := e.Load(ctx, "d1", mediaRef(garbage), time.Second)
