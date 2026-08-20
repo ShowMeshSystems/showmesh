@@ -82,14 +82,22 @@ jobs:
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+            gstreamer1.0-alsa libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
           gst-inspect-1.0 wavparse > /dev/null
           # audiomixer carries the program bus; it lives in plugins-bad, and
           # the dev headers are what the agent's cgo audio engine links against.
+          # alsasink is the production output sink and ships in its own
+          # gstreamer1.0-alsa package, not in plugins-base.
           gst-inspect-1.0 audiomixer > /dev/null
+          gst-inspect-1.0 alsasink > /dev/null
           pkg-config --modversion gstreamer-1.0
+          # go-glib calls GLib symbols added through 2.80, so a distribution
+          # older than that fails to build the agent at all. MEASURED: Debian
+          # 12 (GLib 2.74) fails with twenty undefined C symbols; Debian 13
+          # (GLib 2.84) builds and passes.
+          pkg-config --atleast-version=2.80 glib-2.0
 
       - name: Vet
         run: go vet ./...
@@ -190,14 +198,22 @@ jobs:
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+            gstreamer1.0-alsa libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
           gst-inspect-1.0 wavparse > /dev/null
           # audiomixer carries the program bus; it lives in plugins-bad, and
           # the dev headers are what the agent's cgo audio engine links against.
+          # alsasink is the production output sink and ships in its own
+          # gstreamer1.0-alsa package, not in plugins-base.
           gst-inspect-1.0 audiomixer > /dev/null
+          gst-inspect-1.0 alsasink > /dev/null
           pkg-config --modversion gstreamer-1.0
+          # go-glib calls GLib symbols added through 2.80, so a distribution
+          # older than that fails to build the agent at all. MEASURED: Debian
+          # 12 (GLib 2.74) fails with twenty undefined C symbols; Debian 13
+          # (GLib 2.84) builds and passes.
+          pkg-config --atleast-version=2.80 glib-2.0
 
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration
