@@ -143,18 +143,20 @@ func TestAudioSessionDispatchApplyThenStopReachesRealAgentAcrossTwoCommands(t *t
 	if applyResp.Command.Outcome == "failed" && strings.Contains(strings.ToLower(applyResp.Command.Reason), "revision") {
 		t.Fatalf("apply reported the pre-fix defect verbatim: outcome=%q reason=%q", applyResp.Command.Outcome, applyResp.Command.Reason)
 	}
-	// FakeEngine.Available() always reports false (no pipeline backend
-	// exists), so Manager's own gateAvailability rewrites apply's structural
-	// success (Position) to Unconfirmable with FakeEngine's own reason —
-	// still proof revision parsing succeeded, since a params.revision
-	// failure would have reported Outcome "failed" with a DIFFERENT
-	// reason instead.
+	// This agent's real playback engine (internal/agent/audio.
+	// SwitchableEngine behind the real gstengine backend, Track C phase
+	// 1b) has never received an audio.node.configure binding, so its own
+	// Available() reports false and Manager's gateAvailability rewrites
+	// apply's structural success (Position) to Unconfirmable with THAT
+	// reason — still proof revision parsing succeeded, since a
+	// params.revision failure would have reported Outcome "failed" with a
+	// DIFFERENT reason instead.
 	if applyResp.Command.Outcome != "unconfirmable" {
-		t.Fatalf("apply outcome = %q, want %q (FakeEngine is always unavailable, per internal/agent/audio.Manager.gateAvailability); reason = %q",
+		t.Fatalf("apply outcome = %q, want %q (no audio.node binding has ever been delivered to this node); reason = %q",
 			applyResp.Command.Outcome, "unconfirmable", applyResp.Command.Reason)
 	}
-	if !strings.Contains(applyResp.Command.Reason, "no pipeline backend is implemented") {
-		t.Fatalf("apply reason = %q, want FakeEngine's own unavailability reason", applyResp.Command.Reason)
+	if !strings.Contains(applyResp.Command.Reason, "no audio.node configuration has been delivered to this node yet") {
+		t.Fatalf("apply reason = %q, want the real engine's own no-binding reason", applyResp.Command.Reason)
 	}
 
 	stopResult := dispatchAudioSessionCommand(t, coord, adminToken, nodeID, sessionID, "stop", 2)

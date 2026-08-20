@@ -56,6 +56,9 @@ type Engine struct {
 
 	brokenMu     sync.Mutex
 	brokenReason string
+
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 var _ agentaudio.Engine = (*Engine)(nil)
@@ -72,7 +75,12 @@ func New(cfg Config) (*Engine, error) {
 	}
 	gst.Init()
 
-	e := &Engine{cfg: cfg, handles: make(map[agentaudio.EngineHandle]*branch), elementIndex: make(map[string]*branch)}
+	e := &Engine{
+		cfg:          cfg,
+		handles:      make(map[agentaudio.EngineHandle]*branch),
+		elementIndex: make(map[string]*branch),
+		done:         make(chan struct{}),
+	}
 
 	if reason := e.checkPrerequisites(); reason != "" {
 		e.availReason = reason
@@ -125,6 +133,35 @@ func (e *Engine) Available() (bool, string) {
 		return false, reason
 	}
 	return true, ""
+}
+
+// closedReason is [Engine.Close]'s standing unavailability reason. A
+// closed engine holds no device and must never report itself playable.
+const closedReason = "engine was closed and released its output device"
+
+// Close tears every branch down, stops the bus watcher, and returns the
+// output pipeline to NULL so the device it held is released. Required
+// before building a replacement Engine against the same device, since
+// the outgoing pipeline keeps the device open until it does. Idempotent.
+func (e *Engine) Close() error {
+	e.closeOnce.Do(func() {
+		close(e.done)
+		e.mu.Lock()
+		branches := make([]*branch, 0, len(e.handles))
+		for h, b := range e.handles {
+			branches = append(branches, b)
+			delete(e.handles, h)
+		}
+		e.mu.Unlock()
+		for _, b := range branches {
+			_ = b.teardown(context.Background())
+		}
+		e.markBroken(closedReason)
+		if e.pipeline != nil {
+			e.pipeline.SetState(gst.StateNull)
+		}
+	})
+	return nil
 }
 
 func (e *Engine) markBroken(reason string) {
@@ -240,6 +277,11 @@ func (e *Engine) buildPipeline() error {
 func (e *Engine) watchBus() {
 	bus := e.pipeline.GetBus()
 	for {
+		select {
+		case <-e.done:
+			return
+		default:
+		}
 		msg := bus.TimedPop(gst.ClockTime(200 * time.Millisecond))
 		if msg == nil {
 			continue

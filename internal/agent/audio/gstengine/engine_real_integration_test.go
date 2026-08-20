@@ -544,3 +544,45 @@ func TestBrokenOutputPipelineStopsAnsweringWithStaleState(t *testing.T) {
 		t.Errorf("Release on a broken pipeline: %v, want it to stay possible", err)
 	}
 }
+
+// TestCloseReleasesTheOutputDeviceAndStopsAnswering proves a closed
+// engine reports itself unavailable and refuses every call. A rebind
+// builds a replacement against the same device, so an outgoing engine
+// that kept answering would also still be holding that device.
+func TestCloseReleasesTheOutputDeviceAndStopsAnswering(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "cl1", mediaRef(wav), 3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "cl1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatalf("second Close is not idempotent: %v", err)
+	}
+
+	ok, reason := e.Available()
+	if ok {
+		t.Fatal("a closed engine reports itself available")
+	}
+	if reason != closedReason {
+		t.Fatalf("closed reason = %q, want %q", reason, closedReason)
+	}
+	if _, err := e.Observe(ctx, "cl1"); err == nil {
+		t.Fatal("Observe on a closed engine returned no error")
+	}
+	if _, err := e.Load(ctx, "cl2", mediaRef(wav), 3*time.Second); err == nil {
+		t.Fatal("Load on a closed engine succeeded")
+	}
+}

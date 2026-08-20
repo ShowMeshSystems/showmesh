@@ -338,6 +338,13 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	// A fast report cadence so "the next report after the broker returns"
 	// is a bounded wait rather than the 15s production default.
 	t.Setenv(envAudioReportInterval, "1s")
+	// Track C phase 1b: production wires the real gstengine backend, not
+	// FakeEngine, and the real engine refuses every session call outright
+	// until an audio.node binding has been delivered (never a working
+	// no-op the way FakeEngine used to be) — so this test's local
+	// playback claim needs a real, bound engine to run against.
+	// "fakesink" opens no real audio device.
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
 
 	assetDir := t.TempDir()
 	const filename = "clip.wav"
@@ -355,6 +362,11 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	// barrier, apply/start below can land in that window and be silently
 	// dropped, never reaching the agent at all.
 	awaitAgentReceivingCommands(t, cli, w, nodeID)
+
+	configureCmdID := "cmd-audio-node-configure-" + uniqueSuffix()
+	dispatchCmd(t, cli, nodeID, audioNodeConfigureCmd(nodeID, configureCmdID, 1))
+	waitForResult(t, w, configureCmdID, 15*time.Second)
+
 	audioSub := subscribeAudioReports(t, nodeID)
 
 	const sessionID = "show-session-1"

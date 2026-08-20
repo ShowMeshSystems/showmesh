@@ -279,6 +279,8 @@ after shipping a breaking change to stored history.
 | `audio.output.unmute` | reserved | Track C seam C4 |
 | `audio.device.probe` | shipped | Track C seam C1a |
 | `audio.media.probe` | reserved | Track C seam C2 |
+| `audio.node.configure` | shipped | Track C phase 1b |
+| `audio.settings.configure` | shipped | Track C phase 1b |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
 `announce` and `duck` mint no operation of their own.** §14 permits combining

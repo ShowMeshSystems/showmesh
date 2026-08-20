@@ -66,6 +66,14 @@ type Manager struct {
 	// [WithOnChange].
 	onChange func()
 
+	// onHello is called with nodeID after a hello is successfully stored —
+	// see [WithOnHello]. nil (the default) means no notification. This is
+	// what lets a coordinator-side subscriber (ADR-039/ADR-036's audio
+	// config push) reach a node that reconnects after being offline
+	// during a config write, without this package importing anything
+	// about audio configuration itself.
+	onHello func(nodeID string)
+
 	// livenessMu and lastLiveness back [Manager.observeLiveness] (called
 	// from both recordLivenessTransition, the message-arrival path, and
 	// the exported [Manager.RecordLivenessObservation], the staleness-on-
@@ -156,6 +164,16 @@ type Option func(*Manager)
 // non-blocking by construction.
 func WithOnChange(fn func()) Option {
 	return func(m *Manager) { m.onChange = fn }
+}
+
+// WithOnHello registers fn to be called with a node's id after its hello
+// is successfully stored — see [Manager.onHello]'s doc comment. fn must
+// be safe to call from whatever goroutine HandleMessage runs on and
+// should not block: a caller that needs to do real I/O (an MQTT publish,
+// a store read) should launch its own goroutine rather than block
+// hello processing for every node behind one slow push.
+func WithOnHello(fn func(nodeID string)) Option {
+	return func(m *Manager) { m.onHello = fn }
 }
 
 // WithRenderSink registers sink to receive every decoded render report —
@@ -459,6 +477,9 @@ func (m *Manager) handleHello(ctx context.Context, nodeID string, msg broker.Mes
 	}
 	m.notify()
 	m.recordLivenessTransition(ctx, nodeID)
+	if m.onHello != nil {
+		m.onHello(nodeID)
+	}
 }
 
 func (m *Manager) handleLWT(ctx context.Context, nodeID string, msg broker.Message) {

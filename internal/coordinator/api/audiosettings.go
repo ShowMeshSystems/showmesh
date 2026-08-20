@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -179,10 +180,34 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// ADR-039/ADR-036: audio.settings is engine-wide, so every node in
+	// inventory is pushed the new revision without waiting for its next
+	// hello — best-effort per node, matching handlePutAudioNode.
+	h.pushAudioSettingsToAllNodes(ctx, now)
+
 	jsonWrite(w, mapAudioSettingsConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AudioSettingsConfigKind, ID: config.AudioSettingsConfigObjectID,
 		CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
+}
+
+// pushAudioSettingsToAllNodes best-effort pushes the current
+// audio.settings revision to every node currently in inventory. A node
+// this coordinator does not yet know about (never sent a hello) is
+// reached instead by its own hello-triggered push once it does — this
+// call never fails the write that triggered it.
+func (h *handlers) pushAudioSettingsToAllNodes(ctx context.Context, now time.Time) {
+	if h.deps.Nodes == nil {
+		return
+	}
+	views, err := h.deps.Nodes.Snapshot(ctx, now)
+	if err != nil {
+		h.logWarn("failed to list nodes for audio.settings push", "error", err)
+		return
+	}
+	for _, nv := range views {
+		audioconfigpush.BestEffort(ctx, h.deps.Config, h.deps.RenderPublisher, h.now, nv.NodeID, h.logger)
+	}
 }
 
 func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettingsPayload {

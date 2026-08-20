@@ -134,6 +134,14 @@ const (
 	// evidence is visible within a bounded wait rather than only at the
 	// 15s production default.
 	envAudioReportInterval = "SHOWMESH_AUDIO_REPORT_INTERVAL"
+
+	// envGstAudioSinkOverride mirrors internal/agent's own
+	// SHOWMESH_GST_AUDIO_SINK_FACTORY (audionodeops.go) — the ONE
+	// test-only environment variable Track C phase 1b adds, so an agent
+	// under test can build the real gstengine backend against "fakesink"
+	// instead of "alsasink" and exercise it with no real audio device.
+	// Forwarded by startAgent exactly like the intervals above.
+	envGstAudioSinkOverride = "SHOWMESH_GST_AUDIO_SINK_FACTORY"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -532,6 +540,9 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	}
 	if raw := os.Getenv(envAudioReportInterval); raw != "" {
 		env = append(env, envAudioReportInterval+"="+raw)
+	}
+	if raw := os.Getenv(envGstAudioSinkOverride); raw != "" {
+		env = append(env, envGstAudioSinkOverride+"="+raw)
 	}
 	if cfg.capabilities != "" {
 		env = append(env, "SHOWMESH_NODE_CAPABILITIES="+cfg.capabilities)
