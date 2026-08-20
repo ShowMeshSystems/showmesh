@@ -20,10 +20,18 @@ import (
 // requiredElementFactories are the GStreamer elements the output topology
 // needs regardless of configuration. cfg.SinkFactory is checked
 // separately since it is configuration, not a fixed requirement.
+// interleaveSampleFormat is the sample format every channel negotiates
+// immediately before interleave's sink pads, program mixer, silence, and
+// LTC alike. interleave requires every sink pad to agree on one format;
+// left to negotiate independently, different branches can settle on
+// different ones depending on timing, which breaks interleave's per-pad
+// width bookkeeping.
+const interleaveSampleFormat = "F32LE"
+
 var requiredElementFactories = []string{
 	"audiomixer", "interleave", "deinterleave", "audioconvert",
 	"audioresample", "capsfilter", "volume", "decodebin", "filesrc",
-	"queue", "audiotestsrc",
+	"queue", "audiotestsrc", "appsrc",
 }
 
 // Engine is the real [agentaudio.Engine] backend: one continuously
@@ -41,6 +49,10 @@ type Engine struct {
 	// channelMixers holds one audiomixer per cfg.ProgramChannels entry,
 	// same order, each already linked into the interleave stage.
 	channelMixers []gst.Element
+
+	// ltc is non-nil exactly when cfg.LTCChannel != 0, owning that
+	// channel's appsrc and the state of whatever LTC run drives it.
+	ltc *ltcChannel
 
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
@@ -94,6 +106,9 @@ func New(cfg Config) (*Engine, error) {
 
 	e.availOK = true
 	go e.watchBus()
+	if e.ltc != nil {
+		go e.runLTCFeeder(e.ltc)
+	}
 	return e, nil
 }
 
@@ -155,6 +170,11 @@ func (e *Engine) Close() error {
 		e.mu.Unlock()
 		for _, b := range branches {
 			_ = b.teardown(context.Background())
+		}
+		if e.ltc != nil {
+			close(e.ltc.stopFeed)
+			<-e.ltc.feedDone
+			e.ltc.closeEncoder()
 		}
 		e.markBroken(closedReason)
 		if e.pipeline != nil {
@@ -233,10 +253,38 @@ func (e *Engine) buildPipeline() error {
 			if !bin.Add(mixer) {
 				return fmt.Errorf("could not add audiomixer for channel %d", ch)
 			}
-			if mixer.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
+			// Every sink pad interleave collects from must negotiate the
+			// same sample format, or its cross-pad width bookkeeping
+			// breaks; left unconstrained, this mixer path and the LTC or
+			// silence chains on other channels can each independently
+			// negotiate a different one. Pinning it here removes the race.
+			mixerCaps := gst.ElementFactoryMake("capsfilter", fmt.Sprintf("mixer-caps-ch%d", ch))
+			if mixerCaps == nil {
+				return fmt.Errorf("could not create mixer output capsfilter for channel %d", ch)
+			}
+			mixerCaps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, e.cfg.SampleRate)))
+			if !bin.Add(mixerCaps) {
+				return fmt.Errorf("could not add mixer output capsfilter for channel %d", ch)
+			}
+			if !mixer.Link(mixerCaps) {
+				return fmt.Errorf("could not link channel %d mixer to its output capsfilter", ch)
+			}
+			if mixerCaps.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
 				return fmt.Errorf("could not link channel %d mixer to interleave", ch)
 			}
 			channelMixers[pos] = mixer
+			continue
+		}
+
+		if ch == e.cfg.LTCChannel {
+			ltc, err := newLTCChannel(bin, e.cfg.SampleRate)
+			if err != nil {
+				return fmt.Errorf("could not build LTC chain for channel %d: %w", ch, err)
+			}
+			if ltc.capsfilter.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
+				return fmt.Errorf("could not link LTC chain to interleave for channel %d", ch)
+			}
+			e.ltc = ltc
 			continue
 		}
 
@@ -251,7 +299,7 @@ func (e *Engine) buildPipeline() error {
 		if conv == nil || caps == nil {
 			return fmt.Errorf("could not create silence chain for channel %d", ch)
 		}
-		caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=1", e.cfg.SampleRate)))
+		caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, e.cfg.SampleRate)))
 		for _, el := range []gst.Element{silenceSrc, conv, caps} {
 			if !bin.Add(el) {
 				return fmt.Errorf("could not add silence element to pipeline for channel %d", ch)
@@ -267,6 +315,9 @@ func (e *Engine) buildPipeline() error {
 
 	e.pipeline = pipeline
 	e.channelMixers = channelMixers
+	if e.ltc != nil {
+		e.ltc.bindPipeline(pipeline)
+	}
 
 	if pipeline.SetState(gst.StatePlaying) == gst.StateChangeFailure {
 		return errors.New("output pipeline refused to reach PLAYING")

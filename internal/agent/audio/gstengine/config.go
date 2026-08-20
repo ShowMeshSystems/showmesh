@@ -15,12 +15,9 @@ import (
 type AssetResolver func(media pkgaudio.MediaRef) (string, error)
 
 // Config is the output pipeline's fixed shape: one physical sink, its
-// negotiated channel layout, and where the mixed program bus lands on
-// that layout. ProgramChannels holds 1-based output channel indices —
-// [1, 2] is ADR-018's stereo program minimum. Every index not claimed by
-// ProgramChannels is wired to silence for now; that is deliberately the
-// only shape of the LTC seam this package provides — a future LTC source
-// claims one of those indices without any other topology change here.
+// negotiated channel layout, where the mixed program bus lands on that
+// layout, and which channel (if any) carries generated LTC. Every index
+// claimed by neither ProgramChannels nor LTCChannel is wired to silence.
 type Config struct {
 	// SinkFactory is the GStreamer element factory name for the output
 	// sink — "alsasink" in production, a non-hardware sink (e.g.
@@ -38,6 +35,11 @@ type Config struct {
 	// ChannelCount is the total number of channels the device output
 	// carries. Must be at least the highest index in ProgramChannels.
 	ChannelCount int
+
+	// LTCChannel is the 1-based output channel index carrying generated
+	// LTC, or 0 if this node generates no LTC at all. Never a member of
+	// ProgramChannels.
+	LTCChannel int
 
 	// SampleRate is the output pipeline's sample rate in Hz.
 	SampleRate int
@@ -84,6 +86,14 @@ func (c Config) Validate() error {
 	}
 	if c.Resolve == nil {
 		return fmt.Errorf("%w: Resolve is nil", ErrConfigInvalid)
+	}
+	if c.LTCChannel != 0 {
+		if c.LTCChannel < 1 || c.LTCChannel > c.ChannelCount {
+			return fmt.Errorf("%w: LTC channel %d is outside [1, %d]", ErrConfigInvalid, c.LTCChannel, c.ChannelCount)
+		}
+		if _, isProgram := seen[c.LTCChannel]; isProgram {
+			return fmt.Errorf("%w: LTC channel %d is also a program channel", ErrConfigInvalid, c.LTCChannel)
+		}
 	}
 	return nil
 }

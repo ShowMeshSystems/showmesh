@@ -85,3 +85,22 @@ func (e *Engine) Available() (bool, string) {
 }
 
 var _ agentaudio.Engine = (*Engine)(nil)
+var _ agentaudio.LTCGenerator = (*Engine)(nil)
+
+// StartLTC always fails: this build has no GStreamer backend.
+func (e *Engine) StartLTC(context.Context, agentaudio.LTCSpec) (agentaudio.LTCObservation, error) {
+	obs := agentaudio.LTCObservation{State: agentaudio.LTCUnsupported, Reason: unavailableReason, ObservedAt: time.Now()}
+	return obs, e.unavailable()
+}
+
+// StopLTC always fails: this build has no GStreamer backend.
+func (e *Engine) StopLTC(context.Context) (agentaudio.LTCObservation, error) {
+	obs := agentaudio.LTCObservation{State: agentaudio.LTCUnsupported, Reason: unavailableReason, ObservedAt: time.Now()}
+	return obs, e.unavailable()
+}
+
+// ObserveLTC always reports unsupported: this build has no GStreamer
+// backend.
+func (e *Engine) ObserveLTC(context.Context) agentaudio.LTCObservation {
+	return agentaudio.LTCObservation{State: agentaudio.LTCUnsupported, Reason: unavailableReason, ObservedAt: time.Now()}
+}
