@@ -93,6 +93,15 @@ type PersistedSession struct {
 	FadePending    bool
 	FadeInvocation pkgaudio.InvocationID
 	FadeState      FadeState
+
+	// GapKnown, Gap, GapReason, and GapObservedAt mirror the identically
+	// named Session fields — the last measured (or explicitly unmeasured)
+	// inter-item gap, so a restart does not silently forget genuine
+	// evidence collected before it.
+	GapKnown      bool
+	Gap           time.Duration
+	GapReason     string
+	GapObservedAt time.Time
 }
 
 // SessionStore is the session layer's durability boundary — enough of
@@ -208,6 +217,19 @@ type Session struct {
 	// this session. The retained observation surface reports position
 	// against this, never against the time it happens to be read.
 	lastObservedAt time.Time
+
+	// gapKnown, gap, gapReason, and gapObservedAt are the measured
+	// interval between the previous playlist item's natural completion
+	// and this item's confirmed start — never derived from a requested
+	// transition or an item duration. gapReason is set whenever gapKnown
+	// is false, stating why (first item, no advance yet, a forced
+	// advance, or a session that is stopped), and is otherwise the one
+	// path this package never lets read as a fabricated zero. See
+	// [Session.setGapKnownLocked] and [Session.setGapUnknownLocked].
+	gapKnown      bool
+	gap           time.Duration
+	gapReason     string
+	gapObservedAt time.Time
 }
 
 // sortedSessionIDsLocked returns set's members as a deterministically
@@ -243,6 +265,12 @@ func primaryDuckedByLocked(set map[pkgaudio.SessionID]struct{}) pkgaudio.Session
 	return best
 }
 
+// gapReasonNeverAdvanced is the default gap reason for a session that has
+// never run [Session.advanceLocked] to a successor item — a first item and
+// a session that never advanced report this identically, since neither
+// has a predecessor completion to measure against.
+const gapReasonNeverAdvanced = "no playlist advance has occurred yet"
+
 func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 	return &Session{
 		id:              id,
@@ -253,7 +281,29 @@ func newSession(id pkgaudio.SessionID, mgr *Manager) *Session {
 		currentIndex:    -1,
 		fault:           pkgaudio.FaultNone,
 		fadeState:       FadeStateNone,
+		gapReason:       gapReasonNeverAdvanced,
 	}
+}
+
+// setGapKnownLocked records a genuine inter-item gap measurement: gap is
+// the interval between the predecessor's completion evidence and the
+// successor's confirmed start evidence, at is the successor's own
+// engine-clock evidence time. Caller holds s.mu.
+func (s *Session) setGapKnownLocked(gap time.Duration, at time.Time) {
+	s.gapKnown = true
+	s.gap = gap
+	s.gapReason = ""
+	s.gapObservedAt = at
+}
+
+// setGapUnknownLocked records that no gap measurement is available for
+// this session's current playlist position, with reason stated rather
+// than defaulting the value to zero. Caller holds s.mu.
+func (s *Session) setGapUnknownLocked(reason string) {
+	s.gapKnown = false
+	s.gap = 0
+	s.gapReason = reason
+	s.gapObservedAt = time.Time{}
 }
 
 // maxRetainedInvocations bounds how many invocation decisions/results one
@@ -332,6 +382,10 @@ func (s *Session) persistedLocked() PersistedSession {
 		FadePending:      s.fadePending,
 		FadeInvocation:   s.fadeInvocation,
 		FadeState:        s.fadeState,
+		GapKnown:         s.gapKnown,
+		Gap:              s.gap,
+		GapReason:        s.gapReason,
+		GapObservedAt:    s.gapObservedAt,
 	}
 }
 
@@ -584,7 +638,15 @@ func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (tim
 // playback reached it, and that must still move the session to
 // Completed — leaving it refused here left every single-Media session
 // reporting Playing forever once the engine was actually done.
-func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.OutcomeResult {
+//
+// completedAt is the predecessor's own completion evidence time — the
+// [EngineObservation.ObservedAt] of the Observe call that reported it
+// Completed — and is the zero [time.Time] for a forced advance, which has
+// no natural completion to measure from. It is the sole input the
+// inter-item gap measurement (docs/build/IDENTIFIER-REGISTER.md) is
+// computed from; it is never derived from the requested transition or an
+// item's known duration.
+func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt time.Time) pkgaudio.OutcomeResult {
 	if s.desired.Playlist == nil {
 		if s.desired.Media == nil {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to advance"}
@@ -595,6 +657,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 		s.releaseEngineLocked(ctx)
 		s.state = pkgaudio.StateCompleted
 		s.bookmark = nil
+		s.setGapUnknownLocked("session has no playlist to measure a gap within")
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
@@ -614,10 +677,25 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 			s.releaseEngineLocked(ctx)
 			s.state = pkgaudio.StateCompleted
 			s.bookmark = nil
+			s.setGapUnknownLocked("playlist ended with no successor item")
 			s.mgr.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 		}
+	}
+
+	// The gap this advance could produce is decided here, before the
+	// successor is even attempted, so every failure path below (prepare,
+	// Start) already leaves a stated reason rather than a stale or
+	// fabricated value — the success path at the bottom is the only place
+	// that ever overwrites this with a genuine measurement.
+	switch {
+	case forced:
+		s.setGapUnknownLocked("advance was operator-forced, not driven by natural completion")
+	case completedAt.IsZero():
+		s.setGapUnknownLocked("no completion evidence was available for the predecessor item")
+	default:
+		s.setGapUnknownLocked("successor item did not reach a confirmed start")
 	}
 
 	item := items[next]
@@ -648,6 +726,18 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	s.state = pkgaudio.StatePlaying
 	s.timingKnown = true
 	s.lastObservedAt = obs.ObservedAt
+	// The only place a genuine measurement is ever recorded: both sides
+	// are engine evidence (the predecessor's own completion, this item's
+	// own confirmed start), never a requested transition or a duration.
+	// A negative interval is discarded rather than reported, since it can
+	// only mean the two observations are not actually comparable evidence.
+	if !forced && !completedAt.IsZero() {
+		if gap := obs.ObservedAt.Sub(completedAt); gap >= 0 {
+			s.setGapKnownLocked(gap, obs.ObservedAt)
+		} else {
+			s.setGapUnknownLocked("measured gap was negative; discarded as invalid evidence")
+		}
+	}
 	s.mgr.startLTCLocked(ctx, s, 0)
 	s.persistBestEffortLocked("state change")
 	return confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt)
@@ -732,6 +822,18 @@ type SessionSnapshot struct {
 
 	Fault       pkgaudio.SessionFault
 	FaultReason string
+
+	// GapKnown, Gap, GapReason, and GapObservedAt are the measured
+	// interval between the previous playlist item's natural completion
+	// and this item's confirmed start (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.item_gap_ms). GapReason is set whenever GapKnown is
+	// false; GapObservedAt is only meaningful when GapKnown is true, and
+	// is the successor's own engine-clock evidence time, never this
+	// call's own wall-clock time.
+	GapKnown      bool
+	Gap           time.Duration
+	GapReason     string
+	GapObservedAt time.Time
 }
 
 // snapshotLocked builds s's [SessionSnapshot]. Caller holds s.mu. When a
@@ -746,6 +848,7 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	snap := SessionSnapshot{
 		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
+		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 	}
 
 	if s.desired.SourceRole != nil {

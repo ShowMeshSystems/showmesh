@@ -107,6 +107,13 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	if s.fadeState == "" {
 		s.fadeState = FadeStateNone
 	}
+	s.gapKnown = rec.GapKnown
+	s.gap = rec.Gap
+	s.gapReason = rec.GapReason
+	s.gapObservedAt = rec.GapObservedAt
+	if !s.gapKnown && s.gapReason == "" {
+		s.gapReason = gapReasonNeverAdvanced
+	}
 
 	m.mu.Lock()
 	m.sessions[id] = s
@@ -306,7 +313,7 @@ func (m *Manager) watchTick(ctx context.Context) {
 			} else {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
-					s.advanceLocked(ctx, false)
+					s.advanceLocked(ctx, false, obs.ObservedAt)
 				}
 			}
 		}

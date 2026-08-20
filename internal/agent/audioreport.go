@@ -170,6 +170,9 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 		HasAssetProbe:    s.HasAssetProbe,
 		AssetProbeState:  string(s.AssetProbeState),
 		AssetProbeReason: s.AssetProbeReason,
+		GapKnown:         s.GapKnown,
+		ItemGapMs:        s.Gap.Milliseconds(),
+		ItemGapReason:    s.GapReason,
 		Fault:            string(s.Fault),
 		FaultReason:      s.FaultReason,
 	}
@@ -182,6 +185,10 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 	if s.PositionKnown {
 		observedAt := s.ObservedAt
 		r.ObservedAt = &observedAt
+	}
+	if s.GapKnown {
+		gapObservedAt := s.GapObservedAt
+		r.ItemGapObservedAt = &gapObservedAt
 	}
 	return r
 }

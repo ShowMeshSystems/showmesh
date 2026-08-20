@@ -301,6 +301,22 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
 	}
 
+	if sess.GapKnown {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
+			buildSessionValue(res, source, SignalSessionItemGapReason, sess.ItemGapReason, sess.ItemGapObservedAt, rep),
+		)
+	} else {
+		gapReason := sess.ItemGapReason
+		if gapReason == "" {
+			gapReason = "node reported no gap measurement and no reason"
+		}
+		obs = append(obs,
+			notCollected(res, SignalSessionItemGapMs, source, gapReason, rep.receivedAt),
+			notCollected(res, SignalSessionItemGapReason, source, gapReason, rep.receivedAt),
+		)
+	}
+
 	return obs
 }
 
