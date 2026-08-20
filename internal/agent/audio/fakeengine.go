@@ -27,7 +27,19 @@ type FakeEngine struct {
 	mu       sync.Mutex
 	handles  map[EngineHandle]*fakeHandle
 	failNext map[EngineHandle]error
+
+	// ltc is FakeEngine's single, handle-less LTC run, matching
+	// [LTCGenerator]'s own shape: this node has one LTC output, not one
+	// per session. Zero value reports [LTCStopped] with
+	// fakeLTCNeverStartedReason, never an empty state.
+	ltc         LTCObservation
+	ltcFailNext error
 }
+
+// fakeLTCNeverStartedReason is FakeEngine's LTC state before StartLTC is
+// ever called, or after StopLTC last ran — never mistakable for a real
+// backend's own wording, per this type's doc comment.
+const fakeLTCNeverStartedReason = "fake engine: no LTC run has been started"
 
 type fakeHandle struct {
 	media    pkgaudio.MediaRef
@@ -288,4 +300,62 @@ func (e *FakeEngine) Observe(_ context.Context, handle EngineHandle) (EngineObse
 		return EngineObservation{}, err
 	}
 	return e.obs(h), nil
+}
+
+// InjectLTCFailure arms a one-shot failure for the next call to StartLTC
+// or StopLTC, then disarms itself — the same one-shot shape as
+// [FakeEngine.InjectFailure], for a test to prove that an LTC failure
+// never fails the session operation it accompanied.
+func (e *FakeEngine) InjectLTCFailure(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ltcFailNext = err
+}
+
+func (e *FakeEngine) takeLTCFailure() error {
+	err := e.ltcFailNext
+	e.ltcFailNext = nil
+	return err
+}
+
+// StartLTC begins, or realigns, FakeEngine's one LTC run at spec's
+// timecode.
+func (e *FakeEngine) StartLTC(_ context.Context, spec LTCSpec) (LTCObservation, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.takeLTCFailure(); err != nil {
+		e.ltc = LTCObservation{State: LTCFailed, Reason: err.Error(), ObservedAt: e.now()}
+		return e.ltc, err
+	}
+	e.ltc = LTCObservation{
+		State:          LTCRunning,
+		FrameRateKnown: true, FrameRate: spec.FrameRate,
+		TimecodeKnown: true, Timecode: spec.StartTimecode,
+		ObservedAt: e.now(),
+	}
+	return e.ltc, nil
+}
+
+// StopLTC ends FakeEngine's LTC run.
+func (e *FakeEngine) StopLTC(_ context.Context) (LTCObservation, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.takeLTCFailure(); err != nil {
+		return e.ltc, err
+	}
+	e.ltc = LTCObservation{State: LTCStopped, Reason: fakeLTCNeverStartedReason, ObservedAt: e.now()}
+	return e.ltc, nil
+}
+
+// ObserveLTC returns FakeEngine's current LTC evidence, freshly stamped
+// on every call.
+func (e *FakeEngine) ObserveLTC(_ context.Context) LTCObservation {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ltc.State == "" {
+		return LTCObservation{State: LTCStopped, Reason: fakeLTCNeverStartedReason, ObservedAt: e.now()}
+	}
+	obs := e.ltc
+	obs.ObservedAt = e.now()
+	return obs
 }

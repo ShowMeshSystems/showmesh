@@ -151,3 +151,43 @@ func (e *SwitchableEngine) Observe(ctx context.Context, handle EngineHandle) (En
 	}
 	return cur.Observe(ctx, handle)
 }
+
+// StartLTC, StopLTC, and ObserveLTC make SwitchableEngine itself an
+// [LTCGenerator], forwarding to whatever engine is currently bound. This
+// is what lets [Manager]'s LTC lifecycle type-assert m.engine once at
+// startup and keep working across every [SwitchableEngine.Set] rebind: an
+// assertion against the never-changing SwitchableEngine value, not
+// against whichever concrete engine happens to be bound today. A never-
+// bound engine, or a bound one that cannot generate LTC at all, reports
+// [LTCUnsupported] rather than executing anything.
+func (e *SwitchableEngine) StartLTC(ctx context.Context, spec LTCSpec) (LTCObservation, error) {
+	cur, ok := e.get()
+	if !ok {
+		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}, e.errNoBinding()
+	}
+	gen, ok := cur.(LTCGenerator)
+	if !ok {
+		return LTCObservation{State: LTCUnsupported, Reason: noLTCGeneratorReason, ObservedAt: time.Now()}, fmt.Errorf("audio: %s", noLTCGeneratorReason)
+	}
+	return gen.StartLTC(ctx, spec)
+}
+
+func (e *SwitchableEngine) StopLTC(ctx context.Context) (LTCObservation, error) {
+	cur, ok := e.get()
+	if !ok {
+		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}, e.errNoBinding()
+	}
+	gen, ok := cur.(LTCGenerator)
+	if !ok {
+		return LTCObservation{State: LTCUnsupported, Reason: noLTCGeneratorReason, ObservedAt: time.Now()}, fmt.Errorf("audio: %s", noLTCGeneratorReason)
+	}
+	return gen.StopLTC(ctx)
+}
+
+func (e *SwitchableEngine) ObserveLTC(ctx context.Context) LTCObservation {
+	cur, ok := e.get()
+	if !ok {
+		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}
+	}
+	return ObserveEngineLTC(ctx, cur, time.Now())
+}

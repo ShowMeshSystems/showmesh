@@ -93,6 +93,8 @@ func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 		DefaultFadeCurve:         pkgaudio.FadeCurve(p.DefaultFadeCurve),
 		DefaultFadeDurationMs:    p.DefaultFadeDurationMs,
 		DefaultMaxBackgroundGain: pkgaudio.Ceiling(p.DefaultMaxBackgroundGain),
+		LTCFrameRate:             pkgaudio.LTCFrameRate(p.LTCFrameRate),
+		LTCDefaultStartOffset:    pkgaudio.LTCTimecode(p.LTCDefaultStartOffset),
 	}
 }
 

@@ -58,6 +58,7 @@ func (m *Manager) interruptOneLocked(ctx context.Context, t *Session, interrupte
 		}
 		t.timingKnown = true
 		t.lastObservedAt = obs.ObservedAt
+		m.stopLTCLocked(ctx, t)
 	}
 	if t.interruptedByAll == nil {
 		t.interruptedByAll = make(map[pkgaudio.SessionID]struct{}, 1)
@@ -138,6 +139,7 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		if err != nil {
 			t.state = pkgaudio.StateFailed
 			t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, t)
 			t.persistBestEffortLocked("state change")
 			return
 		}
@@ -145,6 +147,7 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		t.bookmark = nil
 		t.timingKnown = true
 		t.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, t, obs.Position)
 		t.persistBestEffortLocked("state change")
 		return
 	}
@@ -171,6 +174,7 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	t.releaseEngineLocked(ctx)
 	if _, err := t.prepareLocked(ctx, item); err != nil {
 		t.state = pkgaudio.StateFailed
+		m.stopLTCLocked(ctx, t)
 		t.persistBestEffortLocked("state change")
 		return
 	}
@@ -179,11 +183,13 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	if err != nil {
 		t.state = pkgaudio.StateFailed
 		t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		m.stopLTCLocked(ctx, t)
 		t.persistBestEffortLocked("state change")
 		return
 	}
 	t.state = pkgaudio.StatePlaying
 	t.timingKnown = true
 	t.lastObservedAt = obs.ObservedAt
+	m.startLTCLocked(ctx, t, position)
 	t.persistBestEffortLocked("state change")
 }

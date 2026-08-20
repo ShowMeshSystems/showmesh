@@ -36,6 +36,10 @@ type Manager struct {
 	settingsMu sync.RWMutex
 	settings   Settings
 
+	// ltc tracks which session, if any, currently owns this node's one
+	// LTC run — see ltclifecycle.go.
+	ltc ltcOwner
+
 	// corruptSessions is [Manager.RestoreAll]'s record of every persisted
 	// file it could not decode into a real session — never
 	// addressable by a command, but reported by [Manager.Snapshot] so it
@@ -93,6 +97,12 @@ func (m *Manager) invalidateActiveSessions(reason string) {
 			s.handle = ""
 			s.handleLoaded = false
 			s.timingKnown = false
+			// The outgoing engine is discarded whole by the caller right
+			// after this returns (see [Manager.RebindEngine]), so there is
+			// nothing to gain from calling StopLTC on it — only from
+			// making sure the new engine starts with no owner carried
+			// forward.
+			m.ltc.release(s.id)
 			s.persistBestEffortLocked("engine rebind")
 		}
 		s.mu.Unlock()
@@ -253,6 +263,10 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to prepare"}
 		}
+		// Prepare never leaves a session Playing (it ends Ready or
+		// Failed), so any LTC run it owned from before must stop
+		// regardless of which of those two this call reaches.
+		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		obs, err := s.prepareLocked(ctx, item)
 		if err != nil {
@@ -288,6 +302,7 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			s.releaseEngineLocked(ctx)
 			if _, err := s.prepareLocked(ctx, item); err != nil {
 				s.state = pkgaudio.StateFailed
+				m.stopLTCLocked(ctx, s)
 				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 			}
 		}
@@ -305,12 +320,14 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = true
 		s.bookmark = nil
 		s.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, s, position)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 
@@ -362,6 +379,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 		}
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt
+		m.stopLTCLocked(ctx, s)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePaused, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -394,6 +412,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		s.bookmark = nil
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, s, obs.Position)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -427,6 +446,13 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 			if s.desired.Playlist != nil {
 				s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
 			}
+		}
+		// A seek is the realignment case: while playing, LTC must jump to
+		// the new position's timecode too, never keep emitting the
+		// pre-seek one. A seek while paused has no running LTC to
+		// realign.
+		if s.state == pkgaudio.StatePlaying {
+			m.startLTCLocked(ctx, s, obs.Position)
 		}
 		return m.gateAvailability(confirmLocked(obs.State, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
@@ -476,9 +502,14 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		if !s.handleLoaded {
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
+			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 		}
 		s.state = pkgaudio.StateStopping
+		// Stopped on the attempt, not on confirmation — the same
+		// "declared, not refused, not fabricated" rule this method's own
+		// doc comment states for the ducks it releases.
+		m.stopLTCLocked(ctx, s)
 		_, stopErr := s.mgr.engine.Stop(ctx, s.handle)
 		var releaseErr error
 		if stopErr == nil {
@@ -520,6 +551,7 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	s.mu.Lock()
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		s.desired = pkgaudio.SessionDesiredState{}
 		s.state = pkgaudio.StateStopped
