@@ -23,7 +23,9 @@ static void showmesh_ltc_force_nondrop(LTCEncoder *e, enum LTC_TV_STANDARD stand
 
 // showmesh_ltc_frame_s16le encodes e's current frame and widens libltc's
 // unsigned 8-bit samples to signed 16-bit little-endian PCM directly into
-// out, returning the sample count written (never more than out_cap).
+// out. Returns the sample count written, 0 for an empty frame, or
+// (size_t)-1 if the frame would not fit in out_cap — never a silent
+// truncation.
 static size_t showmesh_ltc_frame_s16le(LTCEncoder *e, int16_t *out, size_t out_cap) {
 	ltc_encoder_encode_frame(e);
 	ltcsnd_sample_t *buf;
@@ -33,7 +35,7 @@ static size_t showmesh_ltc_frame_s16le(LTCEncoder *e, int16_t *out, size_t out_c
 	}
 	size_t count = (size_t)n;
 	if (count > out_cap) {
-		count = out_cap;
+		return (size_t)-1;
 	}
 	for (size_t i = 0; i < count; i++) {
 		out[i] = (int16_t)(((int)buf[i] - 128) << 8);
@@ -139,6 +141,9 @@ func (e *Encoder) NextFrame() ([]byte, pkgaudio.LTCTimecode, error) {
 	tc := pkgaudio.LTCTimecode(fmt.Sprintf("%02d:%02d:%02d:%02d", int(t.hours), int(t.mins), int(t.secs), int(t.frame)))
 
 	n := C.showmesh_ltc_frame_s16le(e.enc, (*C.int16_t)(unsafe.Pointer(&e.buf[0])), C.size_t(len(e.buf)))
+	if n == C.size_t(^uint64(0)) {
+		return nil, "", fmt.Errorf("ltcgen: libltc frame exceeded the %d-sample scratch buffer", len(e.buf))
+	}
 	if n == 0 {
 		return nil, "", fmt.Errorf("ltcgen: libltc produced an empty frame buffer")
 	}

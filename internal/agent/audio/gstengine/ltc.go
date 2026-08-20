@@ -20,12 +20,15 @@ import (
 var _ agentaudio.LTCGenerator = (*Engine)(nil)
 
 // ltcSilenceChunk is how much silence one push covers while no LTC run is
-// active. interleave blocks until every requested pad has a buffer, so
-// this channel must never fall idle waiting on a push — a starved LTC
-// channel would stall program audio on every other channel of the same
-// pipeline — and this chunk size is small enough that idle and active
-// pushes keep the same steady cadence.
+// active, and also the retry interval after a push the appsrc did not
+// accept (see waitBeforeRetry).
 const ltcSilenceChunk = 20 * time.Millisecond
+
+// ltcLivenessTimeout bounds how long a run may go without a confirmed
+// emission before ObserveLTC stops reporting it as running: ten silence
+// chunks, generous against scheduling jitter while still catching a real
+// stall within a fraction of a second.
+const ltcLivenessTimeout = 10 * ltcSilenceChunk
 
 // ltcAppSrcLeadSeconds bounds appsrc's internal queue. block=true on the
 // appsrc makes [gstapp.AppSrc.PushBuffer] itself the pacing mechanism —
@@ -63,10 +66,14 @@ type ltcChannel struct {
 	// [Engine.runLTCFeeder] trusts before reporting [agentaudio.LTCRunning].
 	emittedGeneration atomic.Uint64
 
-	// obs is guarded by mu, alongside encoder/rate/active/generation, so
-	// that checking whether a run is still current and writing the
-	// evidence for it is always one critical section, never two.
-	obs agentaudio.LTCObservation
+	// obs and lastConfirmed are guarded by mu, alongside
+	// encoder/rate/active/generation, so that checking whether a run is
+	// still current and writing the evidence for it is always one
+	// critical section, never two. lastConfirmed is the time of the most
+	// recent confirmed emission; [ltcChannel.observe] downgrades a stale
+	// LTCRunning to LTCFailed once it is older than ltcLivenessTimeout.
+	obs           agentaudio.LTCObservation
+	lastConfirmed time.Time
 
 	// feedStarted is set once [Engine.runLTCFeeder] is actually launched
 	// for this channel, distinguishing that from a structural pipeline
@@ -102,11 +109,8 @@ func newLTCChannel(bin gst.Bin, sampleRate int) (*ltcChannel, error) {
 		fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1,layout=interleaved", ltcgen.SampleFormat, sampleRate)))
 	src.SetObjectProperty("format", gst.FormatTime)
 	src.SetObjectProperty("is-live", true)
-	// block makes PushBuffer itself the pacing mechanism: it returns once
-	// the queue below max-bytes has room, so the feeder runs at exactly
-	// the rate the pipeline consumes. No leaky-type: a full queue must
-	// block the producer, not silently discard a buffer that PushBuffer
-	// would still report as sent.
+	// block makes PushBuffer the pacing mechanism: it returns once the
+	// queue below max-bytes has room, not a leaky discard reported as sent.
 	src.SetObjectProperty("block", true)
 	src.SetObjectProperty("max-bytes", uint64(float64(sampleRate)*2*ltcAppSrcLeadSeconds))
 
@@ -130,11 +134,10 @@ func newLTCChannel(bin gst.Bin, sampleRate int) (*ltcChannel, error) {
 		obs:        agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "no LTC run has been requested"},
 	}
 
-	// A buffer that reaches this probe has actually left the LTC chain,
-	// unlike a PushBuffer return value alone. Each pushed buffer carries
-	// its generation in Offset (see pushLTCSamples), so the feeder can
-	// tell whether the confirmation belongs to the run it is currently
-	// reporting on.
+	// A buffer that reaches this probe left the LTC chain, which is not
+	// proof the sink consumed it. Each pushed buffer carries its
+	// generation in Offset (see pushLTCSamples), so the feeder can tell
+	// whether the confirmation belongs to the run it is reporting on.
 	caps.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(_ gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		if buf := info.GetBuffer(); buf != nil {
 			ch.emittedGeneration.Store(buf.Offset())
@@ -154,7 +157,14 @@ func (ch *ltcChannel) bindPipeline(p gst.Pipeline) {
 func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
 	ch.mu.Lock()
 	o := ch.obs
+	lastConfirmed := ch.lastConfirmed
 	ch.mu.Unlock()
+	if o.State == agentaudio.LTCRunning && now.Sub(lastConfirmed) > ltcLivenessTimeout {
+		o = agentaudio.LTCObservation{
+			State:  agentaudio.LTCFailed,
+			Reason: fmt.Sprintf("no confirmed LTC emission within %s", ltcLivenessTimeout),
+		}
+	}
 	o.ObservedAt = now
 	return o
 }
@@ -257,16 +267,18 @@ func (e *Engine) ObserveLTC(ctx context.Context) agentaudio.LTCObservation {
 }
 
 // runLTCFeeder keeps ch's appsrc fed for as long as the engine lives: LTC
-// samples while a run is active, silence otherwise. It never sleeps —
-// pacing comes entirely from appsrc's own backpressure (block=true, a
-// small max-bytes lead), since interleave paces the whole pipeline to its
-// slowest sink pad and a Go-side sleep on top of that backpressure is
-// pure added latency the pipeline can never recover.
+// samples while a run is active, silence otherwise. Pacing comes from
+// appsrc's own backpressure (block=true, a small max-bytes lead) rather
+// than a Go-side sleep, which would add latency the pipeline could never
+// recover; waitBeforeRetry is the sole exception, bounding the retry rate
+// when a push is not accepted at all.
 func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 	defer close(ch.feedDone)
 
 	if ch.pipeline != nil {
-		ch.feedAnchor = ch.pipeline.GetCurrentRunningTime()
+		if t := ch.pipeline.GetCurrentRunningTime(); t != gst.ClockTimeNone {
+			ch.feedAnchor = t
+		}
 	}
 
 	for {
@@ -302,19 +314,27 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 				ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: frameErr.Error()}
 			}
 			ch.mu.Unlock()
-			e.pushLTCSilence(ch, gen)
+			if !e.pushLTCSilence(ch, gen) && !ch.waitBeforeRetry() {
+				return
+			}
 			continue
 		}
 
 		if !haveFrame {
-			e.pushLTCSilence(ch, gen)
+			if !e.pushLTCSilence(ch, gen) && !ch.waitBeforeRetry() {
+				return
+			}
 			continue
 		}
 
 		pushed := e.pushLTCSamples(ch, raw, gen)
+		if !pushed && !ch.waitBeforeRetry() {
+			return
+		}
 
 		ch.mu.Lock()
 		if pushed && ch.generation == gen && ch.active && ch.emittedGeneration.Load() == gen {
+			ch.lastConfirmed = e.cfg.now()
 			ch.obs = agentaudio.LTCObservation{
 				State:          agentaudio.LTCRunning,
 				FrameRateKnown: true,
@@ -327,14 +347,25 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 	}
 }
 
+// waitBeforeRetry bounds the feeder's retry rate after appsrc refuses a
+// push (downstream error, EOS, or flushing), so a stalled sink idles
+// instead of busy-spinning. Reports false when stopFeed fired during the
+// wait, telling the caller to exit rather than retry.
+func (ch *ltcChannel) waitBeforeRetry() bool {
+	select {
+	case <-ch.stopFeed:
+		return false
+	case <-time.After(ltcSilenceChunk):
+		return true
+	}
+}
+
 // pushLTCSamples wraps raw (already-encoded [ltcgen.SampleFormat] PCM) in
 // a timestamped buffer tagged with gen and pushes it, reporting whether
-// appsrc accepted it. PTS is derived from ch.feedAnchor plus the exact
-// sample count fed so far, never from re-reading the pipeline clock per
-// buffer, so the stream stays gapless regardless of how long this push
-// blocks under backpressure. Accepted is not the same as emitted: the
-// capsfilter pad probe installed in [newLTCChannel] is the evidence the
-// buffer actually left this channel.
+// appsrc accepted it. PTS is ch.feedAnchor plus the exact sample count fed
+// so far, never a re-read of the pipeline clock, so the stream stays
+// gapless regardless of how long a push blocks. Accepted is not emitted:
+// see the capsfilter pad probe in [newLTCChannel].
 func (e *Engine) pushLTCSamples(ch *ltcChannel, raw []byte, gen uint64) bool {
 	buf := gst.NewBufferAllocate(nil, uint(len(raw)), nil)
 	mapped, ok := buf.Map(gst.MapWrite)

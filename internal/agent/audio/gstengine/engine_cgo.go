@@ -176,10 +176,7 @@ func (e *Engine) Close() error {
 
 		// Signal first, then flush the pipeline to NULL: a feeder blocked
 		// inside PushBuffer under backpressure only returns once the
-		// pipeline stops accepting data. feedStarted below is what keeps
-		// this safe when the feeder was never launched at all — a build
-		// failure between constructing e.ltc and starting the goroutine
-		// would otherwise leave feedDone with no writer, ever.
+		// pipeline stops accepting data.
 		if e.ltc != nil {
 			close(e.ltc.stopFeed)
 		}
@@ -289,7 +286,7 @@ func (e *Engine) buildPipeline() error {
 			if mixerCaps.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
 				return fmt.Errorf("could not link channel %d mixer to interleave", ch)
 			}
-			if err := addMixerKeepAlive(bin, mixer, ch); err != nil {
+			if err := addMixerKeepAlive(bin, mixer, ch, e.cfg.SampleRate); err != nil {
 				return err
 			}
 			channelMixers[pos] = mixer
@@ -345,35 +342,35 @@ func (e *Engine) buildPipeline() error {
 	return nil
 }
 
-// addMixerKeepAlive gives mixer one permanently connected silent sink pad.
-// A GstAggregator-based element (audiomixer, interleave) with zero
-// connected sink pads never produces output at all — not silence, nothing
-// — so with no branch loaded the whole interleave chain downstream of an
-// unfed program mixer stalls permanently, discovered live when LTC's
-// confirmed-emission evidence (see ltc.go) could never be satisfied.
+// addMixerKeepAlive gives mixer one permanently connected silent sink pad,
+// so a GstAggregator-based mixer with no branch loaded still produces
+// output instead of stalling the whole interleave chain downstream of it.
 // ignore-inactive-pads, already set on mixer, is what lets a branch's own
 // pad go quiet without stalling this one.
-func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int) error {
+func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int, sampleRate int) error {
 	src := gst.ElementFactoryMake("audiotestsrc", fmt.Sprintf("keepalive-ch%d", ch))
 	conv := gst.ElementFactoryMake("audioconvert", fmt.Sprintf("keepalive-conv-ch%d", ch))
-	if src == nil || conv == nil {
+	resample := gst.ElementFactoryMake("audioresample", fmt.Sprintf("keepalive-resample-ch%d", ch))
+	caps := gst.ElementFactoryMake("capsfilter", fmt.Sprintf("keepalive-caps-ch%d", ch))
+	if src == nil || conv == nil || resample == nil || caps == nil {
 		return fmt.Errorf("could not create mixer keep-alive chain for channel %d", ch)
 	}
 	src.SetObjectProperty("is-live", true)
 	src.SetObjectProperty("wave", int32(4)) // GST_AUDIO_TEST_SRC_WAVE_SILENCE
-	for _, el := range []gst.Element{src, conv} {
+	caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)))
+	for _, el := range []gst.Element{src, conv, resample, caps} {
 		if !bin.Add(el) {
 			return fmt.Errorf("could not add mixer keep-alive element for channel %d", ch)
 		}
 	}
-	if !src.Link(conv) {
+	if !src.Link(conv) || !conv.Link(resample) || !resample.Link(caps) {
 		return fmt.Errorf("could not link mixer keep-alive chain for channel %d", ch)
 	}
 	pad := mixer.RequestPadSimple("sink_%u")
 	if pad == nil {
 		return fmt.Errorf("mixer for channel %d refused a keep-alive sink pad", ch)
 	}
-	if conv.GetStaticPad("src").Link(pad) != gst.PadLinkOK {
+	if caps.GetStaticPad("src").Link(pad) != gst.PadLinkOK {
 		return fmt.Errorf("could not link mixer keep-alive source for channel %d", ch)
 	}
 	return nil

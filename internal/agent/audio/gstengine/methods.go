@@ -113,6 +113,7 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 			return agentaudio.EngineObservation{}, err
 		}
 	}
+	b.resyncMixerPads(b.queryPosition())
 	b.unfreeze()
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
@@ -144,6 +145,7 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	b.resyncMixerPads(b.queryPosition())
 	b.unfreeze()
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
@@ -162,6 +164,7 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 	if err := b.seekTo(ctx, position); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	b.resyncMixerPads(position)
 	return b.observe(e.cfg.now()), nil
 }
 
@@ -252,6 +255,7 @@ func (b *branch) seekTo(ctx context.Context, position time.Duration) error {
 		return err
 	}
 	b.mu.Lock()
+	b.segmentStart = position
 	frozen := b.frozen
 	b.mu.Unlock()
 	if frozen {
