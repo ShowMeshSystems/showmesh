@@ -216,11 +216,10 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		if err != nil {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 		}
-		// interrupt is declared and refused, never silently downgraded to
-		// duck: whether announcements ever interrupt show audio is an
-		// open owner decision.
-		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyInterrupt {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "interrupt" is not supported; use "mix" or "duck"`}
+		// "unsupported" only ever appears in an adapter's own capability
+		// report (AUDIO-ENGINE section 9): a session may never desire it.
+		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyUnsupported {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "unsupported" cannot be requested; it only appears in adapter capability reports`}
 		}
 		s.desired = merged
 		if s.currentIndex < 0 {
@@ -315,10 +314,11 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 
-	// duck resolution needs to lock OTHER sessions, so it must run after
-	// s.mu is released — see [Manager.duckLowerPriority]'s doc comment on
-	// why this can never hold two sessions' locks at once.
+	// duck/interrupt resolution needs to lock OTHER sessions, so it must
+	// run after s.mu is released — see [Manager.duckLowerPriority]'s doc
+	// comment on why this can never hold two sessions' locks at once.
 	duck := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck
+	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
 	if s.desired.SourceRole != nil {
 		role = *s.desired.SourceRole
@@ -327,6 +327,9 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 
 	if duck {
 		m.duckLowerPriority(ctx, id, role)
+	}
+	if interrupt {
+		m.interruptLowerPriority(ctx, id, role)
 	}
 	return res.outcome
 }
@@ -376,6 +379,9 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		if !s.handleLoaded || s.state != pkgaudio.StatePaused {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is not paused"}
+		}
+		if len(s.interruptedByAll) > 0 {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
 		}
 		s.timingKnown = false
 		dispatchedAt := m.now()
@@ -499,6 +505,7 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 
 	if attempted {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 	}
 	return res.outcome
 }
@@ -525,6 +532,7 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 
 	if res.executed {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 		if err := m.store.Delete(id); err != nil {
 			m.logf("audio session %s: failed to delete persisted state on clear: %v", id, err)
 		}

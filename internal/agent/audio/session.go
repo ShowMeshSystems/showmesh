@@ -62,6 +62,14 @@ type PersistedSession struct {
 	DuckedByAll []pkgaudio.SessionID
 	PreDuckGain *pkgaudio.Gain
 
+	// InterruptedByAll is every session whose interrupt mix policy is
+	// currently suspending this session — the same set/restore shape as
+	// DuckedByAll, but for a full suspend rather than a gain reduction.
+	// The position to resume from is this record's own Bookmark, captured
+	// exactly as a commanded Pause captures it; no separate field is
+	// needed to remember it.
+	InterruptedByAll []pkgaudio.SessionID
+
 	// Fault, FaultReason, and FaultAt are the last engine fault reported
 	// against this session (AUDIO-ENGINE section 11.4), FaultNone when
 	// none is in effect. Persisted so a fault survives a restart instead
@@ -183,6 +191,11 @@ type Session struct {
 	duckedByAll map[pkgaudio.SessionID]struct{}
 	preDuckGain *pkgaudio.Gain
 
+	// interruptedByAll is every session whose interrupt mix policy is
+	// currently suspending this session — see [PersistedSession.
+	// InterruptedByAll].
+	interruptedByAll map[pkgaudio.SessionID]struct{}
+
 	fault       pkgaudio.SessionFault
 	faultReason string
 	faultAt     time.Time
@@ -197,9 +210,10 @@ type Session struct {
 	lastObservedAt time.Time
 }
 
-// duckedBySortedLocked returns set's members as a deterministically
-// ordered slice, for [PersistedSession.DuckedByAll]. Caller holds s.mu.
-func duckedBySortedLocked(set map[pkgaudio.SessionID]struct{}) []pkgaudio.SessionID {
+// sortedSessionIDsLocked returns set's members as a deterministically
+// ordered slice, for [PersistedSession.DuckedByAll] and
+// [PersistedSession.InterruptedByAll]. Caller holds s.mu.
+func sortedSessionIDsLocked(set map[pkgaudio.SessionID]struct{}) []pkgaudio.SessionID {
 	if len(set) == 0 {
 		return nil
 	}
@@ -297,26 +311,27 @@ func (s *Session) retainedDecisionsLocked() map[pkgaudio.InvocationID]pkgaudio.R
 // persistedLocked snapshots s for [SessionStore.Save]. Caller holds s.mu.
 func (s *Session) persistedLocked() PersistedSession {
 	return PersistedSession{
-		ID:              s.id,
-		Desired:         s.desired,
-		Revision:        s.revState.Current(),
-		Decisions:       s.retainedDecisionsLocked(),
-		ExecutedResults: s.executedResults,
-		SessionState:    s.state,
-		CurrentIndex:    s.currentIndex,
-		CurrentItemID:   s.currentItemID,
-		Bookmark:        s.bookmark,
-		Muted:           s.muted,
-		PreMuteGain:     s.preMuteGain,
-		DuckedByAll:     duckedBySortedLocked(s.duckedByAll),
-		PreDuckGain:     s.preDuckGain,
-		Fault:           s.fault,
-		FaultReason:     s.faultReason,
-		FaultAt:         s.faultAt,
-		LastProbe:       s.lastProbe,
-		FadePending:     s.fadePending,
-		FadeInvocation:  s.fadeInvocation,
-		FadeState:       s.fadeState,
+		ID:               s.id,
+		Desired:          s.desired,
+		Revision:         s.revState.Current(),
+		Decisions:        s.retainedDecisionsLocked(),
+		ExecutedResults:  s.executedResults,
+		SessionState:     s.state,
+		CurrentIndex:     s.currentIndex,
+		CurrentItemID:    s.currentItemID,
+		Bookmark:         s.bookmark,
+		Muted:            s.muted,
+		PreMuteGain:      s.preMuteGain,
+		DuckedByAll:      sortedSessionIDsLocked(s.duckedByAll),
+		PreDuckGain:      s.preDuckGain,
+		InterruptedByAll: sortedSessionIDsLocked(s.interruptedByAll),
+		Fault:            s.fault,
+		FaultReason:      s.faultReason,
+		FaultAt:          s.faultAt,
+		LastProbe:        s.lastProbe,
+		FadePending:      s.fadePending,
+		FadeInvocation:   s.fadeInvocation,
+		FadeState:        s.fadeState,
 	}
 }
 

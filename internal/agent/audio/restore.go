@@ -86,6 +86,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 	}
 	s.preDuckGain = rec.PreDuckGain
+	if len(rec.InterruptedByAll) > 0 {
+		s.interruptedByAll = make(map[pkgaudio.SessionID]struct{}, len(rec.InterruptedByAll))
+		for _, id := range rec.InterruptedByAll {
+			s.interruptedByAll[id] = struct{}{}
+		}
+	}
 	s.fault = rec.Fault
 	if s.fault == "" {
 		s.fault = pkgaudio.FaultNone
@@ -211,19 +217,33 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		duckers = append(duckers, id)
 	}
 	for _, duckerID := range duckers {
-		if !m.duckerStillActiveOnDisk(duckerID) {
+		if !m.sourceStillActiveOnDisk(duckerID) {
 			m.removeDuckerLocked(ctx, s, duckerID)
+		}
+	}
+
+	// Same restore-boundary reasoning, and the same
+	// [Manager.removeInterrupterLocked] exactly-once membership check,
+	// for a session left suspended by an interrupting announcement that
+	// did not itself survive to Playing/Preparing.
+	interrupters := make([]pkgaudio.SessionID, 0, len(s.interruptedByAll))
+	for id := range s.interruptedByAll {
+		interrupters = append(interrupters, id)
+	}
+	for _, interrupterID := range interrupters {
+		if !m.sourceStillActiveOnDisk(interrupterID) {
+			m.removeInterrupterLocked(ctx, s, interrupterID)
 		}
 	}
 	return nil
 }
 
-// duckerStillActiveOnDisk reports whether id's persisted record shows a
+// sourceStillActiveOnDisk reports whether id's persisted record shows a
 // session that is still (or will again be, once restored) Playing —
-// i.e. one that legitimately still owns an active duck. Reads the
-// store directly rather than the in-memory session map because restore
-// order across sessions is unspecified.
-func (m *Manager) duckerStillActiveOnDisk(id pkgaudio.SessionID) bool {
+// i.e. one that legitimately still owns an active duck or interrupt.
+// Reads the store directly rather than the in-memory session map because
+// restore order across sessions is unspecified.
+func (m *Manager) sourceStillActiveOnDisk(id pkgaudio.SessionID) bool {
 	rec, ok, err := m.store.Load(id)
 	if err != nil || !ok {
 		return false
@@ -288,10 +308,11 @@ func (m *Manager) watchTick(ctx context.Context) {
 		s.mu.Unlock()
 	}
 
-	// restoreDucked locks OTHER sessions, so it must run after every
-	// session's own mu from the loop above is released — see
-	// [Manager.duckLowerPriority]'s doc comment.
+	// restoreDucked/restoreInterrupted lock OTHER sessions, so they must
+	// run after every session's own mu from the loop above is released —
+	// see [Manager.duckLowerPriority]'s doc comment.
 	for _, id := range completed {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 	}
 }
