@@ -168,6 +168,9 @@ func (b *branch) build(path string) error {
 			return fmt.Errorf("gstengine: channel mixer %d refused a sink pad request", k)
 		}
 		b.channelMixerPads[k] = pad
+		pad.AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			return gst.PadProbeRemove
+		})
 	}
 
 	b.readyCh = make(chan struct{})
