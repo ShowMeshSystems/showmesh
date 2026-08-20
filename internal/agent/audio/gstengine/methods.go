@@ -101,19 +101,20 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 	return b.observe(e.cfg.now()), nil
 }
 
-// Start seeks to position when non-zero, then brings the branch to
-// PLAYING.
+// Start seeks to position, then brings the branch to PLAYING. The seek
+// runs even for position 0: a branch loaded ahead of Start may have kept
+// decoding while frozen, so only an unconditional seek guarantees Start
+// begins producing from the position it names rather than from wherever
+// the branch had drifted to.
 func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	if position > 0 {
-		if err := b.seekTo(ctx, position); err != nil {
-			return agentaudio.EngineObservation{}, err
-		}
+	if err := b.seekTo(ctx, position); err != nil {
+		return agentaudio.EngineObservation{}, err
 	}
-	b.resyncMixerPads(b.queryPosition())
+	b.resyncMixerPads(position)
 	b.unfreeze()
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
@@ -200,7 +201,10 @@ func (e *Engine) SetGain(ctx context.Context, handle agentaudio.EngineHandle, ga
 }
 
 // Fade begins a GstController-driven ramp toward fade.TargetGain,
-// replacing any fade already in progress.
+// replacing any fade already in progress. The ramp is anchored to the
+// branch's own running time, not the shared pipeline's: b.volume sits
+// upstream of resyncMixerPads' pad offset, so it runs on the branch's
+// local segment clock.
 func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade pkgaudio.Fade) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -209,7 +213,7 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 	if err := fade.Validate(); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	base := e.pipeline.GetCurrentRunningTime()
+	base := b.localRunningTime(b.queryPosition())
 	if err := b.startFade(fade, base); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEnginePipelineCrash, err)
 	}
