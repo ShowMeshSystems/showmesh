@@ -33,14 +33,19 @@ func NewSwitchableEngine() *SwitchableEngine {
 	return &SwitchableEngine{}
 }
 
-// Set replaces the backing engine. The caller is responsible for
-// invalidating any session state that referred to handles on the
-// previous engine BEFORE calling Set — see [Manager.RebindEngine], which
-// does both together.
-func (e *SwitchableEngine) Set(engine Engine) {
+// Set replaces the backing engine and returns the one it replaced, or
+// nil when nothing was set. The caller is responsible for invalidating
+// any session state referring to handles on the previous engine before
+// calling Set, and for releasing the returned engine's own resources:
+// an outgoing engine holding an output device keeps holding it until
+// something closes it. See [Manager.RebindEngine], which does the
+// invalidation and hands the previous engine back.
+func (e *SwitchableEngine) Set(engine Engine) Engine {
 	e.mu.Lock()
+	prev := e.current
 	e.current = engine
 	e.mu.Unlock()
+	return prev
 }
 
 func (e *SwitchableEngine) get() (Engine, bool) {

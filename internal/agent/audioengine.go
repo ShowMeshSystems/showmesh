@@ -79,7 +79,8 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 			"sample_rate", cfg.SampleRate, "sample_rate_source", rateSource,
 			"available", ok, "unavailable_reason", reason)
 	}
-	r.mgr.RebindEngine(r.switchable, engine, audio.RebindReasonEngineRebind)
+	prev := r.mgr.RebindEngine(r.switchable, engine, audio.RebindReasonEngineRebind)
+	closeReplacedEngine(prev, r.logger)
 }
 
 // audioSettingsFromWire converts a decoded "audio.settings.configure"
@@ -92,5 +93,19 @@ func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 		DefaultFadeCurve:         pkgaudio.FadeCurve(p.DefaultFadeCurve),
 		DefaultFadeDurationMs:    p.DefaultFadeDurationMs,
 		DefaultMaxBackgroundGain: pkgaudio.Ceiling(p.DefaultMaxBackgroundGain),
+	}
+}
+
+// closeReplacedEngine releases an outgoing engine's own resources. A
+// gstengine holds its output device until it is closed, so a rebind that
+// skipped this would leave the replacement unable to open the same
+// device.
+func closeReplacedEngine(prev audio.Engine, logger *slog.Logger) {
+	closer, ok := prev.(interface{ Close() error })
+	if !ok {
+		return
+	}
+	if err := closer.Close(); err != nil && logger != nil {
+		logger.Warn("failed to close the audio engine a rebind replaced", "error", err)
 	}
 }

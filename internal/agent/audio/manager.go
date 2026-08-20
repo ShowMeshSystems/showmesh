@@ -69,9 +69,9 @@ const RebindReasonEngineRebind = "audio output configuration changed; this sessi
 // constructed with; a caller that passes any other Engine here defeats
 // this method's whole reason to exist, since m.engine itself never
 // changes identity.
-func (m *Manager) RebindEngine(engine *SwitchableEngine, next Engine, reason string) {
+func (m *Manager) RebindEngine(engine *SwitchableEngine, next Engine, reason string) Engine {
 	m.invalidateActiveSessions(reason)
-	engine.Set(next)
+	return engine.Set(next)
 }
 
 // invalidateActiveSessions fails every session currently in a state that
