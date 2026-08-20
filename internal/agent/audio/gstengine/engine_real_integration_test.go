@@ -5,6 +5,7 @@ package gstengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,6 +181,40 @@ func TestBoundedCallReturnsOnContextDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("boundedCall returned %v, want context.DeadlineExceeded", err)
 	}
+}
+
+// TestLoadDeadlineDoesNotLeakElements proves a Load that fails because its
+// own ctx deadline fired before setElementsState(PAUSED) returned still
+// tears the branch's elements out of the pipeline, rather than handing
+// teardown the same exhausted ctx and leaving them attached forever.
+func TestLoadDeadlineDoesNotLeakElements(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	nextID := e.nextID.Load() + 1
+	filesrcName := fmt.Sprintf("h%d-filesrc", nextID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if _, err := e.Load(ctx, "leak1", mediaRef(wav), 3*time.Second); err == nil {
+		t.Fatalf("Load with an exhausted deadline: err = nil, want an error")
+	}
+
+	bin, ok := e.pipeline.(gst.Bin)
+	if !ok {
+		t.Fatalf("engine pipeline is not a gst.Bin")
+	}
+	const settleWait = 3 * time.Second
+	deadline := time.Now().Add(settleWait)
+	for time.Now().Before(deadline) {
+		if bin.GetByName(filesrcName) == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("branch element %q still present in the pipeline %s after a failed Load", filesrcName, settleWait)
 }
 
 func TestLoadStartObservesAdvancingPosition(t *testing.T) {
@@ -370,8 +405,9 @@ func TestFadeReachesTargetGain(t *testing.T) {
 }
 
 // TestFadeCompletesAcrossPause proves FadeActive still clears when Pause
-// interrupts a fade, since the fade is anchored to the shared pipeline's
-// running time, which keeps advancing while this branch is frozen.
+// interrupts a fade: decode keeps running while frozen, so the ramp
+// itself (anchored to the branch's own local clock) keeps advancing and
+// reaches its target.
 func TestFadeCompletesAcrossPause(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
@@ -462,11 +498,11 @@ func TestFadeCompletesAcrossStop(t *testing.T) {
 	_ = e.Release(context.Background(), "fs1")
 }
 
-// TestFadeIssuedBeforeStartCompletes proves a fade dispatched on a branch
-// that has never been Start'd still clears FadeActive, since the ramp is
-// anchored to the shared pipeline's running time rather than to any
-// per-branch play state.
-func TestFadeIssuedBeforeStartCompletes(t *testing.T) {
+// TestFadeIssuedBeforeStartIsRefused proves Fade refuses a branch that
+// has never been Start'd, rather than running a ramp against preroll
+// decode that a later Start's flushing seek would replay across real
+// playback. SetGain remains available for presetting a gain before Start.
+func TestFadeIssuedBeforeStartIsRefused(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
 	e := newTestEngine(t)
@@ -481,21 +517,27 @@ func TestFadeIssuedBeforeStartCompletes(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	fadeObs, err := e.Fade(ctx, "fb1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0.4})
-	if err != nil {
-		t.Fatalf("Fade before Start: %v", err)
-	}
-	if !fadeObs.FadeActive {
-		t.Fatalf("immediately after Fade issued before Start: FadeActive = false, want true")
+	if _, err := e.Fade(ctx, "fb1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0.4}); !errors.Is(err, errFadeBeforeStart) {
+		t.Fatalf("Fade before Start: err = %v, want errFadeBeforeStart", err)
 	}
 
-	time.Sleep(fadeDuration + 500*time.Millisecond)
 	obs, err := e.Observe(ctx, "fb1")
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
 	if obs.FadeActive {
-		t.Fatalf("after a %s fade issued before Start: FadeActive = true, want false", fadeDuration)
+		t.Fatalf("after a refused Fade issued before Start: FadeActive = true, want false")
+	}
+	if !gainWithin(obs.Gain, 1.0, fadeGainTolerance) {
+		t.Fatalf("after a refused Fade issued before Start: Gain = %v, want unchanged 1.0", obs.Gain)
+	}
+
+	setObs, err := e.SetGain(ctx, "fb1", 0.4)
+	if err != nil {
+		t.Fatalf("SetGain before Start: %v", err)
+	}
+	if !gainWithin(setObs.Gain, 0.4, fadeGainTolerance) {
+		t.Fatalf("SetGain before Start: Gain = %v, want close to 0.4", setObs.Gain)
 	}
 
 	_ = e.Release(context.Background(), "fb1")
@@ -848,11 +890,7 @@ func TestRepeatStartWhilePlayingReanchorsToNamedPosition(t *testing.T) {
 // TestResumeReanchorsImmediatelyAfterPause proves Resume re-invokes
 // resyncMixerPads by checking playback continues tightly from Pause's
 // reported position when Resume follows it back to back, with no held
-// interval between them. It does NOT prove Resume is correct across an
-// actual pause of nonzero duration — the branch's own clock keeps
-// advancing while paused (a separate, known, and out-of-scope defect),
-// so a real held pause folds its own duration into Resume's re-anchored
-// position, which this test never exercises.
+// interval between them.
 func TestResumeReanchorsImmediatelyAfterPause(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()

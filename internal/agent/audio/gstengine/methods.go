@@ -17,6 +17,12 @@ import (
 
 var errUnavailable = fmt.Errorf("gstengine: engine is not available")
 
+// errFadeBeforeStart is returned by Fade when the branch has never left
+// StateReady: its ramp would run against decode-ahead preroll and replay
+// in full once Start's flushing seek resets the segment to zero. SetGain
+// is the correct verb for presetting a gain before playback.
+var errFadeBeforeStart = fmt.Errorf("gstengine: cannot fade a branch that has not been started")
+
 func (e *Engine) unavailableErr() error {
 	_, reason := e.Available()
 	return fmt.Errorf("%w: %s", errUnavailable, reason)
@@ -81,7 +87,10 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 	}
 
 	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
-		_ = b.teardown(ctx)
+		// A boundedCall failure here can mean ctx's own deadline fired,
+		// which leaves ctx already exhausted, so teardown needs a budget
+		// of its own rather than one that has already run out.
+		bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, err
 	}
 
@@ -145,7 +154,9 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 	return b.observe(e.cfg.now()), nil
 }
 
-// Resume continues playback from the position Pause left it at.
+// Resume re-anchors playback to the branch's current decode position, not
+// to the position Pause reported: decode keeps running while frozen, so a
+// held pause's own duration folds into the position Resume starts from.
 func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -207,8 +218,13 @@ func (e *Engine) SetGain(ctx context.Context, handle agentaudio.EngineHandle, ga
 
 // Fade begins a GstController-driven ramp toward fade.TargetGain,
 // replacing any fade already in progress. FadeActive clears once the
-// ramp completes or, failing that, once a Pause or Stop has held it
-// short of fade.TargetGain for the fade's own duration (see startFade).
+// fade's own duration has elapsed AND Gain has actually arrived at
+// fade.TargetGain (see fadeArrived); an elapsed fade whose gain has not
+// yet arrived, such as one Pause or Stop has held short of target, stays
+// reported in progress. Fade refuses a branch that has never been
+// Start'd — see errFadeBeforeStart — since preroll decode would run the
+// ramp to completion before playback exists to hear it; use SetGain to
+// preset a gain ahead of Start instead.
 func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade pkgaudio.Fade) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -216,6 +232,9 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 	}
 	if err := fade.Validate(); err != nil {
 		return agentaudio.EngineObservation{}, err
+	}
+	if !b.hasStarted() {
+		return agentaudio.EngineObservation{}, errFadeBeforeStart
 	}
 	baseLocal := b.localRunningTime(b.queryPosition())
 	baseRunning := b.pipelineRunningTime()
