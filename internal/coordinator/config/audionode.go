@@ -28,6 +28,7 @@ func ValidateAudioNodeObjectID(id string) *ValidationError {
 
 var audioNodeTopLevelKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true,
+	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
 }
 
@@ -44,8 +45,21 @@ type AudioNodePayload struct {
 	// requires it be a DISCRETE channel, never mixed into program;
 	// whether a given route can supply that is probe evidence (the
 	// audio.output.ltc capability), not something this package can check
-	// on its own — see [ValidateAudioNodePlacement].
+	// on its own — see [ValidateAudioNodePlacement]. Program and LTC leave
+	// through one interface in one clock domain, so DecodeAudioNodePayload
+	// refuses a payload where this differs from ProgramRoute; the two
+	// fields stay separate so an existing revision still decodes.
 	LTCRoute string `json:"ltcRoute"`
+
+	// ProgramChannels is the ordered, 1-based channel indices on
+	// ProgramRoute carrying program audio: [1, 2] for reference stereo,
+	// [1] for mono.
+	ProgramChannels []int `json:"programChannels"`
+
+	// LTCChannel is the 1-based channel index on LTCRoute carrying LTC.
+	// Never a member of ProgramChannels — ADR-018 requires LTC on a
+	// discrete channel, never mixed into program.
+	LTCChannel int `json:"ltcChannel"`
 
 	// ClockDomain is the operator's own name for the shared hardware
 	// clock ProgramRoute and LTCRoute are declared to share. Never
@@ -96,6 +110,14 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
+	programChannels, verr := decodeAudioNodeProgramChannels(top)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+	ltcChannel, verr := decodeAudioNodeLTCChannel(top, programChannels)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
 	clockDomain, verr := decodeRequiredString(top, "clockDomain", "clockDomain")
 	if verr != nil {
 		return AudioNodePayload{}, verr
@@ -105,10 +127,106 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, verr
 	}
 
+	if programRoute != ltcRoute {
+		return AudioNodePayload{}, &ValidationError{
+			Code: ValidationCodeAudioNodeRouteMismatch, Field: "ltcRoute",
+			Detail: fmt.Sprintf(
+				"ltcRoute %q must name the same route as programRoute %q; program and LTC leave through one interface in one clock domain",
+				ltcRoute, programRoute),
+		}
+	}
+
 	return AudioNodePayload{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
+		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 	}, nil
+}
+
+// decodeAudioNodeProgramChannels decodes and validates the required
+// "programChannels" field: absent, explicit null, and an explicitly empty
+// array are three distinct refusals (decodeRequiredIntList's own doc
+// comment), and every element must be a distinct positive 1-based index.
+func decodeAudioNodeProgramChannels(top map[string]json.RawMessage) ([]int, *ValidationError) {
+	channels, verr := decodeRequiredIntList(top, "programChannels", "programChannels")
+	if verr != nil {
+		return nil, verr
+	}
+	seen := make(map[int]bool, len(channels))
+	for i, ch := range channels {
+		field := fmt.Sprintf("programChannels[%d]", i)
+		if ch < 1 {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: field,
+				Detail: fmt.Sprintf("%s must be a positive 1-based channel index", field),
+			}
+		}
+		if seen[ch] {
+			return nil, &ValidationError{
+				Code: ValidationCodeAudioNodeChannelDuplicate, Field: field,
+				Detail: fmt.Sprintf("channel index %d appears more than once in programChannels", ch),
+			}
+		}
+		seen[ch] = true
+	}
+	return channels, nil
+}
+
+// decodeAudioNodeLTCChannel decodes and validates the required
+// "ltcChannel" field: a positive 1-based index not already claimed by
+// programChannels.
+func decodeAudioNodeLTCChannel(top map[string]json.RawMessage, programChannels []int) (int, *ValidationError) {
+	ltcChannel, verr := decodeRequiredInt(top, "ltcChannel", "ltcChannel")
+	if verr != nil {
+		return 0, verr
+	}
+	if ltcChannel < 1 {
+		return 0, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "ltcChannel",
+			Detail: "ltcChannel must be a positive 1-based channel index",
+		}
+	}
+	for _, ch := range programChannels {
+		if ch == ltcChannel {
+			return 0, &ValidationError{
+				Code: ValidationCodeAudioNodeChannelOverlap, Field: "ltcChannel",
+				Detail: fmt.Sprintf("ltcChannel %d also appears in programChannels; LTC must be on a channel discrete from program", ltcChannel),
+			}
+		}
+	}
+	return ltcChannel, nil
+}
+
+// decodeRequiredIntList reads key from top as a required, non-null,
+// non-empty JSON array of whole numbers. Absent, explicit null, and an
+// explicitly empty array are three distinct refusals — the same rule this
+// package enforces for every other required field, extended to arrays.
+func decodeRequiredIntList(top map[string]json.RawMessage, key, field string) ([]int, *ValidationError) {
+	raw, present := top[key]
+	if !present {
+		return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: field, Detail: fmt.Sprintf("%s is required", field)}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
+	}
+	var floats []float64
+	if err := json.Unmarshal(raw, &floats); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON array of whole numbers", field)}
+	}
+	if len(floats) == 0 {
+		return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must not be empty", field)}
+	}
+	out := make([]int, len(floats))
+	for i, f := range floats {
+		if f != float64(int(f)) {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: fmt.Sprintf("%s[%d]", field, i),
+				Detail: fmt.Sprintf("%s[%d] must be a whole number", field, i),
+			}
+		}
+		out[i] = int(f)
+	}
+	return out, nil
 }
 
 // ErrAudioNodeNoEvidence is [ValidateAudioNodePlacement]'s error when a

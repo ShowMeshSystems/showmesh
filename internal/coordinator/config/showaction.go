@@ -193,6 +193,24 @@ const (
 	// same posture, matching what api/openapi.yaml's conformance-test
 	// overlay already treats these payloads as (closed objects).
 	ValidationCodeFieldUnknownKey = "field-unknown-key"
+
+	// ValidationCodeAudioNodeChannelDuplicate: audionode.go's own rule.
+	// programChannels lists the SAME physical route's channel indices, so a
+	// repeated index is a distinct refusal from an ordinary out-of-range
+	// value.
+	ValidationCodeAudioNodeChannelDuplicate = "audio-node-channel-duplicate"
+
+	// ValidationCodeAudioNodeChannelOverlap: audionode.go's own rule.
+	// ltcChannel named an index already claimed by programChannels — ADR-018
+	// requires LTC on a channel discrete from program, so this is a
+	// placement conflict, not merely a bad number.
+	ValidationCodeAudioNodeChannelOverlap = "audio-node-channel-overlap"
+
+	// ValidationCodeAudioNodeRouteMismatch: audionode.go's own rule.
+	// programRoute and ltcRoute named different routes — program and LTC
+	// leave through one interface in one clock domain (ADR-018), so two
+	// different route names can never be satisfied together.
+	ValidationCodeAudioNodeRouteMismatch = "audio-node-route-mismatch"
 )
 
 // --- show.action's own vocabulary. ---

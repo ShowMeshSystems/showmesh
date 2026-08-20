@@ -77,9 +77,15 @@ func TestOpenAPIAudioNodeConfigResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("PUT: status = %d, want 200; body: %s", putResp.StatusCode, putBody)
 	}
 	assertMatchesSchema(t, c, "AudioNodeConfigResponse", putBody)
+	if !containsAll(string(putBody), `"programChannels":[1,2]`) || !containsAll(string(putBody), `"ltcChannel":3`) {
+		t.Fatalf("PUT response missing programChannels/ltcChannel; body: %s", putBody)
+	}
 
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", authHeader)
 	assertMatchesSchema(t, c, "AudioNodeConfigResponse", getBody)
+	if !containsAll(string(getBody), `"programChannels":[1,2]`) || !containsAll(string(getBody), `"ltcChannel":3`) {
+		t.Fatalf("GET response missing programChannels/ltcChannel; body: %s", getBody)
+	}
 
 	_, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01/revisions", authHeader)
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
