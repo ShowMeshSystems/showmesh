@@ -2252,7 +2252,7 @@ export interface components {
             revision: number;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` — see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
+            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
             params?: Record<string, never>;
         };
         /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
