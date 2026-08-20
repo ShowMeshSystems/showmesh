@@ -125,7 +125,7 @@ The common entry key is derived from the FPP instance UUID, playlist name, playl
 
 This is preferred over minting an independent random UUID inside each FPP entry. FPP does preserve entry configuration in its runtime object, but a custom field's survival through every FPP editor, API, import, and upgrade path is not yet established. A persisted explicit UUID may be added later if preserving entry identity across reordering proves valuable, but it is not required for safe day-one matching.
 
-SM-63's approved hybrid runtime structure supplies version-matched FPP 9 and FPP 10 native adapters around a shared Go runtime. The native adapter will use FPP's playlist callback to capture playlist information, action, section, and item position atomically, and the shared runtime will publish the entry-identity message. Existing independent MQTT topics remain compatibility evidence, but they are not the canonical identity event because their fields can arrive separately and describe different instants during a transition.
+SM-63's approved hybrid plugin structure supplies a resident native component with version-matched FPP 9 and FPP 10 adapters alongside the forked Go macro helper. The native component will use FPP's playlist callback to capture playlist information, action, section, and item position atomically and will publish the entry-identity message through its coordinator-facing contract. Existing independent MQTT topics remain compatibility evidence, but they are not the canonical identity event because their fields can arrive separately and describe different instants during a transition.
 
 ### 6. Active-show isolation is enforced at configuration, activation, dispatch, and execution
 
