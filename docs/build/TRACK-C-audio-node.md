@@ -39,6 +39,18 @@ This section states plainly what the merged scaffolding does and does not establ
 >
 > Track C remains **In Review**, not operational or accepted.
 
+## 2026-08-20, third pass: Linux evidence, two packaging facts, and the acceptance classification
+
+**The engine had only ever run on macOS.** Running it on the deployment platform found a constraint nothing had stated and corrected a packaging ruling that was wrong.
+
+**The audio node requires GLib 2.80 or newer.** `go-glib v0.0.2`, which `go-gst v0.0.2` depends on, calls GLib symbols added through 2.80 (`g_path_buf_*` at 2.76, `g_utf8_truncate_middle` at 2.78, `g_strv_builder_take` and `g_dir_ref` at 2.80). On Debian 12 bookworm, GLib 2.74, the agent does not build at all: twenty undefined C symbols. On Debian 13 trixie, GLib 2.84.4 with GStreamer 1.26.2, it builds and **all thirteen engine tests pass**, including interrupt against a real pipeline. macOS carries a far newer GLib through Homebrew, which is exactly why every gate on the development machine was green while the deployment platform could not have compiled the code. CI now asserts the floor with `pkg-config --atleast-version=2.80 glib-2.0`.
+
+**`alsasink` ships in `gstreamer1.0-alsa`, not in `gstreamer1.0-plugins-base-apps`.** The recorded node package set named the wrong package for the production output sink. Without it the agent builds, starts, receives its `audio.node` binding, and cannot construct its sink; it reports unavailable with that reason, which is the design working, and the show still has no audio. CI installs it and asserts `gst-inspect-1.0 alsasink` succeeds. The node image needs the same correction.
+
+**`mixPolicy` was not reachable over the wire.** `parseApplyRequest` never accepted the key and rejects unknown keys, so no announcement policy could be selected by any client: not `interrupt`, and not `duck` either, which this document described as implemented. The session layer had it, the decision was resolved, and nothing could reach it. It now parses and validates against its closed vocabulary, with a test that fails when the key is dropped again. `showmeshctl` passes apply params through verbatim, so the CLI reaches it without its own change.
+
+**All fifteen acceptance criteria are classified against observed evidence in Linear SM-67**, split into software-verifiable, Linux and GStreamer integration, physical commissioning under SM-74, and real-show acceptance. **Zero of fifteen are met.** Nine have a software half done and a measured half missing. No `fakesink` result, container graph or captured file is offered anywhere as evidence for a physical criterion. One new gap came out of that pass: **nothing measures the inter-item gap a playlist produces** (criterion 6), filed as SM-144.
+
 ## 2026-08-20, second half: the agent builds and uses the real engine
 
 `3fd5f5c`. The wiring seam SM-68 owed, merged after the engine package itself.
