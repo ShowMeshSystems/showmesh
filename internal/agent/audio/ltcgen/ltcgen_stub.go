@@ -25,7 +25,7 @@ func NewEncoder(pkgaudio.LTCFrameRate, pkgaudio.LTCTimecode, int) (*Encoder, err
 }
 
 // NextFrame always fails: this build has no libltc linked in.
-func (e *Encoder) NextFrame() ([]int16, pkgaudio.LTCTimecode, error) {
+func (e *Encoder) NextFrame() ([]byte, pkgaudio.LTCTimecode, error) {
 	return nil, "", fmt.Errorf("ltcgen: %s", unsupportedReason)
 }
 

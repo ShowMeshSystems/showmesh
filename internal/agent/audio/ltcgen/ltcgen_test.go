@@ -3,6 +3,7 @@
 package ltcgen
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -11,6 +12,17 @@ import (
 )
 
 const testSampleRate = 48000
+
+// bytesToS16LE reinterprets a [SampleFormat] byte slice as the []int16
+// libltc's test decoder expects; a plain little-endian read, not a
+// recomputation of any sample.
+func bytesToS16LE(raw []byte) []int16 {
+	out := make([]int16, len(raw)/2)
+	for i := range out {
+		out[i] = int16(binary.LittleEndian.Uint16(raw[2*i:]))
+	}
+	return out
+}
 
 func encodeRun(t *testing.T, rate pkgaudio.LTCFrameRate, start pkgaudio.LTCTimecode, frames int) (samples []int16, expected []pkgaudio.LTCTimecode) {
 	t.Helper()
@@ -21,14 +33,14 @@ func encodeRun(t *testing.T, rate pkgaudio.LTCFrameRate, start pkgaudio.LTCTimec
 	defer enc.Close()
 
 	for i := 0; i < frames; i++ {
-		s, tc, err := enc.NextFrame()
+		raw, tc, err := enc.NextFrame()
 		if err != nil {
 			t.Fatalf("NextFrame %d: %v", i, err)
 		}
-		if len(s) == 0 {
+		if len(raw) == 0 {
 			t.Fatalf("NextFrame %d: empty buffer", i)
 		}
-		samples = append(samples, s...)
+		samples = append(samples, bytesToS16LE(raw)...)
 		expected = append(expected, tc)
 	}
 	return samples, expected

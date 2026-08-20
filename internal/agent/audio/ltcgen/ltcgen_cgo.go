@@ -8,6 +8,7 @@ package ltcgen
 /*
 #cgo pkg-config: ltc
 #include <ltc.h>
+#include <stdint.h>
 
 // showmesh_ltc_force_nondrop clears the encoder's drop-frame bit and
 // recomputes parity to match. ltc_encoder_create sets dfbit whenever fps
@@ -18,6 +19,26 @@ static void showmesh_ltc_force_nondrop(LTCEncoder *e, enum LTC_TV_STANDARD stand
 	f.dfbit = 0;
 	ltc_frame_set_parity(&f, standard);
 	ltc_encoder_set_frame(e, &f);
+}
+
+// showmesh_ltc_frame_s16le encodes e's current frame and widens libltc's
+// unsigned 8-bit samples to signed 16-bit little-endian PCM directly into
+// out, returning the sample count written (never more than out_cap).
+static size_t showmesh_ltc_frame_s16le(LTCEncoder *e, int16_t *out, size_t out_cap) {
+	ltc_encoder_encode_frame(e);
+	ltcsnd_sample_t *buf;
+	int n = ltc_encoder_get_bufferptr(e, &buf, 1);
+	if (n <= 0) {
+		return 0;
+	}
+	size_t count = (size_t)n;
+	if (count > out_cap) {
+		count = out_cap;
+	}
+	for (size_t i = 0; i < count; i++) {
+		out[i] = (int16_t)(((int)buf[i] - 128) << 8);
+	}
+	return count;
 }
 */
 import "C"
@@ -39,6 +60,10 @@ const SampleFormat = "S16LE"
 // concurrent use.
 type Encoder struct {
 	enc *C.LTCEncoder
+	// buf is scratch space [Encoder.NextFrame] hands to C to fill, sized
+	// once for the slowest supported frame rate (the most samples per
+	// frame) at construction.
+	buf []int16
 }
 
 // NewEncoder creates an [Encoder] emitting rate at sampleHz, starting at
@@ -67,7 +92,11 @@ func NewEncoder(rate pkgaudio.LTCFrameRate, start pkgaudio.LTCTimecode, sampleHz
 	}
 	C.showmesh_ltc_force_nondrop(enc, standard)
 
-	e := &Encoder{enc: enc}
+	// 24 fps is the slowest rate this project authorizes and so carries
+	// the most samples per frame; the margin covers libltc's rounding at
+	// non-integer sample-rate/fps ratios.
+	maxSamples := sampleHz/24 + 64
+	e := &Encoder{enc: enc, buf: make([]int16, maxSamples)}
 	e.setTimecode(hh, mm, ss, ff)
 	return e, nil
 }
@@ -92,12 +121,15 @@ func (e *Encoder) setTimecode(hh, mm, ss, ff int) {
 	C.ltc_encoder_set_timecode(e.enc, &t)
 }
 
-// NextFrame encodes the encoder's current timecode to PCM, returns that
-// timecode alongside the samples it produced, and advances the encoder to
-// the following frame. The sample count is not constant: at 29.97 fps
-// libltc distributes a fractional sample count across frames, so callers
-// must read it from the returned slice rather than assume a fixed size.
-func (e *Encoder) NextFrame() ([]int16, pkgaudio.LTCTimecode, error) {
+// NextFrame encodes the encoder's current timecode to [SampleFormat] PCM,
+// returns that timecode alongside the bytes produced, and advances the
+// encoder to the following frame. libltc does the amplitude conversion in
+// C (ADR-042 decision 2); this only copies the result out of scratch space
+// it owns, so the returned slice is invalidated by the next call. The byte
+// count is not constant: at 29.97 fps libltc distributes a fractional
+// sample count across frames, so callers must read it from the returned
+// slice rather than assume a fixed size.
+func (e *Encoder) NextFrame() ([]byte, pkgaudio.LTCTimecode, error) {
 	if e.enc == nil {
 		return nil, "", fmt.Errorf("ltcgen: encoder is closed")
 	}
@@ -106,24 +138,16 @@ func (e *Encoder) NextFrame() ([]int16, pkgaudio.LTCTimecode, error) {
 	C.ltc_encoder_get_timecode(e.enc, &t)
 	tc := pkgaudio.LTCTimecode(fmt.Sprintf("%02d:%02d:%02d:%02d", int(t.hours), int(t.mins), int(t.secs), int(t.frame)))
 
-	C.ltc_encoder_encode_frame(e.enc)
-
-	var bufPtr *C.ltcsnd_sample_t
-	n := C.ltc_encoder_get_bufferptr(e.enc, &bufPtr, 1)
-	if n <= 0 {
+	n := C.showmesh_ltc_frame_s16le(e.enc, (*C.int16_t)(unsafe.Pointer(&e.buf[0])), C.size_t(len(e.buf)))
+	if n == 0 {
 		return nil, "", fmt.Errorf("ltcgen: libltc produced an empty frame buffer")
 	}
-
-	// libltc's encoded samples are unsigned 8-bit, 128 at silence; centre
-	// and widen to signed 16-bit by shifting into the top byte.
-	raw := unsafe.Slice((*byte)(unsafe.Pointer(bufPtr)), int(n))
-	samples := make([]int16, len(raw))
-	for i, b := range raw {
-		samples[i] = int16(int(b)-128) << 8
-	}
-
 	C.ltc_encoder_inc_timecode(e.enc)
-	return samples, tc, nil
+
+	raw := unsafe.Slice((*byte)(unsafe.Pointer(&e.buf[0])), int(n)*2)
+	out := make([]byte, len(raw))
+	copy(out, raw)
+	return out, tc, nil
 }
 
 // Close releases the underlying libltc encoder. Safe to call more than
