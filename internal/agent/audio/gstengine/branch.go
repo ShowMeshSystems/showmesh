@@ -56,6 +56,12 @@ type branch struct {
 	frozen   bool // true when Position must come from frozenPosition, not a live query
 	frozenAt time.Duration
 
+	// segmentStart is the branch position the current GStreamer segment
+	// began at: 0 until the first seek, then whatever position the most
+	// recent seek targeted. resyncMixerPads uses it to translate a
+	// resumed position into the shared pipeline's running time.
+	segmentStart time.Duration
+
 	fadeActive    bool
 	fadeStartedAt time.Time
 	fadeDuration  time.Duration
@@ -262,6 +268,28 @@ func (b *branch) queryPosition() time.Duration {
 		return frozenAt
 	}
 	return time.Duration(ns)
+}
+
+// resyncMixerPads re-anchors every channel mixer sink pad this branch
+// feeds so the next buffer, carrying atPos in the branch's own segment,
+// lands at the shared pipeline's current running time rather than in
+// GstAudioAggregator's past. Required whenever this branch's data flow
+// (re)starts, since the aggregator advances its output running time in
+// real time regardless of whether anything is playing.
+func (b *branch) resyncMixerPads(atPos time.Duration) {
+	target := b.engine.pipeline.GetCurrentRunningTime()
+	if target == gst.ClockTimeNone {
+		target = 0
+	}
+	b.mu.Lock()
+	local := atPos - b.segmentStart
+	b.mu.Unlock()
+	offset := int64(target) - local.Nanoseconds()
+	for _, pad := range b.channelMixerPads {
+		if pad != nil {
+			pad.SetOffset(offset)
+		}
+	}
 }
 
 func (b *branch) currentGain() pkgaudio.Gain {

@@ -545,6 +545,126 @@ func TestBrokenOutputPipelineStopsAnsweringWithStaleState(t *testing.T) {
 	}
 }
 
+// TestLateJoiningBranchPlaysFromOwnStartPosition proves a branch that
+// Loads and Starts after the output pipeline has been running for a while
+// reports its own elapsed play time, not the pipeline's own uptime folded
+// in. GstAudioAggregator (audiomixer, interleave) advances its output
+// running time continuously once anything is connected, so a branch whose
+// buffers arrive at running time 0 lands in the aggregator's past and is
+// silently discarded unless its mixer sink pads are re-anchored to "now".
+func TestLateJoiningBranchPlaysFromOwnStartPosition(t *testing.T) {
+	const engineUptime = 4 * time.Second
+	const settleWait = 800 * time.Millisecond
+	// pass bound is deliberately well above settleWait (scheduling jitter
+	// under load) and well below engineUptime (what the regression folds in).
+	const passBound = 2 * time.Second
+
+	cases := []struct {
+		name string
+		cfg  func(AssetResolver) Config
+	}{
+		{"LTCChannel unset", testConfig},
+		{"LTCChannel configured", ltcTestConfig},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := New(tc.cfg(resolveByRuntimeFilename))
+			if err != nil {
+				t.Fatalf("New: unexpected structural config error: %v", err)
+			}
+			if ok, reason := e.Available(); !ok {
+				t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+			}
+			t.Cleanup(func() { _ = e.Close() })
+
+			time.Sleep(engineUptime)
+
+			dir := t.TempDir()
+			wav := filepath.Join(dir, "fixture.wav")
+			generateWAV(t, wav, 8)
+
+			ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+			defer cancel()
+
+			if _, err := e.Load(ctx, "late", mediaRef(wav), 8*time.Second); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if _, err := e.Start(ctx, "late", 0); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			time.Sleep(settleWait)
+
+			obs, err := e.Observe(ctx, "late")
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if obs.Position >= passBound {
+				t.Fatalf("position %s is close to the engine's %s uptime; branch played from the middle of the file", obs.Position, engineUptime)
+			}
+			if obs.Position < settleWait/2 {
+				t.Fatalf("position %s did not advance after Start", obs.Position)
+			}
+
+			_ = e.Release(context.Background(), "late")
+		})
+	}
+}
+
+// TestConcurrentBranchesStartedAtDifferentTimesEachReportOwnPosition
+// proves two branches, joined the shared pipeline at different moments,
+// each report their own elapsed play time rather than a pipeline-relative
+// one shared between them.
+func TestConcurrentBranchesStartedAtDifferentTimesEachReportOwnPosition(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wavA := filepath.Join(dir, "early.wav")
+	wavB := filepath.Join(dir, "late.wav")
+	generateWAV(t, wavA, 6)
+	generateWAV(t, wavB, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "early", mediaRef(wavA), 6*time.Second); err != nil {
+		t.Fatalf("Load early: %v", err)
+	}
+	if _, err := e.Start(ctx, "early", 0); err != nil {
+		t.Fatalf("Start early: %v", err)
+	}
+
+	const headStart = 3 * time.Second
+	time.Sleep(headStart)
+
+	if _, err := e.Load(ctx, "late", mediaRef(wavB), 6*time.Second); err != nil {
+		t.Fatalf("Load late: %v", err)
+	}
+	if _, err := e.Start(ctx, "late", 0); err != nil {
+		t.Fatalf("Start late: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	earlyObs, err := e.Observe(ctx, "early")
+	if err != nil {
+		t.Fatalf("Observe early: %v", err)
+	}
+	lateObs, err := e.Observe(ctx, "late")
+	if err != nil {
+		t.Fatalf("Observe late: %v", err)
+	}
+
+	const latePassBound = headStart - 500*time.Millisecond
+	if lateObs.Position >= latePassBound {
+		t.Fatalf("late branch position %s folded in the early branch's %s head start", lateObs.Position, headStart)
+	}
+	if earlyObs.Position < headStart-1*time.Second {
+		t.Fatalf("early branch position %s did not keep advancing while late joined", earlyObs.Position)
+	}
+
+	_ = e.Release(context.Background(), "early")
+	_ = e.Release(context.Background(), "late")
+}
+
 // TestCloseReleasesTheOutputDeviceAndStopsAnswering proves a closed
 // engine reports itself unavailable and refuses every call. A rebind
 // builds a replacement against the same device, so an outgoing engine

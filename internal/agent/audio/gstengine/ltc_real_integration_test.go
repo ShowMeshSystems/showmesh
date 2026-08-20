@@ -5,8 +5,11 @@ package gstengine
 import (
 	"context"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/go-gst/go-gst/pkg/gst"
 
 	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -304,18 +307,44 @@ func TestLTCTimecodeTracksWallClock(t *testing.T) {
 	}
 }
 
-// TestCloseDoesNotDeadlockWhenLTCFeederNeverStarted proves Close returns
-// even when the LTC feeder goroutine was never launched. A structural
-// pipeline failure between constructing e.ltc and starting the feeder
-// (ordinarily a busy or missing ALSA device on
-// pipeline.SetState(StatePlaying)) is not reproducible against fakesink,
-// so this forces the same reachable state directly: e.ltc is non-nil and
-// feedStarted is false.
-func TestCloseDoesNotDeadlockWhenLTCFeederNeverStarted(t *testing.T) {
-	e := newLTCTestEngine(t)
+// newLTCTestEngineNoFeeder builds and starts the same pipeline [New]
+// would, but deliberately skips launching runLTCFeeder — the same
+// reachable state a structural failure between constructing e.ltc and
+// starting the feeder would leave (ordinarily a busy or missing ALSA
+// device on pipeline.SetState(StatePlaying), not reproducible against
+// fakesink). feedDone genuinely has no writer here, unlike flipping
+// feedStarted back to false on a feeder that is actually running.
+func newLTCTestEngineNoFeeder(t *testing.T) *Engine {
+	t.Helper()
+	cfg := ltcTestConfig(resolveByRuntimeFilename)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	gst.Init()
+	e := &Engine{
+		cfg:          cfg,
+		handles:      make(map[agentaudio.EngineHandle]*branch),
+		elementIndex: make(map[string]*branch),
+		done:         make(chan struct{}),
+	}
+	if reason := e.checkPrerequisites(); reason != "" {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
+	if err := e.buildPipeline(); err != nil {
+		t.Skipf("skipping: could not build output pipeline: %v", err)
+	}
+	e.availOK = true
+	go e.watchBus()
+	t.Cleanup(func() { _ = e.Close() })
+	return e
+}
 
-	if !e.ltc.feedStarted.CompareAndSwap(true, false) {
-		t.Fatalf("expected New to have started the LTC feeder")
+// TestCloseDoesNotDeadlockWhenLTCFeederNeverStarted proves Close returns
+// even when the LTC feeder goroutine was never launched.
+func TestCloseDoesNotDeadlockWhenLTCFeederNeverStarted(t *testing.T) {
+	e := newLTCTestEngineNoFeeder(t)
+	if e.ltc.feedStarted.Load() {
+		t.Fatalf("expected the LTC feeder not to have started")
 	}
 
 	done := make(chan error, 1)
@@ -329,6 +358,89 @@ func TestCloseDoesNotDeadlockWhenLTCFeederNeverStarted(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close deadlocked waiting on an LTC feeder that was never started")
 	}
+}
+
+// processCPUTime returns this process's total user+system CPU time, for
+// bounding CPU consumption over a wall-clock window without depending on
+// platform-specific profiling tools.
+func processCPUTime() time.Duration {
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		return 0
+	}
+	toDuration := func(tv syscall.Timeval) time.Duration {
+		return time.Duration(tv.Sec)*time.Second + time.Duration(tv.Usec)*time.Microsecond
+	}
+	return toDuration(ru.Utime) + toDuration(ru.Stime)
+}
+
+// TestLTCFeederDoesNotBusySpinAfterDownstreamStops proves the feeder does
+// not free-run once appsrc stops accepting pushes. Before the fix, PushBuffer
+// returning anything but FlowOK was the loop's only exit condition, so a
+// downstream EOS turned it into an unbounded spin holding ch.mu on every
+// iteration.
+func TestLTCFeederDoesNotBusySpinAfterDownstreamStops(t *testing.T) {
+	e := newLTCTestEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate25, StartTimecode: "00:00:00:00"}); err != nil {
+		t.Fatalf("StartLTC: %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+	if r := e.ltc.src.EndOfStream(); r != gst.FlowOK {
+		t.Fatalf("EndOfStream on the LTC appsrc returned %v", r)
+	}
+	time.Sleep(100 * time.Millisecond) // let the feeder reach the failing push path
+
+	const window = 500 * time.Millisecond
+	before := processCPUTime()
+	time.Sleep(window)
+	spent := processCPUTime() - before
+
+	t.Logf("process CPU consumed over %s with the LTC feeder's downstream stopped: %s", window, spent)
+	if spent > window/2 {
+		t.Fatalf("feeder consumed %s of CPU over a %s wall window, want well under it (busy-spin)", spent, window)
+	}
+}
+
+// TestLTCObservationStopsClaimingRunningAfterEmissionStalls proves a run
+// whose pushes stop being accepted downgrades out of LTCRunning, and stops
+// carrying its last timecode forward as current, rather than reporting
+// running forever off a frozen confirmation.
+func TestLTCObservationStopsClaimingRunningAfterEmissionStalls(t *testing.T) {
+	e := newLTCTestEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate25, StartTimecode: "00:00:00:00"}); err != nil {
+		t.Fatalf("StartLTC: %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+	if r := e.ltc.src.EndOfStream(); r != gst.FlowOK {
+		t.Fatalf("EndOfStream on the LTC appsrc returned %v", r)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		obs := e.ObserveLTC(context.Background())
+		if obs.State != agentaudio.LTCRunning {
+			if obs.State != agentaudio.LTCFailed {
+				t.Fatalf("state after emission stalled = %q, want failed", obs.State)
+			}
+			if obs.TimecodeKnown {
+				t.Fatalf("stale observation still carries a timecode: %+v", obs)
+			}
+			if obs.Reason == "" {
+				t.Fatalf("stale observation carries no reason")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("LTC observation still reported running %s after downstream stopped accepting pushes", 2*time.Second)
 }
 
 func TestLTCChannelZeroNeverReportsRunning(t *testing.T) {
