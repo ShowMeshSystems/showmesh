@@ -389,7 +389,9 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 // — so a retried Stop can still address it, and the outcome is
 // Unconfirmable with the failure's reason, the same "declared, not
 // refused, not fabricated" shape ADR-024 decision 7's other exempt
-// safety actions use.
+// safety actions use. A duck this session imposed on others is released
+// once the stop is attempted, engine confirmation or not; a session left
+// in StateStopping is re-resolved by [Session.checkStopCompletionLocked].
 func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -423,10 +425,12 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		s.bookmark = nil
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
-	reachedStopped := res.executed && s.state == pkgaudio.StateStopped
+	// Released on the attempt, not on confirmation: a stuck duck is
+	// audible all night, and the outcome carries the engine evidence.
+	attempted := res.executed
 	s.mu.Unlock()
 
-	if reachedStopped {
+	if attempted {
 		m.restoreDucked(ctx, id)
 	}
 	return res.outcome

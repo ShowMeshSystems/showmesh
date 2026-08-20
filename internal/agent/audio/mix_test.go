@@ -638,6 +638,57 @@ func TestFadeSupervisionSurvivesRestart(t *testing.T) {
 	}
 }
 
+// TestFadeSupervisionRestartDoesNotJumpGainUpward verifies the sharper
+// half of the restart finding: a restored session's first supervision
+// tick must never infer a fade's completion from a freshly loaded engine
+// handle that was never actually driven through that fade. A pre-crash
+// desired gain of 0.4 mid-fade toward 0 must not become the new handle's
+// default unity gain once RestoreAll and a watchTick run.
+func TestFadeSupervisionRestartDoesNotJumpGainUpward(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+	m.GainSet(ctx, id, "inv-gain", 3, pkgaudio.Gain(0.4))
+	m.GainFade(ctx, id, "inv-fade", 4, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0))
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	preCrashGain := *s.desired.Gain
+	s.mu.Unlock()
+	if preCrashGain != pkgaudio.Gain(0.4) {
+		t.Fatalf("precondition: pre-crash desired gain = %v, want 0.4", preCrashGain)
+	}
+
+	// "Restart": a fresh Manager and engine over the same store, with no
+	// intervening watchTick — the crash TestFadeSupervisionSurvivesRestart
+	// also uses. The new engine handle this creates has never been given
+	// the fade that was in flight when the store was last written.
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.watchTick(ctx)
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	if s2.desired.Gain == nil {
+		t.Fatal("desired gain is nil after restore")
+	}
+	if *s2.desired.Gain > preCrashGain {
+		t.Fatalf("desired gain after restart = %v, want it not to exceed the pre-crash gain %v (a virgin handle's default must never be read as this fade's outcome)", *s2.desired.Gain, preCrashGain)
+	}
+}
+
 // TestFadeCompletionToleratesFloatingPointDrift proves a fade whose
 // engine-reported gain differs from its target only by floating-point
 // error still reports fade_complete. Exact equality here would report a
@@ -654,5 +705,43 @@ func TestFadeCompletionToleratesFloatingPointDrift(t *testing.T) {
 	}
 	if gainsEqual(pkgaudio.Gain(0.3), target) {
 		t.Fatal("gainsEqual(0.3, 0.2) = true, want false: the tolerance must not accept a gain that genuinely missed its target")
+	}
+}
+
+// TestFadeDispatchedAfterRestartResolvesNormally guards the restart guard
+// itself: it is armed by a restore and must be disarmed by the next fade
+// actually dispatched, or a fade issued between the restore and the first
+// supervision tick is answered as one interrupted by a restart it was
+// never part of.
+func TestFadeDispatchedAfterRestartResolvesNormally(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+	m.GainFade(ctx, id, "inv-fade", 3, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0))
+
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.GainFade(ctx, id, "inv-fade-2", 4, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0.2))
+	m2.watchTick(ctx)
+
+	s, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.fadePending {
+		t.Fatal("the fade dispatched after the restore was resolved by the restart guard rather than left in progress")
+	}
+	if s.fadeState != FadeStateInProgress {
+		t.Fatalf("fade state = %q, want %q", s.fadeState, FadeStateInProgress)
 	}
 }

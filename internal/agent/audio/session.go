@@ -164,6 +164,12 @@ type Session struct {
 	fadePending    bool
 	fadeInvocation pkgaudio.InvocationID
 
+	// fadeHandleNeverFaded marks a fadePending inherited from disk onto a
+	// handle that was never given that fade. Such a handle reports
+	// FadeActive false from the moment it loads, which is otherwise
+	// indistinguishable from a fade that just completed.
+	fadeHandleNeverFaded bool
+
 	// fadeState is fadePending's reporting-only companion: it additionally
 	// distinguishes a fade that just completed from one that never
 	// started, which fadePending's own true-to-false transition cannot —
@@ -363,7 +369,10 @@ func (s *Session) releaseEngineLocked(ctx context.Context) {
 	if !s.handleLoaded {
 		return
 	}
-	if err := s.mgr.engine.Release(ctx, s.handle); err != nil {
+	relCtx, relCancel := boundedObserveContext(ctx)
+	err := s.mgr.engine.Release(relCtx, s.handle)
+	relCancel()
+	if err != nil {
 		s.mgr.logf("audio session %s: engine release failed: %v", s.id, err)
 	}
 	s.handleLoaded = false
@@ -622,6 +631,37 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool) pkgaudio.Outco
 	s.lastObservedAt = obs.ObservedAt
 	s.persistBestEffortLocked("state change")
 	return confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt)
+}
+
+// checkStopCompletionLocked re-resolves a session a failed Engine.Stop or
+// Release left in StateStopping, once engine evidence shows it actually
+// stopped. Caller holds s.mu.
+func (s *Session) checkStopCompletionLocked(ctx context.Context) {
+	if s.state != pkgaudio.StateStopping || !s.handleLoaded {
+		return
+	}
+	obsCtx, cancel := boundedObserveContext(ctx)
+	obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
+	cancel()
+	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		return
+	}
+	if obs.State != pkgaudio.StateStopped {
+		return
+	}
+	relCtx, relCancel := boundedObserveContext(ctx)
+	err = s.mgr.engine.Release(relCtx, s.handle)
+	relCancel()
+	if err != nil {
+		s.mgr.logf("audio session %s: engine release failed while resolving stop: %v", s.id, err)
+		return
+	}
+	s.handleLoaded = false
+	s.loadedIdentity = ""
+	s.state = pkgaudio.StateStopped
+	s.bookmark = nil
+	s.persistBestEffortLocked("state change")
 }
 
 // SessionSnapshot is one session's retained telemetry, fresh as of the

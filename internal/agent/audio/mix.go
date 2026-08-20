@@ -140,6 +140,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 	s.desired.Fade = &f
 	s.fadePending = true
 	s.fadeInvocation = invocation
+	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateInProgress
 	s.persistBestEffortLocked("state change")
 
@@ -174,6 +175,10 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 // Engine reports the gain reached, not before. Caller holds s.mu.
 func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
+		return
+	}
+	if s.fadeHandleNeverFaded {
+		s.resolveFadeInterruptedByRestartLocked()
 		return
 	}
 	obsCtx, cancel := boundedObserveContext(ctx)
@@ -212,6 +217,23 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	s.fadePending = false
 	s.fadeInvocation = ""
 	s.fadeState = FadeStateComplete
+	s.persistBestEffortLocked("state change")
+}
+
+// resolveFadeInterruptedByRestartLocked answers a fade that survived a
+// restart onto a handle never driven through it. desired.Gain is left as
+// restored rather than read back from that handle. Caller holds s.mu.
+func (s *Session) resolveFadeInterruptedByRestartLocked() {
+	if s.fadeInvocation != "" {
+		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
+			Outcome: pkgaudio.OutcomeUnconfirmable,
+			Reason:  "fade was interrupted by a restart before it reached its target",
+		}))
+	}
+	s.fadePending = false
+	s.fadeInvocation = ""
+	s.fadeHandleNeverFaded = false
+	s.fadeState = FadeStateNone
 	s.persistBestEffortLocked("state change")
 }
 
