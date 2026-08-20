@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,7 @@ func New(cfg Config) (*Engine, error) {
 	e.availOK = true
 	go e.watchBus()
 	if e.ltc != nil {
+		e.ltc.feedStarted.Store(true)
 		go e.runLTCFeeder(e.ltc)
 	}
 	return e, nil
@@ -171,14 +173,29 @@ func (e *Engine) Close() error {
 		for _, b := range branches {
 			_ = b.teardown(context.Background())
 		}
+
+		// Signal first, then flush the pipeline to NULL: a feeder blocked
+		// inside PushBuffer under backpressure only returns once the
+		// pipeline stops accepting data. feedStarted below is what keeps
+		// this safe when the feeder was never launched at all — a build
+		// failure between constructing e.ltc and starting the goroutine
+		// would otherwise leave feedDone with no writer, ever.
 		if e.ltc != nil {
 			close(e.ltc.stopFeed)
-			<-e.ltc.feedDone
-			e.ltc.closeEncoder()
 		}
 		e.markBroken(closedReason)
 		if e.pipeline != nil {
 			e.pipeline.SetState(gst.StateNull)
+		}
+		if e.ltc != nil {
+			if e.ltc.feedStarted.Load() {
+				select {
+				case <-e.ltc.feedDone:
+				case <-time.After(ltcFeederShutdownTimeout):
+					slog.Warn("gstengine: LTC feeder did not exit within the shutdown timeout")
+				}
+			}
+			e.ltc.closeEncoder()
 		}
 	})
 	return nil
@@ -272,6 +289,9 @@ func (e *Engine) buildPipeline() error {
 			if mixerCaps.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
 				return fmt.Errorf("could not link channel %d mixer to interleave", ch)
 			}
+			if err := addMixerKeepAlive(bin, mixer, ch); err != nil {
+				return err
+			}
 			channelMixers[pos] = mixer
 			continue
 		}
@@ -321,6 +341,40 @@ func (e *Engine) buildPipeline() error {
 
 	if pipeline.SetState(gst.StatePlaying) == gst.StateChangeFailure {
 		return errors.New("output pipeline refused to reach PLAYING")
+	}
+	return nil
+}
+
+// addMixerKeepAlive gives mixer one permanently connected silent sink pad.
+// A GstAggregator-based element (audiomixer, interleave) with zero
+// connected sink pads never produces output at all — not silence, nothing
+// — so with no branch loaded the whole interleave chain downstream of an
+// unfed program mixer stalls permanently, discovered live when LTC's
+// confirmed-emission evidence (see ltc.go) could never be satisfied.
+// ignore-inactive-pads, already set on mixer, is what lets a branch's own
+// pad go quiet without stalling this one.
+func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int) error {
+	src := gst.ElementFactoryMake("audiotestsrc", fmt.Sprintf("keepalive-ch%d", ch))
+	conv := gst.ElementFactoryMake("audioconvert", fmt.Sprintf("keepalive-conv-ch%d", ch))
+	if src == nil || conv == nil {
+		return fmt.Errorf("could not create mixer keep-alive chain for channel %d", ch)
+	}
+	src.SetObjectProperty("is-live", true)
+	src.SetObjectProperty("wave", int32(4)) // GST_AUDIO_TEST_SRC_WAVE_SILENCE
+	for _, el := range []gst.Element{src, conv} {
+		if !bin.Add(el) {
+			return fmt.Errorf("could not add mixer keep-alive element for channel %d", ch)
+		}
+	}
+	if !src.Link(conv) {
+		return fmt.Errorf("could not link mixer keep-alive chain for channel %d", ch)
+	}
+	pad := mixer.RequestPadSimple("sink_%u")
+	if pad == nil {
+		return fmt.Errorf("mixer for channel %d refused a keep-alive sink pad", ch)
+	}
+	if conv.GetStaticPad("src").Link(pad) != gst.PadLinkOK {
+		return fmt.Errorf("could not link mixer keep-alive source for channel %d", ch)
 	}
 	return nil
 }
