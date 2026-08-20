@@ -55,9 +55,13 @@ jobs:
           # (internal/agent/audio) drive decodebin against real WAV/FLAC
           # fixtures, and without them decodebin typefinds the container but
           # has no element to decode it, which reports as MediaFault, not a
-          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
-          # jack, SDL2 and a 5 MB soundfont, which took this step from
-          # 3 seconds to over 300.
+          # skip. plugins-bad is installed for one element and one element
+          # only: audiomixer, which carries the program bus. It was
+          # previously excluded because it drags in pipewire, jack, SDL2 and
+          # a 5 MB soundfont, MEASURED at taking this step from 3 seconds to
+          # over 300; that cost is still real and is now paid deliberately.
+          # The dev headers are what the agent's cgo audio engine links
+          # against, so a build without them fails rather than degrades.
           #
           # The runner's default azure.archive.ubuntu.com mirror intermittently
           # stops answering; apt then retries it per index file before falling
@@ -76,10 +80,16 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
           gst-inspect-1.0 wavparse > /dev/null
+          # audiomixer carries the program bus; it lives in plugins-bad, and
+          # the dev headers are what the agent's cgo audio engine links against.
+          gst-inspect-1.0 audiomixer > /dev/null
+          pkg-config --modversion gstreamer-1.0
 
       - name: Vet
         run: go vet ./...
@@ -153,9 +163,13 @@ jobs:
           # (internal/agent/audio) drive decodebin against real WAV/FLAC
           # fixtures, and without them decodebin typefinds the container but
           # has no element to decode it, which reports as MediaFault, not a
-          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
-          # jack, SDL2 and a 5 MB soundfont, which took this step from
-          # 3 seconds to over 300.
+          # skip. plugins-bad is installed for one element and one element
+          # only: audiomixer, which carries the program bus. It was
+          # previously excluded because it drags in pipewire, jack, SDL2 and
+          # a 5 MB soundfont, MEASURED at taking this step from 3 seconds to
+          # over 300; that cost is still real and is now paid deliberately.
+          # The dev headers are what the agent's cgo audio engine links
+          # against, so a build without them fails rather than degrades.
           #
           # The runner's default azure.archive.ubuntu.com mirror intermittently
           # stops answering; apt then retries it per index file before falling
@@ -174,10 +188,16 @@ jobs:
             || sudo timeout 300 apt-get update $APT_OPTS
           # shellcheck disable=SC2086
           sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
           gst-launch-1.0 --version
           gst-inspect-1.0 rawvideoparse > /dev/null
           gst-inspect-1.0 wavparse > /dev/null
+          # audiomixer carries the program bus; it lives in plugins-bad, and
+          # the dev headers are what the agent's cgo audio engine links against.
+          gst-inspect-1.0 audiomixer > /dev/null
+          pkg-config --modversion gstreamer-1.0
 
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
         run: make test-integration

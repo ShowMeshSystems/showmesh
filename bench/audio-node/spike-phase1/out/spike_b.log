@@ -1,0 +1,5 @@
+waitState ret: StatePlaying
+branch2 buffers before pause: 22 total mix buffers: 51
+branch2 buffers frozen at: 22 still at: 22
+total mix buffers grew during branch2 pause: 72
+RESULT b: PASS - blocking one branch's src pad freezes that branch's dataflow while the mix as a whole keeps producing output
