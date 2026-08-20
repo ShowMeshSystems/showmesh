@@ -2,13 +2,13 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#45-audio-engine) · [Audio Engine specification](../architecture/AUDIO-ENGINE.md) · [Tracker](README.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [Resolume SMPTE research](RES-001-resolume-smpte-behavior.md)
 
-Status: planned (bench) · Risk: critical · Verification: **split — L2 for GStreamer graph/pipeline behaviour in a container (C0a-1, 2026-08-18); L0 for everything hardware- or device-dependent**
+Status: bench partially run · Risk: critical · Verification: **split: L2 for recorded GStreamer graph/pipeline behaviour, on two platforms (C0a-1 et al., a Debian container, 2026-08-18; the `gstengine` phase 1 spike, macOS arm64, 2026-08-20); L0 for the owner-selected live-LTC design and everything hardware- or device-dependent**
 
 ## Decision to make
 
 Establish whether the audio architecture decided on 2026-08-10 is achievable on real hardware, and produce the numbers it depends on but does not contain.
 
-Three ADRs settled the questions this record originally asked about clock ownership and playback model: ShowMesh owns audience-facing audio and nodes play local media against their own clock (ADR-017), program and LTC share one clock domain (ADR-018), and audio device loss fails silent with no automatic FPP fallback (ADR-019). Those decisions are architectural intent at L0. **Nothing below has been prototyped**, and this record is now the work queue that either confirms them or forces a superseding ADR. The physical questions block commissioning claims for a particular interface and Day-0 readiness on that device; they do **not** block building the device-agnostic engine, sessions, routing, mixing, telemetry, or runtime capability model.
+Three ADRs settled the questions this record originally asked about clock ownership and playback model: ShowMesh owns audience-facing audio and nodes play local media against their own clock (ADR-017), program and LTC share one clock domain (ADR-018), and audio device loss fails silent with no automatic FPP fallback (ADR-019). Container work below prototyped graph construction, captured routing, fades, seeks, transitions, and decode behavior. It did not prototype the production engine or the owner-selected live libltc path, and it cannot answer physical questions. Those remain the work queue that either confirms the architecture or forces a superseding ADR.
 
 ## Required use cases
 
@@ -16,7 +16,7 @@ Three ADRs settled the questions this record originally asked about clock owners
 - Background and ambient music outside scheduled shows.
 - Deterministic crossfades into pre-show, live, intermission, and post-show states.
 - Announcements ducked over show or background audio.
-- Independent LTC output without consuming the stereo program pair, from the same clock as program.
+- Independent LTC output outside the configured program channel set, from the same clock as program. The reference program layout is stereo, while a mono installation may use program channel 1 and LTC channel 2.
 - Multichannel USB interfaces, with optional Dante as an additional output.
 - Metering, device health, underrun reporting, and local recovery.
 
@@ -128,9 +128,23 @@ So for **whichever interface is in use**: confirm under Linux that a signal sent
 
 **One candidate already on hand, recorded rather than recommended.** The owner has a Behringer X Air mixer, which is a multichannel USB device and is sufficient to generate LTC for [RES-001](RES-001-resolume-smpte-behavior.md)'s bench. Nothing about its Linux behaviour, channel map, or suitability as the show's audio interface has been checked, and this note is not a selection.
 
-### C5 implements live LTC generation, and this is a design decision, not new evidence (2026-08-18)
+### gstengine phase 1 spike, run 2026-08-20 (L2 for graph behaviour, macOS only)
 
-Track C's C5 seam (`f7743c5`) implements the owner's ruling (Linear SM-69, SM-83) that LTC is generated live by a supervised external `libltc`-based process rather than played from a pre-rendered file, with a closed frame-rate vocabulary of 24/25/29.97/30 and non-drop shipped at every rate. That ruling settles *what ShowMesh builds*; it settles nothing this record measures. C5's generator output reaches a fake pipeline, program on channels 1–2 and LTC on a discrete channel 3 is proven only as a graph-routing fact by its own tests, and no physical output, alignment, or drift number exists behind it. **This does not raise this record's verification split above L0 for anything hardware- or device-dependent**: the mirror problem, physical channel independence, real-device alignment, drift, hot-plug, and PipeWire-versus-ALSA-on-real-hardware remain exactly where the 2026-08-14 note above left them, unreached, and C0b commissioning is still gated on an interface that is not yet selected.
+Committed at `bench/audio-node/spike-phase1/` as its own Go module with captured logs, run against real GStreamer **1.28.6** through **`go-gst`** on **macOS arm64**, on the bare development machine with no container and no ALSA. This is a **different platform from C0a-1/C1a/C2 above**, which are Debian-container measurements, and the two must not be merged into one claim. See `docs/bench/TRACK-C-AUDIO-BENCH.md`'s phase 1 section for the full record.
+
+Five questions the `internal/agent/audio/gstengine` package's topology depends on, each answered by observing a real running pipeline rather than by reasoning about GStreamer's documented behaviour:
+
+1. **A branch can be added to and removed from a running `audiomixer` with no stall.** Buffer count observed 51 → 101 → 150 across an add/remove cycle.
+2. **One branch can be paused while the mix continues**, using `ignore-inactive-pads=true` plus a pad-blocking probe: the blocked branch froze at 22 buffers while the mixer's own count continued to 72.
+3. **A `GstController` ramp reads back accurately when bound with `new_absolute()`**: 1.0 to 0.3 over 500 ms read 0.9998 near the start, 0.6747 mid-ramp, 0.3000 after. This bench's earlier `new()`-versus-`new_absolute()` 10x hazard (R4, C0a-1 above) did not reproduce under the absolute binding.
+4. **Per-branch end of media is distinguishable from pipeline EOS**: a branch's own `EventEOS` fired while the pipeline bus never emitted `MessageEOS`.
+5. **`interleave` places content on chosen channel indices by sink pad request order, not by any per-pad property.** This is the fact `gstengine`'s "request sink pads in ascending 1-based order" topology rule rests on.
+
+**This is further evidence about GStreamer graph and pipeline behaviour, on a second platform, and it moves nothing above L2.** It says nothing about a physical audio interface, ALSA, Linux driver behaviour, real multichannel hardware, channel discreteness, or program-to-LTC alignment, none of which is reachable from a synthetic pipeline on any platform. **No sound was produced or heard.** Because the platform is macOS arm64 with no ALSA, this evidence is not Linux evidence for the `gstengine` Go package specifically; that remains open until the package runs on the audio node's actual target stack.
+
+### C5 live-LTC decision has no production evidence (reconciled 2026-08-19)
+
+Track C's `f7743c5` commit implemented a supervised external-process contract, but review proved it had no production generator, lifecycle caller, or pipeline consumer. The owner-updated SM-69 design instead links libltc into the native agent through cgo and feeds C-generated PCM into the go-gst engine. Neither design has production or physical evidence here. The closed frame-rate vocabulary of 24/25/29.97/30 is resolved, with non-drop explicit. **Nothing hardware-dependent moves above L0**: the mirror problem, physical channel independence, real-device alignment, drift, hot-plug, and PipeWire-versus-ALSA behavior remain unreached, and C0b commissioning is still gated on an interface that is not yet selected.
 
 ## Decision, fallback, and revalidation
 
