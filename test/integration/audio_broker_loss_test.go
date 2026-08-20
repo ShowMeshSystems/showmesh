@@ -7,10 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +219,113 @@ func waitForBrokerTCPUp(t *testing.T, timeout time.Duration) {
 	}
 }
 
+// isolatedAudioBrokerImage is pinned to match deploy/docker-compose.yml's
+// mosquitto.image and scripts/test-integration.sh's own pin, so this
+// broker never drifts onto a version the reference deployment does not
+// run.
+const isolatedAudioBrokerImage = "eclipse-mosquitto:2.0.22"
+
+// startIsolatedAudioBroker gives this test its own Mosquitto container and
+// port, seeded with the exact shipped deploy/mosquitto/mosquitto.conf and
+// acl.conf (ADR-024 decision 10), rather than the shared broker
+// scripts/test-integration.sh starts for the rest of this package. That
+// shared broker is depended on by every other test in this package; this
+// one needs to stop and start a broker container for real, and doing that
+// to the shared instance is what quarantined this test in the first place
+// (see this test's own doc comment).
+//
+// It overrides the package-level brokerURL/mosquittoContainer/
+// testMQTTCoordinatorUsername/testMQTTCoordinatorPassword for the rest of
+// this test's run, so every existing helper (startAgent, startCmdClient,
+// stopBroker, startBroker, subscribeAudioReports, ...) drives this
+// container without any change of its own, and restores the previous
+// values via t.Cleanup so no later test in this package (which does not
+// run in parallel with this one — see provisionMu's doc comment) is
+// affected.
+func startIsolatedAudioBroker(t *testing.T) {
+	t.Helper()
+	requireBroker(t)
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		skipOrFatalDependency(t, depBroker, "docker is not usable, so this test cannot start its own isolated broker: %v", err)
+	}
+
+	root, err := moduleRoot()
+	if err != nil {
+		t.Fatalf("moduleRoot: %v", err)
+	}
+
+	containerName := "showmesh-test-mosquitto-audio-brokerloss-" + uniqueSuffix()
+	port := findFreePort(t)
+	const username = "coordinator"
+	password := "test-" + username + "-" + uniqueSuffix()
+
+	// In case a previous run of this test was interrupted before its own
+	// cleanup ran, matching scripts/test-integration.sh's identical
+	// precaution for the shared container.
+	_ = exec.Command("docker", "rm", "-f", containerName).Run()
+
+	createOut, err := exec.Command("docker", "create",
+		"--name", containerName,
+		"-p", fmt.Sprintf("%d:1883", port),
+		"-v", root+"/deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro",
+		isolatedAudioBrokerImage,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker create %s: %v\n%s", containerName, err, createOut)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", containerName).Run() })
+
+	// password_file is required (mosquitto refuses to start with
+	// allow_anonymous false and no password_file present), so it is seeded
+	// via `docker cp` into the created-but-not-started container, exactly
+	// like scripts/test-integration.sh's identical "seed via docker cp
+	// before start" technique.
+	seedPasswd, err := os.CreateTemp("", "showmesh-audio-brokerloss-passwd-*")
+	if err != nil {
+		t.Fatalf("create temp passwd seed file: %v", err)
+	}
+	seedPasswdPath := seedPasswd.Name()
+	_ = seedPasswd.Close()
+	defer os.Remove(seedPasswdPath)
+
+	if out, err := exec.Command("docker", "run", "--rm",
+		"-v", seedPasswdPath+":/out/passwd",
+		isolatedAudioBrokerImage,
+		"mosquitto_passwd", "-b", "-c", "/out/passwd", username, password,
+	).CombinedOutput(); err != nil {
+		t.Fatalf("mosquitto_passwd -b -c ... %s: %v\n%s", username, err, out)
+	}
+	if out, err := exec.Command("docker", "cp", seedPasswdPath, containerName+":/mosquitto/config/passwd").CombinedOutput(); err != nil {
+		t.Fatalf("docker cp passwd into %s: %v\n%s", containerName, err, out)
+	}
+
+	// The committed acl.conf, unedited: this test only ever authenticates
+	// as the fixed "coordinator" role and its own provisioned per-node
+	// agent credential (via provisionAgentCredential, unchanged), so it
+	// needs no test-only ACL stanza the way the shared broker's burst
+	// publisher does.
+	if out, err := exec.Command("docker", "cp", root+"/deploy/mosquitto/acl.conf", containerName+":/mosquitto/config/acl.generated.conf").CombinedOutput(); err != nil {
+		t.Fatalf("docker cp acl.conf into %s: %v\n%s", containerName, err, out)
+	}
+
+	if out, err := exec.Command("docker", "start", containerName).CombinedOutput(); err != nil {
+		t.Fatalf("docker start %s: %v\n%s", containerName, err, out)
+	}
+
+	prevBrokerURL, prevContainer := brokerURL, mosquittoContainer
+	prevUsername, prevPassword := testMQTTCoordinatorUsername, testMQTTCoordinatorPassword
+	brokerURL = fmt.Sprintf("tcp://localhost:%d", port)
+	mosquittoContainer = containerName
+	testMQTTCoordinatorUsername = username
+	testMQTTCoordinatorPassword = password
+	t.Cleanup(func() {
+		brokerURL, mosquittoContainer = prevBrokerURL, prevContainer
+		testMQTTCoordinatorUsername, testMQTTCoordinatorPassword = prevUsername, prevPassword
+	})
+
+	waitForBrokerTCPUp(t, 15*time.Second)
+}
+
 // TestLocalAudioSessionSurvivesBrokerLoss proves ADR-019's failure-containment intent: a
 // running local session must continue through coordinator/broker loss
 // for media already present, and the FIRST evidence available once the
@@ -223,18 +333,7 @@ func waitForBrokerTCPUp(t *testing.T, timeout time.Duration) {
 // gone — not a resumed-from-scratch session, not a session frozen at the
 // moment of the outage.
 func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
-	// Quarantined: this test stops and restarts the broker container the
-	// rest of this suite shares, and when its restart does not settle in
-	// time the failure cascades into every later broker and ACL test. It
-	// needs its own broker on its own port before it can run here again,
-	// and until then the ADR-019 survives-broker-loss claim it carries is
-	// unproven rather than passing.
-	t.Skip("needs an isolated broker; stopping the shared one cascades into the rest of the suite")
-
-	requireBroker(t)
-	if mosquittoContainer == "" {
-		t.Skipf("%s is not set, so this test cannot stop/start the broker container; run via `make test-integration`", envMosquittoContainer)
-	}
+	startIsolatedAudioBroker(t)
 
 	// A fast report cadence so "the next report after the broker returns"
 	// is a bounded wait rather than the 15s production default.
@@ -248,7 +347,7 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	content, contentHash := writeShortWAV(t, filepath.Join(assetDir, filename), 2.0)
 
 	nodeID := "audio-node-" + uniqueSuffix()
-	startAgent(t, agentConfig{nodeID: nodeID, assetDir: assetDir})
+	agent := startAgent(t, agentConfig{nodeID: nodeID, assetDir: assetDir})
 
 	cli, w := startCmdClient(t, nodeID)
 	// The agent's SUBSCRIBE to its own cmd topic races this function's
@@ -283,6 +382,22 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	// entirely on the agent's own local clock.
 	time.Sleep(4 * time.Second)
 
+	// The audio path does not stop merely because MQTT disconnected: the
+	// agent process is still running (nothing in internal/agent's report
+	// loops or RunWatcher exits or panics on a broker outage), and its own
+	// log shows runAudioReport's ticker kept firing and kept trying to
+	// publish, failing on every attempt only because the broker is
+	// unreachable (audioreport.go's publishAudioPayload logs exactly this
+	// and lets the ticker continue rather than stopping).
+	select {
+	case <-agent.waitDone:
+		t.Fatalf("agent process for node %s exited during the broker outage; the audio path must survive broker loss", nodeID)
+	default:
+	}
+	if !strings.Contains(agent.logs.String(), "audio report publish failed; will retry next tick") {
+		t.Fatalf("agent %s produced no evidence of a continued audio report attempt during the broker outage; log:\n%s", nodeID, agent.logs.String())
+	}
+
 	startBroker(t)
 	waitForBrokerTCPUp(t, 15*time.Second)
 
@@ -301,9 +416,25 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	// The first report to arrive after the broker returns must already
 	// show Completed — proving the transition happened locally, during
 	// the outage, since nothing else could have driven it while the
-	// broker was down.
+	// broker was down. This is also "current telemetry is present again":
+	// this subscription was only opened after the broker was confirmed
+	// reachable, so any report it receives at all is fresh, post-outage
+	// evidence, never a stale or replayed one.
+	var final mqttproto.AudioSessionReport
 	waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
 		p, ok := audioSub.latestFor(sessionID)
-		return ok && p.State == "completed"
+		if !ok || p.State != "completed" {
+			return false
+		}
+		final = p
+		return true
 	}, "session to already report state \"completed\" on the first report after the broker returns")
+
+	// Desired and observed state reconcile: the start command carried
+	// revision 2 (startSessionCmd), and the completed session's own
+	// DesiredRevision must show the agent settled on it rather than being
+	// stuck on the outage-time value.
+	if final.DesiredRevision != 2 {
+		t.Fatalf("completed session reports DesiredRevision = %d, want 2 (desired/observed did not reconcile)", final.DesiredRevision)
+	}
 }
