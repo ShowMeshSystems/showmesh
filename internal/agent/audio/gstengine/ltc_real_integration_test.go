@@ -229,6 +229,48 @@ func measureProgramRate(t *testing.T, e *Engine, window time.Duration) float64 {
 	return advanced.Seconds() / wallElapsed.Seconds()
 }
 
+// measureProgramRateFromStart is [measureProgramRate] without the initial
+// wait for position to pass 100ms: the window starts at the Start call
+// itself, so a bounded catch-up burst right after Start falls inside the
+// measured window instead of settling out before measurement begins.
+func measureProgramRateFromStart(t *testing.T, e *Engine, window time.Duration) float64 {
+	t.Helper()
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, window.Seconds()+3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "ratefromstart", mediaRef(wav), window+3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	wallStart := time.Now()
+	if _, err := e.Start(ctx, "ratefromstart", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	startObs, err := e.Observe(ctx, "ratefromstart")
+	if err != nil {
+		t.Fatalf("Observe (start): %v", err)
+	}
+
+	if remaining := window - time.Since(wallStart); remaining > 0 {
+		time.Sleep(remaining)
+	}
+
+	endObs, err := e.Observe(ctx, "ratefromstart")
+	if err != nil {
+		t.Fatalf("Observe (end): %v", err)
+	}
+	wallElapsed := time.Since(wallStart)
+	advanced := endObs.Position - startObs.Position
+
+	_ = e.Release(context.Background(), "ratefromstart")
+
+	return advanced.Seconds() / wallElapsed.Seconds()
+}
+
 // TestLTCConfiguredDoesNotSlowProgramPlayback proves an LTC channel never
 // slows the shared output pipeline's program branches, whether or not a
 // run is active.
@@ -256,6 +298,31 @@ func TestLTCConfiguredDoesNotSlowProgramPlayback(t *testing.T) {
 
 		rate := measureProgramRate(t, e, window)
 		t.Logf("program rate, LTC running: %.4f", rate)
+		if rate < minRate || rate > maxRate {
+			t.Fatalf("program rate = %.4f, want within [%.2f, %.2f] of real time", rate, minRate, maxRate)
+		}
+	})
+
+	t.Run("no LTC run started, measured from Start", func(t *testing.T) {
+		e := newLTCTestEngine(t)
+		rate := measureProgramRateFromStart(t, e, window)
+		t.Logf("program rate from Start, LTCChannel configured, no run started: %.4f", rate)
+		if rate < minRate || rate > maxRate {
+			t.Fatalf("program rate = %.4f, want within [%.2f, %.2f] of real time", rate, minRate, maxRate)
+		}
+	})
+
+	t.Run("LTC running, measured from Start", func(t *testing.T) {
+		e := newLTCTestEngine(t)
+		ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+		defer cancel()
+		if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate25, StartTimecode: "00:00:00:00"}); err != nil {
+			t.Fatalf("StartLTC: %v", err)
+		}
+		waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+		rate := measureProgramRateFromStart(t, e, window)
+		t.Logf("program rate from Start, LTC running: %.4f", rate)
 		if rate < minRate || rate > maxRate {
 			t.Fatalf("program rate = %.4f, want within [%.2f, %.2f] of real time", rate, minRate, maxRate)
 		}
