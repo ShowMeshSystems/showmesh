@@ -43,14 +43,17 @@ func startPlaying(t *testing.T, m *Manager, ctx context.Context, id pkgaudio.Ses
 	}
 }
 
-// mutation target: Manager.Apply's interrupt refusal. Flip the equality
-// check to always-false (or delete it) and this test starts passing on
-// an accepted apply instead of a refusal.
-func TestApplyRefusesInterruptMixPolicy(t *testing.T) {
+// mutation target: Manager.Apply's "unsupported" mix policy refusal. Flip
+// the equality check to always-false (or delete it) and this test starts
+// passing on an accepted apply instead of a refusal. "unsupported" only
+// ever appears in an adapter's own capability report; a session may never
+// desire it, unlike duck/mix/interrupt, which are all real, requestable
+// policies now.
+func TestApplyRefusesUnsupportedMixPolicy(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
-	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyInterrupt)}
+	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyUnsupported)}
 
 	r := m.Apply(ctx, "ann", "inv-1", 1, req)
 	if r.Outcome != pkgaudio.OutcomeRefused {
@@ -58,6 +61,21 @@ func TestApplyRefusesInterruptMixPolicy(t *testing.T) {
 	}
 	if r.Reason == "" {
 		t.Fatal("refusal must carry a reason")
+	}
+}
+
+// mutation target: Manager.Apply must accept all three real mix policies.
+// This is the negative space of the refusal above: interrupt must reach
+// desired state rather than being refused.
+func TestApplyAcceptsInterruptMixPolicy(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyInterrupt)}
+
+	r := m.Apply(ctx, "ann", "inv-1", 1, req)
+	if r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("outcome = %+v, want interrupt accepted", r)
 	}
 }
 
