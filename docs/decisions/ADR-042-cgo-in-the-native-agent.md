@@ -37,7 +37,7 @@ So the channel always produces, silence when no run is active and LTC when one i
 
 ### 4. Liveness is evidence that samples were emitted, never that a run was requested
 
-A run that was asked for and has produced nothing is not `running`. The reported timecode belongs to samples the pipeline has confirmed consuming, not to samples merely handed to a queue, because a full queue can accept and discard in the same call. A stopped generator reports no timecode at all rather than carrying its last one forward. This is the same rule that took four subsystems to learn: absence of evidence is not evidence of absence, and its mirror, a request is not an outcome.
+A run that was asked for and has produced nothing is not `running`. Handing a buffer to a queue is not evidence, because a full queue can accept and discard in the same call; the evidence is that a buffer carrying the current run's identity was observed leaving the generator's own chain. That is short of proof the sink consumed it, and this record claims no more than the probe shows. A stopped generator reports no timecode at all rather than carrying its last one forward. This is the same rule that took four subsystems to learn: absence of evidence is not evidence of absence, and its mirror, a request is not an outcome.
 
 ### 5. An LTC failure never stops program audio
 
@@ -48,5 +48,5 @@ If the encoder cannot be created or a run cannot start, the failure is reported 
 - The agent's build dependencies gain `libltc-dev` alongside the GStreamer development headers; Debian 13 runtime gains `libltc11`. No ShowMesh LTC generator executable exists, is built, or is packaged.
 - The agent requires GLib 2.80 or newer, measured: it does not build on Debian 12.
 - `make build` produces every binary with `CGO_ENABLED=0`, so the agent has its own native build target; a build that forgets it compiles the audio engine out and the node reports itself honestly unable to play anything.
-- One LTC run exists per node, and it is never taken from a session that still holds it: silently re-anchoring a running show's timecode is worse than a second show session having none, and the refusal is stated.
+- One LTC run exists per node, and it is never taken from a session that still holds it: silently re-anchoring a running show's timecode is worse than a second show session having none. The refusal currently reaches the node's log and no operator surface, which is a known gap rather than the intended end state.
 - Nothing here is evidence about sound. Every gate behind this record runs against a non-hardware sink; the interface, the channel discreteness, and the program-to-LTC alignment stay commissioning measurements.
