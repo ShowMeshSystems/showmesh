@@ -313,8 +313,25 @@ func TestSeekReanchorsPosition(t *testing.T) {
 	_ = e.Release(context.Background(), "s1")
 }
 
+// TestFadeReachesTargetGain proves a fade started on a branch that
+// joined well after the engine came up still completes on the duration
+// passed to Fade, and FadeActive reflects that ramp rather than wall time.
 func TestFadeReachesTargetGain(t *testing.T) {
-	e := newTestEngine(t)
+	const engineUptime = 4 * time.Second
+	const fadeDuration = 400 * time.Millisecond
+	const checkAfter = 900 * time.Millisecond
+
+	e, err := New(testConfig(resolveByRuntimeFilename))
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	if ok, reason := e.Available(); !ok {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	time.Sleep(engineUptime)
+
 	dir := t.TempDir()
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
@@ -329,7 +346,7 @@ func TestFadeReachesTargetGain(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	fadeObs, err := e.Fade(ctx, "f1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: 400 * time.Millisecond, TargetGain: 0.25})
+	fadeObs, err := e.Fade(ctx, "f1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0.25})
 	if err != nil {
 		t.Fatalf("Fade: %v", err)
 	}
@@ -337,16 +354,16 @@ func TestFadeReachesTargetGain(t *testing.T) {
 		t.Fatalf("immediately after Fade: FadeActive = false, want true")
 	}
 
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(checkAfter)
 	obs, err := e.Observe(ctx, "f1")
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
 	if obs.FadeActive {
-		t.Fatalf("700ms after a 400ms fade: FadeActive = true, want false")
+		t.Fatalf("%s after a %s fade started on a branch that joined at %s uptime: FadeActive = true, want false", checkAfter, fadeDuration, engineUptime)
 	}
 	if obs.Gain < 0.20 || obs.Gain > 0.30 {
-		t.Fatalf("gain after fade completion = %v, want close to 0.25 (no 10x scale defect)", obs.Gain)
+		t.Fatalf("gain after fade completion = %v, want close to 0.25", obs.Gain)
 	}
 
 	_ = e.Release(context.Background(), "f1")
@@ -609,6 +626,177 @@ func TestLateJoiningBranchPlaysFromOwnStartPosition(t *testing.T) {
 			_ = e.Release(context.Background(), "late")
 		})
 	}
+}
+
+// TestStartAfterLoadGapPlaysFromNamedPosition proves Start begins
+// producing from the position it names at the moment it is called, not
+// from wherever the branch had drifted to while loaded and frozen.
+func TestStartAfterLoadGapPlaysFromNamedPosition(t *testing.T) {
+	const loadToStartGap = 3 * time.Second
+	const settleWait = 800 * time.Millisecond
+	const passBound = 2 * time.Second
+
+	cases := []struct {
+		name    string
+		startAt time.Duration
+	}{
+		{"zero position", 0},
+		{"non-zero position", 2 * time.Second},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t)
+			dir := t.TempDir()
+			wav := filepath.Join(dir, "fixture.wav")
+			generateWAV(t, wav, 8)
+
+			ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+			defer cancel()
+
+			if _, err := e.Load(ctx, "gap", mediaRef(wav), 8*time.Second); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			time.Sleep(loadToStartGap)
+
+			if _, err := e.Start(ctx, "gap", tc.startAt); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			time.Sleep(settleWait)
+
+			obs, err := e.Observe(ctx, "gap")
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			elapsedSinceStart := obs.Position - tc.startAt
+			if elapsedSinceStart >= passBound {
+				t.Fatalf("position %s is %s past the named start position %s; the Load-to-Start gap folded in", obs.Position, elapsedSinceStart, tc.startAt)
+			}
+			if elapsedSinceStart < settleWait/2 {
+				t.Fatalf("position %s did not advance from the named start position after Start", obs.Position)
+			}
+
+			_ = e.Release(context.Background(), "gap")
+		})
+	}
+}
+
+// TestRepeatStartWhilePlayingReanchorsToNamedPosition proves a repeat
+// Start on an already-playing branch, at a non-zero position, seeks and
+// re-anchors to that position rather than being a no-op.
+func TestRepeatStartWhilePlayingReanchorsToNamedPosition(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "r1", mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "r1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "r1", 500*time.Millisecond, 5*time.Second)
+
+	const target = 3 * time.Second
+	obs, err := e.Start(ctx, "r1", target)
+	if err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if obs.Position < target-200*time.Millisecond || obs.Position > target+900*time.Millisecond {
+		t.Fatalf("position %s immediately after a repeat Start to %s; want close to the named position", obs.Position, target)
+	}
+
+	_ = e.Release(context.Background(), "r1")
+}
+
+// TestResumeReanchorsAfterPause proves Resume re-invokes resyncMixerPads
+// by checking playback resumes tightly from where Pause left it, rather
+// than from a stale offset Start or a previous Resume set.
+func TestResumeReanchorsAfterPause(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "res1", mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "res1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "res1", 200*time.Millisecond, 5*time.Second)
+
+	pauseObs, err := e.Pause(ctx, "res1")
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	frozenAt := pauseObs.Position
+
+	if _, err := e.Resume(ctx, "res1"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	const settleWait = 300 * time.Millisecond
+	time.Sleep(settleWait)
+
+	obs, err := e.Observe(ctx, "res1")
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	elapsedSinceResume := obs.Position - frozenAt
+	if elapsedSinceResume < settleWait/2 || elapsedSinceResume > settleWait+500*time.Millisecond {
+		t.Fatalf("position %s is %s from where Pause left it after a %s settle; want tight to elapsed play time", obs.Position, elapsedSinceResume, settleWait)
+	}
+
+	_ = e.Release(context.Background(), "res1")
+}
+
+// TestSeekAfterGapReanchors proves Seek re-anchors the mixer offset
+// against the pipeline's current running time at the moment of the seek,
+// not the one in effect when the branch started.
+func TestSeekAfterGapReanchors(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "sk1", mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "sk1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	const preSeekGap = 3 * time.Second
+	time.Sleep(preSeekGap)
+
+	target := 1 * time.Second
+	if _, err := e.Seek(ctx, "sk1", target); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+
+	const settleWait = 500 * time.Millisecond
+	time.Sleep(settleWait)
+
+	obs, err := e.Observe(ctx, "sk1")
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	elapsedSinceSeek := obs.Position - target
+	if elapsedSinceSeek >= preSeekGap {
+		t.Fatalf("position %s is %s past the seek target %s; pipeline uptime folded in on Seek", obs.Position, elapsedSinceSeek, target)
+	}
+
+	_ = e.Release(context.Background(), "sk1")
 }
 
 // TestConcurrentBranchesStartedAtDifferentTimesEachReportOwnPosition

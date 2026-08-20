@@ -62,9 +62,13 @@ type branch struct {
 	// resumed position into the shared pipeline's running time.
 	segmentStart time.Duration
 
-	fadeActive    bool
-	fadeStartedAt time.Time
-	fadeDuration  time.Duration
+	fadeActive bool
+	// fadeStartLocal is the branch-local running time (see localRunningTime)
+	// the fade's control points were set against, not a wall-clock time:
+	// the GstController driving b.volume is synced against buffer running
+	// time, not real time.
+	fadeStartLocal time.Duration
+	fadeDuration   time.Duration
 
 	released bool
 }
@@ -270,6 +274,21 @@ func (b *branch) queryPosition() time.Duration {
 	return time.Duration(ns)
 }
 
+// localRunningTime returns atPos translated into the running time this
+// branch's own elements (everything upstream of the mixer sink pads, the
+// volume element included) actually run on: elapsed time since the
+// current segment began, unaffected by resyncMixerPads' pad offset.
+func (b *branch) localRunningTime(atPos time.Duration) time.Duration {
+	b.mu.Lock()
+	segmentStart := b.segmentStart
+	b.mu.Unlock()
+	local := atPos - segmentStart
+	if local < 0 {
+		local = 0
+	}
+	return local
+}
+
 // resyncMixerPads re-anchors every channel mixer sink pad this branch
 // feeds so the next buffer, carrying atPos in the branch's own segment,
 // lands at the shared pipeline's current running time rather than in
@@ -281,10 +300,7 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 	if target == gst.ClockTimeNone {
 		target = 0
 	}
-	b.mu.Lock()
-	local := atPos - b.segmentStart
-	b.mu.Unlock()
-	offset := int64(target) - local.Nanoseconds()
+	offset := int64(target) - b.localRunningTime(atPos).Nanoseconds()
 	for _, pad := range b.channelMixerPads {
 		if pad != nil {
 			pad.SetOffset(offset)
@@ -302,10 +318,13 @@ func (b *branch) currentGain() pkgaudio.Gain {
 // which must be called strictly after any state-changing action this
 // observation reports on.
 func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
+	pos := b.queryPosition()
+	local := b.localRunningTime(pos)
+
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && now.Sub(b.fadeStartedAt) >= b.fadeDuration {
+	if fadeActive && local-b.fadeStartLocal >= b.fadeDuration {
 		fadeActive = false
 		b.fadeActive = false
 	}
@@ -313,7 +332,7 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 
 	return agentaudio.EngineObservation{
 		State:      state,
-		Position:   b.queryPosition(),
+		Position:   pos,
 		ObservedAt: now,
 		Gain:       b.currentGain(),
 		FadeActive: fadeActive,
@@ -345,7 +364,7 @@ func (b *branch) unfreeze() {
 // latter maps a 0..1 control value onto the property's full 0..10 range
 // and turns a requested gain of 1.0 into a 10x boost (measured in the
 // phase 1 spike, bench/audio-node/spike-phase1).
-func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime gst.ClockTime) error {
+func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime time.Duration) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -361,8 +380,9 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime gst.ClockTime) er
 	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
 
 	start := float64(b.currentGain())
-	tvcs.Set(baseRunningTime, start)
-	tvcs.Set(baseRunningTime+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
+	base := gst.ClockTime(baseRunningTime.Nanoseconds())
+	tvcs.Set(base, start)
+	tvcs.Set(base+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
 
 	binding := gstcontroller.NewDirectControlBindingAbsolute(volObj, "volume", cs)
 	if !volObj.AddControlBinding(binding) {
@@ -371,7 +391,7 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime gst.ClockTime) er
 
 	b.mu.Lock()
 	b.fadeActive = true
-	b.fadeStartedAt = b.engine.cfg.now()
+	b.fadeStartLocal = baseRunningTime
 	b.fadeDuration = fade.Duration
 	b.mu.Unlock()
 	return nil
