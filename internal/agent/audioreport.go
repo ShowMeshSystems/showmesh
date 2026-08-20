@@ -22,22 +22,20 @@ type audioSessionSnapshotter interface {
 	Snapshot(ctx context.Context) []audio.SessionSnapshot
 }
 
-// ltcGeneratorSnapshotter is the read side of an [audio.LTCGenerator] this
-// package needs: fresh liveness evidence on every tick, never a command
-// path — matching audioSessionSnapshotter's identical shape. A nil
-// snapshotter reports node.audio.ltc.generator.state "stopped" with a
-// stated reason, never omits the four LTC generator signals: an absent
-// field renders as blank and blank reads as fine (ADR-011).
-type ltcGeneratorSnapshotter interface {
-	Snapshot() audio.LTCGeneratorSnapshot
+// ltcObserver is the read side of this node's LTC generation — fresh
+// evidence on every tick, never a command path, matching
+// audioSessionSnapshotter's identical shape. A nil observer reports
+// node.audio.ltc.generator.state "unsupported" with a stated reason and
+// never omits the four LTC signals: an absent field renders as blank and
+// blank reads as fine (ADR-011).
+type ltcObserver interface {
+	ObserveLTC(ctx context.Context) audio.LTCObservation
 }
 
-// noLTCGeneratorReason is what a nil ltcGeneratorSnapshotter reports —
-// distinct from [audio.LTCGeneratorStopped]'s own "never started" reason,
-// because "no generator is wired into this report loop at all" and "one is
-// wired but has never been told to run" are different facts an operator
-// debugging silent timecode loss needs told apart.
-const noLTCGeneratorReason = "no LTC generator is configured on this node"
+// noLTCObserverReason is what a nil ltcObserver reports: no LTC source is
+// wired into this report loop at all, which is a different fact from an
+// engine that cannot generate LTC.
+const noLTCObserverReason = "no LTC source is wired into this node's audio report"
 
 // runAudioReport publishes this node's audio report to nodeID's
 // observed/audio topic on every tick received from ticks. Hardware
@@ -51,9 +49,9 @@ const noLTCGeneratorReason = "no LTC generator is configured on this node"
 // (audioops.go), which probes one named device and is unrelated to this
 // cache.
 //
-// Session and LTC generator telemetry are the opposite: mgr and ltcGen,
-// when non-nil, are asked for fresh evidence on every tick, because a
-// session's state, position, and fault, and a generator's liveness, are
+// Session and LTC telemetry are the opposite: mgr and ltc, when non-nil,
+// are asked for fresh evidence on every tick, because a session's state,
+// position, and fault, and whether LTC is actually being emitted, are
 // live facts a cache would make stale evidence look current. That live
 // evidence is stamped with its own tick time in
 // [mqttproto.AudioPayload.ObservedAt] — distinct from DiscoveredAt so
@@ -63,7 +61,7 @@ const noLTCGeneratorReason = "no LTC generator is configured on this node"
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
 // contract.
-func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltcGen ltcGeneratorSnapshotter, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
+func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltc ltcObserver, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "audio")
 	if err != nil {
 		// nodeID is validated at config load, matching runRenderReport's
@@ -87,35 +85,35 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			tickAt := now()
 			payload.ObservedAt = &tickAt
 			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
-			applyLTCGeneratorSnapshot(&payload, ltcGen)
+			applyLTCObservation(ctx, &payload, ltc)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
 }
 
-// applyLTCGeneratorSnapshot writes ltcGen's current state onto payload's
-// four LTC generator fields, fresh on every call — the same "live, never
-// cached" rule [buildAudioSessionReports] follows and for the identical
-// reason: generator liveness must never be inferred from anything cached.
-func applyLTCGeneratorSnapshot(payload *mqttproto.AudioPayload, ltcGen ltcGeneratorSnapshotter) {
-	if ltcGen == nil {
-		payload.LTCGeneratorState = string(audio.LTCGeneratorStopped)
-		payload.LTCGeneratorReason = noLTCGeneratorReason
+// applyLTCObservation writes ltc's current evidence onto payload's four
+// LTC fields, fresh on every call — the same "live, never cached" rule
+// [buildAudioSessionReports] follows and for the identical reason: LTC
+// liveness must never be inferred from anything cached.
+func applyLTCObservation(ctx context.Context, payload *mqttproto.AudioPayload, ltc ltcObserver) {
+	if ltc == nil {
+		payload.LTCGeneratorState = string(audio.LTCUnsupported)
+		payload.LTCGeneratorReason = noLTCObserverReason
 		return
 	}
-	snap := ltcGen.Snapshot()
-	payload.LTCGeneratorState = string(snap.State)
+	obs := ltc.ObserveLTC(ctx)
+	payload.LTCGeneratorState = string(obs.State)
 	payload.LTCGeneratorReason = ""
-	if snap.State != audio.LTCGeneratorRunning {
-		payload.LTCGeneratorReason = snap.Reason
+	if obs.State != audio.LTCRunning {
+		payload.LTCGeneratorReason = obs.Reason
 	}
-	if snap.FrameRateKnown {
+	if obs.FrameRateKnown {
 		payload.LTCFrameRateKnown = true
-		payload.LTCFrameRate = string(snap.FrameRate)
+		payload.LTCFrameRate = string(obs.FrameRate)
 	}
-	if snap.TimecodeKnown {
+	if obs.TimecodeKnown {
 		payload.LTCTimecodeKnown = true
-		payload.LTCTimecode = string(snap.Timecode)
+		payload.LTCTimecode = string(obs.Timecode)
 	}
 }
 
@@ -242,12 +240,12 @@ func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPay
 		ObservedAt:               &probedAt,
 		Sessions:                 []mqttproto.AudioSessionReport{},
 		// Discovery-time default, self-consistent on its own — a caller
-		// that never wires an [audio.LTCGenerator] (or calls this
-		// function directly, as this file's own tests do) still gets a
-		// payload that passes [mqttproto.AudioPayload.Validate]. Every
-		// per-tick publish overwrites this via [applyLTCGeneratorSnapshot].
-		LTCGeneratorState:  string(audio.LTCGeneratorStopped),
-		LTCGeneratorReason: noLTCGeneratorReason,
+		// that never wires an [ltcObserver] (or calls this function
+		// directly, as this file's own tests do) still gets a payload
+		// that passes [mqttproto.AudioPayload.Validate]. Every per-tick
+		// publish overwrites this via [applyLTCObservation].
+		LTCGeneratorState:  string(audio.LTCUnsupported),
+		LTCGeneratorReason: noLTCObserverReason,
 	}
 	if !p.EngineAvailable && p.EngineReason == "" {
 		p.EngineReason = "audio engine probe did not reach PLAYING"

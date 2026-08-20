@@ -216,10 +216,6 @@ func Run() int {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})
 
-	// Constructed unconditionally so node.audio.ltc.* reports real
-	// evidence rather than an absent signal, but never started here:
-	// nothing yet decides when a node should generate LTC.
-	ltcGen := audio.NewLTCGenerator(time.Now, nil)
 	if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
 	}
@@ -278,7 +274,7 @@ func Run() int {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, ltcGen, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, nil, time.Now, ticker.C, logger)
 	}()
 
 	<-sigCtx.Done()
@@ -317,10 +313,6 @@ func Run() int {
 	// is deliberately after the shutdown-signal handling above and before
 	// the MQTT offline publish, so it happens on every clean exit path.
 	sup.Shutdown(shutdownCtx)
-
-	// Same rule for the LTC generator: never leave an orphaned process
-	// behind, whether or not it was ever actually started.
-	ltcGen.Shutdown(shutdownCtx)
 
 	shutdownCleanly(shutdownCtx, conn, cfg.NodeID, logger)
 
