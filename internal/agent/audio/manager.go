@@ -470,7 +470,7 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 	defer s.mu.Unlock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
-		return m.gateAvailability(s.advanceLocked(ctx, true))
+		return m.gateAvailability(s.advanceLocked(ctx, true, time.Time{}))
 	})
 	return res.outcome
 }
@@ -499,6 +499,7 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		if !s.handleLoaded {
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
+			s.setGapUnknownLocked("session is stopped")
 			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 		}
@@ -524,6 +525,7 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
 	// Released on the attempt, not on confirmation: a stuck duck is
@@ -555,6 +557,7 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 		s.currentIndex = -1
 		s.currentItemID = ""
 		s.bookmark = nil
+		s.setGapUnknownLocked("session was cleared")
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
 	s.mu.Unlock()
