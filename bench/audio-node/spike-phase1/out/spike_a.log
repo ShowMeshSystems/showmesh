@@ -1,0 +1,5 @@
+waitState ret: StatePlaying
+buffers before second branch: 51
+buffers after add, before remove: 101 delta since add: 50
+buffers after remove: 150 delta since remove: 49
+RESULT a: PASS - mix kept producing buffers before, during, and after dynamic add/remove

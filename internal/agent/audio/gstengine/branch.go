@@ -1,0 +1,358 @@
+//go:build cgo
+
+package gstengine
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/go-gst/go-gst/pkg/gst"
+	"github.com/go-gst/go-gst/pkg/gstcontroller"
+
+	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+)
+
+// branch is one session's playback chain: a flat set of elements living
+// directly in the engine's single output pipeline, from a file source
+// through decode to one request pad on each of the program channel
+// mixers it feeds. There is no per-branch sub-pipeline and no ghost pad —
+// everything is a direct sibling in the same top-level bin, which is what
+// lets a branch's pads link straight to the shared channel mixers.
+type branch struct {
+	id     uint64
+	engine *Engine
+
+	filesrc       gst.Element
+	decodebin     gst.Element
+	audioconvert  gst.Element
+	audioresample gst.Element
+	capsfilter    gst.Element
+	volume        gst.Element
+	queue         gst.Element
+	deinterleave  gst.Element
+
+	filesrcName   string
+	decodebinName string
+
+	channelMixerPads []gst.Pad // index k links to engine.channelMixers[k]
+	linkedCount      atomic.Int32
+
+	readyCh   chan struct{}
+	readyOnce sync.Once
+	loadErrCh chan error
+
+	eosCh   chan struct{}
+	eosOnce sync.Once
+
+	media    pkgaudio.MediaRef
+	duration time.Duration
+
+	mu       sync.Mutex
+	state    pkgaudio.State
+	frozen   bool // true when Position must come from frozenPosition, not a live query
+	frozenAt time.Duration
+
+	fadeActive    bool
+	fadeStartedAt time.Time
+	fadeDuration  time.Duration
+
+	released bool
+}
+
+// elements returns every GStreamer element this branch owns, in link
+// order, for state changes and teardown.
+func (b *branch) elements() []gst.Element {
+	return []gst.Element{
+		b.filesrc, b.decodebin, b.audioconvert, b.audioresample,
+		b.capsfilter, b.volume, b.queue, b.deinterleave,
+	}
+}
+
+// isAudioPad reports whether pad's negotiated or proposed caps name an
+// audio media type — decodebin can add a video pad for a file that
+// carries one, and only the audio pad belongs in this chain.
+func isAudioPad(pad gst.Pad) bool {
+	caps := pad.GetCurrentCaps()
+	if caps == nil {
+		caps = pad.QueryCaps(nil)
+	}
+	if caps == nil || caps.GetSize() == 0 {
+		return false
+	}
+	name := caps.GetStructure(0).GetName()
+	return len(name) >= 5 && name[:5] == "audio"
+}
+
+// build constructs and links every element this branch owns except the
+// dynamic pads decodebin and deinterleave create once they know their
+// input: filesrc/decodebin's audio pad links to audioconvert as soon as
+// it appears, and each of deinterleave's N mono src pads links to its
+// program channel's mixer as soon as it appears. Both are wired here via
+// pad-added callbacks; build itself only returns once every element is
+// created, added to the pipeline, and every static-pad link is made.
+func (b *branch) build(path string) error {
+	e := b.engine
+	n := len(e.cfg.ProgramChannels)
+
+	name := func(role string) string { return fmt.Sprintf("h%d-%s", b.id, role) }
+	b.filesrcName = name("filesrc")
+	b.decodebinName = name("decodebin")
+	e.indexBranch(b)
+
+	b.filesrc = gst.ElementFactoryMake("filesrc", b.filesrcName)
+	b.decodebin = gst.ElementFactoryMake("decodebin", b.decodebinName)
+	b.audioconvert = gst.ElementFactoryMake("audioconvert", name("audioconvert"))
+	b.audioresample = gst.ElementFactoryMake("audioresample", name("audioresample"))
+	b.capsfilter = gst.ElementFactoryMake("capsfilter", name("capsfilter"))
+	b.volume = gst.ElementFactoryMake("volume", name("volume"))
+	b.queue = gst.ElementFactoryMake("queue", name("queue"))
+	b.deinterleave = gst.ElementFactoryMake("deinterleave", name("deinterleave"))
+	for _, el := range b.elements() {
+		if el == nil {
+			return fmt.Errorf("gstengine: could not construct a branch element (registry check at construction should have caught this)")
+		}
+	}
+
+	b.filesrc.SetObjectProperty("location", path)
+	b.capsfilter.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", e.cfg.SampleRate, n)))
+	b.volume.SetObjectProperty("volume", 1.0)
+
+	bin, ok := e.pipeline.(gst.Bin)
+	if !ok {
+		return fmt.Errorf("gstengine: engine pipeline is not a gst.Bin")
+	}
+	for _, el := range b.elements() {
+		if !bin.Add(el) {
+			return fmt.Errorf("gstengine: could not add branch element %q to pipeline", el.GetName())
+		}
+	}
+	if !b.filesrc.Link(b.decodebin) {
+		return fmt.Errorf("gstengine: could not link filesrc to decodebin")
+	}
+	if !b.audioconvert.Link(b.audioresample) || !b.audioresample.Link(b.capsfilter) ||
+		!b.capsfilter.Link(b.volume) || !b.volume.Link(b.queue) || !b.queue.Link(b.deinterleave) {
+		return fmt.Errorf("gstengine: could not link branch decode chain")
+	}
+
+	b.channelMixerPads = make([]gst.Pad, n)
+	for k := 0; k < n; k++ {
+		pad := e.channelMixers[k].RequestPadSimple("sink_%u")
+		if pad == nil {
+			return fmt.Errorf("gstengine: channel mixer %d refused a sink pad request", k)
+		}
+		b.channelMixerPads[k] = pad
+	}
+
+	b.readyCh = make(chan struct{})
+	b.loadErrCh = make(chan error, 1)
+	b.eosCh = make(chan struct{})
+
+	b.decodebin.Connect("pad-added", func(self gst.Element, pad gst.Pad) {
+		if !isAudioPad(pad) {
+			return
+		}
+		sinkPad := b.audioconvert.GetStaticPad("sink")
+		if sinkPad.IsLinked() {
+			return
+		}
+		if pad.Link(sinkPad) != gst.PadLinkOK {
+			select {
+			case b.loadErrCh <- fmt.Errorf("%w: decodebin produced an audio pad that would not link", pkgaudio.ErrEngineDecodeFailure):
+			default:
+			}
+		}
+	})
+
+	b.deinterleave.Connect("pad-added", func(self gst.Element, pad gst.Pad) {
+		idx, ok := deinterleavePadIndex(pad.GetName())
+		if !ok || idx < 0 || idx >= n {
+			return
+		}
+		if pad.Link(b.channelMixerPads[idx]) != gst.PadLinkOK {
+			select {
+			case b.loadErrCh <- fmt.Errorf("%w: deinterleave output %d would not link to its channel mixer", pkgaudio.ErrEngineDecodeFailure, idx):
+			default:
+			}
+			return
+		}
+		if b.linkedCount.Add(1) == int32(n) {
+			b.readyOnce.Do(func() { close(b.readyCh) })
+		}
+	})
+
+	// Watch this branch's own contribution to the mix for its natural
+	// end: an EOS event on the queue's src pad is this branch finishing
+	// on its own, distinct from a pipeline-wide EOS this engine never
+	// expects to see (the shared output pipeline never runs out of
+	// input — silence and other branches keep it alive).
+	b.queue.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		ev := info.GetEvent()
+		if ev != nil && ev.GetType() == gst.EventEOS {
+			b.onEOS()
+		}
+		return gst.PadProbeOK
+	})
+
+	return nil
+}
+
+// deinterleavePadIndex parses deinterleave's "src_%u" pad name into its
+// numeric channel index.
+func deinterleavePadIndex(name string) (int, bool) {
+	const prefix = "src_"
+	if len(name) <= len(prefix) || name[:len(prefix)] != prefix {
+		return 0, false
+	}
+	var n int
+	for _, c := range name[len(prefix):] {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
+func (b *branch) reportLoadError(err error) {
+	select {
+	case b.loadErrCh <- err:
+	default:
+	}
+}
+
+func (b *branch) onEOS() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state == pkgaudio.StateStopped || b.state == pkgaudio.StateCompleted {
+		return
+	}
+	b.state = pkgaudio.StateCompleted
+	b.frozen = true
+	b.frozenAt = b.duration
+	b.eosOnce.Do(func() { close(b.eosCh) })
+}
+
+// setElementsState sets every branch element to state, bounded by ctx.
+func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
+	return boundedCall(ctx, func() error {
+		for _, el := range b.elements() {
+			if el.SetState(state) == gst.StateChangeFailure {
+				return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
+			}
+		}
+		return nil
+	})
+}
+
+// queryPosition returns the branch's live decode position, or the last
+// frozen position when the branch is not actively producing data.
+func (b *branch) queryPosition() time.Duration {
+	b.mu.Lock()
+	frozen, frozenAt := b.frozen, b.frozenAt
+	b.mu.Unlock()
+	if frozen {
+		return frozenAt
+	}
+	ns, ok := b.decodebin.QueryPosition(gst.FormatTime)
+	if !ok || ns < 0 {
+		return frozenAt
+	}
+	return time.Duration(ns)
+}
+
+func (b *branch) currentGain() pkgaudio.Gain {
+	v := b.volume.(gst.Object).ObjectProperty("volume")
+	f, _ := v.(float64)
+	return pkgaudio.Gain(f)
+}
+
+// observe collects a fresh [agentaudio.EngineObservation] as of now,
+// which must be called strictly after any state-changing action this
+// observation reports on.
+func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
+	b.mu.Lock()
+	state := b.state
+	fadeActive := b.fadeActive
+	if fadeActive && now.Sub(b.fadeStartedAt) >= b.fadeDuration {
+		fadeActive = false
+		b.fadeActive = false
+	}
+	b.mu.Unlock()
+
+	return agentaudio.EngineObservation{
+		State:      state,
+		Position:   b.queryPosition(),
+		ObservedAt: now,
+		Gain:       b.currentGain(),
+		FadeActive: fadeActive,
+	}
+}
+
+func (b *branch) setState(s pkgaudio.State) {
+	b.mu.Lock()
+	b.state = s
+	b.mu.Unlock()
+}
+
+func (b *branch) freezeAt(pos time.Duration) {
+	b.mu.Lock()
+	b.frozen = true
+	b.frozenAt = pos
+	b.mu.Unlock()
+}
+
+func (b *branch) unfreeze() {
+	b.mu.Lock()
+	b.frozen = false
+	b.mu.Unlock()
+}
+
+// gstController is the pair a Fade dispatches: a fresh interpolation
+// source and the absolute binding driving b.volume's "volume" property
+// from it. NewDirectControlBindingAbsolute is required, not New() — the
+// latter maps a 0..1 control value onto the property's full 0..10 range
+// and turns a requested gain of 1.0 into a 10x boost (measured in the
+// phase 1 spike, bench/audio-node/spike-phase1).
+func (b *branch) startFade(fade pkgaudio.Fade, baseRunningTime gst.ClockTime) error {
+	volObj := b.volume.(gst.Object)
+	volObj.SetControlBindingDisabled("volume", false)
+
+	cs := gstcontroller.NewInterpolationControlSource()
+	tvcs, ok := cs.(gstcontroller.TimedValueControlSource)
+	if !ok {
+		return fmt.Errorf("gstengine: interpolation control source does not implement TimedValueControlSource")
+	}
+	csObj, ok := cs.(gst.Object)
+	if !ok {
+		return fmt.Errorf("gstengine: interpolation control source does not implement gst.Object")
+	}
+	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
+
+	start := float64(b.currentGain())
+	tvcs.Set(baseRunningTime, start)
+	tvcs.Set(baseRunningTime+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
+
+	binding := gstcontroller.NewDirectControlBindingAbsolute(volObj, "volume", cs)
+	if !volObj.AddControlBinding(binding) {
+		return fmt.Errorf("gstengine: could not attach fade control binding")
+	}
+
+	b.mu.Lock()
+	b.fadeActive = true
+	b.fadeStartedAt = b.engine.cfg.now()
+	b.fadeDuration = fade.Duration
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *branch) cancelFade() {
+	volObj := b.volume.(gst.Object)
+	volObj.SetControlBindingDisabled("volume", true)
+	b.mu.Lock()
+	b.fadeActive = false
+	b.mu.Unlock()
+}

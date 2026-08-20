@@ -1,0 +1,34 @@
+===== SPIKE a =====
+waitState ret: StatePlaying
+buffers before second branch: 51
+buffers after add, before remove: 101 delta since add: 50
+buffers after remove: 150 delta since remove: 49
+RESULT a: PASS - mix kept producing buffers before, during, and after dynamic add/remove
+exit=0
+===== SPIKE b =====
+waitState ret: StatePlaying
+branch2 buffers before pause: 22 total mix buffers: 51
+branch2 buffers frozen at: 22 still at: 22
+total mix buffers grew during branch2 pause: 72
+RESULT b: PASS - blocking one branch's src pad freezes that branch's dataflow while the mix as a whole keeps producing output
+exit=0
+===== SPIKE c =====
+waitState ret: StatePlaying
+t=0ms volume=0.9998192191123962
+t=250ms volume=0.6747398376464844
+t=750ms (post-ramp) volume=0.30000001192092896
+RESULT c: PASS - GstController ramp read back monotonically decreasing, landed at target gain, no 10x scale defect observed
+exit=0
+===== SPIKE d =====
+waitState ret: StatePlaying
+branch-level EOS event observed on mix.sink_0 at 2026-08-20T01:18:23.89838-05:00
+branchEOS: true pipelineEOS: false mix buffers grew after branch EOS: 40
+RESULT d: PASS - one branch's EOS is observable per-pad, distinct from any pipeline-wide EOS, and the mix keeps running on the surviving branch
+exit=0
+===== SPIKE e =====
+waitState ret: StatePlaying
+buffers seen at 4-channel sink: 30
+negotiated caps at sink: audio/x-raw, rate=(int)44100, format=(string)F64LE, channels=(int)4, layout=(string)interleaved, channel-mask=(bitmask)0x0000000000000000
+reached EOS: true
+RESULT e: PASS - interleave negotiated a 4-channel output from 4 mono branches and ran to completion; see caps above for actual channel assembly
+exit=0
