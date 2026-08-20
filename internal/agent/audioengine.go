@@ -29,6 +29,7 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 		SinkFactory:     sinkFactory,
 		SinkProperties:  props,
 		ProgramChannels: node.ProgramChannels,
+		LTCChannel:      node.LTCChannel,
 		ChannelCount:    audioNodeChannelCount(node),
 		SampleRate:      rate,
 		Resolve:         gstAssetResolver(assetDir),
