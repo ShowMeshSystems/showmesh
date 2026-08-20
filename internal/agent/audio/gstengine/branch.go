@@ -53,7 +53,7 @@ type branch struct {
 
 	mu       sync.Mutex
 	state    pkgaudio.State
-	frozen   bool // true when Position must come from frozenPosition, not a live query
+	frozen   bool // true when Position must come from frozenAt, not a live query
 	frozenAt time.Duration
 
 	// segmentStart is the branch position the current GStreamer segment
@@ -70,6 +70,7 @@ type branch struct {
 	fadeStartLocal   time.Duration
 	fadeStartRunning time.Duration
 	fadeDuration     time.Duration
+	fadeTargetGain   pkgaudio.Gain
 
 	released bool
 }
@@ -272,7 +273,8 @@ func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 }
 
 // queryPosition returns the branch's live decode position, or the last
-// frozen position when the branch is not actively producing data.
+// frozen position when the branch is frozen — decode keeps running while
+// frozen, so a frozen branch's own position is not this call's report.
 func (b *branch) queryPosition() time.Duration {
 	b.mu.Lock()
 	frozen, frozenAt := b.frozen, b.frozenAt
@@ -335,6 +337,11 @@ func (b *branch) currentGain() pkgaudio.Gain {
 	return pkgaudio.Gain(f)
 }
 
+// fadeGainTolerance is how close currentGain must be to a fade's target
+// before the elapsed-duration completion bound in observe may treat the
+// fade as arrived, rather than merely timed out.
+const fadeGainTolerance = 1e-3
+
 // observe collects a fresh [agentaudio.EngineObservation] as of now,
 // which must be called strictly after any state-changing action this
 // observation reports on.
@@ -342,11 +349,12 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	pos := b.queryPosition()
 	local := b.localRunningTime(pos)
 	running := b.pipelineRunningTime()
+	gain := b.currentGain()
 
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && (local-b.fadeStartLocal >= b.fadeDuration || running-b.fadeStartRunning >= b.fadeDuration) {
+	if fadeActive && fadeArrived(local, b.fadeStartLocal, running, b.fadeStartRunning, b.fadeDuration, gain, b.fadeTargetGain) {
 		fadeActive = false
 		b.fadeActive = false
 	}
@@ -356,15 +364,47 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 		State:      state,
 		Position:   pos,
 		ObservedAt: now,
-		Gain:       b.currentGain(),
+		Gain:       gain,
 		FadeActive: fadeActive,
 	}
+}
+
+// fadeArrived reports whether a fade started at (fadeStartLocal,
+// fadeStartRunning) with fadeDuration should clear FadeActive, given the
+// branch's current local and pipeline running time and its current gain
+// against the fade's target. The interface promises FadeActive clears
+// only once Gain equals the target, so a fade either clock says is due
+// but whose gain has not arrived stays reported in progress rather than
+// falsely complete — a stuck pending fade must be visible, a falsely
+// completed one must not.
+func fadeArrived(local, fadeStartLocal, running, fadeStartRunning, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
+	elapsed := local-fadeStartLocal >= fadeDuration || running-fadeStartRunning >= fadeDuration
+	return elapsed && gainWithin(gain, target, fadeGainTolerance)
+}
+
+// gainWithin reports whether g is within tolerance of target.
+func gainWithin(g, target pkgaudio.Gain, tolerance float64) bool {
+	diff := float64(g - target)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
 }
 
 func (b *branch) setState(s pkgaudio.State) {
 	b.mu.Lock()
 	b.state = s
 	b.mu.Unlock()
+}
+
+// hasStarted reports whether Start has ever brought this branch out of its
+// post-Load StateReady. A branch that has never started is still prerolled
+// and decoding, which is what makes a fade issued against it replay once
+// Start's flushing seek resets the segment — see startFade's caller in Fade.
+func (b *branch) hasStarted() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state != pkgaudio.StateReady
 }
 
 func (b *branch) freezeAt(pos time.Duration) {
@@ -416,6 +456,7 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Durat
 	b.fadeStartLocal = baseLocal
 	b.fadeStartRunning = baseRunning
 	b.fadeDuration = fade.Duration
+	b.fadeTargetGain = fade.TargetGain
 	b.mu.Unlock()
 	return nil
 }
