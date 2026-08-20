@@ -95,6 +95,8 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.lastProbe = rec.LastProbe
 	s.fadePending = rec.FadePending
 	s.fadeInvocation = rec.FadeInvocation
+	// The handle reloaded below has never been given this fade.
+	s.fadeHandleNeverFaded = rec.FadePending
 	s.fadeState = rec.FadeState
 	if s.fadeState == "" {
 		s.fadeState = FadeStateNone
@@ -262,6 +264,7 @@ func (m *Manager) watchTick(ctx context.Context) {
 	for _, s := range sessions {
 		s.mu.Lock()
 		s.checkFadeCompletionLocked(ctx)
+		s.checkStopCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
 			obsCtx, cancel := boundedObserveContext(ctx)
 			obs, err := m.engine.Observe(obsCtx, s.handle)
