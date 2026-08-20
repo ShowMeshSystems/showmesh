@@ -635,6 +635,10 @@ var showConfigValidationProblemTypes = map[string]string{
 	config.ValidationCodeStepsTooMany:          ProblemBaseURI + "show-config-steps-too-many",
 	config.ValidationCodeStepIDDuplicate:       ProblemBaseURI + "show-config-step-id-duplicate",
 	config.ValidationCodeFieldUnknownKey:       ProblemBaseURI + "show-config-field-unknown-key",
+
+	config.ValidationCodeAudioNodeChannelDuplicate: ProblemBaseURI + "audio-node-channel-duplicate",
+	config.ValidationCodeAudioNodeChannelOverlap:   ProblemBaseURI + "audio-node-channel-overlap",
+	config.ValidationCodeAudioNodeRouteMismatch:    ProblemBaseURI + "audio-node-route-mismatch",
 }
 
 // mapValidationError renders verr as a v1.Problem whose Type names verr's

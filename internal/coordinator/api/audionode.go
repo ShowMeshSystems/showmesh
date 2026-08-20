@@ -225,6 +225,7 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 		ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, ID: obj.ID, Revision: rev.Revision,
 		Payload: v1.ConfigAudioNode{
 			ProgramRoute: p.ProgramRoute, LTCRoute: p.LTCRoute,
+			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),

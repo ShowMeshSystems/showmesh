@@ -38,7 +38,8 @@ func nodeViewWithAudioCapabilities(nodeID string, programRoutes, ltcRoutes []str
 	}
 }
 
-const validAudioNodeBody = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+const validAudioNodeBody = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+	`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
 
 func mustPutAudioNode(t *testing.T, api *API, token, id, body string) (int, string) {
 	t.Helper()
@@ -111,6 +112,57 @@ func TestPutAudioNodeAcceptsEvidencedPlacement(t *testing.T) {
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", map[string]string{"Authorization": "Bearer " + token})
 	if !containsAll(string(getBody), `"programRoute":"hw:0,0"`) {
 		t.Fatalf("GET missing programRoute; body: %s", getBody)
+	}
+	if !containsAll(string(getBody), `"programChannels":[1,2]`) || !containsAll(string(getBody), `"ltcChannel":3`) {
+		t.Fatalf("GET missing programChannels/ltcChannel; body: %s", getBody)
+	}
+}
+
+// TestPutAudioNodeRejectsRouteMismatch proves programRoute and ltcRoute
+// naming different routes is refused at decode time, before placement
+// evidence is even consulted.
+func TestPutAudioNodeRejectsRouteMismatch(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:1,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+	status, respBody := mustPutAudioNode(t, api, token, "render-01", body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", status, respBody)
+	}
+	if !containsAll(respBody, "audio-node-route-mismatch") {
+		t.Fatalf("body does not name the route-mismatch code; body: %s", respBody)
+	}
+}
+
+// TestPutAudioNodeRejectsLTCChannelOverlappingProgramChannels proves the
+// overlap refusal is reachable through the real handler, not only the
+// config package's own decode test.
+func TestPutAudioNodeRejectsLTCChannelOverlappingProgramChannels(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":2,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it"}`
+	status, respBody := mustPutAudioNode(t, api, token, "render-01", body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", status, respBody)
+	}
+	if !containsAll(respBody, "audio-node-channel-overlap") {
+		t.Fatalf("body does not name the channel-overlap code; body: %s", respBody)
 	}
 }
 
