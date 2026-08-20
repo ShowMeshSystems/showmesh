@@ -79,18 +79,18 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
 
-	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
-		_ = b.teardown(context.Background())
+	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
+		bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, err
 	}
 
 	select {
 	case <-b.readyCh:
 	case err := <-b.loadErrCh:
-		_ = b.teardown(context.Background())
+		bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, err
 	case <-ctx.Done():
-		_ = b.teardown(context.Background())
+		bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, ctx.Err()
 	}
 
@@ -111,12 +111,11 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	if err := b.seekTo(ctx, position); err != nil {
+	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.resyncMixerPads(position)
 	b.unfreeze()
-	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePlaying, nil); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.setState(pkgaudio.StatePlaying)
@@ -132,7 +131,7 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.freezeAt(pos)
@@ -146,9 +145,10 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.resyncMixerPads(b.queryPosition())
+	resumeAt := b.queryPosition()
+	b.resyncMixerPads(resumeAt)
 	b.unfreeze()
-	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePlaying, nil); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.setState(pkgaudio.StatePlaying)
@@ -162,10 +162,9 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	if err := b.seekTo(ctx, position); err != nil {
+	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.resyncMixerPads(position)
 	return b.observe(e.cfg.now()), nil
 }
 
@@ -177,7 +176,7 @@ func (e *Engine) Stop(ctx context.Context, handle agentaudio.EngineHandle) (agen
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
+	if err := b.setElementsState(ctx, gst.StatePaused, nil); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	b.freezeAt(pos)
@@ -245,13 +244,21 @@ func (e *Engine) Observe(ctx context.Context, handle agentaudio.EngineHandle) (a
 }
 
 // seekTo issues a flushing, accurate seek on the branch and re-anchors
-// its frozen position when the branch is not currently playing.
-func (b *branch) seekTo(ctx context.Context, position time.Duration) error {
+// its frozen position when the branch is not currently playing. If after
+// is non-nil it runs once the seek succeeds and segmentStart is updated,
+// on the same goroutine and before this call returns to its caller.
+func (b *branch) seekTo(ctx context.Context, position time.Duration, after func()) error {
 	err := boundedCall(ctx, func() error {
 		ok := b.decodebin.Seek(1.0, gst.FormatTime, gst.SeekFlagFlush|gst.SeekFlagAccurate,
 			gst.SeekTypeSet, position.Nanoseconds(), gst.SeekTypeNone, -1)
 		if !ok {
 			return fmt.Errorf("%w: seek to %s was refused", pkgaudio.ErrEngineDecodeFailure, position)
+		}
+		b.mu.Lock()
+		b.segmentStart = position
+		b.mu.Unlock()
+		if after != nil {
+			after()
 		}
 		return nil
 	})
@@ -259,13 +266,26 @@ func (b *branch) seekTo(ctx context.Context, position time.Duration) error {
 		return err
 	}
 	b.mu.Lock()
-	b.segmentStart = position
 	frozen := b.frozen
 	b.mu.Unlock()
 	if frozen {
 		b.freezeAt(position)
 	}
 	return nil
+}
+
+// teardownTimeout bounds a best-effort teardown triggered by a failure
+// this package cannot otherwise recover from. A stuck GStreamer state
+// change must end the caller's wait, never extend it indefinitely.
+const teardownTimeout = 5 * time.Second
+
+// bestEffortTeardown tears b down under a fresh bounded context, for
+// call sites that hold no ctx of their own (a cleanup path already
+// past its caller's deadline, or one triggered by that deadline).
+func bestEffortTeardown(b *branch) {
+	ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+	defer cancel()
+	_ = b.teardown(ctx)
 }
 
 // teardown halts and removes every element this branch owns and releases
@@ -281,7 +301,7 @@ func (b *branch) teardown(ctx context.Context) error {
 	b.mu.Unlock()
 
 	b.engine.unindexBranch(b)
-	_ = b.setElementsState(ctx, gst.StateNull)
+	_ = b.setElementsState(ctx, gst.StateNull, nil)
 
 	bin, ok := b.engine.pipeline.(gst.Bin)
 	if ok {

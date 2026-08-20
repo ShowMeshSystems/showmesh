@@ -171,7 +171,7 @@ func (e *Engine) Close() error {
 		}
 		e.mu.Unlock()
 		for _, b := range branches {
-			_ = b.teardown(context.Background())
+			bestEffortTeardown(b)
 		}
 
 		// Signal first, then flush the pipeline to NULL: a feeder blocked

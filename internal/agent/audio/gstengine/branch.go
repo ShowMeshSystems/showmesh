@@ -97,6 +97,10 @@ func isAudioPad(pad gst.Pad) bool {
 	return len(name) >= 5 && name[:5] == "audio"
 }
 
+// queueMaxSizeTime bounds how far this branch's queue may let decode run
+// ahead of the mixer's real-time consumption; see its use in build.
+const queueMaxSizeTime = 100 * time.Millisecond
+
 // build constructs and links every element this branch owns except the
 // dynamic pads decodebin and deinterleave create once they know their
 // input: filesrc/decodebin's audio pad links to audioconvert as soon as
@@ -130,6 +134,15 @@ func (b *branch) build(path string) error {
 	b.filesrc.SetObjectProperty("location", path)
 	b.capsfilter.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d", e.cfg.SampleRate, n)))
 	b.volume.SetObjectProperty("volume", 1.0)
+	// queue's own defaults (200 buffers / 10MB / 1s) let decode race far
+	// ahead of the mixer's real-time consumption whenever nothing else
+	// backpressures it — measured filling the full 1s depth within single-digit
+	// milliseconds of a (re)start — after which the mixer drains that backlog
+	// faster than real time until it catches up. Bounding depth by time alone,
+	// tightly, bounds how much can ever be banked ahead this way.
+	b.queue.SetObjectProperty("max-size-buffers", uint32(0))
+	b.queue.SetObjectProperty("max-size-bytes", uint32(0))
+	b.queue.SetObjectProperty("max-size-time", uint64(queueMaxSizeTime.Nanoseconds()))
 
 	bin, ok := e.pipeline.(gst.Bin)
 	if !ok {
@@ -246,13 +259,21 @@ func (b *branch) onEOS() {
 	b.eosOnce.Do(func() { close(b.eosCh) })
 }
 
-// setElementsState sets every branch element to state, bounded by ctx.
-func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
+// setElementsState sets every branch element to state, bounded by ctx. If
+// after is non-nil it runs once every element has reached state, on the
+// same goroutine and before this call returns to its caller, so a
+// caller anchoring the mixer offset in after is not also paying for a
+// second goroutine wakeup's scheduling delay on top of the state change
+// itself.
+func (b *branch) setElementsState(ctx context.Context, state gst.State, after func()) error {
 	return boundedCall(ctx, func() error {
 		for _, el := range b.elements() {
 			if el.SetState(state) == gst.StateChangeFailure {
 				return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
 			}
+		}
+		if after != nil {
+			after()
 		}
 		return nil
 	})
@@ -294,7 +315,17 @@ func (b *branch) localRunningTime(atPos time.Duration) time.Duration {
 // lands at the shared pipeline's current running time rather than in
 // GstAudioAggregator's past. Required whenever this branch's data flow
 // (re)starts, since the aggregator advances its output running time in
-// real time regardless of whether anything is playing.
+// real time regardless of whether anything is playing. Callers run this
+// from inside the same goroutine that performed the seek or state change
+// which resumes data flow (setElementsState's after, seekTo's own call),
+// not after a further channel handoff back to the original caller, so no
+// avoidable scheduling delay sits between the two.
+//
+// A pad probe on this branch's own output was tried to catch the exact
+// instant a buffer arrives instead of relying on that placement: on this
+// pipeline, any gst.Pad probe there — buffer or event, however briefly
+// attached — permanently disables the downstream queue element's own
+// backpressure, measured directly, so it is not used here.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	target := b.engine.pipeline.GetCurrentRunningTime()
 	if target == gst.ClockTimeNone {
