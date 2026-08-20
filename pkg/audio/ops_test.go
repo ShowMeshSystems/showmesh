@@ -2,10 +2,10 @@ package audio
 
 import "testing"
 
-func TestOperationsAreExactlyFifteen(t *testing.T) {
+func TestOperationsAreExactlySeventeen(t *testing.T) {
 	ops := Operations()
-	if len(ops) != 15 {
-		t.Fatalf("Operations(): got %d entries, want 15", len(ops))
+	if len(ops) != 17 {
+		t.Fatalf("Operations(): got %d entries, want 17", len(ops))
 	}
 	want := map[Operation]struct{}{
 		"audio.session.apply": {}, "audio.session.prepare": {}, "audio.session.start": {},
@@ -13,6 +13,7 @@ func TestOperationsAreExactlyFifteen(t *testing.T) {
 		"audio.session.advance": {}, "audio.session.stop": {}, "audio.session.clear": {},
 		"audio.gain.set": {}, "audio.gain.fade": {}, "audio.output.mute": {},
 		"audio.output.unmute": {}, "audio.device.probe": {}, "audio.media.probe": {},
+		"audio.node.configure": {}, "audio.settings.configure": {},
 	}
 	seen := make(map[Operation]struct{}, len(ops))
 	for _, op := range ops {

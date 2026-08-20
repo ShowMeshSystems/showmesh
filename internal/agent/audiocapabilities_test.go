@@ -17,6 +17,20 @@ func withAudioDiscoverer(t *testing.T, d audio.Discovery) {
 	t.Cleanup(func() { audioDiscoverer = orig })
 }
 
+// withAudioEngineAvailable drives [audioEngineAvailable] deterministically,
+// matching withAudioDiscoverer's own injection convention. Every test in
+// this file that predates the engine-availability gate calls this with
+// ok=true to keep asserting exactly the probe-evidence behavior it always
+// has; TestDetectAudioCapabilitiesEngineGatedOnAvailability and
+// TestFakeAudioEngineNeverAdvertisesPlaybackCapability are what actually
+// exercise the gate itself.
+func withAudioEngineAvailable(t *testing.T, ok bool, reason string) {
+	t.Helper()
+	orig := audioEngineAvailable
+	audioEngineAvailable = func() (bool, string) { return ok, reason }
+	t.Cleanup(func() { audioEngineAvailable = orig })
+}
+
 // TestDetectAudioCapabilitiesNoEngineReturnsNil proves a node with no
 // usable audio engine (every render node, the development laptop)
 // advertises no audio capability at all.
@@ -38,6 +52,7 @@ func TestDetectAudioCapabilitiesNoEngineReturnsNil(t *testing.T) {
 // HasHardwareCards set proves nothing here, since detectAudioCapabilities
 // never reads that field itself.
 func TestDetectAudioCapabilitiesEngineOnlyNoHardware(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true,
 		Routes: []audio.RouteEvidence{
@@ -60,6 +75,7 @@ func TestDetectAudioCapabilitiesEngineOnlyNoHardware(t *testing.T) {
 // TestDetectAudioCapabilitiesLocalWithoutLTC proves a 2-channel-only route
 // advertises audio.output.local but never audio.output.ltc.
 func TestDetectAudioCapabilitiesLocalWithoutLTC(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
 		Routes: []audio.RouteEvidence{
@@ -89,6 +105,7 @@ func TestDetectAudioCapabilitiesLTCRequiresThreeChannels(t *testing.T) {
 		t.Fatalf("minLTCChannels = %d, want the ADR-018 threshold pinned at 3", minLTCChannels)
 	}
 
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
 		Routes: []audio.RouteEvidence{
@@ -122,6 +139,7 @@ func TestDetectAudioCapabilitiesLTCRequiresThreeChannels(t *testing.T) {
 // (LTCChannels left at zero), does not advertise audio.output.ltc — the
 // unconstrained achieved count is never itself evidence of LTC capability.
 func TestDetectAudioCapabilitiesLTCNotAdvertisedFromUnconstrainedChannelsAlone(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
 		Routes: []audio.RouteEvidence{
@@ -139,6 +157,7 @@ func TestDetectAudioCapabilitiesLTCNotAdvertisedFromUnconstrainedChannelsAlone(t
 // that was enumerated but did not itself probe Available never
 // contributes to either output capability.
 func TestDetectAudioCapabilitiesNeverAdvertisesUnprobedRoute(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
 		Routes: []audio.RouteEvidence{
@@ -155,6 +174,7 @@ func TestDetectAudioCapabilitiesNeverAdvertisesUnprobedRoute(t *testing.T) {
 // TestDetectAudioCapabilitiesEveryIDValidates is a sanity check that every
 // ID this function can mint passes capability.ID.Validate.
 func TestDetectAudioCapabilitiesEveryIDValidates(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
 		Routes: []audio.RouteEvidence{
@@ -179,16 +199,19 @@ func TestDetectAudioCapabilitiesEveryIDValidates(t *testing.T) {
 // TestFakeAudioEngineNeverAdvertisesPlaybackCapability guards against a
 // node whose only backend is [audio.FakeEngine] ever advertising ANY
 // capability implying it can actually play audio through a session, no
-// matter how healthy its ALSA hardware detection reports.
-// detectAudioCapabilities today only ever advertises audio.engine/
-// audio.output.local/audio.output.ltc from real ALSA evidence and mints
-// no session/playback capability at all — this test pins that down so a
-// future change cannot start advertising one while a [audio.FakeEngine]
-// is still the only Engine this repository ships.
+// matter how healthy its ALSA hardware detection reports. This is the
+// real rule, not merely a naming convention: [audio.FakeEngine.Available]
+// is always false, so wiring its Available method into
+// [audioEngineAvailable] (exactly as agent.go wires the real engine's)
+// must withhold "audio.engine" itself, in addition to the standing
+// "audio.session"/"audio.playback" prefix check below.
 func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
-	if ok, _ := audio.NewFakeEngine(time.Now).Available(); ok {
+	fake := audio.NewFakeEngine(time.Now)
+	fakeOK, fakeReason := fake.Available()
+	if fakeOK {
 		t.Fatal("audio.FakeEngine.Available() must be false")
 	}
+	withAudioEngineAvailable(t, fakeOK, fakeReason)
 
 	withAudioDiscoverer(t, audio.Discovery{
 		EngineUsable: true, HasHardwareCards: true,
@@ -202,9 +225,38 @@ func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
 	})
 
 	set := detectAudioCapabilities(context.Background())
+	if _, ok := set.Lookup("audio.engine"); ok {
+		t.Error(`"audio.engine" advertised while the only Engine is FakeEngine (Available() == false); this must never happen`)
+	}
 	for _, c := range set {
 		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") {
 			t.Errorf("capability set advertises %q while the only Engine is FakeEngine; this must never happen", c.ID)
 		}
+	}
+}
+
+// TestDetectAudioCapabilitiesEngineGatedOnAvailability proves the gate
+// directly: identical probe evidence (usable GStreamer, a usable route)
+// advertises "audio.engine" when [audioEngineAvailable] reports true and
+// withholds it when false — never inferred from GStreamer/ALSA probe
+// success alone.
+func TestDetectAudioCapabilitiesEngineGatedOnAvailability(t *testing.T) {
+	discovery := audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 48000, Format: "S16LE"}},
+		},
+	}
+
+	withAudioEngineAvailable(t, false, "no audio.node binding delivered yet")
+	withAudioDiscoverer(t, discovery)
+	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); ok {
+		t.Error(`"audio.engine" advertised while audioEngineAvailable() == false, want absent`)
+	}
+
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, discovery)
+	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); !ok {
+		t.Error(`"audio.engine" not advertised while audioEngineAvailable() == true, want present`)
 	}
 }

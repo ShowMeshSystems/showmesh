@@ -36,17 +36,32 @@ func (s *Session) effectiveGainLocked() pkgaudio.Gain {
 	return pkgaudio.Gain(1)
 }
 
-// clampToCeilingLocked applies s's ceiling, if any, to requested, and
-// reports the clamp so a caller can carry it as outcome evidence rather
+// clampToCeilingLocked applies s's own declared ceiling if it has one;
+// otherwise, for a background-role session, once a real
+// audio.settings.configure has been delivered
+// ([Settings.Configured]), applies its DefaultMaxBackgroundGain — the
+// operator-configured ceiling a background bed gets when it declares
+// none itself. Before any audio.settings has ever been delivered, or for
+// any other session role, a session with no declared ceiling stays
+// unclamped, matching this package's pre-existing behavior. Reports the
+// clamp either way so a caller can carry it as outcome evidence rather
 // than silently applying an unreported value. Caller holds s.mu.
 func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.CeilingResult, error) {
-	if s.desired.Ceiling == nil {
+	ceiling := s.desired.Ceiling
+	if ceiling == nil && s.desired.SourceRole != nil && *s.desired.SourceRole == pkgaudio.SourceRoleBackground {
+		settings := s.mgr.SettingsSnapshot()
+		if settings.Configured {
+			c := settings.DefaultMaxBackgroundGain
+			ceiling = &c
+		}
+	}
+	if ceiling == nil {
 		if err := requested.Validate(); err != nil {
 			return pkgaudio.CeilingResult{}, err
 		}
 		return pkgaudio.CeilingResult{Requested: requested, Effective: requested}, nil
 	}
-	return pkgaudio.ApplyCeiling(requested, *s.desired.Ceiling)
+	return pkgaudio.ApplyCeiling(requested, *ceiling)
 }
 
 // GainSet is audio.gain.set: it changes id's gain immediately, clamped

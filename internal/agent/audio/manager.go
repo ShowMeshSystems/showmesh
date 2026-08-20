@@ -29,6 +29,13 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[pkgaudio.SessionID]*Session
 
+	// settingsMu and settings back [Manager.SetSettings]/
+	// [Manager.SettingsSnapshot] — see settings.go. Its own mutex, not
+	// m.mu: a settings read/write must never contend with session
+	// dispatch.
+	settingsMu sync.RWMutex
+	settings   Settings
+
 	// corruptSessions is [Manager.RestoreAll]'s record of every persisted
 	// file it could not decode into a real session — never
 	// addressable by a command, but reported by [Manager.Snapshot] so it
@@ -43,6 +50,66 @@ func NewManager(engine Engine, store SessionStore, assetDir string, decoder Deco
 	return &Manager{
 		engine: engine, store: store, assetDir: assetDir, decoder: decoder, now: now, logger: logger,
 		sessions: make(map[pkgaudio.SessionID]*Session),
+		settings: DefaultSettings,
+	}
+}
+
+// RebindReasonEngineRebind is the [pkgaudio.FaultRouteChanged] reason
+// recorded on every session [Manager.RebindEngine] invalidates.
+const RebindReasonEngineRebind = "audio output configuration changed; this session's engine handle is no longer valid"
+
+// RebindEngine invalidates every session with an active engine handle
+// (never a silent drop: each is set to StateFailed with
+// [pkgaudio.FaultRouteChanged] and persisted, see
+// [Manager.invalidateActiveSessionsLocked]), then swaps m.engine's
+// backing implementation via engine.Set — in that order, so a session in
+// flight is failed visibly against the OLD binding before any call can
+// reach the new one with a handle the new engine has never heard of.
+// engine must be the same [*SwitchableEngine] this Manager was
+// constructed with; a caller that passes any other Engine here defeats
+// this method's whole reason to exist, since m.engine itself never
+// changes identity.
+func (m *Manager) RebindEngine(engine *SwitchableEngine, next Engine, reason string) {
+	m.invalidateActiveSessions(reason)
+	engine.Set(next)
+}
+
+// invalidateActiveSessions fails every session currently in a state that
+// implies a live engine handle. Called before [SwitchableEngine.Set]
+// swaps the backing engine out from under every existing handle.
+func (m *Manager) invalidateActiveSessions(reason string) {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	for _, s := range sessions {
+		s.mu.Lock()
+		if sessionStateImpliesHandleLocked(s.state) {
+			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.FaultRouteChanged, reason)
+			s.handle = ""
+			s.handleLoaded = false
+			s.timingKnown = false
+			s.persistBestEffortLocked("engine rebind")
+		}
+		s.mu.Unlock()
+	}
+}
+
+// sessionStateImpliesHandleLocked reports whether state is one this
+// package only ever reaches with a loaded (or loading) engine handle
+// behind it — the set [Manager.invalidateActiveSessions] must fail
+// rather than leave silently pointing at a handle the new engine has
+// never heard of.
+func sessionStateImpliesHandleLocked(state pkgaudio.State) bool {
+	switch state {
+	case pkgaudio.StatePreparing, pkgaudio.StateReady, pkgaudio.StatePlaying, pkgaudio.StatePaused:
+		return true
+	default:
+		return false
 	}
 }
 

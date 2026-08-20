@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -210,6 +211,12 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "write audio.node config revision", writeErr)
 		return
 	}
+
+	// ADR-039/ADR-036: push the newly-written binding to id without
+	// waiting for its next hello. Best-effort: a node unreachable right
+	// now converges on its next successful push instead of failing this
+	// write, which already committed.
+	audioconfigpush.BestEffort(r.Context(), h.deps.Config, h.deps.RenderPublisher, h.now, id, h.logger)
 
 	jsonWrite(w, mapAudioNodeConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AudioNodeConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
