@@ -666,6 +666,306 @@ func TestFPPObservationIngestionWritesNoExecutionSideEffects(t *testing.T) {
 	}
 }
 
+// --- audit: every refusal from step 5 onward is audited under
+// fpp.observe_playlist_entry, step 4 and an accepted observation are not
+// (contract §1.6, closing paragraph) ---
+
+// fppAuditEntriesForObservation returns every audit entry svc holds under
+// this endpoint's fixed action, so a test can assert on count and
+// OutcomeReason without also having to keep this file's refusal prose in
+// sync with the handler's.
+func fppAuditEntriesForObservation(t *testing.T, svc identity.Service) []identity.AuditEntry {
+	t.Helper()
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var matched []identity.AuditEntry
+	for _, e := range entries {
+		if e.Action == auditActionFPPObservePlaylistEntry {
+			matched = append(matched, e)
+		}
+	}
+	return matched
+}
+
+// TestFPPObservationStepFiveThroughNineRefusalsAreAuditedWithReason is
+// finding 1's own regression test: the handler has fifteen auditRefusal
+// call sites and, before this test, none of them was asserted, so
+// dropping any one of them kept every test in this file green. Each case
+// removes ONE call site's worth of coverage if deleted; the self-check in
+// this task's own final report proves that by commenting one out and
+// watching this test (not some other one) fail.
+func TestFPPObservationStepFiveThroughNineRefusalsAreAuditedWithReason(t *testing.T) {
+	wrongKey := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	cases := []struct {
+		name       string
+		body       func(uuid string) string
+		wantReason string
+	}{
+		{
+			name: "unsupported schemaVersion",
+			body: func(uuid string) string {
+				return `{"schemaVersion":2,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "unsupported schemaVersion",
+		},
+		{
+			name: "missing instanceUuid",
+			body: func(string) string {
+				return `{"schemaVersion":1,"instanceUuid":"","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "missing instanceUuid",
+		},
+		{
+			name: "invalid action",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"bogus","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "invalid action",
+		},
+		{
+			name: "invalid unavailable reason",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"unavailable":"bogus"}`
+			},
+			wantReason: "invalid unavailable reason",
+		},
+		{
+			name: "negative position",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"position":-1}`
+			},
+			wantReason: "negative position",
+		},
+		{
+			name: "malformed playlistHash",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"playlistHash":"not-a-hash"}`
+			},
+			wantReason: "malformed playlistHash",
+		},
+		{
+			name: "malformed entryKey",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"entryKey":"not-a-hash"}`
+			},
+			wantReason: "malformed entryKey",
+		},
+		{
+			name: "negative coalescedSincePreviousAcknowledged",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":-1}`
+			},
+			wantReason: "negative coalescedSincePreviousAcknowledged",
+		},
+		{
+			name: "negative sequence",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":-1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "negative sequence",
+		},
+		{
+			name: "derived identity present with unavailable set",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"unavailable":"missing_playlist_name",` +
+					`"playlistHash":"` + playlistHash64 + `"}`
+			},
+			wantReason: "derived identity present with unavailable set",
+		},
+		{
+			name: "missing identity field with unavailable absent",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","action":"playing","sequence":1,` +
+					`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "missing identity field with unavailable absent",
+		},
+		{
+			name: "entry key mismatch",
+			body: func(uuid string) string {
+				return `{"schemaVersion":1,"instanceUuid":"` + uuid + `","playlistName":"showmesh-test",` +
+					`"playlistHash":"` + playlistHash64 + `","section":"main","position":0,"entryKey":"` + wrongKey + `",` +
+					`"action":"playing","sequence":1,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+			},
+			wantReason: "entry key mismatch",
+		},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+			api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+			scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+			token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+			uuid := fmt.Sprintf("instance-audit-%d", i)
+			resp, m := mustPostObservation(t, api, tc.body(uuid), token)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+			}
+
+			entries := fppAuditEntriesForObservation(t, setup.svc)
+			if len(entries) != 1 {
+				t.Fatalf("audit entries for %q = %d, want exactly 1: %+v", auditActionFPPObservePlaylistEntry, len(entries), entries)
+			}
+			if entries[0].OutcomeReason != tc.wantReason {
+				t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, tc.wantReason)
+			}
+			if entries[0].Kind != identity.AuditOutcome {
+				t.Errorf("audit Kind = %v, want %v", entries[0].Kind, identity.AuditOutcome)
+			}
+		})
+	}
+}
+
+// TestFPPObservationSequenceRegressionIsAuditedWithReason is the step 9
+// half finding 1's table above cannot cover in one request: the refusal
+// reason names the last accepted sequence, which only exists once a prior
+// observation has been accepted.
+func TestFPPObservationSequenceRegressionIsAuditedWithReason(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	uuid := "instance-audit-seq-regression"
+	seed := fppObservationBody(t, uuid, 5, "showmesh-test", "main", 0)
+	if resp, _ := mustPostObservation(t, api, seed, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: want 200")
+	}
+	lower := fppObservationBody(t, uuid, 3, "showmesh-test", "main", 0)
+	resp, m := mustPostObservation(t, api, lower, token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %v", resp.StatusCode, m)
+	}
+
+	entries := fppAuditEntriesForObservation(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries for %q = %d, want exactly 1 (the seed accept must not audit): %+v",
+			auditActionFPPObservePlaylistEntry, len(entries), entries)
+	}
+	const wantReason = "sequence regression: last accepted sequence was 5"
+	if entries[0].OutcomeReason != wantReason {
+		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
+	}
+}
+
+// TestFPPObservationSequenceReusedWithDifferentBodyIsAuditedWithReason is
+// the step 9 sibling of the regression case above: the same sequence
+// reused with a different canonical body.
+func TestFPPObservationSequenceReusedWithDifferentBodyIsAuditedWithReason(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	uuid := "instance-audit-seq-reused"
+	seed := fppObservationBody(t, uuid, 5, "showmesh-test", "main", 0)
+	if resp, _ := mustPostObservation(t, api, seed, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: want 200")
+	}
+	// Same sequence, different section: a different canonical body.
+	reused := fppObservationBody(t, uuid, 5, "showmesh-test", "other", 0)
+	resp, m := mustPostObservation(t, api, reused, token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %v", resp.StatusCode, m)
+	}
+
+	entries := fppAuditEntriesForObservation(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries for %q = %d, want exactly 1 (the seed accept must not audit): %+v",
+			auditActionFPPObservePlaylistEntry, len(entries), entries)
+	}
+	const wantReason = "sequence 5 reused with a different body"
+	if entries[0].OutcomeReason != wantReason {
+		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
+	}
+}
+
+// TestFPPObservationDecodeRefusalsWriteNoAuditEntry is finding 1's other
+// half: contract §1.6 is explicit that step 4 (malformed JSON, an unknown
+// field, trailing content, or a duplicate member name) is NOT audited.
+// Without this, someone could "fix" the classification later by auditing
+// everything, and nothing here would notice.
+func TestFPPObservationDecodeRefusalsWriteNoAuditEntry(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "malformed JSON",
+			body: `{not valid json`,
+		},
+		{
+			name: "unknown field",
+			body: `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+				`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`,
+		},
+		{
+			name: "trailing content",
+			body: `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+				`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0} trailing`,
+		},
+		{
+			name: "duplicate member name",
+			body: `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+				`"sequence":9,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+			api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+			scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+			token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+			resp, m := mustPostObservation(t, api, tc.body, token)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+			}
+
+			if entries := fppAuditEntriesForObservation(t, setup.svc); len(entries) != 0 {
+				t.Errorf("audit entries for %q = %d, want 0 (step 4 is not audited): %+v",
+					auditActionFPPObservePlaylistEntry, len(entries), entries)
+			}
+		})
+	}
+}
+
+// TestFPPObservationAcceptedWritesNoAuditEntry is the third rule in
+// contract §1.6's closing paragraph: "a per-entry audit entry would flood
+// it during an ordinary show," so an accepted observation writes none.
+func TestFPPObservationAcceptedWritesNoAuditEntry(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBody(t, "instance-1", 1, "showmesh-test", "main", 0)
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+
+	if entries := fppAuditEntriesForObservation(t, setup.svc); len(entries) != 0 {
+		t.Errorf("audit entries for %q = %d, want 0 (accepted observations are not audited): %+v",
+			auditActionFPPObservePlaylistEntry, len(entries), entries)
+	}
+}
+
 // --- GET ---
 
 func TestFPPObservationListReturnsLatestPerInstance(t *testing.T) {

@@ -163,7 +163,7 @@ func TestDeriveEntryKeySeparatorCharactersDoNotCollide(t *testing.T) {
 }
 
 // A NUL-adjacent control character embedded in a name must be escaped
-// (as ) rather than truncating or otherwise being treated as a
+// (as \u0000) rather than truncating or otherwise being treated as a
 // delimiter.
 func TestDeriveEntryKeyControlCharacterInNameIsHashedNotTruncated(t *testing.T) {
 	id := EntryIdentity{

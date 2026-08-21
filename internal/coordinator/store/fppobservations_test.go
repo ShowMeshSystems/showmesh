@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -10,7 +11,7 @@ import (
 // TestFPPPlaylistEntryObservationSchemaVersionIsV14 pins this seam's own
 // migration number against a hardcoded expectation (not just "agrees with
 // maxMigrationVersion()", which store_test.go's general tests already
-// cover): versions 9 through 13 are reserved by other, not-yet-merged
+// cover): versions 11 through 13 are reserved by other, not-yet-merged
 // branches per docs/build/IDENTIFIER-REGISTER.md, so this fails loudly if
 // schemaV14's entry is ever renumbered to close that gap.
 func TestFPPPlaylistEntryObservationSchemaVersionIsV14(t *testing.T) {
@@ -312,5 +313,120 @@ func TestFPPPlaylistEntryObservationTxAndStoreFormsAgree(t *testing.T) {
 	}
 	if _, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-1"); !errors.Is(err, ErrFPPPlaylistEntryObservationNotFound) {
 		t.Fatalf("get after Tx-form delete committed: error = %v, want ErrFPPPlaylistEntryObservationNotFound", err)
+	}
+}
+
+// TestFPPPlaylistEntryObservationConcurrentSameSequenceProducesExactlyOneWinner
+// is finding 4's own regression test, modeled on commands_test.go's
+// TestInsertCommandConcurrentDuplicateProducesExactlyOneRow: it proves the
+// step 9 sequence read and the step 10 write it gates share one
+// transaction, rather than merely being called from the same handler.
+// SetMaxOpenConns(1) (store.go's open()) currently serializes every writer
+// through the driver itself, which is why this cannot fail today even if
+// the read and write were split across two transactions - the point of
+// this test is to PIN that property so a future connection-pool change
+// cannot silently reopen the TOCTOU: N goroutines race a Put for the SAME
+// instance at the SAME sequence with different bodies, and exactly one may
+// win. Each goroutine's own returned error is captured, not just whether
+// the eventual stored row looks right, so this cannot pass by chance the
+// way asserting only the final row could.
+func TestFPPPlaylistEntryObservationConcurrentSameSequenceProducesExactlyOneWinner(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	const n = 8
+	var wg sync.WaitGroup
+	results := make([]error, n)
+	bodies := make([]string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := fppObservationFixture("instance-race", 5)
+			rec.BodyHash = "hash-race-" + string(rune('a'+i))
+			rec.ObservationJSON = `{"instanceUuid":"instance-race","goroutine":` + string(rune('0'+i)) + `}`
+			bodies[i] = rec.BodyHash
+			results[i] = st.PutFPPPlaylistEntryObservation(ctx, rec)
+		}(i)
+	}
+	wg.Wait()
+
+	var succeeded, conflicted int
+	var winnerBodyHash string
+	for i, err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+			winnerBodyHash = bodies[i]
+		case errors.Is(err, ErrFPPPlaylistEntryObservationSequenceConflict):
+			conflicted++
+		default:
+			t.Errorf("goroutine %d: unexpected error: %v", i, err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("succeeded = %d, want exactly 1", succeeded)
+	}
+	if conflicted != n-1 {
+		t.Errorf("conflicted = %d, want %d", conflicted, n-1)
+	}
+
+	got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-race")
+	if err != nil {
+		t.Fatalf("get after the race: %v", err)
+	}
+	if got.Sequence != 5 {
+		t.Fatalf("stored Sequence = %d, want 5", got.Sequence)
+	}
+	if got.BodyHash != winnerBodyHash {
+		t.Fatalf("stored BodyHash = %q, want %q (the goroutine that actually won the Put)", got.BodyHash, winnerBodyHash)
+	}
+}
+
+// TestFPPPlaylistEntryObservationConcurrentAscendingSequencesEndsAtHighest
+// is the ascending-sequence variant: N goroutines Put the SAME instance at
+// DISTINCT, increasing sequences with different bodies. Monotonicity
+// (§1.5) must still hold under concurrency: the store ends at the highest
+// sequence any goroutine attempted, and no lower sequence is ever allowed
+// to overwrite a higher one that already landed, regardless of the order
+// the driver actually serializes them in.
+func TestFPPPlaylistEntryObservationConcurrentAscendingSequencesEndsAtHighest(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	const n = 8
+	var wg sync.WaitGroup
+	results := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := fppObservationFixture("instance-race", int64(i+1))
+			rec.BodyHash = "hash-ascending-" + string(rune('a'+i))
+			results[i] = st.PutFPPPlaylistEntryObservation(ctx, rec)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range results {
+		// Every attempted sequence here is distinct, so under monotonicity
+		// each Put either accepts outright or is refused as stale by one
+		// that already landed at a higher sequence; a same-sequence
+		// conflict can never happen because no two goroutines share a
+		// sequence.
+		if err != nil && !errors.Is(err, ErrFPPPlaylistEntryObservationStale) {
+			t.Errorf("goroutine %d (sequence %d): unexpected error: %v", i, i+1, err)
+		}
+	}
+
+	got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-race")
+	if err != nil {
+		t.Fatalf("get after the race: %v", err)
+	}
+	if got.Sequence != n {
+		t.Fatalf("stored Sequence = %d, want %d (the highest sequence attempted)", got.Sequence, n)
+	}
+	if got.BodyHash != "hash-ascending-"+string(rune('a'+n-1)) {
+		t.Fatalf("stored BodyHash = %q, want the highest sequence's own body, not a lower sequence that raced past it", got.BodyHash)
 	}
 }
