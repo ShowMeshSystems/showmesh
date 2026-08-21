@@ -33,8 +33,9 @@ type Manager struct {
 	// [Manager.SettingsSnapshot] — see settings.go. Its own mutex, not
 	// m.mu: a settings read/write must never contend with session
 	// dispatch.
-	settingsMu sync.RWMutex
-	settings   Settings
+	settingsMu     sync.RWMutex
+	settings       Settings
+	settingsIssues []string
 
 	// ltc tracks which session, if any, currently owns this node's one
 	// LTC run — see ltclifecycle.go.
@@ -290,6 +291,16 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		item, ok := s.currentItemLocked()
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to start"}
+		}
+		// A paused session whose bookmark still names the item currently
+		// loaded is a Resume, not a Start: under the known pause-fidelity
+		// limitation the engine's own position may have moved on since the
+		// pause, so replaying the bookmark here would seek it backwards
+		// rather than continue it. A bookmark for a different item (an
+		// Apply landed while paused) is not this case and falls through to
+		// the ordinary stale-handle handling below.
+		if s.state == pkgaudio.StatePaused && s.bookmark != nil && s.bookmark.Identity == itemIdentity(item) {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is paused; use Resume to continue this item, not Start"}
 		}
 		// A handle loaded for a now-superseded item identity (a media or
 		// playlist revision landed via Apply between Prepare and Start) is

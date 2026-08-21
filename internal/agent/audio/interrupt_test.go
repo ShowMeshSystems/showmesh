@@ -322,3 +322,68 @@ func TestInterruptRestoreExactlyOnce_CrashWhileInterrupterStillPlaying(t *testin
 		t.Fatalf("bg2.state = %q after ann finally stopped, want playing", bg2.state)
 	}
 }
+
+// TestInterruptedSessionResumeFailureStaysRecoverable verifies that when
+// the engine.Resume call [Manager.removeInterrupterLocked] makes on an
+// interrupting announcement's stop fails, the interrupted session stays
+// Paused, not Failed — the same treatment [Manager.Resume] itself gives
+// this error — so an operator Resume can still recover it instead of the
+// session being stuck for the rest of the night.
+func TestInterruptedSessionResumeFailureStaysRecoverable(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
+
+	bg, ok := m.get("bg")
+	if !ok {
+		t.Fatal("bg session was not created")
+	}
+	bg.mu.Lock()
+	if bg.state != pkgaudio.StatePaused {
+		state := bg.state
+		bg.mu.Unlock()
+		t.Fatalf("precondition: bg should be paused while interrupted, got %q", state)
+	}
+	handle := bg.handle
+	bg.mu.Unlock()
+
+	fake, ok := m.engine.(*FakeEngine)
+	if !ok {
+		t.Fatalf("test manager's engine is %T, want *FakeEngine", m.engine)
+	}
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+
+	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("stop ann: unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	state := bg.state
+	_, stillInterrupted := bg.interruptedByAll["ann"]
+	bg.mu.Unlock()
+	if stillInterrupted {
+		t.Fatal("bg is still recorded as interrupted by ann after ann stopped")
+	}
+	if state != pkgaudio.StatePaused {
+		t.Fatalf("bg state after a failed automatic resume = %q, want still Paused (recoverable), not Failed", state)
+	}
+
+	// Recovery: nothing is armed to fail this Resume, so the operator can
+	// still bring bg back from exactly here.
+	r := m.Resume(ctx, "bg", "inv-bg-resume", 4)
+	if r.Outcome == pkgaudio.OutcomeRefused || r.Outcome == pkgaudio.OutcomeFailed {
+		t.Fatalf("recovery Resume after the automatic one failed = %+v, want it to succeed", r)
+	}
+	bg.mu.Lock()
+	finalState := bg.state
+	bg.mu.Unlock()
+	if finalState != pkgaudio.StatePlaying {
+		t.Fatalf("bg state after recovery Resume = %q, want Playing", finalState)
+	}
+}

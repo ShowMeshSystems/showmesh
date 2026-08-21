@@ -14,6 +14,11 @@ import (
 // handled. A single session's restore failure is logged and does not
 // stop the rest — see [Manager.restoreOne].
 func (m *Manager) RestoreAll(ctx context.Context) error {
+	// A prior RestoreAll that failed partway through can leave ownership
+	// pointing at a session this run is about to rebuild from scratch;
+	// nothing else ever clears it, so a re-run must start from "free".
+	m.ltc.resetForRestore()
+
 	ids, err := m.store.List()
 	if err != nil {
 		return fmt.Errorf("audio: list persisted sessions: %w", err)
@@ -55,6 +60,25 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	}
 	if !ok {
 		return nil
+	}
+
+	// A redundant restore (a second startup after a crash mid-restore, or
+	// a hot reload) must not leak the previous in-memory session's engine
+	// handle, or risk two Session objects both driving the same handle
+	// identity — release it before this call's own Session, and its own
+	// Load, replaces it.
+	// A redundant restore (a second startup after a crash mid-restore, or
+	// a hot reload) must not leak the previous in-memory session's engine
+	// handle, or risk two Session objects both driving the same handle
+	// identity — release it before this call's own Session, and its own
+	// Load, replaces it.
+	m.mu.Lock()
+	previous, hadPrevious := m.sessions[id]
+	m.mu.Unlock()
+	if hadPrevious {
+		previous.mu.Lock()
+		previous.releaseEngineLocked(ctx)
+		previous.mu.Unlock()
 	}
 
 	s := newSession(id, m)

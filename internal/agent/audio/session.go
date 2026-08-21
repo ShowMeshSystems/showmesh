@@ -659,6 +659,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		s.bookmark = nil
 		s.setGapUnknownLocked("session has no playlist to measure a gap within")
 		s.mgr.stopLTCLocked(ctx, s)
+		s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
@@ -679,6 +680,7 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 			s.bookmark = nil
 			s.setGapUnknownLocked("playlist ended with no successor item")
 			s.mgr.stopLTCLocked(ctx, s)
+			s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
 			s.persistBestEffortLocked("state change")
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 		}
@@ -771,6 +773,10 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 	s.loadedIdentity = ""
 	s.state = pkgaudio.StateStopped
 	s.bookmark = nil
+	// This session may never have gone through [Manager.Stop]'s own LTC
+	// release (an engine-spontaneous stop reaches here some other way),
+	// so this is not a redundant call — a no-op when it already ran.
+	s.mgr.stopLTCLocked(ctx, s)
 	s.persistBestEffortLocked("state change")
 }
 

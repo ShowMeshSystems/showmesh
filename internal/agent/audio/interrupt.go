@@ -137,9 +137,11 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	if policy == pkgaudio.ResumePolicyResume && handleStillValid {
 		obs, err := m.engine.Resume(ctx, t.handle)
 		if err != nil {
-			t.state = pkgaudio.StateFailed
+			// Same treatment [Manager.Resume] gives this error: t stays
+			// Paused rather than Failed, so an operator Resume (or the
+			// next interrupter release) can still recover it instead of
+			// dead-ending here.
 			t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			m.stopLTCLocked(ctx, t)
 			t.persistBestEffortLocked("state change")
 			return
 		}

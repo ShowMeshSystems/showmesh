@@ -513,3 +513,58 @@ func TestSecondShowSessionNeverTakesLTCFromTheFirst(t *testing.T) {
 		t.Fatal("show-b's stop killed the LTC run show-a still owns")
 	}
 }
+
+// TestCheckStopCompletionReleasesLTCOwnership verifies that a session
+// resolved to Stopped by [Session.checkStopCompletionLocked] releases
+// this node's LTC run if it owned it — not only [Manager.Stop]'s own
+// commanded path — so an engine-spontaneous stop can never leave LTC
+// owned forever and unclaimable by the next show session.
+func TestCheckStopCompletionReleasesLTCOwnership(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
+		Media:      pkgaudio.SetField(ref),
+	})
+	if r := m.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start: unexpectedly refused: %+v", r)
+	}
+
+	m.ltc.mu.Lock()
+	owner, owned := m.ltc.id, m.ltc.owned
+	m.ltc.mu.Unlock()
+	if !owned || owner != id {
+		t.Fatalf("precondition: %s should own this node's LTC run after Start, got owner=%q owned=%v", id, owner, owned)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	handle := s.handle
+	// A path that reaches StateStopping without going through
+	// Manager.Stop's own LTC release — an engine-spontaneous stop with
+	// no operator command.
+	s.state = pkgaudio.StateStopping
+	s.mu.Unlock()
+
+	fake := fakeOf(t, m)
+	if _, err := fake.Stop(ctx, handle); err != nil {
+		t.Fatalf("fake.Stop: %v", err)
+	}
+
+	m.watchTick(ctx)
+
+	m.ltc.mu.Lock()
+	ownerAfter, ownedAfter := m.ltc.id, m.ltc.owned
+	m.ltc.mu.Unlock()
+	if ownedAfter && ownerAfter == id {
+		t.Fatalf("LTC still owned by %s after its stop resolved via checkStopCompletionLocked; a later show session can never claim it", id)
+	}
+}
