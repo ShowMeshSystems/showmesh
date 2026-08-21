@@ -172,6 +172,11 @@ jobs:
                 libltc-dev docker-cli
               pkg-config --atleast-version=1.26.0 gstreamer-1.0
               pkg-config --atleast-version=2.80 glib-2.0
+              # The workspace belongs to the runner user, not root, so git
+              # refuses it as dubiously owned and every -buildvcs stamp
+              # fails. Double quotes because this whole script is already
+              # inside a single-quoted argument.
+              git config --global --add safe.directory "*"
               make test-integration
             '
 
