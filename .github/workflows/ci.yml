@@ -109,6 +109,15 @@ jobs:
       - name: Test (race detector)
         run: go test -race ./...
 
+      - name: Build with cgo (ADR-042 real agent backend)
+        # The agent's real GStreamer/libltc engine is a cgo build; without
+        # this step, nothing in CI proves `./...` links with cgo enabled,
+        # only that `go test -race` (which forces it on) happens not to
+        # fail. Explicit here rather than assumed from -race's own
+        # requirement, because -race enabling cgo as a side effect is not
+        # the same claim as this build gate.
+        run: CGO_ENABLED=1 go build ./...
+
       - name: Build CGo-free (ADR-012)
         # ADR-012 requires the coordinator build CGo-free so the image can
         # be a static binary on a distroless base and cross-compile cleanly

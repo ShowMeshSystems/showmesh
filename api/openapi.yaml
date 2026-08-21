@@ -8935,7 +8935,13 @@ components:
         addition: "action-invoke-refused-audit-unavailable"
         (POST /actions/{id}/invocations' own ADR-024 decision 11
         fail-closed default for an action whose stored safetyClass is
-        "none").
+        "none"). Three are Track C's own additions, all scoped to
+        PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a
+        channel index reused within programChannels, or repeated within
+        ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
+        channel already claimed by programChannels), and
+        "audio-node-route-mismatch" (programRoute and ltcRoute naming the
+        same device route).
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -8976,6 +8982,9 @@ components:
             - https://showmesh.dev/problems/action-invoke-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
+            - https://showmesh.dev/problems/audio-node-channel-duplicate
+            - https://showmesh.dev/problems/audio-node-channel-overlap
+            - https://showmesh.dev/problems/audio-node-route-mismatch
         title:
           type: string
         status:

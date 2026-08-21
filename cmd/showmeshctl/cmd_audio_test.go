@@ -178,6 +178,39 @@ func TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel(t *testing.T) {
 	}
 }
 
+// TestCmdAudioNodeSetLTCChannelZeroReachesServer proves --ltc-channel=0
+// is sent to the coordinator rather than refused locally: the CLI is not
+// the authority on whether 0 is a valid channel index, the coordinator
+// is. Before this fix, ltcChannel's int zero value was indistinguishable
+// from "flag not passed", so an operator who typed --ltc-channel=0 got a
+// local "required flags missing" usage refusal and the request was never
+// sent — this asserts the request IS sent, which is the one thing a
+// coordinator-side 400 (also exitUsage, so the exit code alone cannot
+// distinguish the two cases) cannot prove by itself.
+func TestCmdAudioNodeSetLTCChannelZeroReachesServer(t *testing.T) {
+	var requestSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestSeen = true
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"type":"about:blank","title":"Invalid parameter","status":400,"detail":"ltcChannel must be positive"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	_ = cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "0",
+		"--clock-domain", "d", "--clock-domain-provenance", "p",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if !requestSeen {
+		t.Fatal("--ltc-channel=0 was refused locally instead of being sent to the coordinator")
+	}
+}
+
 // TestCmdAudioNodeSetRejectsUnparseableProgramChannels proves a malformed
 // --program-channels value is refused locally with a clear reason rather
 // than sent to the server as garbage.
