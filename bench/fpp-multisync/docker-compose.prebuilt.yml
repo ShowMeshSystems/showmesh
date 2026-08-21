@@ -10,4 +10,4 @@
 services:
   fpp-master:
     build: !reset null
-    image: ${SHOWMESH_FPP_TEST_IMAGE:?SHOWMESH_FPP_TEST_IMAGE is unset and no fixture digest has been pinned here yet -- publish an image with .github/workflows/build-fpp-test-image.yml and set the default in this file, or export SHOWMESH_FPP_TEST_IMAGE yourself}
+    image: ${SHOWMESH_FPP_TEST_IMAGE:-ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:94c38cd2168ae9d5da820a678360a55837685915ffc4deb1a283604e5f01d1ff}

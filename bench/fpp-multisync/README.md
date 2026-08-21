@@ -145,7 +145,9 @@ digest-pinned `image:`.
 - Upstream FPP version: `9.5.3`
 - Upstream commit the build context is pinned to:
   `7979a4bb0bb9068fea71f3b447e273d5c0ea01e3`
-- Current CI digest: _filled in after the first publish_
+- Current CI tag: `9.5.3-build1`
+- Current CI digest:
+  `sha256:94c38cd2168ae9d5da820a678360a55837685915ffc4deb1a283604e5f01d1ff`
 
 The commit pin fixes the `Docker/Dockerfile` and the source tree copied
 into the image. It does not fully pin what gets installed: upstream's
