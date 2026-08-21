@@ -5486,6 +5486,120 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-entry-observations:
+    post:
+      operationId: postFPPPlaylistEntryObservation
+      summary: Ingest one FPP playlist-entry observation (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1)
+      description: >-
+        Behind `fpp:observe`, held by the `scheduler` role (the installed
+        FPP plugin's own principal) and `admin`, deliberately never by
+        `operator`: an operator credential must not be able to forge
+        plugin evidence. Authenticates as a bearer token, so ADR-024
+        decision 6's CSRF header requirement does not apply.
+
+
+        Ingestion grants no execution authority: accepting this
+        observation says only that FPP reported an entry. It never
+        activates a show, playlist, or cue.
+
+
+        The body is bounded at 16384 bytes, refused with `413` before
+        parsing. `sequence` is required to be persistent and monotonic per
+        instance across plugin and host restarts; a lower or reused
+        sequence is refused with `409` and leaves the stored observation
+        untouched. A reused sequence with an identical canonical body is
+        an idempotent replay: `200`, nothing stored, no change-stream
+        event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPPlaylistEntryObservationRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistEntryObservationResponse"
+        "400":
+          description: >-
+            Malformed body or unknown field (`invalid-parameter`),
+            missing `instanceUuid` (`invalid-parameter`), an invalid
+            `action`/`unavailable`/hash/`position` (`invalid-parameter`),
+            an unsupported `schemaVersion`
+            (`unsupported-observation-schema-version`), or a derived
+            `entryKey` that disagrees with the submitted one
+            (`observation-entry-key-mismatch`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            `sequence` was already used for this instance with a
+            different observation body, or is lower than the last
+            accepted sequence (`conflict`). The stored observation is
+            left untouched either way.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: >-
+            The request body exceeds this endpoint's 16384 byte limit.
+            Shares `type` `payload-too-large` with
+            `POST /config/resolume/composition` and `POST /resolume/actions`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listFPPPlaylistEntryObservations
+      summary: The latest accepted playlist-entry observation for every known FPP instance
+      description: >-
+        Open under `observation:read`, matching every other FPP read
+        surface. Exists so a client that sees an
+        `fppPlaylistEntry.changed` change-stream event has an
+        authoritative state to re-fetch (ADR-020's non-resumable stream
+        rule).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistEntryObservationsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets:
     get:
       operationId: listAssets
@@ -9374,7 +9488,14 @@ components:
         ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
         channel already claimed by programChannels), and
         "audio-node-route-mismatch" (programRoute and ltcRoute naming the
-        same device route).
+        same device route). Two are this contract's own additions, both scoped to
+        `POST /integrations/fpp/playlist-entry-observations`:
+        "unsupported-observation-schema-version" (`schemaVersion` is not
+        `1`, `400`) and "observation-entry-key-mismatch" (the coordinator
+        re-derived `entryKey` from the submitted identity fields and it
+        disagreed with what was sent, `400`) — kept distinct from
+        "invalid-parameter" because both name a specific, differently
+        remediable disagreement rather than an ordinary malformed field.
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -9428,6 +9549,8 @@ components:
             - https://showmesh.dev/problems/audio-node-channel-duplicate
             - https://showmesh.dev/problems/audio-node-channel-overlap
             - https://showmesh.dev/problems/audio-node-route-mismatch
+            - https://showmesh.dev/problems/unsupported-observation-schema-version
+            - https://showmesh.dev/problems/observation-entry-key-mismatch
         title:
           type: string
         status:
@@ -10467,6 +10590,171 @@ components:
           type: string
         attributionDegraded:
           type: boolean
+    FPPPlaylistEntryObservationRequest:
+      type: object
+      description: >-
+        The body of POST /integrations/fpp/playlist-entry-observations
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.2), schema
+        version 1. instanceUuid, sequence, observedAtMillis, action,
+        schemaVersion, and coalescedSincePreviousAcknowledged are present
+        on every observation, available or not. The identity fields
+        (playlistName, playlistHash, section, position, entryKey) are
+        required when unavailable is absent and are permitted to be
+        absent when it is present.
+      required:
+        [schemaVersion, instanceUuid, action, sequence, observedAtMillis,
+         coalescedSincePreviousAcknowledged]
+      properties:
+        schemaVersion:
+          type: integer
+          description: Currently 1. Any other value is refused.
+        instanceUuid:
+          type: string
+        playlistName:
+          type: string
+        playlistHash:
+          type: string
+          description: SHA-256, lowercase hex.
+        section:
+          type: string
+        position:
+          type: integer
+          description: Zero-based position within the section.
+        entryKey:
+          type: string
+          description: SHA-256, lowercase hex.
+        sequenceFilename:
+          type: string
+        mediaFilename:
+          type: string
+        action:
+          type: string
+          enum: [start, playing, stop, query_next, unknown]
+        sequence:
+          type: integer
+          description: Monotonic per-instance event sequence, persistent across plugin and host restarts.
+        observedAtMillis:
+          type: integer
+          description: Plugin observation time, epoch milliseconds.
+        coalescedSincePreviousAcknowledged:
+          type: integer
+          description: Gap evidence, 0 when none.
+        unavailable:
+          type: string
+          enum:
+            - missing_instance_uuid
+            - missing_playlist_name
+            - missing_definition
+            - unsupported_definition_shape
+            - negative_position
+            - truncated_identity_field
+    FPPPlaylistEntryObservationResponse:
+      type: object
+      description: >-
+        The 200 response of POST /integrations/fpp/playlist-entry-observations
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): what was decided, not an echo of the
+        request. accepted is true when this observation changed the
+        stored state; false only for an idempotent replay, which stores
+        nothing and publishes nothing. replay is accepted's inverse.
+      required: [schemaVersion, instanceUuid, sequence, entryKey, accepted, replay, serverTime]
+      properties:
+        schemaVersion:
+          type: integer
+        instanceUuid:
+          type: string
+        sequence:
+          type: integer
+        entryKey:
+          type: string
+        accepted:
+          type: boolean
+        replay:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistEntryObservation:
+      type: object
+      description: >-
+        One FPP instance's latest accepted playlist-entry observation, as
+        rendered by GET /integrations/fpp/playlist-entry-observations and
+        the fppPlaylistEntry.changed stream event. position is absent
+        when unavailable is set — an unavailable observation's identity
+        fields carry no meaningful position.
+      required:
+        [instanceUuid, schemaVersion, sequence, action, observedAt,
+         coalescedSincePreviousAcknowledged, receivedAt]
+      properties:
+        instanceUuid:
+          type: string
+        schemaVersion:
+          type: integer
+        sequence:
+          type: integer
+        playlistName:
+          type: string
+        playlistHash:
+          type: string
+        section:
+          type: string
+        position:
+          type: integer
+        entryKey:
+          type: string
+        sequenceFilename:
+          type: string
+        mediaFilename:
+          type: string
+        action:
+          type: string
+          enum: [start, playing, stop, query_next, unknown]
+        unavailable:
+          type: string
+          enum:
+            - missing_instance_uuid
+            - missing_playlist_name
+            - missing_definition
+            - unsupported_definition_shape
+            - negative_position
+            - truncated_identity_field
+        observedAt:
+          type: string
+          format: date-time
+        coalescedSincePreviousAcknowledged:
+          type: integer
+        receivedAt:
+          type: string
+          format: date-time
+    FPPPlaylistEntryObservationsResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlist-entry-observations:
+        the latest accepted observation for every known instance.
+      required: [observations, serverTime]
+      properties:
+        observations:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPPlaylistEntryObservation"
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistEntryChangedEvent:
+      type: object
+      description: >-
+        The payload of an "fppPlaylistEntry.changed" SSE event (FPP-PLUGIN-COORDINATOR-CONTRACTS.md
+        §1.6 step 10): one instance's latest observation, full-frame
+        only — no ADR-023 delta narrowing exists for this resource.
+      required: [seq, serverTime, observation]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
+        serverTime:
+          type: string
+          format: date-time
+        observation:
+          $ref: "#/components/schemas/FPPPlaylistEntryObservation"
     ConfigShow:
       type: object
       description: >-

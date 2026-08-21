@@ -78,8 +78,8 @@ func TestRoleScopes(t *testing.T) {
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
 		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead}},
-		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve}},
+		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve}},
 	}
 	for _, tc := range cases {
 		got := tc.role.Scopes()
@@ -117,10 +117,22 @@ func TestRoleHas(t *testing.T) {
 		t.Errorf("RoleViewer.Has(principal:write) = true, want false")
 	}
 	if RoleScheduler.Has(ScopeNodeRead) {
-		t.Errorf("RoleScheduler.Has(node:read) = true, want false — scheduler holds only show:macro:run and night:command")
+		t.Errorf("RoleScheduler.Has(node:read) = true, want false — scheduler holds only show:macro:run, night:command, and fpp:observe")
 	}
 	if !RoleScheduler.Has(ScopeNightCommand) {
 		t.Errorf("RoleScheduler.Has(night:command) = false, want true (ADR-038 decision 1: FPP is the scheduler credential)")
+	}
+	if !RoleScheduler.Has(ScopeFPPObserve) {
+		t.Errorf("RoleScheduler.Has(fpp:observe) = false, want true (scheduler is the installed plugin principal)")
+	}
+	if RoleOperator.Has(ScopeFPPObserve) {
+		t.Errorf("RoleOperator.Has(fpp:observe) = true, want false — an operator credential must not be able to forge plugin evidence")
+	}
+	if RoleViewer.Has(ScopeFPPObserve) {
+		t.Errorf("RoleViewer.Has(fpp:observe) = true, want false")
+	}
+	if !RoleAdmin.Has(ScopeFPPObserve) {
+		t.Errorf("RoleAdmin.Has(fpp:observe) = false, want true")
 	}
 }
 

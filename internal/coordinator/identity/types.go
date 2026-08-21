@@ -53,6 +53,13 @@ const (
 	ScopeEventRead       Scope = "event:read"
 )
 
+// ScopeFPPObserve gates POST /api/v1/integrations/fpp/playlist-entry-observations
+// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1): the installed FPP
+// plugin reporting playlist-entry evidence. Granted to [RoleScheduler] and
+// [RoleAdmin] only — deliberately NOT to [RoleOperator]: an operator
+// credential must not be able to forge plugin evidence.
+const ScopeFPPObserve Scope = "fpp:observe"
+
 // Write scopes. Step 6 adds no endpoint that consumes ScopeShowMacroRun,
 // ScopeDevicePower, or ScopeFPPCommand — they exist so the vocabulary is
 // fixed by the record that decided it (ADR-024) rather than invented by
@@ -150,7 +157,12 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // names it, alongside principal:write, as the pair that stays fail-closed
 // even under the audit-write-failure exemption, and neither appears in
 // operatorActionScopes above.
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead}
+// ScopeFPPObserve is deliberately admin-only rather than added to
+// operatorActionScopes: it is not an operator action scope (FPP-PLUGIN-COORDINATOR-CONTRACTS.md,
+// ScopeFPPObserve's own doc comment) — admin holds it only because admin
+// holds everything, never because an operator credential should be able
+// to forge plugin evidence.
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
@@ -169,8 +181,11 @@ func (r Role) Scopes() []Scope {
 	case RoleScheduler:
 		// ADR-038 decision 1: FPP invokes the seven night-session
 		// lifecycle commands, and scheduler is the machine credential
-		// that exists for exactly that.
-		return []Scope{ScopeShowMacroRun, ScopeNightCommand}
+		// that exists for exactly that. the plugin observation contract grows this bundle by
+		// exactly one scope: scheduler is also the installed plugin
+		// principal that reports playlist-entry observations (ADR-038,
+		// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1).
+		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve}
 	case RoleRecovery:
 		return []Scope{ScopeResolumeAction}
 	default:

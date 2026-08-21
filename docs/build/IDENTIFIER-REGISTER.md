@@ -182,7 +182,7 @@ bundles of these (ADR-024).
 | `show:macro:run` | shipped | macro run submission |
 | `device:power` | shipped | controlled-device power |
 | `fpp:command` | shipped | the eight FPP primitives |
-| `fpp:observe` | reserved | SM-63/Track H: authenticated FPP playlist-entry observation ingestion |
+| `fpp:observe` | shipped | SM-63/Track H: authenticated FPP playlist-entry observation ingestion |
 | `config:write` | shipped | every configuration write |
 | `audit:read` | shipped | audit log reads |
 | `resolume:action` | shipped | the seven Resolume actions |
@@ -351,6 +351,7 @@ register entry comes from the code and never from a plan.
 | `asset.upload` | shipped | Track E |
 | `asset.fetch` | shipped | Track E |
 | `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+| `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -632,7 +633,8 @@ The store schema version, bumped by migrations in
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
 | v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
-| v14+ | unallocated | free |
+| v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
+| v15+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
@@ -709,6 +711,7 @@ anything failing loudly.
 | `resolume.changed` | shipped | Track D |
 | `resolumeRecovery.changed` | shipped | Track D seam D-3a |
 | `nightSession.changed` | reserved | Track F seam F2 |
+| `fppPlaylistEntry.changed` | shipped | SM-150, Track H: latest accepted FPP playlist-entry observation |
 
 **Track F mints one kind, not one per lifecycle transition.** ADR-020 makes
 the stream non-resumable, so a client that misses frames re-fetches the

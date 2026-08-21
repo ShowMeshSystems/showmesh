@@ -57,7 +57,7 @@ Validation refuses cross-show references, duplicate entry ids, missing Cues, uns
 
 Provide an authoring flow that reads an FPP playlist definition, stores its canonical revision, and maps each entry to a Cue. Import never makes a filename the Cue identity.
 
-The SM-63 native component publishes the versioned atomic identity event defined by RES-018. Track H ingests it and resolves the deterministic entry key from FPP instance UUID, playlist name, canonical playlist hash, section, and position. Expected sequence and media filenames are validation evidence.
+The SM-63 native component publishes the versioned atomic identity event defined by RES-018 and frozen byte for byte in [FPP plugin coordinator contracts](FPP-PLUGIN-COORDINATOR-CONTRACTS.md). Ingestion of that event, its authorization scope, its refusal vocabulary, and its storage landed under SM-150; H2 consumes the stored latest observation rather than redefining the wire shape. Track H ingests it and resolves the deterministic entry key from FPP instance UUID, playlist name, canonical playlist hash, section, and position. Expected sequence and media filenames are validation evidence.
 
 Reconciliation refuses a changed playlist hash, an unknown entry, ambiguous duplicates, an event-sequence regression, or an inactive-show binding. A playlist edit becomes visible in readiness before showtime and becomes an explicit mismatch at runtime until the operator reconciles it.
 

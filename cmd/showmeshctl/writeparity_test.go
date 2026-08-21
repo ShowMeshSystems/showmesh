@@ -30,6 +30,15 @@ var exemptWritePaths = map[string]string{
 	"/session": "POST mints and DELETE destroys a browser session cookie; this CLI is bearer-only and " +
 		"never holds one. GET /session (whoami against whatever --token resolves to) IS covered — see " +
 		"cmd_session.go — only the cookie-minting/destroying half is exempt.",
+	"/integrations/fpp/playlist-entry-observations": "POST is evidence ingestion from the installed FPP " +
+		"plugin, not an operator capability: the body is machine-derived identity (a canonical playlist " +
+		"hash and a derived entry key over a definition only the plugin holds) plus a per-instance " +
+		"monotonic sequence the coordinator refuses to let go backwards. A hand-typed observation is " +
+		"either refused or a forged claim about what FPP played, so a verb for it would be a way to lie " +
+		"to the coordinator rather than a way to operate it, which is also why fpp:observe is granted to " +
+		"scheduler and admin and deliberately not to operator (FPP-PLUGIN-COORDINATOR-CONTRACTS.md 1.1). " +
+		"The READ half, GET on the same path, is an ordinary read this CLI should grow a verb for when " +
+		"Track H gives an operator a reason to look at it.",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees

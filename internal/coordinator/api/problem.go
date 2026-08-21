@@ -146,6 +146,26 @@ const (
 	// matching `detail` prose, the exact defect the sibling type exists to
 	// rule out. See [fppStartPlaylistBusyProblem].
 	ProblemTypeFPPStartPlaylistBusy = problemBaseURI + "fpp-start-playlist-busy"
+
+	// ProblemTypeUnsupportedObservationSchemaVersion is FPP-PLUGIN-COORDINATOR-CONTRACTS.md's own §1.6
+	// step 5 refusal: POST /api/v1/integrations/fpp/playlist-entry-observations'
+	// schemaVersion is not 1. Distinct from [ProblemTypeInvalidParameter]
+	// because a client on this type can tell "this coordinator does not
+	// speak the schema version you sent" apart from every other malformed
+	// field, which has a different remedy (upgrade the plugin, not fix a
+	// typo).
+	ProblemTypeUnsupportedObservationSchemaVersion = problemBaseURI + "unsupported-observation-schema-version"
+
+	// ProblemTypeObservationEntryKeyMismatch is FPP-PLUGIN-COORDINATOR-CONTRACTS.md's own §1.6 step 8
+	// refusal: the coordinator re-derived entryKey from the submitted
+	// identity fields (pkg/fppidentity.DeriveEntryKey) and it disagreed
+	// with what the plugin sent. Distinct from
+	// [ProblemTypeInvalidParameter]: this is not a malformed field, it is
+	// two independent computations of the same value disagreeing, which a
+	// client needs to be able to tell apart from an ordinary validation
+	// error (contract §1.3: "a disagreement...is a blocker...never a
+	// unilateral change on either side").
+	ProblemTypeObservationEntryKeyMismatch = problemBaseURI + "observation-entry-key-mismatch"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
