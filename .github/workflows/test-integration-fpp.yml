@@ -58,6 +58,9 @@ concurrency:
 jobs:
   test-integration-fpp:
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_BASE: bench/fpp-multisync/docker-compose.yml
+      COMPOSE_PREBUILT: bench/fpp-multisync/docker-compose.prebuilt.yml
     # The fixture pull plus the test run; the source build this used to pay
     # for is gone, but headroom stays generous over the other integration
     # jobs' 10 minutes.
@@ -76,11 +79,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No fallback: docker-compose.prebuilt.yml removes fpp-master's build
+      # config outright, so a failure here is the end of the job rather than
+      # a silent return to the source build this replaced.
       - name: Pull the pinned FPP test fixture
         run: |
-          docker compose -f bench/fpp-multisync/docker-compose.yml -f bench/fpp-multisync/docker-compose.prebuilt.yml pull fpp-master
-          resolved="$(docker compose -f bench/fpp-multisync/docker-compose.yml -f bench/fpp-multisync/docker-compose.prebuilt.yml config --images fpp-master)"
-          echo "pulled fpp-master image: $resolved"
+          resolved="$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" config --images fpp-master)"
+          echo "pinned fpp-master image: $resolved"
+          if ! docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" pull fpp-master; then
+            echo "::error::could not pull $resolved. A pull request from a fork gets a GITHUB_TOKEN scoped to the fork, which cannot read this private package; a fork PR cannot run this job." >&2
+            exit 1
+          fi
 
       # ubuntu-latest ships Docker (with Compose v2) already, usable
       # without sudo. `make test-integration-fpp` (scripts/test-integration-fpp.sh)
@@ -93,3 +102,16 @@ jobs:
         env:
           SHOWMESH_FPP_TEST_PREBUILT: "1"
         run: make test-integration-fpp
+
+      # Independent of SHOWMESH_FPP_TEST_PREBUILT, so dropping or
+      # misspelling that variable fails here instead of quietly restoring
+      # the source build and reporting green.
+      - name: Verify the bench container ran the pinned fixture
+        run: |
+          pinned="$(docker image inspect -f '{{.Id}}' "$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" config --images fpp-master)")"
+          running="$(docker inspect -f '{{.Image}}' showmesh-bench-fpp-master)"
+          if [ "$running" != "$pinned" ]; then
+            echo "::error::showmesh-bench-fpp-master ran $running, not the pinned fixture $pinned" >&2
+            exit 1
+          fi
+          echo "confirmed: showmesh-bench-fpp-master ran the pinned fixture $pinned"

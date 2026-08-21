@@ -225,11 +225,9 @@ func TestIntegrationLivePollMatchesRealDaemon(t *testing.T) {
 // working directory regardless of where it was invoked from.
 //
 // SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE, when set, is appended as a second
-// -f layer: CI's prebuilt-fixture mode sets it so this test's own
-// --force-recreate recovers the container from the pinned GHCR image
-// rather than triggering the source build this file's whole existence is
-// meant to avoid. A set-but-missing override fails loudly rather than
-// silently falling back to the base file alone.
+// -f layer, so this test's --force-recreate recovers the container the
+// same way the harness created it. A set-but-missing override fails rather
+// than silently falling back to the base file alone.
 func benchComposeFiles(t *testing.T) ([]string, bool) {
 	t.Helper()
 	base := filepath.Join("..", "..", "..", "..", "bench", "fpp-multisync", "docker-compose.yml")

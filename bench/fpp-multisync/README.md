@@ -137,14 +137,21 @@ expect — confirmed while building this bench (see below).
 CI does not source-build fpp-master: GitHub-hosted runners have no
 persistent Docker layer cache, so every run would pay the full build.
 Instead `.github/workflows/test-integration-fpp.yml` pulls a prebuilt image
-from `ghcr.io/showmeshsystems/showmesh-fpp-test` (private package) via
+from `ghcr.io/showmeshsystems/showmesh-fpp-test` via
 `docker-compose.prebuilt.yml`, an override that layers on top of
 `docker-compose.yml` and replaces `fpp-master`'s `build:` with a
 digest-pinned `image:`.
 
 - Upstream FPP version: `9.5.3`
-- Pinned upstream commit: `7979a4bb0bb9068fea71f3b447e273d5c0ea01e3`
+- Upstream commit the build context is pinned to:
+  `7979a4bb0bb9068fea71f3b447e273d5c0ea01e3`
 - Current CI digest: _filled in after the first publish_
+
+The commit pin fixes the `Docker/Dockerfile` and the source tree copied
+into the image. It does not fully pin what gets installed: upstream's
+Dockerfile runs `SD/FPP_Install.sh --branch ${FPPBRANCH}` without
+`--skip-clone`, so the install step clones the ref rather than the commit.
+The digest, not the commit, is what makes CI reproducible.
 
 Local development is unaffected and still source-builds by default:
 
@@ -152,13 +159,18 @@ Local development is unaffected and still source-builds by default:
 docker compose -f docker-compose.yml up -d --build fpp-master
 ```
 
-CI's path (what `SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp`
-runs locally too, if you want to reproduce it):
+CI's path, which you can reproduce locally if you have access to the
+package:
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull fpp-master
 SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp
 ```
+
+Prebuilt mode **recreates** `showmesh-bench-fpp-master` from the pinned
+image, replacing a source-built container if one is running, and then
+asserts that the running container really is that image. Do not run it on a
+machine whose bench container you want to keep.
 
 **Why a digest, not just the tag.** Rebuilding the same upstream git tag
 does not reproduce the same image: the build installs packages from
@@ -172,9 +184,15 @@ actually resolves from `fpp_ref` upstream before building. Take the
 resulting digest from the job's summary.
 
 **Pointing CI at a new image** is a separate, deliberate step: publishing
-does not move CI to it. Edit the default in
-`docker-compose.prebuilt.yml`'s `SHOWMESH_FPP_TEST_IMAGE` value to the new
-`ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:...` reference.
+does not move CI to it. Replace the digest in `docker-compose.prebuilt.yml`'s
+`image: ${SHOWMESH_FPP_TEST_IMAGE:-...}` default with the
+`ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:...` reference the publish
+job's summary prints.
+
+**Fork pull requests cannot run the FPP integration workflow.** A pull
+request from a fork gets a `GITHUB_TOKEN` scoped to the fork, which cannot
+read a private package owned by `ShowMeshSystems`, so the pull step fails
+with an explicit message rather than falling back to a source build.
 
 **Licensing.** Upstream FPP's `LICENSE` describes a mix: LGPL v2.1 for the
 core, GPL v2 for channel outputs and general code, and CC-BY-ND for
