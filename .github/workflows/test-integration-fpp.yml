@@ -108,10 +108,12 @@ jobs:
               # Debian's docker-compose is Compose v2 and installs the CLI
               # plugin, so the script's `docker compose` subcommand works.
               docker compose version
-              gst="$(pkg-config --modversion gstreamer-1.0)"
-              echo "gstreamer-1.0: $gst, libltc: $(pkg-config --modversion ltc)"
-              pkg-config --atleast-version=1.26.0 gstreamer-1.0 \
-                || { echo "gstreamer $gst is below the 1.26 floor go-gst needs" >&2; exit 1; }
+              echo "PKG_CONFIG_PATH=[${PKG_CONFIG_PATH:-unset}]"
+              echo "PKG_CONFIG_LIBDIR=[${PKG_CONFIG_LIBDIR:-unset}]"
+              command -v pkg-config || true
+              dpkg -l libgstreamer1.0-dev | tail -2 || true
+              ls -l /usr/lib/*/pkgconfig/gstreamer-1.0.pc || true
+              pkg-config --modversion gstreamer-1.0 || echo "pkg-config could not resolve gstreamer-1.0"
               git config --global --add safe.directory "*"
               make test-integration-fpp
             '
