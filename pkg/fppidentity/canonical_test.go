@@ -309,6 +309,54 @@ func TestCanonicalizeArraysAndNestedObjects(t *testing.T) {
 	}
 }
 
+// TestNestingDepthBoundary asserts the exact maxDepth boundary, contract
+// §1.3: only containers count toward the depth, so 200 nested arrays
+// canonicalize and 201 are refused.
+func TestNestingDepthBoundary(t *testing.T) {
+	nested := func(n int) []byte {
+		return []byte(strings.Repeat("[", n) + "1" + strings.Repeat("]", n))
+	}
+	if _, err := Canonicalize(nested(maxDepth)); err != nil {
+		t.Errorf("%d levels of array nesting should canonicalize, got error: %v", maxDepth, err)
+	}
+	if _, err := Canonicalize(nested(maxDepth + 1)); err == nil {
+		t.Errorf("%d levels of array nesting should be refused, got nil error", maxDepth+1)
+	}
+}
+
+// TestCanonicalizeRejectsInvalidUTF8InStrings is finding 6's regression
+// test: an invalid UTF-8 lead byte, a truncated multi-byte sequence, and
+// an overlong encoding must all be refused, never silently coerced.
+func TestCanonicalizeRejectsInvalidUTF8InStrings(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []byte
+	}{
+		{"invalid lead byte", []byte("[\"a\xffb\"]")},
+		{"truncated multi-byte sequence", []byte("[\"a\xe2\x82\"]")},
+		{"overlong encoding", []byte("[\"a\xc0\x80b\"]")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Canonicalize(tc.input); err == nil {
+				t.Errorf("Canonicalize(%q): expected an error, got nil", tc.input)
+			}
+		})
+	}
+}
+
+// TestCanonicalizeRejectsInvalidUTF8InMemberNames mirrors the string-value
+// case for an object member name, exercised through the entryKey path's
+// own object construction, not the JSON parser: DeriveEntryKey builds its
+// five-member object directly (see entrykey.go), bypassing parseString
+// entirely, so the refusal must live in writeValue/sortMembers, not in
+// the parser.
+func TestCanonicalizeRejectsInvalidUTF8InMemberNames(t *testing.T) {
+	if _, err := Canonicalize([]byte("{\"a\xffb\":1}")); err == nil {
+		t.Error("expected an error for an invalid UTF-8 member name, got nil")
+	}
+}
+
 func TestCanonicalizeUsesUTF8Output(t *testing.T) {
 	got, err := canonicalText(t, `{"a":"caf\u00e9"}`)
 	if err != nil {

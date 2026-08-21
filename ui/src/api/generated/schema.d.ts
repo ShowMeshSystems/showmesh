@@ -3752,7 +3752,7 @@ export interface components {
             reason: string;
             attributionDegraded: boolean;
         };
-        /** @description The body of POST /integrations/fpp/playlist-entry-observations (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.2), schema version 1. instanceUuid, sequence, observedAtMillis, action, schemaVersion, and coalescedSincePreviousAcknowledged are present on every observation, available or not. The identity fields (playlistName, playlistHash, section, position, entryKey) are required when unavailable is absent and are permitted to be absent when it is present. */
+        /** @description The body of POST /integrations/fpp/playlist-entry-observations (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.2), schema version 1. instanceUuid, sequence, observedAtMillis, action, schemaVersion, and coalescedSincePreviousAcknowledged are present on every observation, available or not. playlistName, playlistHash, position, and entryKey are required when unavailable is absent; playlistHash and entryKey must be absent when unavailable is present (they are derived identity nothing computed for an unavailable observation), while playlistName, section, and position are merely permitted to be absent then. section may be the empty string even when unavailable is absent; playlistName may not. */
         FPPPlaylistEntryObservationRequest: {
             /** @description Currently 1. Any other value is refused. */
             schemaVersion: number;
@@ -8263,7 +8263,7 @@ export interface operations {
                     "application/json": components["schemas"]["FPPPlaylistEntryObservationResponse"];
                 };
             };
-            /** @description Malformed body or unknown field (`invalid-parameter`), missing `instanceUuid` (`invalid-parameter`), an invalid `action`/`unavailable`/hash/`position` (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-observation-schema-version`), or a derived `entryKey` that disagrees with the submitted one (`observation-entry-key-mismatch`). */
+            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), missing `instanceUuid` (`invalid-parameter`), an invalid `action`/`unavailable`/hash/`position` (`invalid-parameter`), an identity field missing when `unavailable` is absent, or `playlistHash`/`entryKey` present when `unavailable` is present (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-observation-schema-version`), or a derived `entryKey` that disagrees with the submitted one (`observation-entry-key-mismatch`). */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

@@ -68,9 +68,24 @@ generous for every legitimate observation.
 
 `instanceUuid`, `sequence`, `observedAtMillis`, `action`, `schemaVersion`, and
 `coalescedSincePreviousAcknowledged` are present on every observation,
-available or not. The identity fields (`playlistName`, `playlistHash`,
-`section`, `position`, `entryKey`) are required when `unavailable` is absent
-and are permitted to be absent when it is present.
+available or not.
+
+The identity fields divide into two groups, and the split is load bearing:
+
+- **`playlistHash` and `entryKey` are derived identity.** They are required
+  when `unavailable` is absent and **must be absent** when it is present.
+  Neither can exist without the playlist definition, so a value in either
+  field on an unavailable observation is a claim nothing computed. The
+  coordinator refuses it rather than storing an entry key it never verified,
+  because Track H consumes the stored observation and an unverified key there
+  is an unverified key in the Cue binding.
+- **`playlistName`, `section`, and `position` are corroborating evidence.**
+  They are required when `unavailable` is absent, and are permitted but not
+  required when it is present. `section` may legitimately be an empty string;
+  `playlistName` may not.
+
+"Permitted to be absent" never means "permitted to be arbitrary". Every field
+present on the wire is validated whether or not `unavailable` is set.
 
 ### 1.3 The two hashes
 
@@ -104,6 +119,28 @@ The canonicalization rules both sides implement:
 - Minimal string escaping: `"`, `\`, `\b`, `\f`, `\n`, `\r`, `\t`, and
   `\u00xx` for any other code point below `0x20`. Nothing else is escaped.
 - UTF-8 output.
+- Container nesting is bounded at 200. Only objects and arrays count toward
+  the depth; a scalar does not.
+- Invalid UTF-8 in a string or a member name is **refused**, not passed
+  through. A definition containing it is `unsupported_definition_shape`.
+
+The last two rules are stated because they are exactly where two independent
+implementations drift without either one looking wrong. Sorting member names
+by UTF-16 code unit is only a total order over well-formed UTF-8: map two
+byte-distinct malformed names onto the same code unit and the sort has a tie
+it cannot break, at which point the canonical bytes depend on which sort
+algorithm each side happens to use. Refusing invalid UTF-8 removes the tie
+instead of papering over it, and it fails in the visible direction: a refused
+definition becomes an explicit unavailable observation, never a hash two sides
+disagree about.
+
+**Known open divergence, 2026-08-21.** The plugin's C++ currently counts
+nesting depth per container while an earlier draft of the coordinator's Go
+counted it per value, an off-by-one at the boundary, and the C++ does not yet
+refuse invalid UTF-8. The coordinator now implements both rules as written
+above. The plugin must adopt them before the two are byte-identical on
+malformed input. Well-formed definitions, which is every definition FPP itself
+produces, are unaffected and are covered by the shared fixtures.
 
 ### 1.4 Unavailable observations
 
@@ -123,6 +160,9 @@ are:
 
 The C++ enum's human strings are not wire values. Any other value in
 `unavailable` is refused as an invalid parameter.
+
+An unavailable observation carrying a `playlistHash` or an `entryKey` is
+refused. See §1.2 for why those two fields, and not the corroborating ones.
 
 An unavailable observation whose `instanceUuid` is itself missing cannot be
 attributed to an instance and is refused: `missing_instance_uuid` is
@@ -151,8 +191,20 @@ What the coordinator does with a genuine regression:
   operator reading it can tell a restart apart from a genuine reorder.
 - The stored per-instance sequence is cleared only by an explicit,
   authenticated operator action. That action does not exist yet and is
-  deliberately out of scope here; until it does, a plugin that loses its
-  persisted sequence is recovered by clearing the coordinator's stored row.
+  deliberately out of scope here. The store method exists and no route reaches
+  it, so today the only way to clear a row is direct database access on the
+  coordinator host.
+
+**That recovery route is a prerequisite for the plugin's sending half, not a
+nice-to-have.** Nothing posts to this endpoint yet, so nothing can be wedged
+today. The moment a plugin does post, a single observation carrying a wildly
+high sequence, from a misconfigured host or a compromised credential, refuses
+every later legitimate observation for that instance permanently. There is
+also no binding between the authenticated principal and the `instanceUuid` it
+reports for: `fpp:observe` authorizes reporting for any instance, because
+ADR-024 decision 4 delivers action scoping and states plainly that target
+scoping is not implemented. Both facts are recorded here so the follow-up work
+inherits them rather than rediscovering them.
 
 ### 1.6 Ingestion behavior
 
@@ -161,13 +213,21 @@ In order:
 1. Authenticate; refuse `401` when no credential resolves.
 2. Check `fpp:observe`; refuse `403` naming the scope.
 3. Bound the body at 16384 bytes; refuse `413` on overflow.
-4. Decode. Refuse `400` on malformed JSON or unknown fields.
+4. Decode, and canonicalize the raw body. Refuse `400` on malformed JSON,
+   unknown fields, trailing content after the object, or a duplicate member
+   name. A duplicate member name matters here and not merely as pedantry: a
+   permissive decoder keeps the last `sequence` while a reader of the same
+   bytes sees the first.
 5. Refuse `400` when `schemaVersion` is not `1`.
 6. Refuse `400` when `instanceUuid` is absent or empty.
 7. Refuse `400` when `action` is outside the fixed vocabulary, when
    `unavailable` is outside the §1.4 vocabulary, when `position` is negative,
-   when a hash is not 64 lowercase hex characters, or when
-   `coalescedSincePreviousAcknowledged` or `sequence` is negative.
+   when a hash is present and is not 64 lowercase hex characters, or when
+   `coalescedSincePreviousAcknowledged` or `sequence` is negative. Refuse
+   `400` when `unavailable` is absent and any of `playlistName`,
+   `playlistHash`, `position`, or `entryKey` is missing, and when
+   `unavailable` is present and either `playlistHash` or `entryKey` is
+   present.
 8. When `unavailable` is absent, re-derive the entry key from
    `instanceUuid`, `playlistName`, `playlistHash`, `section`, and `position`
    and refuse `400` when it disagrees with the submitted `entryKey`.
@@ -209,6 +269,8 @@ non-active show must never activate anything.
 | Unsupported `schemaVersion` | 400 | `unsupported-observation-schema-version` |
 | Missing `instanceUuid` | 400 | `invalid-parameter` |
 | Invalid enum, hash, or position | 400 | `invalid-parameter` |
+| Identity field missing with no `unavailable` | 400 | `invalid-parameter` |
+| Derived identity present with `unavailable` | 400 | `invalid-parameter` |
 | Derived entry key mismatch | 400 | `observation-entry-key-mismatch` |
 | Reused sequence, different body | 409 | `conflict` |
 | Sequence regression | 409 | `conflict` |

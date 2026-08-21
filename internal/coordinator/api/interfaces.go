@@ -415,11 +415,8 @@ type NightSessionStore interface {
 // InTx is required, not merely Get/List/Put individually: contract §1.6
 // step 9 requires reading the instance's currently stored sequence AND
 // body hash to distinguish an idempotent replay from a genuine conflict
-// BEFORE deciding whether to write, and that read must happen inside the
-// SAME transaction as the write it gates — a read on one connection
-// followed by a write on another is exactly the defect this package's
-// reviews have caught before (store/fppobservations.go's own
-// putFPPPlaylistEntryObservation doc comment).
+// BEFORE deciding whether to write, and that read must share one
+// transaction with the write it gates.
 type FPPObservationStore interface {
 	GetFPPPlaylistEntryObservation(ctx context.Context, instanceUUID string) (store.FPPPlaylistEntryObservationRecord, error)
 	ListFPPPlaylistEntryObservations(ctx context.Context) ([]store.FPPPlaylistEntryObservationRecord, error)

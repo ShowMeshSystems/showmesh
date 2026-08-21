@@ -214,6 +214,24 @@ func TestDeriveEntryKeyFromCanonicalizedDefinition(t *testing.T) {
 	}
 }
 
+// TestDeriveEntryKeyRejectsInvalidUTF8 is finding 6's regression test on
+// the entryKey path specifically: DeriveEntryKey builds its object
+// directly from Go strings, never through the JSON parser, so a caller
+// passing an invalid-UTF-8 playlist name must still be refused rather
+// than silently hashed.
+func TestDeriveEntryKeyRejectsInvalidUTF8(t *testing.T) {
+	id := EntryIdentity{
+		InstanceUUID: testUUID,
+		PlaylistName: "bad\xffname",
+		PlaylistHash: "aa",
+		Section:      "main",
+		Position:     0,
+	}
+	if _, err := DeriveEntryKey(id); err == nil {
+		t.Error("expected an error for an invalid UTF-8 playlist name, got nil")
+	}
+}
+
 func TestParseActionRoundTrips(t *testing.T) {
 	actions := []Action{ActionStart, ActionPlaying, ActionStop, ActionQueryNext, ActionUnknown}
 	for _, a := range actions {

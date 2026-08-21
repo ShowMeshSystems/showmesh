@@ -1,31 +1,17 @@
 package v1
 
 // This file is the playlist-entry observation wire types: FPP-PLUGIN-COORDINATOR-CONTRACTS.md
-// §1.2 (request) and §1.6 (response). Optional identity fields
-// (playlistName, playlistHash, section, sequenceFilename, mediaFilename,
-// entryKey, unavailable) use omitempty on the request, §1.2's own table
-// says they are "permitted to be absent when [unavailable] is present"
-// but position and coalescedSincePreviousAcknowledged use *int/*uint32
-// rather than a bare int/int32: the contract requires distinguishing
-// "absent" from "zero" for both (position 0 is a real, valid first-slot
-// position; coalescedSincePreviousAcknowledged 0 is a real, valid "no
-// gap"), and a bare zero-value int cannot make that distinction on the
-// wire.
+// §1.2 (request) and §1.6 (response). Position uses *int rather than a
+// bare int because position 0 is a real, valid first-slot position, and
+// the contract requires distinguishing "absent" from "zero" (§1.2, §1.6
+// step 7).
 
 // FPPPlaylistEntryObservationRequest is the body of
 // POST /api/v1/integrations/fpp/playlist-entry-observations, contract
-// §1.2, schema version 1.
-//
-// Position is *int, not int: it is one of the five identity fields
-// ("required when unavailable is absent, permitted to be absent when it
-// is present", §1.2), and position 0 is a real, valid first-slot
-// position, so a bare int cannot distinguish "absent" from "the first
-// entry". Sequence and CoalescedSincePreviousAcknowledged are plain int64:
-// both are present on EVERY observation regardless of unavailable (§1.2's
-// own note), so there is no absent case for either to distinguish from
-// zero, decoding both as signed (never unsigned) is what lets step 7's
-// "refuse 400 when...negative" check run as this handler's own audited
-// validation rather than surfacing as an unaudited JSON decode error.
+// §1.2, schema version 1. Sequence and CoalescedSincePreviousAcknowledged
+// are plain int64, decoded as signed rather than unsigned, so a negative
+// value reaches step 7's own audited "refuse 400" check instead of
+// surfacing as an unaudited JSON decode error.
 type FPPPlaylistEntryObservationRequest struct {
 	SchemaVersion                      int    `json:"schemaVersion"`
 	InstanceUUID                       string `json:"instanceUuid"`

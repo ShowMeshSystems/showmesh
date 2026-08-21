@@ -89,6 +89,16 @@ already, but a consumer should sort rather than assume), canonicalizes it
 with its own canonicalizer, compares against `expectedCanonicalKeyObject`,
 hashes those bytes, and compares against `expectedEntryKey`.
 
+`entry-key.json`'s `playlistHash` values (`"deadbeef"`, `"cafebabe"`, and
+similar) are deliberately short and not 64 lowercase hex characters: this
+file exercises entry-key derivation alone, which never validates
+`playlistHash`'s shape, so a short, readable placeholder is more useful
+here than a real SHA-256. Those values are not valid ingestion bodies:
+`playlist-entry-observations` POST refuses any hash that is not 64
+lowercase hex (contract section 1.6 step 7). The two fixture families are
+not composable; do not build an `ingestion.json` case's `entryKey` or
+`playlistHash` by copying an `entry-key.json` identity's values.
+
 ## `ingestion.json` schema
 
 A JSON object with a `description` string and a `cases` array. Each case is
@@ -99,7 +109,8 @@ an object:
 | `name` | string | Unique within the file. |
 | `description` | string | What the case exercises. |
 | `scope` | string | One of `"fpp:observe"` (a principal holding the plugin's own scope), `"show:macro:run"` (an operator principal that deliberately does not hold `fpp:observe`, the wrong-scope case), or `"none"` (no credential at all). |
-| `body` | object | The request body to POST, as a JSON object. Omitted when `rawBodyOverride` or `oversizedBodyBytes` is present instead. |
+| `body` | object | The request body to POST, as a JSON object. Omitted when `rawBody`, `rawBodyOverride`, or `oversizedBodyBytes` is present instead. |
+| `rawBody` | string | Present only for a case whose exact wire member order matters, for example a replay case that must post the same content in a different key order: the literal bytes to POST. A consumer that re-marshals a case's `body` from a language map (Go's `json.Marshal(map[string]any)`, for instance) sorts the keys, which silently defeats a member-order case, so this field carries the exact bytes instead. |
 | `rawBodyOverride` | string | Present only for a case whose wire content is not valid JSON (for example the malformed-body case): the literal bytes to POST. |
 | `oversizedBodyBytes` | integer | Present only for the oversized-body case: see below. |
 | `expectedStatus` | integer | The HTTP status code the endpoint must return. |
@@ -124,8 +135,8 @@ JSON-encoded body reaches the target length) and posts that.
    store, and confirm each POST's own `expectedStatus` before continuing.
    A case's `priorCases` are themselves complete cases in this file, not a
    separate abbreviated form.
-3. POST this case's own body (from `body`, `rawBodyOverride`, or the
-   synthesized oversized body).
+3. POST this case's own body (from `body`, `rawBody`, `rawBodyOverride`, or
+   the synthesized oversized body).
 4. Assert the response status against `expectedStatus`.
 5. On a refusal, assert the problem's `type` equals the fixed base URI plus
    `expectedProblemType`.

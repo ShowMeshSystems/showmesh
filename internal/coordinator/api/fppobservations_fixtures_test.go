@@ -43,6 +43,7 @@ type ingestionCase struct {
 	Description         string         `json:"description"`
 	Scope               string         `json:"scope"`
 	Body                map[string]any `json:"body,omitempty"`
+	RawBody             *string        `json:"rawBody,omitempty"`
 	RawBodyOverride     *string        `json:"rawBodyOverride,omitempty"`
 	OversizedBodyBytes  *int           `json:"oversizedBodyBytes,omitempty"`
 	ExpectedStatus      int            `json:"expectedStatus"`
@@ -72,13 +73,19 @@ func loadIngestionFixture(t *testing.T) ingestionFixture {
 
 // ingestionCaseBody renders tc's wire body as raw bytes: rawBodyOverride
 // wins when present (the case's content is not valid JSON, contract
-// step 4's malformed-body refusal), then oversizedBodyBytes (synthesized
+// step 4's malformed-body refusal), then rawBody (valid JSON whose exact
+// member order matters, for example a replay case that must not be
+// re-marshaled: json.Marshal(map[string]any) sorts keys and would
+// silently defeat that case), then oversizedBodyBytes (synthesized
 // padding, since a literal 16 KiB JSON value would bloat the fixture
 // file), then the ordinary JSON-encoded body object.
 func ingestionCaseBody(t *testing.T, tc ingestionCase) string {
 	t.Helper()
 	if tc.RawBodyOverride != nil {
 		return *tc.RawBodyOverride
+	}
+	if tc.RawBody != nil {
+		return *tc.RawBody
 	}
 	if tc.OversizedBodyBytes != nil {
 		return synthesizeOversizedBody(*tc.OversizedBodyBytes)

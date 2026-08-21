@@ -16,13 +16,10 @@ import (
 
 // FPPPlaylistEntryObservationRecord is the latest accepted observation for
 // one FPP instance, one row per instance_uuid, never a history (see
-// schemaV14's doc comment). ObservedAt and ReceivedAt are the package's
-// normal time.Time fields; ObservedAt round-trips through
-// observed_at_millis (an INTEGER column, matching the wire contract's own
-// epoch-millisecond encoding exactly, §1.2), while ReceivedAt uses this
-// package's usual TEXT/RFC3339Nano convention (queries.go's timeToDB/
-// dbToTime), since it is this package's own bookkeeping timestamp, not a
-// value carried on the wire.
+// schemaV14's doc comment). observed_at_millis is INTEGER because the
+// wire carries epoch milliseconds (§1.2); ReceivedAt uses this package's
+// usual TEXT/RFC3339Nano convention instead, since it is package
+// bookkeeping, not a value carried on the wire.
 type FPPPlaylistEntryObservationRecord struct {
 	InstanceUUID                       string
 	SchemaVersion                      int64
@@ -147,14 +144,12 @@ func (t *Tx) ListFPPPlaylistEntryObservations(ctx context.Context) ([]FPPPlaylis
 }
 
 // putFPPPlaylistEntryObservation reads the instance's currently stored
-// sequence and decides whether to accept rec, INSIDE the same querier q
-// never a read on one connection followed by a write on another. The [Tx]
-// form is already inside its caller's single transaction; the [Store] form
-// opens its own transaction below rather than calling this against s.db
-// directly, so the read and the write can never be interleaved by a
-// second, concurrent caller, matching queries.go's RecordHealth precedent
-// (this package's connection pool is capped at exactly one connection, so
-// the second call's BeginTx simply blocks until the first commits).
+// sequence and decides whether to accept rec, inside the same querier q,
+// never a read on one connection followed by a write on another. This
+// package's connection pool is capped at exactly one connection, which is
+// what makes that read-then-write serializable even for [Store]'s own
+// transaction (a second, concurrent caller's BeginTx simply blocks until
+// the first commits), matching queries.go's RecordHealth precedent.
 func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlaylistEntryObservationRecord) error {
 	var existingSeq int64
 	switch err := q.QueryRowContext(ctx, `SELECT sequence FROM fpp_playlist_entry_observations WHERE instance_uuid = ?`, rec.InstanceUUID).Scan(&existingSeq); {

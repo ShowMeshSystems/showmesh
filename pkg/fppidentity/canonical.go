@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // kind identifies the type of a parsed JSON value. Named to mirror the C++
@@ -87,11 +88,6 @@ func (p *parser) literal(word string) error {
 }
 
 func (p *parser) parseValue() (value, error) {
-	p.depth++
-	if p.depth > maxDepth {
-		return value{}, p.errf("JSON nesting is too deep")
-	}
-	defer func() { p.depth-- }()
 	if p.pos >= len(p.text) {
 		return value{}, p.errf("unexpected end of input")
 	}
@@ -127,6 +123,13 @@ func (p *parser) parseValue() (value, error) {
 }
 
 func (p *parser) parseArray() (value, error) {
+	// Only containers count toward maxDepth, matching the C++ parser and
+	// contract §1.3: a scalar does not increment depth.
+	p.depth++
+	if p.depth > maxDepth {
+		return value{}, p.errf("JSON nesting is too deep")
+	}
+	defer func() { p.depth-- }()
 	p.pos++ // '['
 	var items []value
 	p.skipWhitespace()
@@ -159,6 +162,12 @@ func (p *parser) parseArray() (value, error) {
 }
 
 func (p *parser) parseObject() (value, error) {
+	// Only containers count toward maxDepth; see parseArray's identical note.
+	p.depth++
+	if p.depth > maxDepth {
+		return value{}, p.errf("JSON nesting is too deep")
+	}
+	defer func() { p.depth-- }()
 	p.pos++ // '{'
 	var members []member
 	p.skipWhitespace()
@@ -395,79 +404,64 @@ func parseJSON(text string) (value, error) {
 	return v, nil
 }
 
-// toUTF16 decodes s (assumed UTF-8) into UTF-16 code units, so member
-// names can be compared the way RFC 8785 requires: by UTF-16 code unit,
-// not by UTF-8 byte. The two orderings disagree for any supplementary
-// character (U+10000 and above), which sorts after U+E000..U+FFFF in raw
-// UTF-8 bytes but before it in UTF-16, because its surrogate pair starts
-// at 0xD800. Mirrors native/src/json.cpp's toUtf16.
-func toUTF16(s string) []uint16 {
+// toUTF16 decodes s into UTF-16 code units, so member names can be
+// compared the way RFC 8785 requires: by UTF-16 code unit, not by UTF-8
+// byte. The two orderings disagree for any supplementary character
+// (U+10000 and above), which sorts after U+E000..U+FFFF in raw UTF-8
+// bytes but before it in UTF-16, because its surrogate pair starts at
+// 0xD800. s must be valid UTF-8: an invalid lead byte maps two
+// byte-distinct malformed names onto the same code unit, breaking the
+// total order the sort depends on, so this refuses rather than guessing.
+// Mirrors native/src/json.cpp's toUtf16, which the plugin must also
+// refuse for invalid input to stay byte-identical.
+func toUTF16(s string) ([]uint16, error) {
+	if !utf8.ValidString(s) {
+		return nil, fmt.Errorf("invalid UTF-8 in a JSON string or member name: %q", s)
+	}
 	out := make([]uint16, 0, len(s))
-	i := 0
-	for i < len(s) {
-		c := s[i]
-		var cp uint32
-		var length int
-		switch {
-		case c < 0x80:
-			cp = uint32(c)
-			length = 1
-		case c&0xE0 == 0xC0:
-			cp = uint32(c & 0x1F)
-			length = 2
-		case c&0xF0 == 0xE0:
-			cp = uint32(c & 0x0F)
-			length = 3
-		case c&0xF8 == 0xF0:
-			cp = uint32(c & 0x07)
-			length = 4
-		default:
-			// Not a valid UTF-8 lead byte: treat as a single code unit so
-			// ordering stays total rather than erroring here.
-			out = append(out, uint16(c))
-			i++
-			continue
-		}
-		if i+length > len(s) {
-			out = append(out, uint16(c))
-			i++
-			continue
-		}
-		for k := 1; k < length; k++ {
-			cp = (cp << 6) | uint32(s[i+k]&0x3F)
-		}
-		i += length
-		if cp >= 0x10000 {
-			cp -= 0x10000
-			out = append(out, uint16(0xD800+(cp>>10)))
-			out = append(out, uint16(0xDC00+(cp&0x3FF)))
+	for _, r := range s {
+		if r >= 0x10000 {
+			r -= 0x10000
+			out = append(out, uint16(0xD800+(r>>10)), uint16(0xDC00+(r&0x3FF)))
 		} else {
-			out = append(out, uint16(cp))
+			out = append(out, uint16(r))
 		}
 	}
-	return out
+	return out, nil
 }
 
-func lessUTF16(a, b string) bool {
-	au, bu := toUTF16(a), toUTF16(b)
+func lessUTF16(a, b string) (bool, error) {
+	au, err := toUTF16(a)
+	if err != nil {
+		return false, err
+	}
+	bu, err := toUTF16(b)
+	if err != nil {
+		return false, err
+	}
 	n := len(au)
 	if len(bu) < n {
 		n = len(bu)
 	}
 	for i := 0; i < n; i++ {
 		if au[i] != bu[i] {
-			return au[i] < bu[i]
+			return au[i] < bu[i], nil
 		}
 	}
-	return len(au) < len(bu)
+	return len(au) < len(bu), nil
 }
 
 // appendEscaped writes s as a minimally-escaped JSON string: only `"`,
 // `\`, and the C0 control characters need an escape, and the six named
 // escapes are used where they exist. Everything else, including non-ASCII
-// text and `/`, is written through unescaped. Mirrors appendEscaped in
+// text and `/`, is written through unescaped. s must be valid UTF-8,
+// contract §1.3: invalid UTF-8 in a string value or a member name is
+// refused, not passed through. Mirrors appendEscaped in
 // native/src/json.cpp.
-func appendEscaped(s string, out *strings.Builder) {
+func appendEscaped(s string, out *strings.Builder) error {
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("fppidentity: invalid UTF-8 in a JSON string: %q", s)
+	}
 	out.WriteByte('"')
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -495,6 +489,7 @@ func appendEscaped(s string, out *strings.Builder) {
 		}
 	}
 	out.WriteByte('"')
+	return nil
 }
 
 // formatNumber implements ECMAScript's Number::toString, which RFC 8785
@@ -602,8 +597,7 @@ func writeValue(v value, out *strings.Builder) error {
 		out.WriteString(formatted)
 		return nil
 	case kindString:
-		appendEscaped(v.s, out)
-		return nil
+		return appendEscaped(v.s, out)
 	case kindArray:
 		out.WriteByte('[')
 		for i, item := range v.items {
@@ -619,13 +613,17 @@ func writeValue(v value, out *strings.Builder) error {
 	case kindObject:
 		sorted := make([]member, len(v.members))
 		copy(sorted, v.members)
-		sortMembers(sorted)
+		if err := sortMembers(sorted); err != nil {
+			return err
+		}
 		out.WriteByte('{')
 		for i, m := range sorted {
 			if i > 0 {
 				out.WriteByte(',')
 			}
-			appendEscaped(m.name, out)
+			if err := appendEscaped(m.name, out); err != nil {
+				return err
+			}
 			out.WriteByte(':')
 			if err := writeValue(m.v, out); err != nil {
 				return err
@@ -638,17 +636,23 @@ func writeValue(v value, out *strings.Builder) error {
 	}
 }
 
-// sortMembers sorts object members by UTF-16 code unit, per RFC 8785.
-// Insertion sort is intentional: the object shapes in this contract
-// (playlist definitions, five-field entry keys) are small enough that
-// stdlib sort's setup cost is not worth pulling in here, and Go's sort
-// package is not otherwise used by this package.
-func sortMembers(members []member) {
+// sortMembers sorts object members by UTF-16 code unit, per RFC 8785. The
+// sort must be total, which is why invalid UTF-8 is refused rather than
+// tie-broken.
+func sortMembers(members []member) error {
 	for i := 1; i < len(members); i++ {
-		for j := i; j > 0 && lessUTF16(members[j].name, members[j-1].name); j-- {
+		for j := i; j > 0; j-- {
+			less, err := lessUTF16(members[j].name, members[j-1].name)
+			if err != nil {
+				return err
+			}
+			if !less {
+				break
+			}
 			members[j], members[j-1] = members[j-1], members[j]
 		}
 	}
+	return nil
 }
 
 // Canonicalize parses raw as RFC 8259 JSON and re-serializes it per RFC

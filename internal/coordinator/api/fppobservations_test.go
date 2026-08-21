@@ -328,6 +328,48 @@ func TestFPPObservationUnknownFieldRefused400(t *testing.T) {
 	}
 }
 
+// TestFPPObservationDuplicateMemberNameRefused400 is finding 7's
+// regression test: encoding/json.Decoder keeps the LAST value for a
+// duplicate member name and never notices the duplicate itself, so
+// without canonicalizing the raw body at step 4, this would silently
+// decode using sequence 9 and never be refused at all.
+func TestFPPObservationDuplicateMemberNameRefused400(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"sequence":9,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %q", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPObservationTrailingContentRefused400 is finding 7's other
+// regression test: dec.More() must be checked, or trailing content after
+// the JSON value silently passes decode.
+func TestFPPObservationTrailingContentRefused400(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0} trailing`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %q", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
 func TestFPPObservationUnsupportedSchemaVersionRefused400(t *testing.T) {
 	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -446,6 +488,89 @@ func TestFPPObservationEntryKeyMismatchRefused400(t *testing.T) {
 	}
 	if m["type"] != ProblemTypeObservationEntryKeyMismatch {
 		t.Errorf("type = %v, want %q", m["type"], ProblemTypeObservationEntryKeyMismatch)
+	}
+}
+
+// --- finding 1: unavailable observations must not carry derived identity ---
+
+func TestFPPObservationUnavailableWithPlaylistHashRefused400(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"unavailable":"missing_playlist_name",` +
+		`"playlistHash":"` + playlistHash64 + `"}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %q", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+func TestFPPObservationUnavailableWithEntryKeyRefused400(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"unavailable":"missing_playlist_name",` +
+		`"entryKey":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %q", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// --- finding 2: available-identity observations must carry the whole identity ---
+
+// TestFPPObservationAvailableWithPrecomputedEmptyIdentityHashRefused400 is
+// the exact bypass finding 2 describes: unavailable is absent, every
+// identity field except entryKey is absent, and entryKey carries the
+// correctly re-derived hash of the all-empty five-member object, so the
+// mismatch check alone would have accepted it. Presence is now checked
+// before re-derivation ever runs.
+func TestFPPObservationAvailableWithPrecomputedEmptyIdentityHashRefused400(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{InstanceUUID: "instance-1"})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","entryKey":"` + entryKey + `",` +
+		`"action":"playing","sequence":1,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %q", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+func TestFPPObservationAvailableWithEmptySectionAccepted(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBody(t, "instance-1", 1, "showmesh-test", "", 0)
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if accepted, _ := m["accepted"].(bool); !accepted {
+		t.Errorf("accepted = %v, want true", m["accepted"])
 	}
 }
 

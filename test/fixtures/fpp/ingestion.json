@@ -467,6 +467,96 @@
       },
       "expectedStatus": 400,
       "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unavailable-with-playlist-hash-refused-400",
+      "description": "unavailable is set AND playlistHash is present. playlistHash and entryKey are derived identity: nothing computed them for an unavailable observation, so a value in either is a claim nothing verified, and is refused rather than stored (contract section 1.2, section 1.4).",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_playlist_name",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unavailable-with-entry-key-refused-400",
+      "description": "unavailable is set AND entryKey is present. Same rule as unavailable-with-playlist-hash-refused-400, for the other derived-identity field.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_playlist_name",
+        "entryKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "available-missing-identity-fields-refused-400",
+      "description": "unavailable is absent, and playlistName, playlistHash, and position are all absent, but entryKey carries the correctly re-derived hash of the all-empty five-member identity object (instanceUuid present, every other field empty). Before this fix, a caller could precompute this hash and pass the entry-key re-derivation check trivially; contract section 1.6 step 7 now refuses this before re-derivation even runs, because playlistName, playlistHash, and position are themselves required whenever unavailable is absent.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-empty-identity",
+        "entryKey": "bd8cb094de8edfe92a21aacf44845bf18341532f9c62c1dc6308999fe0409ffe",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "available-with-empty-section-accepted",
+      "description": "unavailable is absent, section is present but the empty string, and every other identity field is present and correct. section may legitimately be empty; only playlistName may not.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-empty-section",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "",
+        "position": 0,
+        "entryKey": "37c19fb1007213cae785262af3cdeacb617debec4c63ac1c5b9dec59e0ba5bf6",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "replay-different-member-order-is-idempotent",
+      "description": "The same instanceUuid, sequence, and semantic content as sequence-seed-accepted, but with its members in a different wire order, carried in rawBody so the consumer posts exactly these bytes instead of re-marshaling a Go map (which would sort the keys and silently defeat this case). Replay detection hashes the CANONICAL body, so member order must not matter: 200, accepted false, replay true, nothing stored.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "rawBody": "{\"observedAtMillis\":1700000000000,\"coalescedSincePreviousAcknowledged\":0,\"sequence\":5,\"action\":\"playing\",\"entryKey\":\"77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84\",\"position\":0,\"section\":\"main\",\"playlistHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"playlistName\":\"showmesh-test\",\"instanceUuid\":\"instance-seed\",\"schemaVersion\":1}",
+      "expectedStatus": 200,
+      "expectedAccepted": false,
+      "expectedReplay": true
+    },
+    {
+      "name": "sequence-conflict-different-order-and-content-refused-409",
+      "description": "Mirror of replay-different-member-order-is-idempotent: the same sequence as sequence-seed-accepted, a different wire member order AND genuinely different content (section other instead of main), carried in rawBody. Reordering must not accidentally mask a genuine conflict as a replay: still refused 409.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "rawBody": "{\"position\":0,\"action\":\"playing\",\"instanceUuid\":\"instance-seed\",\"section\":\"other\",\"coalescedSincePreviousAcknowledged\":0,\"entryKey\":\"366a9f02aefbb39ccdbe5441c59c399b98051ad7da7b98bbe4acecc60b087928\",\"sequence\":5,\"playlistHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"observedAtMillis\":1700000000000,\"playlistName\":\"showmesh-test\",\"schemaVersion\":1}",
+      "expectedStatus": 409,
+      "expectedProblemType": "conflict"
     }
   ]
 }

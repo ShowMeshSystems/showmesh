@@ -87,19 +87,11 @@ func fppObservationConflictProblem(detail string) v1.Problem {
 
 // handlePostFPPPlaylistEntryObservation serves
 // POST /api/v1/integrations/fpp/playlist-entry-observations, contract
-// §1.6, behind writeGuard(&scopeFPPObserve, ...): by the time this method
-// runs, the request has already authenticated and its principal already
-// holds fpp:observe (steps 1-2), and decision 6's CSRF check has already
-// passed (moot for this endpoint in practice, contract §1.1: "the
-// request authenticates as a bearer token, so the CSRF header requirement
-// does not apply to it").
-//
-// INGESTION GRANTS NO EXECUTION AUTHORITY (§1.6's closing rule): this
-// method calls nothing in this package's macro, command, or cue-dispatch
-// paths. Accepting an observation means only that FPP reported an entry;
-// it writes exactly one store row and, on real change, lets the stream
-// hub's own next render pass pick it up (see stream.go's fppPlaylistEntry
-// block), there is no synchronous publish call here to forget.
+// §1.6, behind writeGuard(&scopeFPPObserve, ...). Ingestion grants no
+// execution authority: this method calls nothing in this package's
+// macro, command, or cue-dispatch paths, and the sequence read that
+// decides replay-vs-conflict shares one transaction with the write it
+// gates (see [FPPObservationStore]'s own doc comment).
 func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -118,16 +110,32 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		return
 	}
 
-	// Step 4: decode. Malformed JSON or an unknown field is refused but
-	// NOT audited, contract §1.6: "every refusal from step 5 onward IS
-	// audited...steps 1 through 3 keep the existing generic auth and
-	// size-refusal behavior", step 4 is likewise ungoverned by that
-	// audit rule, unlike every check below it.
+	// Step 4: decode and canonicalize. Malformed JSON, an unknown field,
+	// trailing content, or a duplicate member name is refused but NOT
+	// audited (contract §1.6: only step 5 onward is audited). Canonicalizing
+	// here, not later, is what puts a duplicate member name at this
+	// unaudited step: encoding/json.Decoder accepts one silently (last
+	// value wins) and does not check dec.More(), so without this the
+	// coordinator's own parser would be the first thing to notice, after
+	// schema and identity validation had already run and been audited.
 	var req v1.FPPPlaylistEntryObservationRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: "+err.Error()))
+		return
+	}
+	if dec.More() {
+		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: trailing content after the JSON value"))
+		return
+	}
+	// bodyHash is the canonical form's hash, reused below both for the
+	// stored record and for step 9's replay comparison; contract §1.3:
+	// replay detection is over the canonical form of what was sent, not
+	// over byte-identical text this handler happens to have received twice.
+	_, bodyHash, err := fppidentity.HashCanonical(raw)
+	if err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem("request body could not be canonicalized: "+err.Error()))
 		return
 	}
 
@@ -208,6 +216,26 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		writeProblem(w, h.logger, now, invalidParameterProblem("sequence must not be negative"))
 		return
 	}
+	// playlistHash and entryKey are derived identity: nothing computed
+	// them for an unavailable observation, so a value in either field is
+	// a claim nothing verified, and storing it would hand Track H an
+	// unverified key in the Cue binding (contract §1.2, §1.4).
+	if unavailable != fppidentity.UnavailableNone && (req.PlaylistHash != "" || req.EntryKey != "") {
+		auditRefusal("derived identity present with unavailable set")
+		writeProblem(w, h.logger, now,
+			invalidParameterProblem("playlistHash and entryKey must be absent when unavailable is set"))
+		return
+	}
+	// playlistName, playlistHash, position, and entryKey are all required
+	// when unavailable is absent (contract §1.6 step 7); section may
+	// legitimately be empty and is not checked here.
+	if unavailable == fppidentity.UnavailableNone &&
+		(req.PlaylistName == "" || req.PlaylistHash == "" || req.Position == nil || req.EntryKey == "") {
+		auditRefusal("missing identity field with unavailable absent")
+		writeProblem(w, h.logger, now,
+			invalidParameterProblem("playlistName, playlistHash, position, and entryKey are required when unavailable is absent"))
+		return
+	}
 
 	// Step 8: re-derive the entry key when identity is available.
 	if unavailable == fppidentity.UnavailableNone {
@@ -232,17 +260,6 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 			writeProblem(w, h.logger, now, fppObservationEntryKeyMismatchProblem(derived, req.EntryKey))
 			return
 		}
-	}
-
-	// Canonical body hash: over the RAW REQUEST BYTES, not the decoded
-	// struct, contract's own framing (§1.3): replay detection is over
-	// the canonical form of what was actually sent, not over
-	// byte-identical text this handler happens to have received twice.
-	_, bodyHash, err := fppidentity.HashCanonical(raw)
-	if err != nil {
-		auditRefusal("could not canonicalize request body: " + err.Error())
-		writeProblem(w, h.logger, now, invalidParameterProblem("request body could not be canonicalized: "+err.Error()))
-		return
 	}
 
 	rec := store.FPPPlaylistEntryObservationRecord{
