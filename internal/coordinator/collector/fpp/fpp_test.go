@@ -214,7 +214,7 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 		SignalMQTTConnected:          false,
 	}
 	wantUnsupported := []observation.SignalID{
-		SignalMediaFilename, SignalPositionElapsedSeconds,
+		SignalMediaFilename, SignalPositionElapsedSeconds, SignalPositionElapsedMS,
 		SignalWarningsCount, SignalWarningsSummary,
 	}
 

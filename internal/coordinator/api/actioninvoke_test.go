@@ -48,6 +48,12 @@ func (f *fakeMQTTBrokerRegistry) AwaitResponse(context.Context, string, broker.R
 	return f.msg, nil
 }
 
+func (f *fakeMQTTBrokerRegistry) publishCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.publishes
+}
+
 func mustPutAction(t *testing.T, api *API, token, id, body string) {
 	t.Helper()
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/"+id, body,

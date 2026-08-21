@@ -85,6 +85,18 @@ const (
 	// key reused for the same macro at a different pinned revision (the
 	// macro was edited between the two submissions).
 	problemMacroRunIdempotencyRevisionConflict = "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict"
+
+	// Track F seam F2's three night-session lifecycle refusal classes
+	// (internal/coordinator/api/nightsessioncontrol.go's identically named
+	// ProblemTypeNight* constants), each mapped to its own exit code below
+	// rather than falling into the generic [exitConflict] every other 409
+	// in this file shares: a script driving the night loop unattended
+	// needs to tell "not ready yet, try again" apart from "this command
+	// makes no sense from the current state" apart from "an operator must
+	// intervene", and a single 409 code cannot carry that distinction.
+	problemNightNotReady      = "https://showmesh.dev/problems/night-not-ready"
+	problemNightStateRejected = "https://showmesh.dev/problems/night-state-rejected"
+	problemNightAmbiguous     = "https://showmesh.dev/problems/night-ambiguous"
 )
 
 // Exit codes, documented in --help (usage.go) so a script wrapping this
@@ -218,6 +230,31 @@ const (
 	// absence of evidence that it came up.
 	exitRenderPipelineDown = 23
 
+	// exitNightNotReady: a "night <verb>" lifecycle command was refused
+	// because a precondition it needs is not yet met — no open
+	// preparation epoch, or no fresh readiness result from the CURRENT
+	// epoch (invariant 2: a delayed command against a stale or prior
+	// epoch is exactly this, never a state-table refusal). The remedy is
+	// almost always "run the missing prerequisite command", named in
+	// stderr.
+	exitNightNotReady = 26
+
+	// exitNightStateRejected: a "night <verb>" lifecycle command was
+	// refused by its own closed state table (RESTING-MODE.md §4.4/§4.5)
+	// for the session's CURRENT lifecycle state — distinct from
+	// exitNightNotReady: the command is not simply early, it is not valid
+	// from here at all (e.g. start-night after the session has already
+	// reached end-of-night-resting; finalization is monotonic).
+	exitNightStateRejected = 27
+
+	// exitNightAmbiguous: a "night <verb>" lifecycle command was refused
+	// because the session is degraded — a restart, or evidence that
+	// contradicted what it was doing, left it in a state this build cannot
+	// confirm is safe to resume from (RESTING-MODE.md §11). Never returned
+	// for request-final-show, fade-out-night, power-down-presentation, or
+	// end-session, which stay accepted while degraded.
+	exitNightAmbiguous = 28
+
 	// exitActionBindingBroken: "action check" found at least one checked
 	// binding "broken" — the target did not resolve, or resolved
 	// ambiguously, against current integration state. Never returned for
@@ -263,6 +300,12 @@ func exitCodeForProblem(status int, p *problem) int {
 		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy,
 			problemMacroRunAlreadyInFlight, problemMacroRunIdempotencyMacroConflict, problemMacroRunIdempotencyRevisionConflict:
 			return exitConflict
+		case problemNightNotReady:
+			return exitNightNotReady
+		case problemNightStateRejected:
+			return exitNightStateRejected
+		case problemNightAmbiguous:
+			return exitNightAmbiguous
 		}
 	}
 	switch status {

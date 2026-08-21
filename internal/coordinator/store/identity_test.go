@@ -62,8 +62,8 @@ func TestMigrationV5AddsIdentityTablesAndPreservesV4Data(t *testing.T) {
 	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != len(migrations) {
-		t.Errorf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version = %d, want %d (maxMigrationVersion())", version, maxMigrationVersion())
 	}
 
 	got, err := st.ListObservations(context.Background(), ObservationFilter{})

@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: not started. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified.
+Status: F0 through F4 and F7's API/CLI half built, reviewed, gated and committed on `track-f/night-session` (2026-08-18 and 2026-08-19). **F5 is blocked**: it consumes Track C's `pkg/audio`, which is not on `main`. F6 is optional configuration and not started. F7's UI half is not started. F8 cannot be attempted on this machine at all, because every one of its scenarios requires a real FPP and the deployed installation. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
 
 ## Goal
 
@@ -27,7 +27,9 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 
 ## Deliverables
 
-### F0. Evidence capture and schema proof
+### F0. Evidence capture and schema proof — built (`369ad34`, 2026-08-18)
+
+Captured against a dedicated bench `fppd` 9.5.3, never the shared bench container and never the deployed fleet. Found that stock FPP has no brightness command at all (owner decision RES-018/SM-49); see the 2026-08-18 BUILD-LOG entry for the full capture summary and the four other measurements that shaped F3.
 
 - Parse duration from representative deployed resting FSEQ variants.
 - Capture the supported read path for an idle FPP playlist definition and prove that ShowMesh can verify its ordered entries and media association before playback. If the FPP API cannot supply it, specify and bench an explicit plugin/config-import path; readiness may not claim playlist contents from running-state observations alone.
@@ -38,7 +40,9 @@ These dependencies do not prevent F1–F3 from being built against fakes and rec
 - Record FPP repeat and one-shot behavior used by inter-show and end-of-night resting.
 - Capture the target percentages, fade durations, and participating hosts for the confirmed 10 PM/11 PM `fpp-brightness` scheduler entries. Prove that the replacement `ShowMesh: Set Brightness Ceiling(targetPercent, fadeSeconds)` FPP Action is schedulable, interpolates the observable ceiling without a jump, and changes only ceiling, while the coordinator-facing path changes only transition gain, before F4 can accept the provider.
 
-### F1. Versioned configuration and validation
+### F1. Versioned configuration and validation — built (`e48660f`, 2026-08-18)
+
+Built against fakes; `make check` and `make test-integration` (287.957s, zero failures) green on this tree. No integrated acceptance is claimed and nothing here has run against a real FPP. Nine review findings, two blocking, are recorded in the 2026-08-18 BUILD-LOG entry.
 
 Add the Night Session configuration object through the public API, `showmeshctl`, export/import, and revision model before adding a UI. It contains FPP resting/show Playlist references, asset/action references, relative cue timing, and a reference to one same-show Track H `show.playlist` for background audio. The Night Session revision and referenced Playlist revision are pinned together at activation; Track H resolves every Cue output to exact asset ids and content hashes. Night Session does not embed a competing ordered audio list or create another Playlist authoring path.
 
@@ -46,13 +50,17 @@ Validation rejects calendar fields, a manual duplicate rest duration, a resting 
 
 Configuration pins revisions for an active session. Editing a show at 8 PM cannot silently change the controller running that night.
 
-### F2. Persisted lifecycle controller
+### F2. Persisted lifecycle controller — built (`49189d7`, 2026-08-18)
+
+Built against fakes and recorded observations; `make check` and `make test-integration` (292.492s, 74 passed, zero failures) green on this tree. No integrated acceptance is claimed and nothing here has run against a real FPP. Thirteen review findings are recorded in the 2026-08-18 BUILD-LOG entry, including a degraded session with no recovery path (fixed) and an untransacted read-decide-write (fixed).
 
 Implement the closed state machine and command vocabulary from `RESTING-MODE.md`. `prepare-site` opens the operating-day preparation epoch; readiness and pre-show attach to it; `start-night` consumes it only with fresh same-epoch evidence. Persist preparation epoch, readiness identity/freshness, session identity, state, final intent, admission-closed flag, cycle, content anchor, armed-show identity, `showCommitted`, durable cue outbox records, stable cue invocation identities, cue outcomes, and pending fade/shutdown. Shutdown intents are monotonic and cancel any uncommitted next-show boundary. Submission is asynchronous; the API and change stream expose state rather than holding a request open.
 
 This controller must not import or reuse the desired-state reconciler as a loop, and it must not resume a generic macro after restart.
 
-### F3. FPP timeline and playlist integration
+### F3. FPP timeline and playlist integration — built (`63f4770`, 2026-08-18)
+
+Built against fakes, a throwaway bench `fppd`, and F0's recorded observations; `make check`, `make test-integration` (298.666s, zero failures), and `make test-integration-fpp` (176.682s, 29 cases) green on this tree. No integrated acceptance is claimed and nothing here has run against the deployed fleet. Ten review findings across two rounds are recorded in the 2026-08-18 BUILD-LOG entry, including a silently re-arming invalidated boundary and a show-launch replacement guard reachable without positive identification.
 
 - Start the configured FPP-owned one-item resting playlist and confirm the exact FSEQ item.
 - Derive its boundary from asset duration plus observed FPP position.
@@ -62,7 +70,9 @@ This controller must not import or reuse the desired-state reconciler as a loop,
 - Start repeating end-of-night resting after the final show.
 - Preserve FPP busy-start protections and never replace an unrelated running playlist silently.
 
-### F4. Transition action runner
+### F4. Transition action runner — built and gated (`506c6c0`, 2026-08-18)
+
+Two review rounds found sixteen defects after the seam's own gates were green, all fixed; the 2026-08-18 BUILD-LOG entry carries them. `make check` exit 0 and `make test-integration` `ok ... 303.774s` with zero failures, run by the orchestrating session once host load was quiet. **The cue outbox has no operator surface**, which is F7's work and is tracked as Linear SM-98; the ambiguous outcome names the recovery that exists today rather than promising one that does not.
 
 Run independently offset lighting, projection, audio, announcement, and other-media cues through named logical actions. Support parallel dispatch where cues share an offset and barriers where show launch requires their outcomes. Record completion and confirmation separately.
 
@@ -72,13 +82,17 @@ Implement the RES-018 brightness contract through the ShowMesh FPP component: ob
 
 This is a purpose-built relative cue runner inside the night controller, not a general scheduler or a replacement macro language.
 
-### F5. Audio integration
+### F5. Audio integration — BLOCKED, not started
+
+Blocked on Track C's `pkg/audio` reaching `main`; verified absent from `origin/main` on 2026-08-19. The contract itself is pinned on `track-c/audio-node` and has moved twice since pinning, so the drift is recorded on Linear SM-53 for whoever starts this.
 
 Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves with observable completion, exact local asset readiness, loop/resume policy, and the configured duck/mix/interrupt policy. Carry the night controller's stable cue invocation identity and desired revision through the audio command so recovery cannot duplicate an effect or let stale work reverse a newer state.
 
 Validate every output against the formats and reproduction capabilities it honestly declares without narrowing the generic asset store. This includes playlist selection/advancement and the requested sequential, gapless, or crossfade item transition. For an optional synchronized third-party output, missing provisioning/readiness evidence warns and does not block local/FM audio. If configuration marks it required and no status API exists, readiness may accept current attributed operator attestations pinned to the immutable destination-configuration revision or fingerprint and **every** exact audio/announcement content hash required by the pinned Night Session revision. One verified playlist item is insufficient; an attempted or acknowledged upload alone is not `ready`.
 
-### F6. Optional power, thermal, and interlock integration
+### F6. Optional power, thermal, and interlock integration — not started, optional
+
+F1 rejects the `siteControl` and `interlocks` configuration blocks with a problem naming this deliverable, rather than accepting configuration nothing enforces. A deployment that omits site control, which is what the reference installation does, runs the full night loop without it.
 
 Add the optional rule mechanism with `observe`, `block`, and `disabled` postures, the required unavailable-source behavior for blocking rules, and phase-filtered evaluation. A rule may withhold only the lifecycle phase it declares; for example, a cooldown rule remains visible but cannot gate `start-night`.
 
@@ -88,11 +102,17 @@ Every presentation power-off binding explicitly selects `immediate` with an oper
 
 If a deployment configures `force-power-off`, ship it only as an explicit operator action with separate authorization and audit presentation. F6 is not a prerequisite for installations that omit site control.
 
-### F7. Operator surfaces
+### F7. Operator surfaces — API and CLI half built (`50772b3`, 2026-08-19); UI half not started
+
+The API and `showmeshctl` now carry lifecycle state, final-cycle status, the content-derived boundary, pending intents, per-cue evidence (state, outcome, reason, pinned action revision, dispatch and resolution times), the reason a transition is held, and recovery guidance naming the recovery that exists. Optional phases render `not_configured`. Closes Linear SM-98.
+
+**Not yet on any surface**: audio gain (F5), brightness ceiling and multiplier (no provider exists, RES-018), and interlock/site-control state (F6). Those three are absent because the capability behind each is absent, not because the surface was skipped.
 
 Add CLI coverage first, then UI configuration and operation. Show lifecycle state, final-cycle status, content-derived boundary, next cue, pending intents, per-cue evidence, audio gain, brightness ceiling/multiplier, configured interlock/site-control state, and recovery guidance. Optional sections render as `not_configured`, not warnings. The UI contains no orchestration logic.
 
-### F8. Integrated and failure verification
+### F8. Integrated and failure verification — not started, and not startable on a development machine
+
+Every scenario needs a real FPP and the deployed installation. Tracked as Linear SM-66 (the whole loop end to end), SM-50 (the real deployed resting FSEQ) and SM-51 (real per-installation cue timing).
 
 Run every acceptance scenario in `RESTING-MODE.md` first with no site-control/interlock configuration, then against the reference installation's configured MQTT/Home Assistant path. Exercise every posture, both unavailable-source choices, phase isolation, override authorization, domain/provenance rejection, both removal policies, partial-configuration rejection, overnight repetition, and failure injection. Update RES-007 and [RES-016](../research/RES-016-third-party-synchronized-audio-output.md) only to the evidence level actually reached; a mock destination changes no claim about a real service.
 

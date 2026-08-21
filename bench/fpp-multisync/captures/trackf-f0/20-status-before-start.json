@@ -1,0 +1,61 @@
+{
+    "MQTT": {
+        "configured": false,
+        "connected": false
+    },
+    "branch": "(HEAD detached at 9.5.3)",
+    "bridging": false,
+    "channelInputsEnabled": false,
+    "channelOutputsEnabled": false,
+    "current_playlist": {
+        "count": "0",
+        "description": "",
+        "index": "0",
+        "playlist": "",
+        "type": ""
+    },
+    "current_sequence": "",
+    "current_song": "",
+    "dateStr": "Tue Aug 18",
+    "fppd": "running",
+    "host_description": "Docker ID: 0::/",
+    "host_name": "2f137a1371a7",
+    "mode": 2,
+    "mode_name": "player",
+    "multisync": false,
+    "next_playlist": {
+        "playlist": "No playlist scheduled.",
+        "start_time": ""
+    },
+    "platform": "Debian",
+    "powerBad": false,
+    "repeat_mode": "0",
+    "scheduler": {
+        "enabled": 1,
+        "nextPlaylist": {
+            "playlistName": "No playlist scheduled.",
+            "scheduledStartTime": 0,
+            "scheduledStartTimeStr": ""
+        },
+        "status": "idle"
+    },
+    "seconds_played": "0",
+    "seconds_remaining": "0",
+    "status": 0,
+    "status_name": "idle",
+    "time": "Tue Aug 18 19:19:46 UTC 2026",
+    "timeStr": "07:19 PM",
+    "timeStrFull": "07:19:46 PM",
+    "time_elapsed": "00:00",
+    "time_remaining": "00:00",
+    "uptime": "03:05",
+    "uptimeDays": 0.0021412037037037038,
+    "uptimeHours": 0.05138888888888889,
+    "uptimeMinutes": 3.0833333333333335,
+    "uptimeSeconds": 5,
+    "uptimeStr": "0 days, 0 hours, 3 minutes, 5 seconds",
+    "uptimeTotalSeconds": 185,
+    "uuid": "M4-ce13ae2b62b238e533a474876a7a8b88",
+    "version": "9.5.3",
+    "volume": 0
+}

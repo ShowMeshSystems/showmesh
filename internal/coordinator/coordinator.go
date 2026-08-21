@@ -674,6 +674,13 @@ func Run() int {
 		// other than always answer a "not configured" internal error
 		// against api.noDeclarationStore's no-op default.
 		Discovery: st,
+		// NightSessions is Track F seam F2's own dependency: *store.Store
+		// already satisfies api.NightSessionStore with no adapter — wiring
+		// it in is what makes GET /api/v1/night/session and
+		// POST /api/v1/night/commands/{command} do anything other than
+		// always report "no session" against api.noNightSessionStore's
+		// no-op default.
+		NightSessions: st,
 		// Nudger is the post-dispatch poll nudge's dependency (owner
 		// decision, 2026-08-13; api.FPPPollNudger's own doc comment has
 		// the full contract): fppRunnerNudger wraps the SAME
@@ -821,6 +828,13 @@ func Run() int {
 	// comment.
 	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
 
+	// Track F seam F2 invariant 4: an ambiguous restart never launches a
+	// show by guess — see api.ReconcileNightSessionOnStartup's own doc
+	// comment. Same synchronous, non-fatal, before-ListenAndServe shape as
+	// the three sweeps immediately above and for the identical reason.
+	if rerr := api.ReconcileNightSessionOnStartup(ctx, apiDeps, time.Now, logger); rerr != nil {
+		logger.Warn("failed to reconcile night session at startup", "error", rerr)
+	}
 	// fppHTTPClient and fppRunner were already constructed above (before
 	// apiDeps), one shared *http.Client per contract/Task C's own guidance
 	// ("callers SHOULD construct one *http.Client and pass it to every
@@ -890,7 +904,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(8)
+	backgroundWG.Add(9)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -946,6 +960,18 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		watchUnclaimedBootstrap(ctx, identitySvc, logger)
+	}()
+
+	// nightLoop.Run owns Track F seam F3's own event-driven driver
+	// (nightloop.go): it advances a night session out of the states F2's
+	// own command handlers never leave on their own (transition-to-show,
+	// live, transition-to-resting, resting-intershow), started
+	// unconditionally like every other reconcile loop above — a session
+	// only ever exists once an operator configures and starts one.
+	nightLoop := api.NewNightLoop(apiDeps, apiOpts)
+	go func() {
+		defer backgroundWG.Done()
+		nightLoop.Run(ctx)
 	}()
 
 	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring

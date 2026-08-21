@@ -1,0 +1,13 @@
+{
+  "name": "trackf-resting",
+  "mainPlaylist": [
+    {
+      "type": "sequence",
+      "enabled": 1,
+      "playOnce": 0,
+      "sequenceName": "trackf-resting.fseq"
+    }
+  ],
+  "leadIn": [],
+  "leadOut": []
+}

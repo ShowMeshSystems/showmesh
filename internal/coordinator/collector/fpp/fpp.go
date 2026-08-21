@@ -73,6 +73,18 @@ const (
 	SignalSchedulerNextStartTime observation.SignalID = "fpp.scheduler.next_start_time"
 	SignalMediaFilename          observation.SignalID = "fpp.media.filename"
 	SignalPositionElapsedSeconds observation.SignalID = "fpp.position.elapsed.seconds"
+
+	// SignalPositionElapsedMS is Track F seam F3's own addition, reserved
+	// on main at 3538439 (docs/build/IDENTIFIER-REGISTER.md): the raw
+	// "milliseconds_elapsed" field, which F0's capture measured advancing
+	// in exact 50ms quanta rather than continuously — sub-second position
+	// evidence the whole-second signal above cannot supply. Mode-governed
+	// identically to SignalPositionElapsedSeconds (StatusSignals, one
+	// field down): absent, not a plausible zero, whenever FPP's own
+	// response omits the key — remote mode, or idle within player mode
+	// (F0 §3's own idle-status capture: this key is absent, not merely
+	// empty, while idle).
+	SignalPositionElapsedMS observation.SignalID = "fpp.position.elapsed.ms"
 )
 
 // Step 5 controller and network health signals, from /api/fppd/status. Per-
@@ -138,7 +150,7 @@ var allStatusSignals = []observation.SignalID{
 	SignalSongName, SignalPlaylistRepeatMode, SignalPlaylistIndex,
 	SignalPlaylistCount, SignalPlaylistType, SignalSchedulerEnabled,
 	SignalSchedulerNextPlaylist, SignalSchedulerNextStartTime,
-	SignalMediaFilename, SignalPositionElapsedSeconds,
+	SignalMediaFilename, SignalPositionElapsedSeconds, SignalPositionElapsedMS,
 	SignalFPPDState, SignalPowerBad, SignalBridging,
 	SignalChannelInputsEnabled, SignalChannelOutputsEnabled,
 	SignalBranch, SignalUUID, SignalHostName, SignalVolume,

@@ -107,6 +107,17 @@ const (
 	// and [ScopeRenderCommand] already carry for their own domains.
 	ScopeAudioCommand Scope = "audio:command"
 
+	// ScopeNightCommand is Track F seam F2's own dispatch scope
+	// (RESTING-MODE.md, ADR-038): every one of the seven lifecycle
+	// commands (prepare-site, run-readiness, start-preshow, start-night,
+	// request-final-show, fade-out-night, power-down-presentation)
+	// requires it. Reads stay open by default (ADR-024) — GET
+	// /api/v1/night/session needs no scope, the identical reasoning
+	// [ScopeFPPCommand], [ScopeResolumeAction], and [ScopeRenderCommand]
+	// already carry: a credential problem must never cost the operator
+	// sight of the lifecycle state.
+	ScopeNightCommand Scope = "night:command"
+
 	// ScopeShowActionInvoke gates POST /api/v1/actions/{id}/invocations:
 	// invoke one stored show.action by id, outside of a macro run. Reads
 	// stay open by default (ADR-024) — this scope exists only because
@@ -131,7 +142,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and
@@ -156,7 +167,10 @@ func (r Role) Scopes() []Scope {
 		out = append(out, operatorActionScopes...)
 		return append(out, adminOnlyScopes...)
 	case RoleScheduler:
-		return []Scope{ScopeShowMacroRun}
+		// ADR-038 decision 1: FPP invokes the seven night-session
+		// lifecycle commands, and scheduler is the machine credential
+		// that exists for exactly that.
+		return []Scope{ScopeShowMacroRun, ScopeNightCommand}
 	case RoleRecovery:
 		return []Scope{ScopeResolumeAction}
 	default:

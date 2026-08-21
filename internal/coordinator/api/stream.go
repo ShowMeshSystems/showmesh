@@ -110,6 +110,11 @@ type Hub struct {
 	keepaliveInterval time.Duration
 	bufSize           int
 
+	// nightReadinessMaxAge backs [mapNightSessionState]'s Fresh
+	// computation for the nightSession.changed projection — see
+	// [Options.NightReadinessMaxAge]'s doc comment.
+	nightReadinessMaxAge time.Duration
+
 	mu           sync.Mutex
 	subscribers  map[uint64]*subscriber
 	nextID       uint64
@@ -248,6 +253,15 @@ type pendingFrame struct {
 	// for it either.
 	resolumeRecovery *v1.ResolumeRecoveryChangedEvent
 
+	// nightSession is set only for a "nightSession.changed" pendingFrame
+	// (Track F seam F2, seam spec's reserved event kind — one kind, not
+	// one per transition): the night-session singleton resource, full-
+	// frame only, same posture as resolumeRecovery immediately above —
+	// this stream is not resumable (ADR-020 decision 21), so a client
+	// re-fetches GET /api/v1/night/session on any gap rather than
+	// reconstructing state from a transition history.
+	nightSession *v1.NightSessionChangedEvent
+
 	// macroRun is set only for a "macroRun.changed" pendingFrame (Step 9
 	// wave 2, STEP-9-SPEC.md section 6.6): the run's state-transition
 	// facts, WITHOUT its steps ("a run with 32 steps must not put 32
@@ -292,6 +306,11 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "resolumeRecovery.changed", ev
+	case "nightSession.changed":
+		ev := *pf.nightSession
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "nightSession.changed", ev
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -333,6 +352,7 @@ func newHub(deps Dependencies, opts Options, logger *slog.Logger) *Hub {
 		tickInterval:             opts.StreamTickInterval,
 		keepaliveInterval:        opts.StreamKeepaliveInterval,
 		bufSize:                  opts.StreamSubscriberBuffer,
+		nightReadinessMaxAge:     opts.NightReadinessMaxAge,
 		subscribers:              make(map[uint64]*subscriber),
 		lastRendered:             make(map[string][]byte),
 		lastRenderedInstanceOnly: make(map[string][]byte),
@@ -576,6 +596,27 @@ func (h *Hub) render(ctx context.Context) {
 				ev := proj
 				pending = append(pending, pendingFrame{event: "resolumeRecovery.changed", serverTime: formatTime(now), resolumeRecovery: &ev})
 			}
+		}
+	}
+
+	// Track F seam F2: the night-session lifecycle, one fixed singleton
+	// resource keyed "nightsession:current" — never evicted, full-frame
+	// only, same posture as resolumeRecovery immediately above, including
+	// that block's own "skipped entirely when there is nothing to
+	// announce yet" rule: a coordinator where prepare-site has never once
+	// been called has no session row at all, which — like an unconfigured
+	// Resolume instance — has no natural empty state to announce, so this
+	// stays silent rather than manufacturing an "inactive" frame out of
+	// literally nothing. GET /api/v1/night/session (unlike the stream)
+	// still answers that state directly on every read; this only concerns
+	// the CHANGE stream's own "when did it last actually change" question.
+	if rec, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx); err != nil {
+		h.logger.Warn("stream hub: get current night session failed", "error", err)
+	} else if ok {
+		const key = "nightsession:current"
+		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge)
+		if h.updateRendered(key, state) {
+			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
 		}
 	}
 
