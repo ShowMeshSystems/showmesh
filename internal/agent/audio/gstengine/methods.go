@@ -162,8 +162,7 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	resumeAt := b.queryPosition()
-	b.resyncMixerPads(resumeAt)
+	b.resyncMixerPadsToLivePosition()
 	b.unfreeze()
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
