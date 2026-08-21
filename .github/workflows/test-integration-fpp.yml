@@ -65,22 +65,8 @@ jobs:
     # several minutes") plus the test run itself; generous headroom over
     # the other integration jobs' 10 minutes for exactly that reason.
     timeout-minutes: 30
-    # This suite proves FPP behaviour and starts no agent, but it compiles
-    # the whole test/integration package, which reaches the agent's cgo
-    # audio engine. That engine needs GStreamer 1.26 and libltc, and
-    # ubuntu-latest ships 1.24, so the package is compiled without cgo here
-    # and the engine's build-tagged files drop out. The cgo backend is
-    # covered by ci.yml's `integration` job, which runs on Debian 13; this
-    # workflow deliberately does not cover it.
-    env:
-      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
 
       # ubuntu-latest ships Docker (with Compose v2) already, usable
       # without sudo. `make test-integration-fpp` (scripts/test-integration-fpp.sh)
@@ -90,4 +76,36 @@ jobs:
       # running it locally does; this job supplies no bespoke CI-only
       # config.
       - name: Integration tests (real fppd, bench container)
-        run: make test-integration-fpp
+        # This suite compiles the whole test/integration package, which
+        # reaches the agent's cgo audio engine, and it runs go test -race,
+        # which requires cgo. The engine needs GStreamer 1.26 and
+        # ubuntu-latest ships 1.24, so the suite runs inside Debian 13.
+        # Not a `container:` job: the script builds and starts the bench
+        # fppd through docker compose and reaches it on localhost, which
+        # needs the host socket and host networking, and GitHub's
+        # container: field cannot express --network. Workspace mounted at
+        # its own absolute path with TMPDIR inside it, so any bind mount
+        # the script hands the host daemon resolves the same on both sides.
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
+          docker run --rm \
+            --network host \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE":"$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE" \
+            -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
+            -e HOME=/tmp \
+            golang:1.25.0-trixie \
+            bash -euxo pipefail -c '
+              apt-get update -o Acquire::Retries=2
+              apt-get install -y --no-install-recommends \
+                pkg-config gstreamer1.0-tools gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+                libltc-dev docker-cli docker-compose-v2 curl jq
+              pkg-config --atleast-version=1.26.0 gstreamer-1.0
+              git config --global --add safe.directory "*"
+              make test-integration-fpp
+            '
