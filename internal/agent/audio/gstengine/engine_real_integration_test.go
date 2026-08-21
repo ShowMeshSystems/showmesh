@@ -217,6 +217,35 @@ func TestLoadDeadlineDoesNotLeakElements(t *testing.T) {
 	t.Fatalf("branch element %q still present in the pipeline %s after a failed Load", filesrcName, settleWait)
 }
 
+// TestLoadTimeoutIsWrappedWithDistinctSentinel proves a Load that fails
+// only because its own ctx deadline fired is wrapped with errLoadTimedOut,
+// not left as a bare, opaque context.DeadlineExceeded.
+func TestLoadTimeoutIsWrappedWithDistinctSentinel(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := e.Load(ctx, "timeout1", mediaRef(wav), 3*time.Second)
+	if err == nil {
+		t.Fatalf("Load with an exhausted deadline: err = nil, want an error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Load with an exhausted deadline: err = %v, want context.DeadlineExceeded in its chain", err)
+	}
+	if !errors.Is(err, errLoadTimedOut) {
+		t.Fatalf("Load with an exhausted deadline: err = %v, want errLoadTimedOut in its chain", err)
+	}
+	// FaultDecodeFailure was never reachable from a ctx-deadline path even
+	// before errLoadTimedOut existed; this only guards against a future
+	// regression that would make it reachable.
+	if fault := pkgaudio.ClassifyFault(err); fault == pkgaudio.FaultDecodeFailure {
+		t.Fatalf("Load timeout classified as %q, want anything but decode_failure", fault)
+	}
+}
+
 func TestLoadStartObservesAdvancingPosition(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()

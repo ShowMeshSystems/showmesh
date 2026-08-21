@@ -9,19 +9,9 @@ import (
 	"testing"
 )
 
-// TestResumeSamplesPositionAndRunningTimeBackToBack guards the two-clock
-// skew finding in resyncMixerPads: Resume used to query the branch's live
-// decode position, return to Resume's own stack frame, and only then call
-// resyncMixerPads (which reads the pipeline's running time) — two
-// independent cgo reads separated by a function boundary and everything
-// Resume did between them. resyncMixerPadsToLivePosition reads both
-// inside one function body with nothing else between the two cgo calls,
-// which is the smallest gap this API allows; some residual skew between
-// two independent clock reads is unavoidable across a cgo boundary and is
-// not eliminated by this test, only minimized and documented (see
-// resyncMixerPadsToLivePosition's doc comment). Checked at the source
-// level because the skew itself is far below what any timer on this
-// machine can observe.
+// TestResumeSamplesPositionAndRunningTimeBackToBack guards Resume against
+// reading position via a separate queryPosition call instead of through
+// resyncMixerPadsToLivePosition, colocated with the running-time read.
 func TestResumeSamplesPositionAndRunningTimeBackToBack(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)

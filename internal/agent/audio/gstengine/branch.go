@@ -272,9 +272,9 @@ func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 	})
 }
 
-// queryPosition returns the branch's live decode position, or the last
-// frozen position when the branch is frozen — decode keeps running while
-// frozen, so a frozen branch's own position is not this call's report.
+// queryPosition returns the branch's live position, or the last frozen
+// position when the branch is frozen. The live query targets volume, not
+// the GstBin decodebin, which has been measured racing real time by seconds.
 func (b *branch) queryPosition() time.Duration {
 	b.mu.Lock()
 	frozen, frozenAt := b.frozen, b.frozenAt
@@ -282,7 +282,7 @@ func (b *branch) queryPosition() time.Duration {
 	if frozen {
 		return frozenAt
 	}
-	ns, ok := b.decodebin.QueryPosition(gst.FormatTime)
+	ns, ok := b.volume.QueryPosition(gst.FormatTime)
 	if !ok || ns < 0 {
 		return frozenAt
 	}
@@ -334,14 +334,8 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 }
 
 // resyncMixerPadsToLivePosition re-anchors exactly as resyncMixerPads,
-// but for a caller that has no target position of its own: it reads the
-// branch's live decode position and the pipeline's running time as the
-// two back-to-back statements below, with no lock, no branch, and no
-// other cgo call between them. Two independent clock reads can never be
-// truly atomic across a cgo boundary, so a scheduling stall between these
-// two lines is still possible; this is the smallest gap this API allows
-// between them, and it is the only ordering this package uses for a live
-// double-read. Returns the position it anchored to.
+// reading atPos from queryPosition, the frozen Pause bookmark at every
+// current call site: Resume always invokes this before unfreeze.
 func (b *branch) resyncMixerPadsToLivePosition() time.Duration {
 	running := b.pipelineRunningTime()
 	atPos := b.queryPosition()

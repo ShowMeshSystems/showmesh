@@ -4,6 +4,7 @@ package gstengine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,6 +23,19 @@ var errUnavailable = fmt.Errorf("gstengine: engine is not available")
 // in full once Start's flushing seek resets the segment to zero. SetGain
 // is the correct verb for presetting a gain before playback.
 var errFadeBeforeStart = fmt.Errorf("gstengine: cannot fade a branch that has not been started")
+
+// errLoadTimedOut marks a Load that failed only because its caller's ctx
+// expired, never because the asset itself was undecodable.
+var errLoadTimedOut = fmt.Errorf("gstengine: Load did not complete before its context deadline")
+
+// asLoadTimeout wraps a bare context deadline with errLoadTimedOut, and
+// returns any other error (a pipeline crash boundedCall produced) unchanged.
+func asLoadTimeout(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", errLoadTimedOut, err)
+	}
+	return err
+}
 
 func (e *Engine) unavailableErr() error {
 	_, reason := e.Available()
@@ -91,7 +105,7 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		// which leaves ctx already exhausted, so teardown needs a budget
 		// of its own rather than one that has already run out.
 		bestEffortTeardown(b)
-		return agentaudio.EngineObservation{}, err
+		return agentaudio.EngineObservation{}, asLoadTimeout(err)
 	}
 
 	select {
@@ -104,7 +118,7 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		// teardown needs a budget of its own rather than one that has
 		// already run out.
 		bestEffortTeardown(b)
-		return agentaudio.EngineObservation{}, ctx.Err()
+		return agentaudio.EngineObservation{}, asLoadTimeout(ctx.Err())
 	}
 
 	e.mu.Lock()
