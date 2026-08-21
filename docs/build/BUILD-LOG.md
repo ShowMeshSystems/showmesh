@@ -77,6 +77,47 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-21 (SM-150: the FPP plugin/coordinator wire contracts frozen, and the coordinator half of observation ingestion: branch `djbartos93/sm-150-brightness-playlist`, commit `ed164cd`, pushed, not merged)
+
+**Goal:** give the two contracts RES-018 section 6 had decided but not specified an exact wire shape, and build the coordinator half of the first one, so the FPP plugin repository and this repository can be built independently and still meet.
+
+**Completed**, on `djbartos93/sm-150-brightness-playlist` at `ed164cd` (32 files, +5447/-14):
+
+- **[FPP plugin coordinator contracts](FPP-PLUGIN-COORDINATOR-CONTRACTS.md) is frozen** (new record, 2026-08-21). It fixes the endpoint, the versioned payload, the refusal vocabulary, the `unavailable` wire spellings, the persistent-sequence requirement, and the coordinator-facing brightness transition-gain write. RES-018 keeps the design and the evidence; this record carries the bytes. RES-018, Track F and Track H were pointed at it and nothing was restated into them.
+- **`pkg/fppidentity`** implements RFC 8785 JSON canonicalization, the SHA-256 playlist hash, and the deterministic five-member entry key (`instanceUuid`, `playlistHash`, `playlistName`, `position`, `section`).
+- **`POST` and `GET /api/v1/integrations/fpp/playlist-entry-observations`**, guarded by a new `fpp:observe` scope granted to the `scheduler` and `admin` roles and deliberately **not** to `operator`, so an operator credential cannot forge plugin evidence.
+- **Store schema v14**, one row per FPP instance holding the latest accepted observation, refusing a sequence regression inside the write transaction rather than after it.
+- **A `fppPlaylistEntry.changed` change-stream kind**, rendered from the store on the hub's own pass, so observations accepted between two passes converge to one frame.
+- **Audit action `fpp.observe_playlist_entry`, written on refusals only.** An accepted observation is not audited; a per-entry entry would flood the log during an ordinary show.
+- **`test/fixtures/fpp`**, plain JSON contract fixtures the plugin repository can consume without importing this one.
+
+**The brightness half is a frozen contract only.** No code was written for it on either side, in this repository or the plugin's. Track F's readiness check `nightCheckNoUnbuiltBrightnessComposition` still rejects any cue requiring compositional brightness, and that remains correct and deliberate until the plugin serves the transition-gain path and RES-018 section 8's decisive mid-fade case is observed on a real host.
+
+**Identifier register changes, in the commit:** `fpp:observe` moved from reserved to shipped; schema v14 allocated, leaving the reserved v9 through v13 gap intact; `fppPlaylistEntry.changed` and `fpp.observe_playlist_entry` registered as shipped.
+
+**Decisions made:** none rising to a new ADR. The contract record is a specification of decisions RES-018 already carried.
+
+**Questions raised with the owner:** none new.
+
+**Deferred:**
+
+- The plugin's `ObservationSink` has no coordinator implementation, so no plugin binary posts to this endpoint yet and the end-to-end path is unexercised.
+- The plugin's per-instance sequence still resets to `0` on every `fppd` start, because `SequenceState::restore()` has no caller. The frozen contract **requires** that sequence to survive a plugin restart, so until the plugin persists it, every observation after a restart would be refused as a regression. This is a deliberate ordering: the contract states the requirement, the follow-up plugin work satisfies it.
+- The brightness transition-gain path is unbuilt on both sides.
+- No explicit, authenticated operator action exists to clear a stored per-instance sequence; the contract names it as out of scope here.
+
+**Verification gates, run this session, on the tree that became `ed164cd`:**
+
+- `make check` exit 0, clean.
+- `go vet ./...` clean.
+- **Cross-language verification against the plugin's merged C++.** The Go canonicalizer and entry-key derivation were checked against the plugin repository's `native/src/json.cpp` and `native/src/playlist_identity.cpp` by compiling throwaway harnesses against those sources. The first harness found no disagreement on any case exercised. The second, reading the committed fixture files with the plugin's own JSON parser, passed **19 of 19** cases. The plugin repository was not modified.
+- The plugin's own native test suite ran green at **103 cases, 0 failing**, as context for the above.
+- **Not run this session:** anything against a real FPP host, the deployed fleet, a browser, or any deployed environment.
+
+**An observed flake, recorded so a later session does not attribute it to this change.** `TestFollowMacroRunTextModeSuppressesDuplicateLines` in `cmd/showmeshctl` failed once during this session with `pollCount = 4, want at least 5`, then passed 5 runs out of 5 with the same changes applied and also passed on a stashed clean tree. It is wall-clock sensitive and unrelated to this change; it is neither a defect this work introduced nor one it fixed.
+
+---
+
 ## 2026-08-20 (Track C: audio.node channels, a proven broker-loss test, a real GStreamer engine package, and reliability fixes)
 
 **Goal:** advance Track C toward a real audio engine without claiming more than what merged. Land explicit program/LTC channel configuration, prove the broker-loss reliability property that had previously been quarantined, build the real GStreamer engine package the owner selected, and fix reliability defects found against the existing fake-backed session layer.

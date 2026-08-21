@@ -48,6 +48,7 @@ var migrations = []migration{
 	{version: 8, sql: schemaV8},
 	{version: 9, sql: schemaV9},
 	{version: 10, sql: schemaV10},
+	{version: 14, sql: schemaV14},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1170,6 +1171,47 @@ CREATE TABLE night_cue_outbox (
 -- name (review finding: a shared name silently returned the OTHER list's
 -- already-resolved row).
 CREATE UNIQUE INDEX night_cue_outbox_identity ON night_cue_outbox (session_id, cycle, phase, cue_name);
+`
+
+// schemaV14 is the playlist-entry observation migration: the coordinator-side store for
+// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1's playlist-entry observation
+// ingestion. Versions 11 through 13 are reserved by other, not-yet-merged
+// branches (see docs/build/IDENTIFIER-REGISTER.md) — this is a deliberate
+// gap, not a mistake, per [migration]'s own doc comment on why the target
+// version is a maximum over [migrations], never a count.
+//
+// One row per FPP instance, holding only the latest accepted observation,
+// never a history (RES-018 requires current-state convergence, not a
+// complete event history; see §1.1's GET endpoint doc comment).
+//
+// body_hash is the SHA-256 of the canonical accepted request body: it is
+// what lets fppobservations.go tell an identical-sequence replay (§1.6
+// step 9) apart from a genuine conflict at the same sequence, without
+// re-deriving the canonical body from the stored columns.
+//
+// The playlist identity columns default to the empty string / zero rather
+// than being nullable, matching §1.4: an "unavailable" observation still
+// has a well-defined row, just with these columns unset.
+const schemaV14 = `
+CREATE TABLE fpp_playlist_entry_observations (
+    instance_uuid       TEXT PRIMARY KEY,
+    schema_version      INTEGER NOT NULL,
+    sequence            INTEGER NOT NULL,
+    body_hash           TEXT NOT NULL,
+    observation_json    TEXT NOT NULL,
+    playlist_name       TEXT NOT NULL DEFAULT '',
+    playlist_hash       TEXT NOT NULL DEFAULT '',
+    section             TEXT NOT NULL DEFAULT '',
+    position            INTEGER NOT NULL DEFAULT 0,
+    entry_key           TEXT NOT NULL DEFAULT '',
+    sequence_filename   TEXT NOT NULL DEFAULT '',
+    media_filename      TEXT NOT NULL DEFAULT '',
+    action              TEXT NOT NULL,
+    unavailable         TEXT NOT NULL DEFAULT '',
+    observed_at_millis  INTEGER NOT NULL,
+    coalesced_since_previous_acknowledged INTEGER NOT NULL DEFAULT 0,
+    received_at         TEXT NOT NULL
+);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

@@ -1,0 +1,562 @@
+{
+  "description": "Ingestion cases for POST and GET /api/v1/integrations/fpp/playlist-entry-observations, docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1.6 and its section 1.7 refusal table. Each case drives the real coordinator HTTP handler. scope selects the bearer principal's role: \"fpp:observe\" mints a principal holding fpp:observe (RoleScheduler), \"show:macro:run\" mints a principal holding show:macro:run but not fpp:observe (RoleOperator), and \"none\" sends no Authorization header at all. priorCases names earlier cases in this same file whose bodies must be POSTed first, in order, against a fresh store, to set up sequence or replay state before this case's own body is posted. The oversized-body case cannot be expressed as a literal 16 KiB JSON value without bloating this file; see oversizedBodyBytes below and the README.",
+  "cases": [
+    {
+      "name": "no-credential-refused-401",
+      "description": "No Authorization header at all. Refused before the body is even parsed.",
+      "scope": "none",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 401,
+      "expectedProblemType": "unauthorized"
+    },
+    {
+      "name": "wrong-scope-refused-403",
+      "description": "A principal holding show:macro:run (the operator role) but not fpp:observe. Deliberately not in the operator bundle: an operator credential must not be able to forge plugin evidence.",
+      "scope": "show:macro:run",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 403,
+      "expectedProblemType": "forbidden"
+    },
+    {
+      "name": "oversized-body-refused-413",
+      "description": "A body larger than the 16384 byte bound, refused before it is parsed. No body field: the consumer synthesizes a request body of oversizedBodyBytes bytes, for example by JSON-encoding an observation whose playlistName is padded with filler characters until the encoded body reaches that length, and posts it as raw bytes.",
+      "scope": "fpp:observe",
+      "oversizedBodyBytes": 20000,
+      "expectedStatus": 413,
+      "expectedProblemType": "payload-too-large"
+    },
+    {
+      "name": "malformed-json-refused-400",
+      "description": "Structurally invalid JSON. body is omitted; rawBodyOverride carries the literal bytes to post instead of JSON-encoding a body object, since this case's wire content is not valid JSON.",
+      "scope": "fpp:observe",
+      "rawBodyOverride": "{not valid json",
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unknown-field-refused-400",
+      "description": "A syntactically valid body carrying a field this schema version does not define. Unknown fields are refused, not ignored.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "somethingElse": true
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unsupported-schema-version-refused-400",
+      "description": "schemaVersion 2. This coordinator accepts only schemaVersion 1.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 2,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "unsupported-observation-schema-version"
+    },
+    {
+      "name": "missing-instance-uuid-refused-400",
+      "description": "instanceUuid is the empty string. instanceUuid is required on every observation regardless of unavailable.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "invalid-action-refused-400",
+      "description": "action outside the fixed vocabulary (start, playing, stop, query_next, unknown).",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "bogus",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "invalid-unavailable-refused-400",
+      "description": "unavailable set to a value outside the section 1.4 vocabulary.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "not_a_real_reason"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "negative-position-refused-400",
+      "description": "position is negative.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "position": -1
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "malformed-playlist-hash-refused-400",
+      "description": "playlistHash is not 64 lowercase hex characters.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "playlistHash": "not-a-hash"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "malformed-entry-key-refused-400",
+      "description": "entryKey is not 64 lowercase hex characters.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "entryKey": "not-a-hash-either"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "negative-sequence-refused-400",
+      "description": "sequence is negative.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": -1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "negative-coalesced-refused-400",
+      "description": "coalescedSincePreviousAcknowledged is negative.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": -1
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "entry-key-mismatch-refused-400",
+      "description": "A syntactically valid 64-hex entryKey that does not match the entry key re-derived from instanceUuid, playlistName, playlistHash, section, and position.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-mismatch",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "observation-entry-key-mismatch"
+    },
+    {
+      "name": "plain-accepted-observation",
+      "description": "A well-formed, available-identity observation with no prior state for this instance. Accepted unconditionally.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "c5d8b25b2b836a3c019668e2b8c770241520dbd7123fb59bf576937230a58dc7",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "sequence-seed-accepted",
+      "description": "Seeds instance-seed at sequence 5. Used as a priorCases dependency by the replay, conflict, regression, and higher-sequence cases below, and is itself a plain accepted-observation case.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-seed",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84",
+        "action": "playing",
+        "sequence": 5,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "identical-replay-is-idempotent",
+      "description": "The exact same instanceUuid, sequence, and canonical body as sequence-seed-accepted, posted a second time. Idempotent: 200, accepted false, replay true, and the stored row is unchanged (a consumer that only checks the wire fixtures cannot assert the store directly, but can assert the response fields).",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-seed",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84",
+        "action": "playing",
+        "sequence": 5,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": false,
+      "expectedReplay": true
+    },
+    {
+      "name": "sequence-conflict-different-body-refused-409",
+      "description": "The same instanceUuid and sequence as sequence-seed-accepted, but a different section, so the canonical body differs. Refused: a sequence must not be reused for two different observations.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-seed",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "other",
+        "position": 0,
+        "entryKey": "366a9f02aefbb39ccdbe5441c59c399b98051ad7da7b98bbe4acecc60b087928",
+        "action": "playing",
+        "sequence": 5,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 409,
+      "expectedProblemType": "conflict"
+    },
+    {
+      "name": "sequence-regression-refused-409",
+      "description": "A sequence lower than sequence-seed-accepted's already-accepted sequence 5. Refused, and the stored latest observation is left untouched (contract section 1.5).",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-seed",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84",
+        "action": "playing",
+        "sequence": 3,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 409,
+      "expectedProblemType": "conflict"
+    },
+    {
+      "name": "higher-sequence-accepted-after-prior",
+      "description": "A sequence higher than sequence-seed-accepted's already-accepted sequence 5. Accepted, replacing the stored latest observation for this instance.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-seed",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "main",
+        "position": 0,
+        "entryKey": "77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84",
+        "action": "playing",
+        "sequence": 9,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-missing-instance-uuid-with-uuid-present-accepted",
+      "description": "unavailable is missing_instance_uuid, but instanceUuid IS present (some other identity input failed). Per contract section 1.4, missing_instance_uuid is reportable only when some other identity input failed, never as the reason a body arrived with no instance at all, so this is accepted, not refused.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_instance_uuid"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-missing-playlist-name-accepted",
+      "description": "unavailable is missing_playlist_name. Unavailable observations are not refusals: the coordinator stores and streams them.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-2",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_playlist_name"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-missing-definition-accepted",
+      "description": "unavailable is missing_definition.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-3",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_definition"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-unsupported-definition-shape-accepted",
+      "description": "unavailable is unsupported_definition_shape.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-4",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "unsupported_definition_shape"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-negative-position-accepted",
+      "description": "unavailable is negative_position. No position field is sent: the plugin reports the reason it could not establish identity rather than sending the offending negative value, which would itself be refused by the position check.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-5",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "negative_position"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-truncated-identity-field-accepted",
+      "description": "unavailable is truncated_identity_field.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-unavail-6",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "truncated_identity_field"
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "unavailable-no-instance-uuid-refused-400",
+      "description": "unavailable is missing_instance_uuid AND instanceUuid is itself empty. Refused: an unavailable observation cannot be attributed to no instance at all.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_instance_uuid"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unavailable-with-playlist-hash-refused-400",
+      "description": "unavailable is set AND playlistHash is present. playlistHash and entryKey are derived identity: nothing computed them for an unavailable observation, so a value in either is a claim nothing verified, and is refused rather than stored (contract section 1.2, section 1.4).",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_playlist_name",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "unavailable-with-entry-key-refused-400",
+      "description": "unavailable is set AND entryKey is present. Same rule as unavailable-with-playlist-hash-refused-400, for the other derived-identity field.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-1",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0,
+        "unavailable": "missing_playlist_name",
+        "entryKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "available-missing-identity-fields-refused-400",
+      "description": "unavailable is absent, and playlistName, playlistHash, and position are all absent, but entryKey carries the correctly re-derived hash of the all-empty five-member identity object (instanceUuid present, every other field empty). Before this fix, a caller could precompute this hash and pass the entry-key re-derivation check trivially; contract section 1.6 step 7 now refuses this before re-derivation even runs, because playlistName, playlistHash, and position are themselves required whenever unavailable is absent.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-empty-identity",
+        "entryKey": "bd8cb094de8edfe92a21aacf44845bf18341532f9c62c1dc6308999fe0409ffe",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 400,
+      "expectedProblemType": "invalid-parameter"
+    },
+    {
+      "name": "available-with-empty-section-accepted",
+      "description": "unavailable is absent, section is present but the empty string, and every other identity field is present and correct. section may legitimately be empty; only playlistName may not.",
+      "scope": "fpp:observe",
+      "body": {
+        "schemaVersion": 1,
+        "instanceUuid": "instance-empty-section",
+        "playlistName": "showmesh-test",
+        "playlistHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "section": "",
+        "position": 0,
+        "entryKey": "37c19fb1007213cae785262af3cdeacb617debec4c63ac1c5b9dec59e0ba5bf6",
+        "action": "playing",
+        "sequence": 1,
+        "observedAtMillis": 1700000000000,
+        "coalescedSincePreviousAcknowledged": 0
+      },
+      "expectedStatus": 200,
+      "expectedAccepted": true,
+      "expectedReplay": false
+    },
+    {
+      "name": "replay-different-member-order-is-idempotent",
+      "description": "The same instanceUuid, sequence, and semantic content as sequence-seed-accepted, but with its members in a different wire order, carried in rawBody so the consumer posts exactly these bytes instead of re-marshaling a Go map (which would sort the keys and silently defeat this case). Replay detection hashes the CANONICAL body, so member order must not matter: 200, accepted false, replay true, nothing stored.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "rawBody": "{\"observedAtMillis\":1700000000000,\"coalescedSincePreviousAcknowledged\":0,\"sequence\":5,\"action\":\"playing\",\"entryKey\":\"77883da6d0ebc887ef949b0de253d4740f1e2cb83ea04e9914295be896063f84\",\"position\":0,\"section\":\"main\",\"playlistHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"playlistName\":\"showmesh-test\",\"instanceUuid\":\"instance-seed\",\"schemaVersion\":1}",
+      "expectedStatus": 200,
+      "expectedAccepted": false,
+      "expectedReplay": true
+    },
+    {
+      "name": "sequence-conflict-different-order-and-content-refused-409",
+      "description": "Mirror of replay-different-member-order-is-idempotent: the same sequence as sequence-seed-accepted, a different wire member order AND genuinely different content (section other instead of main), carried in rawBody. Reordering must not accidentally mask a genuine conflict as a replay: still refused 409.",
+      "scope": "fpp:observe",
+      "priorCases": ["sequence-seed-accepted"],
+      "rawBody": "{\"position\":0,\"action\":\"playing\",\"instanceUuid\":\"instance-seed\",\"section\":\"other\",\"coalescedSincePreviousAcknowledged\":0,\"entryKey\":\"366a9f02aefbb39ccdbe5441c59c399b98051ad7da7b98bbe4acecc60b087928\",\"sequence\":5,\"playlistHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"observedAtMillis\":1700000000000,\"playlistName\":\"showmesh-test\",\"schemaVersion\":1}",
+      "expectedStatus": 409,
+      "expectedProblemType": "conflict"
+    }
+  ]
+}

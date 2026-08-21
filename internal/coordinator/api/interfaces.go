@@ -407,6 +407,22 @@ type NightSessionStore interface {
 	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
 }
 
+// FPPObservationStore is the playlist-entry observation contract's store dependency: the latest accepted
+// playlist-entry observation per FPP instance
+// (store/fppobservations.go). *store.Store already satisfies this with no
+// adapter needed, matching [NightSessionStore]'s identical pattern.
+//
+// InTx is required, not merely Get/List/Put individually: contract §1.6
+// step 9 requires reading the instance's currently stored sequence AND
+// body hash to distinguish an idempotent replay from a genuine conflict
+// BEFORE deciding whether to write, and that read must share one
+// transaction with the write it gates.
+type FPPObservationStore interface {
+	GetFPPPlaylistEntryObservation(ctx context.Context, instanceUUID string) (store.FPPPlaylistEntryObservationRecord, error)
+	ListFPPPlaylistEntryObservations(ctx context.Context) ([]store.FPPPlaylistEntryObservationRecord, error)
+	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
+}
+
 // FPPPollNudger requests an out-of-band poll of one FPP instance's
 // collector, ASAP rather than waiting out its own cadence — the owner's
 // 2026-08-13 fix for the FPP REST collector's DefaultPollInterval (15s)

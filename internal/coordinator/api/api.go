@@ -450,6 +450,13 @@ type Dependencies struct {
 	// matching this struct's standing "an unwired dependency is not this
 	// API failing" posture.
 	NightSessions NightSessionStore
+
+	// FPPObservations is the playlist-entry observation store dependency — see
+	// [FPPObservationStore]. A nil field is replaced by
+	// [noFPPObservationStore], under which GET reports an empty list and
+	// POST refuses with an internal error, matching this struct's
+	// standing "an unwired dependency is not this API failing" posture.
+	FPPObservations FPPObservationStore
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -465,6 +472,11 @@ var _ CommandStore = (*store.Store)(nil)
 // assertion — *store.Store's GetAsset/ListAssets already satisfy it with
 // no adapter needed.
 var _ AssetStore = (*store.Store)(nil)
+
+// storeSatisfiesFPPObservationStore is [FPPObservationStore]'s identical
+// compile-time assertion — *store.Store's Get/List/InTx already satisfy
+// it with no adapter needed.
+var _ FPPObservationStore = (*store.Store)(nil)
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -553,7 +565,29 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.NightSessions == nil {
 		d.NightSessions = noNightSessionStore{}
 	}
+	if d.FPPObservations == nil {
+		d.FPPObservations = noFPPObservationStore{}
+	}
 	return d
+}
+
+// noFPPObservationStore is [Dependencies.FPPObservations]'s nil-safe
+// default: GET reports an empty list (not an error — an unwired store and
+// a store with no observations yet are indistinguishable to a reader) and
+// InTx refuses with an internal error, matching every other unwired
+// write-capable dependency's identical posture in this file.
+type noFPPObservationStore struct{}
+
+func (noFPPObservationStore) GetFPPPlaylistEntryObservation(context.Context, string) (store.FPPPlaylistEntryObservationRecord, error) {
+	return store.FPPPlaylistEntryObservationRecord{}, store.ErrFPPPlaylistEntryObservationNotFound
+}
+
+func (noFPPObservationStore) ListFPPPlaylistEntryObservations(context.Context) ([]store.FPPPlaylistEntryObservationRecord, error) {
+	return nil, nil
+}
+
+func (noFPPObservationStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
+	return fmt.Errorf("api: fpp observation store not wired in")
 }
 
 // noNightSessionStore is [Dependencies.NightSessions]'s nil-safe default:
@@ -1573,6 +1607,15 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/night/session", h.readGuard(identity.ScopeObservationRead, h.handleGetNightLifecycle))
 	mux.HandleFunc("GET /api/v1/night/sessions/{id}", h.readGuard(identity.ScopeObservationRead, h.handleGetNightLifecycleByID))
 	mux.HandleFunc("POST /api/v1/night/commands/{command}", h.writeGuard(&scopeNightCommand, h.handleNightCommand))
+
+	// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1: the installed FPP plugin's own evidence-ingestion
+	// route, behind fpp:observe rather than fpp:command — accepting
+	// plugin evidence grants no execution authority (§1.6's own closing
+	// rule), so this is deliberately not the same scope that dispatches
+	// FPP's native commands. GET stays open under observation:read,
+	// matching every other FPP read surface.
+	mux.HandleFunc("POST /api/v1/integrations/fpp/playlist-entry-observations", h.writeGuard(&scopeFPPObserve, h.handlePostFPPPlaylistEntryObservation))
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-entry-observations", h.readGuard(identity.ScopeObservationRead, h.handleListFPPPlaylistEntryObservations))
 
 	// --- Track E: the asset store ---
 	//

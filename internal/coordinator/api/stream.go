@@ -277,6 +277,14 @@ type pendingFrame struct {
 	instanceID     string
 	changedObs     []v1.Evidence
 	removedSignals []string
+
+	// fppPlaylistEntry is set only for an "fppPlaylistEntry.changed"
+	// pendingFrame (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): one instance's latest accepted
+	// playlist-entry observation, full-frame only — no ADR-023 delta
+	// narrowing exists for this resource, matching resolumeInstance and
+	// resolumeRecovery's identical posture immediately above them in
+	// [Hub.render].
+	fppPlaylistEntry *v1.FPPPlaylistEntryObservation
 }
 
 // materialize assigns seq to pf and returns the SSE event name and the
@@ -311,6 +319,10 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "nightSession.changed", ev
+	case "fppPlaylistEntry.changed":
+		return "fppPlaylistEntry.changed", v1.FPPPlaylistEntryChangedEvent{
+			Seq: seq, ServerTime: pf.serverTime, Observation: *pf.fppPlaylistEntry,
+		}
 	default:
 		// Unreachable: every pendingFrame this file constructs sets event
 		// to one of the four cases above. A panic here is an internal
@@ -618,6 +630,29 @@ func (h *Hub) render(ctx context.Context) {
 		if h.updateRendered(key, state) {
 			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
 		}
+	}
+
+	// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10: the latest accepted playlist-entry observation
+	// per FPP instance, keyed "fppobs:"+instanceUuid — full-frame only,
+	// same posture as resolumeInstance/resolumeRecovery/nightSession
+	// immediately above: no delta kind exists for this resource. A store
+	// error skips this resource kind for the pass rather than publishing
+	// an empty list on a transient read failure, matching every other
+	// dependency-error branch in this method.
+	if recs, err := h.deps.FPPObservations.ListFPPPlaylistEntryObservations(ctx); err != nil {
+		h.logger.Warn("stream hub: list fpp playlist entry observations failed", "error", err)
+	} else {
+		present := make(map[string]struct{}, len(recs))
+		for _, rec := range recs {
+			key := "fppobs:" + rec.InstanceUUID
+			present[key] = struct{}{}
+			obs := mapFPPPlaylistEntryObservation(rec)
+			if h.updateRendered(key, obs) {
+				o := obs
+				pending = append(pending, pendingFrame{event: "fppPlaylistEntry.changed", serverTime: formatTime(now), fppPlaylistEntry: &o})
+			}
+		}
+		h.evictRendered("fppobs:", present)
 	}
 
 	pending = append(pending, h.renderNewEvents(ctx, now)...)
