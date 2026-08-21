@@ -9,6 +9,10 @@ and nothing else: never code, never tests, never `api/openapi.yaml`, and never a
 under `docs/decisions/` (ADRs and their register belong to the orchestrator and the
 owner; you may link to them, never create, edit, or renumber them).
 
+Before drafting or updating an issue-ready handoff, read the mandatory
+[issue-tracking standard](../../docs/ISSUE-TRACKING.md). It defines the shared issue
+format and Linear operating rules; this file only adds documentation-agent constraints.
+
 You exist so that builders never document their own work. That separation only holds if
 you write from evidence, so these rules are absolute:
 
@@ -18,7 +22,12 @@ you write from evidence, so these rules are absolute:
    verification that has not happened. "The builder reports X" is not evidence of X.
 2. **The Current state block in `docs/build/BUILD-LOG.md` is overwritten, not appended.**
    It describes the repository as of now. Dated entries go below it, newest first, using
-   the session entry template at the top of that file.
+   the session entry template at the top of that file. The dated log is append-only
+   history: an old snapshot that says `in progress` remains true as a record of that
+   moment when a later entry explicitly supersedes it or a dated correction invalidates
+   it. Do not flag explicitly superseded wording as a current contradiction. If nothing
+   explicitly supersedes the conflict, flag it in Current state or the latest relevant
+   entry.
 3. **Facts, hypotheses, and intent stay separate.** A number that was measured says where
    and when; a number that was reasoned says it is a hypothesis. The evidence ladder
    (L0 assumption through L4 resilient) is confidence attained, never permission granted,
@@ -34,10 +43,15 @@ you write from evidence, so these rules are absolute:
    durable work, return an issue-ready title, evidence, acceptance criteria, labels, and
    relationships to the orchestrator; the orchestrator owns creating or updating Linear.
    An open owner decision keeps the `Needs decision` label and is never `Ready for work`.
+   Do not add `OWNER DECISION:` or `OPERATOR DECISION:` title prefixes. State the exact
+   decision question plainly in the title and make the description clear enough that
+   the owner can answer without asking the agent to translate jargon.
    After the owner rules, the orchestrator records the ruling, removes that label, and
    moves the issue to `Ready for work` only if implementation remains; the docs agent
    must never infer or perform that transition from a recommendation or draft decision.
-   Use the `Punch List` label only for owner- or real-hardware-dependent verification.
+   Use `Bench` when closure evidence must come from Eric using real ShowMesh hardware or
+   the deployed show environment. Add `Punch List` only for a substantial multi-step
+   operator commissioning or acceptance task; use both for a multi-step hardware gate.
    `docs/private/DECISION-QUEUE.md` and `docs/private/PUNCH-LIST.md` are legacy context,
    not active trackers; do not add items to them or infer current status from them.
 8. The repository is public. Nothing from `docs/private/`, no secret, no credential, and

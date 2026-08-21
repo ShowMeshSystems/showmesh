@@ -4,9 +4,9 @@
 
 ## Format
 
-This is a chronological session log so a future session (or a different contributor) can resume work without reconstructing context from scratch. It is not a substitute for the ADRs, the research records, or BUILD-PLAN.md; it links to them rather than restating their content.
+This is an append-only chronological session log so a future session (or a different contributor) can resume work without reconstructing context from scratch. It is not a substitute for the ADRs, the research records, or BUILD-PLAN.md; it links to them rather than restating their content. Linear is the source of truth for actionable work, ownership, blockers, and current issue state. The build log remains the historical account of what each session observed and changed, and continues to be maintained through the first pre-release.
 
-The **Current state** block at the top of this file is overwritten each session: it always describes the repository as of the most recent session, not a history of how it got there. History lives in the dated entries below it, appended in reverse chronological order (newest first).
+The **Current state** block at the top of this file is overwritten each session: it always describes the repository as of the most recent session, not a history of how it got there. History lives in the dated entries below it, appended in reverse chronological order (newest first). Dated entries are snapshots, not a live status board: an earlier entry may say `in progress` even when a later entry records completion. When a later entry explicitly supersedes that snapshot, reviewers and agents must not flag the old wording as a current contradiction; use the later entry and Current state. The same rule applies when a dated **CORRECTION** explicitly names and invalidates older text preserved below it: the correction is current, and the invalidated passage is history. A contradiction in Current state or the latest relevant entry that is not explicitly superseded is still a defect.
 
 ### Session entry template
 

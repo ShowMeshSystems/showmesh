@@ -94,6 +94,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.surface` | operator-chosen | shipped | Track E |
 | `show.action` | operator-chosen | shipped | Step 9 |
 | `show.macro` | operator-chosen | shipped | Step 9 |
+| `show.cue` | operator-chosen | reserved | Track H seam H1 |
+| `show.playlist` | operator-chosen | reserved | Track H seam H1 |
 | `resolume.instances` | `default` singleton | shipped | Track G seam G-2 |
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
@@ -123,24 +125,31 @@ because ADR-039's test is temporal — the coordinator reads them from its own
 store, so they may not be environment variables, and "which output is LTC"
 is exactly the class of value that shipped as an environment variable in the
 Resolume case and left the subsystem unconnectable from every operator
-surface. **Track C mints no audio-playlist configuration kind**: Track F's
-Night Session configuration embeds the ordered audio slots (TRACK-F F1), and
-a second authoring path for the same list is the collision this register
-exists to prevent.
+surface. **Track C mints no audio-playlist configuration kind**: Track H owns
+the show-level `show.playlist` authoring object, while Track C's `PlaylistRef`
+remains an execution primitive beneath the `showmesh-audio` runner.
 
-**Track F mints two kinds and no audio-playlist kind.** `night.session` is
+**Track F mints two kinds and no Playlist kind.** `night.session` is
 operator-chosen because a deployment holds more than one (the Christmas and
 the Halloween definition differ in content and in FPP playlist references
 while sharing a shape), and `night.session.active` is the singleton pointer
 saying which one a session activation pins, on the `show`/`show.active`
-precedent. The ordered background-audio slots live inside `night.session`
-per TRACK-F F1; Track C deliberately mints no audio-playlist kind, so a
-second authoring path for the same list cannot appear. **`night.session`
+precedent. `night.session` references and pins a same-show `show.playlist`
+revision for background audio; Track H is the only authoring path for that
+ordered list. **`night.session`
 carries no calendar field of any kind** (ADR-038 decision 1), and F1's
 validation rejecting one is part of the kind rather than a later check.
 `night.session.active` may be released back to `free` if the active-show
 reference turns out to be sufficient to resolve the session; it is reserved
 now because releasing an unused reservation is free and colliding is not.
+
+**Track H mints exactly two kinds.** `show.cue` is the stable show intent for
+one synchronized playback item. `show.playlist` is the ordered program whose
+entries reference same-show Cues and declare a runner. The Audio Engine's
+`PlaylistRef` is not registered because it is not an authored configuration
+kind. An FPP playlist name, index, filename, or imported hash belongs inside
+the runner binding of `show.playlist`; none becomes a new global kind or a
+Cue id.
 
 **Track E seam E7 mints no configuration kind, no schema version, no change
 stream event kind and no observation signal, and that is the finding rather
@@ -173,6 +182,7 @@ bundles of these (ADR-024).
 | `show:macro:run` | shipped | macro run submission |
 | `device:power` | shipped | controlled-device power |
 | `fpp:command` | shipped | the eight FPP primitives |
+| `fpp:observe` | reserved | SM-63/Track H: authenticated FPP playlist-entry observation ingestion |
 | `config:write` | shipped | every configuration write |
 | `audit:read` | shipped | audit log reads |
 | `resolume:action` | shipped | the seven Resolume actions |
@@ -716,7 +726,7 @@ sessions running.
 | Number | Status | Subject |
 |---|---|---|
 | RES-001 to RES-017 | shipped | see the research tracker |
-| RES-018 | issued | FPP brightness control and the ADR-038 / RESTING-MODE §7.3 composition seam (Track F) |
+| RES-018 | issued | FPP brightness, ADR-043 playlist identity, and the three-repository plugin runtime (Tracks F/H) |
 | RES-019+ | unallocated | free |
 
 ## API paths
