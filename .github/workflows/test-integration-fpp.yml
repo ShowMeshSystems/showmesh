@@ -65,6 +65,15 @@ jobs:
     # several minutes") plus the test run itself; generous headroom over
     # the other integration jobs' 10 minutes for exactly that reason.
     timeout-minutes: 30
+    # This suite proves FPP behaviour and starts no agent, but it compiles
+    # the whole test/integration package, which reaches the agent's cgo
+    # audio engine. That engine needs GStreamer 1.26 and libltc, and
+    # ubuntu-latest ships 1.24, so the package is compiled without cgo here
+    # and the engine's build-tagged files drop out. The cgo backend is
+    # covered by ci.yml's `integration` job, which runs on Debian 13; this
+    # workflow deliberately does not cover it.
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
 
