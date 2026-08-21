@@ -226,6 +226,13 @@ ui-gen-check: ui-install
 .PHONY: check
 check: fmt-check vet lint test ui-lint ui-test ui-build ui-gen-check
 
+# Checks final repository and GitHub state after the task branch is pushed and
+# its PR checks have completed. Local and integration gates remain explicit
+# commands because their applicability and evidence must be reported separately.
+.PHONY: pr-ready-check
+pr-ready-check:
+	./scripts/pr-ready-check.sh
+
 IMAGE       ?= showmesh
 UI_IMAGE    ?= showmesh-operator-ui
 DOCKER      ?= docker
