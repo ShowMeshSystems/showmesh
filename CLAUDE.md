@@ -113,6 +113,10 @@ documentation-only for this rule.
 For a task that changes repository files, local completion is not delivery.
 
 - Commit coherent completed work after the applicable gates pass.
+- Scope a branch to one seam (or a comparably small independent unit), per
+  `CONTRIBUTING.md`'s pull-request rule, not to a whole delivery track. Push
+  and open the PR for a finished seam rather than holding it on the branch
+  until sibling seams are also done.
 - Push the current task branch in the same session. This is standing authority
   for ordinary task-branch publication; do not ask again merely because pushing
   is outward-facing.

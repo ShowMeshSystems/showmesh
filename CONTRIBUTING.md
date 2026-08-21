@@ -103,7 +103,7 @@ final commit and after GitHub checks finish; it verifies that the local commit
 matches the PR, every reported check passed, and GitHub reports a clean merge
 state. It does not lint the PR body, run tests, or perform a review.
 
-- One coherent change per PR. Name the ADRs and research records it is bound by or touches.
+- One coherent change per PR, scoped to one seam (or a comparably small independent unit), not a whole delivery track. A track's seams merge as separate pull requests rather than one bundle, so each PR stays a size a reviewer, human or agent, can actually hold in their head. Combine seams into one PR only when they are trivially small or genuinely inseparable (e.g. one shared migration file both depend on), and say why in the PR body. Name the ADRs and research records it is bound by or touches.
 - If it changes a wire type, update `api/openapi.yaml` — the conformance test runs in both directions and will fail otherwise.
 - If it changes an API payload consumed by the UI, regenerate the types (`make ui-gen-check` tells you) — CI fails on any diff.
 - Nothing in `cmd/showmeshctl` may import a coordinator package. An import-graph test enforces this; it exists so a JSON tag rename breaks the build instead of silently renaming the field on both sides.

@@ -584,6 +584,14 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 
 	cmd := exec.Command(agentBinPath)
 	cmd.Env = env
+	// Own process group: the agent spawns a real gst-launch-1.0 child, and
+	// this harness kills the agent with an unblockable SIGKILL (sigkill,
+	// stopIfRunning) that the agent has no chance to react to. Without this,
+	// that gst-launch-1.0 grandchild is never told to stop, gets reparented
+	// to init, and keeps running (most test pipelines have no num-buffers
+	// limit) — an orphan per killed test, forever. Killing -pid instead of
+	// pid in stopIfRunning takes the whole group, gst-launch-1.0 included.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	logs := &syncBuffer{}
 	cmd.Stdout = logs
@@ -614,7 +622,11 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 // waits for the process to actually exit.
 func (a *testAgent) sigkill(t *testing.T) {
 	t.Helper()
-	if err := a.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	// -pid (not pid): see startAgent's Setpgid comment. This still delivers
+	// the unclean, uncaught kill this method exists for (SIGKILL is
+	// unblockable either way) while also reaping any gst-launch-1.0 child a
+	// running render surface left behind, instead of orphaning it.
+	if err := syscall.Kill(-a.cmd.Process.Pid, syscall.SIGKILL); err != nil {
 		t.Fatalf("SIGKILL agent %s: %v", a.nodeID, err)
 	}
 	a.waitForExit(t, 5*time.Second)
@@ -688,7 +700,10 @@ func (a *testAgent) stopIfRunning() {
 	default:
 	}
 	_ = a.cmd.Process.Signal(syscall.SIGCONT)
-	_ = a.cmd.Process.Kill()
+	// -pid (not pid) signals the whole process group startAgent put this
+	// process in, so the real gst-launch-1.0 child it may have spawned dies
+	// with it instead of being orphaned. See startAgent's Setpgid comment.
+	_ = syscall.Kill(-a.cmd.Process.Pid, syscall.SIGKILL)
 	<-a.waitDone
 }
 
