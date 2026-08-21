@@ -184,6 +184,26 @@ The entry above stops at `423ad57`. Seven further commits landed on the branch a
 
 **Merge state.** `origin/main` was merged into the branch at `2ff62be`; the only conflict was `docs/decisions/README.md`, where ADR-042 (this branch) and ADR-043 (`main`, show-scoped Cues) were issued into the same register row and both are kept.
 
+### Addendum, 2026-08-21: the first CI run of this project's cgo, and what it found
+
+**`main` carried no `go-gst` at all.** The dependency is absent from `main`'s `go.mod`, so this branch is the first in this project's history to put cgo, GStreamer and libltc through CI. Nothing before it could have caught any of the following, and every engine measurement recorded above was taken on macOS.
+
+**The agent does not build on the CI runner.** `ubuntu-latest` is Ubuntu 24.04 and ships GStreamer 1.24.2; `go-gst` v0.0.2 calls symbols added in 1.26 (`GstIdStr` and the static-string caps API). Only two `go-gst` versions exist, so there is no downgrade path. **The floor this branch had added to CI asserted GLib 2.80, which 24.04 satisfies**, so the guard passed and the build then failed as a wall of undefined C symbols in a dependency. A version floor that names the wrong library is worse than none: it reports the platform as adequate and moves the failure somewhere unrecognisable.
+
+`test`, `lint` and `vuln` now run in a `debian:trixie` job container, the platform the engine was measured green on, and each asserts `gstreamer-1.0 >= 1.26` alongside the existing GLib floor. **`lint` and `vuln` had never had the GStreamer dev headers at all**, so neither could load the engine packages once they existed; neither had ever linted or scanned them.
+
+**`integration` cannot be a container job.** `scripts/test-integration.sh` starts the real pinned Mosquitto itself, deliberately, so the suite tests the shipped `deploy/mosquitto` config rather than a `services:` stand-in. That needs the host Docker socket and host networking, and GitHub's `container:` field cannot express `--network`. It runs the suite in a nested `golang:1.25.0-trixie` container instead, with the workspace mounted at its own absolute path and `TMPDIR` inside it, so the seed-file bind mounts the script hands to the host daemon resolve identically on both sides.
+
+**Two smaller ones, both container-shaped.** The workspace is checked out by the host runner and read as root inside the container, so git refuses it as dubiously owned and every `-buildvcs` stamp fails as a typecheck error, which is how `lint` reported it. And Debian's `docker.io` only *recommends* `docker-cli`, so `--no-install-recommends` left the integration container with no `docker` binary.
+
+**The FPP integration workflow compiles the whole `test/integration` package**, which reaches the cgo engine even though that suite starts no agent and proves nothing about audio. It now compiles without cgo and states that it does not cover the cgo backend.
+
+**A finished-work gap the merge found.** The review fix that declared the three `audio.node` problem-type URIs in `api/openapi.yaml` never regenerated `ui/src/api/generated/schema.d.ts`, so `make check` failed on `ui-gen-check`. The generated file is checked in and the gate compares against git, so an uncommitted regeneration still reads as stale.
+
+**Two defects the first green-building CI run then found in the engine itself**, both tracked and neither yet closed at the time of writing: a branch joining a running pipeline reporting a position matching the engine's uptime rather than its own start position, deterministic across two runs of the same commit; and `Load: context deadline exceeded` at the full 30 s bound, landing on a different set of tests each run. **Neither reproduces on Linux locally** in a `debian:trixie` container at any of isolation, full package, `-race`, one, two or four CPUs, or amd64 under emulation. The unreproduced condition is the command the `test` job actually runs, `go test -race ./...` across roughly forty packages on a four-core runner, where this package competes with `internal/coordinator/api`'s 570 to 613 second race suite.
+
+**The lesson, and it is this project's recurring one in a new disguise.** A test environment that differs from the deployment environment reports success on exactly that difference, and here the difference was that the deployment environment had never been tested at all: the audio node runs on Linux, every number recorded for it was macOS, and the first Linux run disagreed. The guard that should have caught the platform gap checked the wrong library and waved it through.
+
 ---
 
 ## 2026-08-18 (Track E seam E7: actions and bindings; asset rollback PR #17; render idempotency 409 PR #18; fpp.mqtt credential rework returned undone)

@@ -22,6 +22,11 @@ jobs:
       image: debian:trixie
     timeout-minutes: 15
     strategy:
+      # Both matrix legs run to completion. With the default fail-fast, a
+      # failure on one Go version cancels the other, so a run reports one
+      # failure when it could have reported two, and each hidden one costs
+      # a full round trip to discover.
+      fail-fast: false
       # Test both the minimum Go version this project claims to support
       # (go.mod) and the compiler the Dockerfile actually ships the
       # coordinator binary on, so the two never silently diverge. These are
