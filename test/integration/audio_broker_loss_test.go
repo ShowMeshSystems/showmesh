@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -194,29 +195,113 @@ func subscribeAudioReports(t *testing.T, nodeID string) *audioReportSubscriber {
 	return w
 }
 
-// waitForBrokerTCPUp blocks until brokerURL accepts a bare TCP connection,
-// or fails t after timeout. `docker start` returns as soon as the
-// container process is launched, not once Mosquitto is actually listening
-// again, so a dial issued immediately after it can still race a listener
-// that has not bound yet.
-func waitForBrokerTCPUp(t *testing.T, timeout time.Duration) {
+// brokerReadyAttemptTimeout bounds one attempt's dial-plus-CONNECT, so a
+// sequence of retries still respects waitForBrokerReady's own timeout.
+// Matches rawConnect's dial and CONNECT timeouts (broker_auth_test.go),
+// combined into a single per-attempt deadline rather than kept as two
+// independent 5s stages.
+const brokerReadyAttemptTimeout = 5 * time.Second
+
+// waitForBrokerReady blocks until a real MQTT CONNECT against brokerURL
+// succeeds, or fails t after timeout. A bare TCP accept is not enough:
+// Docker's port proxy accepts a connection the moment the port mapping
+// exists, before Mosquitto has read its config and is willing to serve a
+// session.
+func waitForBrokerReady(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	u, err := url.Parse(brokerURL)
 	if err != nil {
 		t.Fatalf("parse broker URL %q: %v", brokerURL, err)
 	}
+	username, password := testMQTTCoordinatorUsername, testMQTTCoordinatorPassword
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
-		conn, err := net.DialTimeout("tcp", u.Host, time.Second)
-		if err == nil {
-			_ = conn.Close()
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("broker at %s did not accept a real MQTT CONNECT within %s: %v", u.Host, timeout, lastErr)
+		}
+		attemptTimeout := brokerReadyAttemptTimeout
+		if remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+		lastErr = attemptBrokerConnect(ctx, u.Host, username, password)
+		cancel()
+		if lastErr == nil {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("broker at %s did not accept a TCP connection within %s: %v", u.Host, timeout, err)
+		var refused *connectRefusedError
+		if errors.As(lastErr, &refused) && refused.terminal() {
+			t.Fatalf("broker at %s refused the MQTT CONNECT: %v", u.Host, lastErr)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// terminalConnectReasons are v5 CONNACK reason codes naming an explicit
+// refusal decision (bad credentials, banned, not authorized) rather than a
+// transient not-ready state, so retrying them cannot help.
+var terminalConnectReasons = map[byte]string{
+	0x85: "Client Identifier not valid",
+	0x86: "Bad User Name or Password",
+	0x87: "Not authorized",
+}
+
+// connectRefusedError reports a CONNACK reason code, since
+// paho.Client.Connect's own error on a refused CONNACK drops the code and
+// carries only the broker's (often empty) reason string.
+type connectRefusedError struct {
+	reasonCode byte
+}
+
+func (e *connectRefusedError) Error() string {
+	if name, ok := terminalConnectReasons[e.reasonCode]; ok {
+		return fmt.Sprintf("CONNECT refused: reason code 0x%02x (%s)", e.reasonCode, name)
+	}
+	return fmt.Sprintf("CONNECT refused: reason code 0x%02x", e.reasonCode)
+}
+
+func (e *connectRefusedError) terminal() bool {
+	_, ok := terminalConnectReasons[e.reasonCode]
+	return ok
+}
+
+// attemptBrokerConnect dials host and performs one MQTT CONNECT as
+// username/password, bounded by ctx. A refused CONNACK (reason code
+// 0x80+) is reported as *connectRefusedError so the caller can read the
+// code: paho.Client.Connect returns a non-nil error on any such CONNACK,
+// which would otherwise mask ack's reason code with its own generic,
+// often reason-string-empty message.
+func attemptBrokerConnect(ctx context.Context, host, username, password string) error {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", host)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	cli := paho.NewClient(paho.ClientConfig{Conn: conn})
+	ack, err := cli.Connect(ctx, &paho.Connect{
+		ClientID:     "showmesh-test-ready-" + uniqueSuffix(),
+		UsernameFlag: true,
+		Username:     username,
+		PasswordFlag: true,
+		Password:     []byte(password),
+		KeepAlive:    30,
+		CleanStart:   true,
+	})
+	if err != nil {
+		if ack != nil && ack.ReasonCode >= 0x80 {
+			return &connectRefusedError{reasonCode: ack.ReasonCode}
+		}
+		return err
+	}
+	if ack.ReasonCode != 0 {
+		return &connectRefusedError{reasonCode: ack.ReasonCode}
+	}
+	_ = cli.Disconnect(&paho.Disconnect{ReasonCode: 0})
+	return nil
 }
 
 // isolatedAudioBrokerImage is pinned to match deploy/docker-compose.yml's
@@ -323,7 +408,9 @@ func startIsolatedAudioBroker(t *testing.T) {
 		testMQTTCoordinatorUsername, testMQTTCoordinatorPassword = prevUsername, prevPassword
 	})
 
-	waitForBrokerTCPUp(t, 15*time.Second)
+	// startCmdClient's rawConnect, called right after this returns, is
+	// single-shot with no retry of its own.
+	waitForBrokerReady(t, 15*time.Second)
 }
 
 // TestLocalAudioSessionSurvivesBrokerLoss proves ADR-019's failure-containment intent: a
@@ -411,7 +498,7 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	}
 
 	startBroker(t)
-	waitForBrokerTCPUp(t, 15*time.Second)
+	waitForBrokerReady(t, 15*time.Second)
 
 	// audioSub's own raw client (rawConnect) is a bare TCP session with no
 	// reconnect logic of its own — unlike the agent under test, which
@@ -425,13 +512,14 @@ func TestLocalAudioSessionSurvivesBrokerLoss(t *testing.T) {
 	// the evidence this test is about.
 	audioSub = subscribeAudioReports(t, nodeID)
 
-	// The first report to arrive after the broker returns must already
-	// show Completed — proving the transition happened locally, during
-	// the outage, since nothing else could have driven it while the
-	// broker was down. This is also "current telemetry is present again":
-	// this subscription was only opened after the broker was confirmed
-	// reachable, so any report it receives at all is fresh, post-outage
-	// evidence, never a stale or replayed one.
+	// The retained pre-outage "playing" report (ObservedTopic's
+	// ObservedDeliveryPolicy retains, and mosquitto.conf persists) can
+	// still arrive first on this fresh subscription, so this polls for
+	// "completed" specifically rather than asserting on the first message.
+	// No "completed" report can predate the outage, because the session
+	// was still Playing when the broker was stopped, so the first one
+	// observed here proves the transition happened locally during the
+	// outage: nothing else could have driven it while the broker was down.
 	var final mqttproto.AudioSessionReport
 	waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
 		p, ok := audioSub.latestFor(sessionID)
