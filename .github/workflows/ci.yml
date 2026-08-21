@@ -171,8 +171,6 @@ jobs:
               make test-integration
             '
 
-        run: make test-integration
-
   integration-fppmqtt:
     runs-on: ubuntu-latest
     # This is the only place the retained-versus-live observation-time rule
