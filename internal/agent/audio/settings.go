@@ -80,9 +80,9 @@ func invalidSettingsFields(s Settings) []string {
 // A field that fails its own wire-boundary validation is never accepted
 // as given — every other field an operator actually set still lands, and
 // only the bad one falls back to [DefaultSettings]'s value for that
-// field. The fallback is never silent: it is logged and retained for
-// [Manager.SettingsValidationIssues], because a substitution nobody can
-// observe is indistinguishable from acceptance.
+// field. The substitution is logged and retained for
+// [Manager.SettingsValidationIssues]; no coordinator surface reports it
+// yet, so today it is visible on the node and nowhere else.
 func (m *Manager) SetSettings(s Settings) {
 	s.Configured = true
 	issues := invalidSettingsFields(s)
@@ -124,8 +124,7 @@ func (m *Manager) SettingsSnapshot() Settings {
 // SettingsValidationIssues returns the field-level problems the most
 // recent [Manager.SetSettings] call found, or nil once a call arrives
 // with none. Each entry names the field that fell back to its
-// [DefaultSettings] value and why — the observable half of "not
-// silent" that SetSettings's own doc comment requires.
+// [DefaultSettings] value and why. Nothing in production reads this yet.
 func (m *Manager) SettingsValidationIssues() []string {
 	m.settingsMu.RLock()
 	defer m.settingsMu.RUnlock()
