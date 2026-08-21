@@ -54,6 +54,10 @@ jobs:
           pkg-config --atleast-version=1.26.0 gstreamer-1.0
           pkg-config --atleast-version=2.80 glib-2.0
           pkg-config --modversion ltc
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
           # Assert the elements the suites actually instantiate, because a
           # missing decoder reports as a MediaFault rather than a skip.
           # rawvideoparse and videotestsrc are the renderer's; wavparse and
@@ -165,7 +169,7 @@ jobs:
                 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
                 gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
                 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-                libltc-dev docker.io
+                libltc-dev docker-cli
               pkg-config --atleast-version=1.26.0 gstreamer-1.0
               pkg-config --atleast-version=2.80 glib-2.0
               make test-integration
@@ -253,6 +257,10 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
           pkg-config --atleast-version=1.26.0 gstreamer-1.0
           pkg-config --atleast-version=2.80 glib-2.0
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v7
 
@@ -336,6 +344,10 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
           pkg-config --atleast-version=1.26.0 gstreamer-1.0
           pkg-config --atleast-version=2.80 glib-2.0
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v7
 
