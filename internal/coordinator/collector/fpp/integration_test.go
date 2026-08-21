@@ -32,6 +32,10 @@ const (
 	// the repo's own bench default. See requireLiveFPP.
 	envTestFPPURL     = "SHOWMESH_TEST_FPP_URL"
 	defaultTestFPPURL = "http://localhost:8090"
+
+	// envTestFPPComposeOverride names an extra compose file to layer over
+	// the bench base file. See benchComposeFiles.
+	envTestFPPComposeOverride = "SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE"
 )
 
 func testFPPURL() string {
@@ -213,29 +217,52 @@ func TestIntegrationLivePollMatchesRealDaemon(t *testing.T) {
 // restores the container to running before returning, via t.Cleanup, on
 // every exit path including a failing assertion.
 
-// benchComposeFile returns the path to bench/fpp-multisync/docker-
-// compose.yml relative to this test file's own directory
-// (internal/coordinator/collector/fpp), and whether it exists. Computed
-// relative to this package rather than assumed as a fixed absolute path or
-// the process's working directory, since `go test` runs with the package
-// directory as its working directory regardless of where it was invoked
-// from.
-func benchComposeFile(t *testing.T) (string, bool) {
+// benchComposeFiles returns the compose file paths to layer, relative to
+// this test file's own directory (internal/coordinator/collector/fpp), and
+// whether the base file exists. Computed relative to this package rather
+// than assumed as a fixed absolute path or the process's working
+// directory, since `go test` runs with the package directory as its
+// working directory regardless of where it was invoked from.
+//
+// SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE, when set, is appended as a second
+// -f layer: CI's prebuilt-fixture mode sets it so this test's own
+// --force-recreate recovers the container from the pinned GHCR image
+// rather than triggering the source build this file's whole existence is
+// meant to avoid. A set-but-missing override fails loudly rather than
+// silently falling back to the base file alone.
+func benchComposeFiles(t *testing.T) ([]string, bool) {
 	t.Helper()
-	path := filepath.Join("..", "..", "..", "..", "bench", "fpp-multisync", "docker-compose.yml")
-	if _, err := os.Stat(path); err != nil {
-		return "", false
+	base := filepath.Join("..", "..", "..", "..", "bench", "fpp-multisync", "docker-compose.yml")
+	if _, err := os.Stat(base); err != nil {
+		return nil, false
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path, true
+	files := []string{absOrOriginal(t, base)}
+
+	if override := os.Getenv(envTestFPPComposeOverride); override != "" {
+		if _, err := os.Stat(override); err != nil {
+			t.Fatalf("%s=%q does not exist: %v", envTestFPPComposeOverride, override, err)
+		}
+		files = append(files, override)
 	}
-	return abs, true
+	return files, true
 }
 
-func runCompose(t *testing.T, composeFile string, args ...string) error {
+func absOrOriginal(t *testing.T, path string) string {
 	t.Helper()
-	full := append([]string{"compose", "-f", composeFile}, args...)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
+}
+
+func runCompose(t *testing.T, composeFiles []string, args ...string) error {
+	t.Helper()
+	full := []string{"compose"}
+	for _, f := range composeFiles {
+		full = append(full, "-f", f)
+	}
+	full = append(full, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", full...)
@@ -290,7 +317,7 @@ func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabrica
 	if os.Getenv(envTestFPPURL) != "" {
 		t.Skipf("%s is set to a non-default URL; this test only stops/starts this repo's own bench container, never an operator-supplied endpoint — skipping", envTestFPPURL)
 	}
-	composeFile, ok := benchComposeFile(t)
+	composeFiles, ok := benchComposeFiles(t)
 	if !ok {
 		t.Skip("bench/fpp-multisync/docker-compose.yml not found relative to this package; skipping the container-stop test")
 	}
@@ -320,7 +347,7 @@ func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabrica
 		// media volume, which is what actually recovers it — confirmed
 		// live: the recreated container came back with multisync still
 		// at whatever value the volume-persisted setting held.
-		if err := runCompose(t, composeFile, "up", "-d", "--force-recreate", "fpp-master"); err != nil {
+		if err := runCompose(t, composeFiles, "up", "-d", "--force-recreate", "fpp-master"); err != nil {
 			t.Errorf("restoring bench container after test: %v", err)
 			return
 		}
@@ -329,7 +356,7 @@ func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabrica
 		}
 	})
 
-	if err := runCompose(t, composeFile, "stop", "fpp-master"); err != nil {
+	if err := runCompose(t, composeFiles, "stop", "fpp-master"); err != nil {
 		t.Fatalf("stopping bench container: %v", err)
 	}
 	if !waitForCondition(t, 20*time.Second, false, url) {

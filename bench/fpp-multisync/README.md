@@ -132,6 +132,56 @@ everything locally, so a build takes on the order of a couple of minutes on
 a development machine, not the much longer full-recompile time you might
 expect — confirmed while building this bench (see below).
 
+## CI's prebuilt test fixture
+
+CI does not source-build fpp-master: GitHub-hosted runners have no
+persistent Docker layer cache, so every run would pay the full build.
+Instead `.github/workflows/test-integration-fpp.yml` pulls a prebuilt image
+from `ghcr.io/showmeshsystems/showmesh-fpp-test` (private package) via
+`docker-compose.prebuilt.yml`, an override that layers on top of
+`docker-compose.yml` and replaces `fpp-master`'s `build:` with a
+digest-pinned `image:`.
+
+- Upstream FPP version: `9.5.3`
+- Pinned upstream commit: `7979a4bb0bb9068fea71f3b447e273d5c0ea01e3`
+- Current CI digest: _filled in after the first publish_
+
+Local development is unaffected and still source-builds by default:
+
+```
+docker compose -f docker-compose.yml up -d --build fpp-master
+```
+
+CI's path (what `SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp`
+runs locally too, if you want to reproduce it):
+
+```
+docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull fpp-master
+SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp
+```
+
+**Why a digest, not just the tag.** Rebuilding the same upstream git tag
+does not reproduce the same image: the build installs packages from
+mutable Debian and FPP apt repositories, so identical tag does not mean
+identical contents. Only a `sha256` image digest is immutable.
+
+**Publishing a new fixture** (a new `build` number or a new FPP version):
+run the `Build FPP test image` workflow (`workflow_dispatch`) with
+`fpp_ref`, `fpp_commit`, and `image_tag` inputs; it verifies `fpp_commit`
+actually resolves from `fpp_ref` upstream before building. Take the
+resulting digest from the job's summary.
+
+**Pointing CI at a new image** is a separate, deliberate step: publishing
+does not move CI to it. Edit the default in
+`docker-compose.prebuilt.yml`'s `SHOWMESH_FPP_TEST_IMAGE` value to the new
+`ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:...` reference.
+
+**Licensing.** Upstream FPP's `LICENSE` describes a mix: LGPL v2.1 for the
+core, GPL v2 for channel outputs and general code, and CC-BY-ND for
+`src/non-gpl/**`. The fixture is unmodified upstream FPP built at the
+recorded commit, carries that source tree under `/opt/fpp` in the image,
+and its OCI labels record the source repository and revision.
+
 ## Bringing the bench up
 
 ```

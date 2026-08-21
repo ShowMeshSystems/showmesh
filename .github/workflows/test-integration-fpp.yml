@@ -1,19 +1,14 @@
 name: FPP Integration (bench fppd)
 
-# Deliberately its own workflow, not a job in ci.yml (BUILD-PLAN Step 7,
-# decided 2026-08-12): bench/fpp-multisync's fpp-master is a full FPP
-# source build (see that directory's own docker-compose.yml comment), so
-# running it on every push would either slow the fast path or teach
-# people to skip it. This is the first work in this project that
-# genuinely depends on `make test-integration-fpp`, which is why the
-# decision is made here rather than deferred again — see
-# docs/build/BUILD-PLAN.md's Step 7 "Decisions settled before the step
-# starts".
+# Deliberately its own workflow, not a job in ci.yml: it depends on a real
+# fppd, which the other integration jobs don't need. fpp-master comes from
+# a prebuilt, digest-pinned GHCR fixture (bench/fpp-multisync/docker-
+# compose.prebuilt.yml) rather than a source build, published separately by
+# build-fpp-test-image.yml -- see bench/fpp-multisync/README.md.
 #
 # Triggered on changes to the two packages this proves (the FPP REST
-# collector, and Step 7 seam C's FPP command client) plus a nightly run,
-# so a regression in either is caught within a day even on a quiet
-# branch, without paying the full source build on every unrelated push.
+# collector, and the FPP command client) plus a nightly run, so a
+# regression in either is caught within a day even on a quiet branch.
 
 on:
   push:
@@ -30,6 +25,7 @@ on:
       - "test/integration/fpp_command_test.go"
       - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
+      - ".github/workflows/build-fpp-test-image.yml"
   pull_request:
     paths:
       - "internal/coordinator/collector/fpp/**"
@@ -43,6 +39,7 @@ on:
       - "test/integration/fpp_command_test.go"
       - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
+      - ".github/workflows/build-fpp-test-image.yml"
   schedule:
     # 05:00 UTC nightly, offset from no other scheduled job in this repo
     # (there are none today) — an arbitrary off-peak hour, not a measured
@@ -52,6 +49,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -60,11 +58,10 @@ concurrency:
 jobs:
   test-integration-fpp:
     runs-on: ubuntu-latest
-    # A full FPP source build (bench/fpp-multisync/docker-compose.yml's own
-    # comment: "a first build is a full FPP source build and can take
-    # several minutes") plus the test run itself; generous headroom over
-    # the other integration jobs' 10 minutes for exactly that reason.
-    timeout-minutes: 30
+    # The fixture pull plus the test run; the source build this used to pay
+    # for is gone, but headroom stays generous over the other integration
+    # jobs' 10 minutes.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -73,12 +70,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the pinned FPP test fixture
+        run: |
+          docker compose -f bench/fpp-multisync/docker-compose.yml -f bench/fpp-multisync/docker-compose.prebuilt.yml pull fpp-master
+          resolved="$(docker compose -f bench/fpp-multisync/docker-compose.yml -f bench/fpp-multisync/docker-compose.prebuilt.yml config --images fpp-master)"
+          echo "pulled fpp-master image: $resolved"
+
       # ubuntu-latest ships Docker (with Compose v2) already, usable
       # without sudo. `make test-integration-fpp` (scripts/test-integration-fpp.sh)
-      # builds and starts bench/fpp-multisync's fpp-master itself — a real
-      # fppd, never a fake — plus its own throwaway Mosquitto for
-      # TestFPPSuccessPathThroughRealCoordinator, exactly as a developer
-      # running it locally does; this job supplies no bespoke CI-only
-      # config.
+      # starts bench/fpp-multisync's fpp-master itself -- a real fppd,
+      # never a fake -- plus its own throwaway Mosquitto for
+      # TestFPPSuccessPathThroughRealCoordinator. SHOWMESH_FPP_TEST_PREBUILT
+      # makes it recreate fpp-master from the fixture just pulled above
+      # instead of source-building it.
       - name: Integration tests (real fppd, bench container)
+        env:
+          SHOWMESH_FPP_TEST_PREBUILT: "1"
         run: make test-integration-fpp

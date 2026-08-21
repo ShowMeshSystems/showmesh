@@ -1,0 +1,111 @@
+name: Build FPP test image
+
+# Publishes the prebuilt FPP fixture CI's test-integration-fpp.yml pulls
+# instead of source-building fppd on every run. Manual dispatch only: this
+# must never publish from an untrusted pull_request, and a new image is a
+# deliberate act with its own digest, not a side effect of a push.
+#
+# Publishing an image here does NOT move CI to it -- that is a separate
+# edit to bench/fpp-multisync/docker-compose.prebuilt.yml's default. See
+# that file and bench/fpp-multisync/README.md for the publish-then-point
+# workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fpp_ref:
+        description: "FalconChristmas/fpp git tag to build"
+        required: true
+        default: "9.5.3"
+      fpp_commit:
+        description: "Commit fpp_ref must resolve to upstream (guarded below)"
+        required: true
+        default: "7979a4bb0bb9068fea71f3b447e273d5c0ea01e3"
+      image_tag:
+        description: "Tag to publish under ghcr.io/showmeshsystems/showmesh-fpp-test"
+        required: true
+        default: "9.5.3-build1"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Inputs reach the shell through env, never through ${{ }}
+      # interpolation into the script body.
+      - name: Verify fpp_commit matches fpp_ref upstream
+        env:
+          FPP_REF: ${{ inputs.fpp_ref }}
+          FPP_COMMIT: ${{ inputs.fpp_commit }}
+        run: |
+          resolved="$(git ls-remote https://github.com/FalconChristmas/fpp.git "refs/tags/${FPP_REF}^{}" | cut -f1)"
+          if [ -z "$resolved" ]; then
+            echo "refs/tags/${FPP_REF} did not resolve upstream" >&2
+            exit 1
+          fi
+          if [ "$resolved" != "$FPP_COMMIT" ]; then
+            echo "fpp_commit ${FPP_COMMIT} does not match what fpp_ref ${FPP_REF} resolves to upstream ($resolved)" >&2
+            exit 1
+          fi
+          echo "confirmed: ${FPP_REF} -> $resolved"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: https://github.com/FalconChristmas/fpp.git#${{ inputs.fpp_commit }}
+          file: Docker/Dockerfile
+          build-args: |
+            FPPBRANCH=${{ inputs.fpp_ref }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/showmeshsystems/showmesh-fpp-test:${{ inputs.image_tag }}
+          labels: |
+            org.opencontainers.image.title=showmesh-fpp-test
+            org.opencontainers.image.description=Unmodified FPP build used as ShowMesh's CI integration test fixture
+            org.opencontainers.image.source=https://github.com/ShowMeshSystems/showmesh
+            org.opencontainers.image.url=https://github.com/FalconChristmas/fpp
+            org.opencontainers.image.version=${{ inputs.fpp_ref }}
+            org.opencontainers.image.revision=${{ inputs.fpp_commit }}
+            org.opencontainers.image.licenses=See https://github.com/FalconChristmas/fpp/blob/master/LICENSE (LGPL-2.1 core, GPL-2.0 general code and channel outputs, CC-BY-ND for src/non-gpl)
+
+      - name: Summary
+        env:
+          FPP_REF: ${{ inputs.fpp_ref }}
+          FPP_COMMIT: ${{ inputs.fpp_commit }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### FPP test image published"
+            echo ""
+            echo "- Image: \`ghcr.io/showmeshsystems/showmesh-fpp-test:${IMAGE_TAG}\`"
+            echo "- Digest: \`${IMAGE_DIGEST}\`"
+            echo "- Upstream FPP ref: \`${FPP_REF}\`"
+            echo "- Upstream FPP commit: \`${FPP_COMMIT}\`"
+            echo ""
+            echo "Paste into bench/fpp-multisync/docker-compose.prebuilt.yml:"
+            echo ""
+            echo '```'
+            echo "image: \${SHOWMESH_FPP_TEST_IMAGE:-ghcr.io/showmeshsystems/showmesh-fpp-test@${IMAGE_DIGEST}}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "digest: ${IMAGE_DIGEST}"

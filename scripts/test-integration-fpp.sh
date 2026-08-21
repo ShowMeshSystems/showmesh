@@ -30,6 +30,11 @@
 # collide if run at the same time), and tears THAT one down on exit. The
 # fpp-master asymmetry above is unchanged: only the broker this script adds
 # is throwaway.
+#
+# SHOWMESH_FPP_TEST_PREBUILT=1 layers docker-compose.prebuilt.yml on top of
+# the base compose file, so fpp-master comes from CI's pinned GHCR image
+# instead of a source build. Unset (the default) this script's behavior is
+# unchanged.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,6 +57,13 @@ COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
 CONTAINER_NAME="showmesh-bench-fpp-master"
 FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:8090}"
 
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
+  PREBUILT_OVERRIDE="$ROOT_DIR/bench/fpp-multisync/docker-compose.prebuilt.yml"
+  COMPOSE_ARGS+=(-f "$PREBUILT_OVERRIDE")
+  export SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE="$PREBUILT_OVERRIDE"
+fi
+
 echo "test-integration-fpp: checking for a running $CONTAINER_NAME"
 if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
   # --force-recreate, not a plain `up -d`: verified live, this image
@@ -65,8 +77,12 @@ if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" --for
   # internal/coordinator/collector/fpp/integration_test.go's cleanup for
   # the same finding, hit the same way, during this collector's own
   # development.
-  echo "test-integration-fpp: not running; starting it (a first build is a full FPP source build and can take several minutes)"
-  docker compose -f "$COMPOSE_FILE" up -d --force-recreate fpp-master
+  if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
+    echo "test-integration-fpp: not running; starting it from the pinned prebuilt image"
+  else
+    echo "test-integration-fpp: not running; starting it (a first build is a full FPP source build and can take several minutes)"
+  fi
+  docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fpp-master
 fi
 
 echo "test-integration-fpp: waiting for $FPP_URL to answer /api/fppd/status"
