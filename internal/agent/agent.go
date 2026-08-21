@@ -199,15 +199,23 @@ func Run() int {
 		}
 	}
 
-	// The pipeline backend is undecided, so this runs against
-	// [audio.FakeEngine] and every audio.session.* command reports
-	// Unconfirmable rather than a playback outcome.
-	audioMgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
+	// audioEngine is the real [gstengine] backend behind a
+	// [audio.SwitchableEngine]: Available() reports false with
+	// audio.SwitchableEngineNoBindingReason until an audio.node.configure
+	// command delivers this node's binding (audioBinding.onNode below
+	// rebuilds it, and every rebuild after the first one, via
+	// audioMgr.RebindEngine — see audioengine.go). audioEngineAvailable
+	// (audiocapabilities.go) is wired to the SAME instance so hello
+	// advertisement never claims audio.engine ahead of this evidence.
+	audioEngine := audio.NewSwitchableEngine()
+	audioEngineAvailable = audioEngine.Available
 
-	// Constructed unconditionally so node.audio.ltc.* reports real
-	// evidence rather than an absent signal, but never started here:
-	// nothing yet decides when a node should generate LTC.
-	ltcGen := audio.NewLTCGenerator(time.Now, nil)
+	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
+	audioRebuilder := newAudioEngineRebuilder(cfg.AssetDir, audioEngine, audioMgr, logger)
+	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
+		audioMgr.SetSettings(audioSettingsFromWire(p))
+	})
+
 	if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
 	}
@@ -226,7 +234,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
 	if err != nil {
@@ -266,7 +274,7 @@ func Run() int {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, ltcGen, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, time.Now, ticker.C, logger)
 	}()
 
 	<-sigCtx.Done()
@@ -305,10 +313,6 @@ func Run() int {
 	// is deliberately after the shutdown-signal handling above and before
 	// the MQTT offline publish, so it happens on every clean exit path.
 	sup.Shutdown(shutdownCtx)
-
-	// Same rule for the LTC generator: never leave an orphaned process
-	// behind, whether or not it was ever actually started.
-	ltcGen.Shutdown(shutdownCtx)
 
 	shutdownCleanly(shutdownCtx, conn, cfg.NodeID, logger)
 

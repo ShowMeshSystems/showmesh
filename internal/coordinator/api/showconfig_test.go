@@ -577,6 +577,9 @@ func TestShowConfigValidationCodesAllMapToDistinctProblemTypes(t *testing.T) {
 		config.ValidationCodeStepsTooMany,
 		config.ValidationCodeStepIDDuplicate,
 		config.ValidationCodeFieldUnknownKey,
+		config.ValidationCodeAudioNodeChannelDuplicate,
+		config.ValidationCodeAudioNodeChannelOverlap,
+		config.ValidationCodeAudioNodeRouteMismatch,
 	}
 	seen := make(map[string]string, len(codes))
 	for _, code := range codes {

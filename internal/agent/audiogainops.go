@@ -77,16 +77,17 @@ func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, in
 		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.targetGain must be a number, got %T", rawTarget)
 	}
 
-	rawDuration, ok := body["durationMs"]
-	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.durationMs is required")
-	}
-	durationMs, ok := rawDuration.(float64)
-	if !ok || durationMs <= 0 {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.durationMs must be a positive number, got %v", rawDuration)
+	settings := mgr.SettingsSnapshot()
+
+	durationMs := float64(settings.DefaultFadeDurationMs)
+	if rawDuration, ok := body["durationMs"]; ok {
+		durationMs, ok = rawDuration.(float64)
+		if !ok || durationMs <= 0 {
+			return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.durationMs must be a positive number, got %v", rawDuration)
+		}
 	}
 
-	curve := pkgaudio.FadeCurveLinear
+	curve := settings.DefaultFadeCurve
 	if rawCurve, ok := body["curve"]; ok {
 		v, ok := rawCurve.(string)
 		if !ok || v == "" {

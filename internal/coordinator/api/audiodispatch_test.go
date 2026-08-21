@@ -650,3 +650,146 @@ func TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch(t *testing
 		t.Fatalf("DispatchedAt = %v, want nil — nothing was ever published", *rec.DispatchedAt)
 	}
 }
+
+// TestAudioSessionDispatchUnconfirmablePersistsDesiredState proves that
+// an unconfirmable outcome — the ordinary result of a dispatch against
+// every shipped engine today, and the outcome a real engine also
+// produces whenever it applies a command but cannot confirm it — still
+// persists desired state. Without this, the audio_sessions table never
+// gets a row in any configuration this project ships. It also proves the
+// store's own anti-rewind guard, not an outcome check, is what stops a
+// stale revision from rewinding an already-persisted record.
+func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeUnconfirmed,
+		Reason:  "operation applied, but the post-write read-back evidence did not match the requested value",
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "unconfirmable", "reason": "engine applied it but confirmation timed out"},
+		},
+	}
+	req1 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":5,"params":{"media":{"assetId":"clip-1"}}}`, token)
+	resp1, body1 := doRawRequest(t, api.Handler, req1)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("apply status = %d; body: %s", resp1.StatusCode, body1)
+	}
+	var decoded1 struct {
+		Command struct {
+			Outcome string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body1, &decoded1); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded1.Command.Outcome != "unconfirmable" {
+		t.Fatalf("outcome = %q, want unconfirmable", decoded1.Command.Outcome)
+	}
+
+	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession after unconfirmable dispatch: %v", err)
+	}
+	if rec.NodeID != "node-a" || rec.Revision != 5 {
+		t.Fatalf("persisted record = %+v, want nodeID node-a revision 5", rec)
+	}
+	if !strings.Contains(rec.DesiredJSON, "clip-1") {
+		t.Fatalf("persisted desired state = %q, want it to contain the dispatched media", rec.DesiredJSON)
+	}
+
+	// A stale, lower revision must still not rewind the persisted record
+	// even though this outcome is also unconfirmable — that guarantee
+	// lives in the store's own ON CONFLICT ... WHERE clause
+	// (audiosessions.go), not in which outcomes this file chooses to
+	// persist.
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeUnconfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "unconfirmable", "reason": "confirmation timed out"},
+		},
+	}
+	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":2,"params":{"media":{"assetId":"clip-STALE"}}}`, token)
+	resp2, body2 := doRawRequest(t, api.Handler, req2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
+	}
+
+	rec2, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession after stale-revision dispatch: %v", err)
+	}
+	if rec2.Revision != 5 {
+		t.Fatalf("stored revision after a stale-revision dispatch = %d, want it to stay at 5", rec2.Revision)
+	}
+	if strings.Contains(rec2.DesiredJSON, "clip-STALE") {
+		t.Fatalf("stored desired state = %q, must not contain the stale-revision request's own params", rec2.DesiredJSON)
+	}
+}
+
+// TestAudioSessionDispatchDeadlineExceededPersistsDesiredState proves
+// that a dispatch whose confirmation deadline expires — the node may
+// well have already acted — also persists desired state, not only the
+// decoded-result path. A mismatched result is what drives the fake
+// publisher to return broker.ErrResponseDeadlineExceeded, the same path
+// a real deadline takes.
+func TestAudioSessionDispatchDeadlineExceededPersistsDesiredState(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.noAutoCorrelate = true
+	setup.pub.result = mqttproto.ResultPayload{
+		CommandID: "some-other-command", IdempotencyKey: "some-other-key", Action: "audio.session.apply",
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "position", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":5,"params":{"media":{"assetId":"clip-1"}}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply status = %d; body: %s", resp.StatusCode, body)
+	}
+	var decoded struct {
+		Command struct {
+			Outcome string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.Command.Outcome != "unconfirmable" {
+		t.Fatalf("outcome = %q, want unconfirmable", decoded.Command.Outcome)
+	}
+
+	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession after deadline-exceeded dispatch: %v", err)
+	}
+	if rec.NodeID != "node-a" || rec.Revision != 5 {
+		t.Fatalf("persisted record = %+v, want nodeID node-a revision 5", rec)
+	}
+}
+
+// TestAudioOutcomeShouldPersistRejectsUnrecognisedOutcomes proves the
+// persistence gate is an allowlist. An outcome this coordinator does not
+// recognise is not evidence that the command reached the node.
+func TestAudioOutcomeShouldPersistRejectsUnrecognisedOutcomes(t *testing.T) {
+	for _, outcome := range []string{"", "ok", "success", "acknowledged", "refused", "failed"} {
+		if audioOutcomeShouldPersist(outcome) {
+			t.Errorf("audioOutcomeShouldPersist(%q) = true, want false", outcome)
+		}
+	}
+	for _, outcome := range []string{"started", "position", "gain", "fade_complete", "stopped", "completed", "unconfirmable"} {
+		if !audioOutcomeShouldPersist(outcome) {
+			t.Errorf("audioOutcomeShouldPersist(%q) = false, want true", outcome)
+		}
+	}
+}

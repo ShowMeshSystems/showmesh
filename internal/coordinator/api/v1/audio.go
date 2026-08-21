@@ -43,6 +43,8 @@ type AudioSettingsConfigResponse struct {
 type ConfigAudioNode struct {
 	ProgramRoute          string `json:"programRoute"`
 	LTCRoute              string `json:"ltcRoute"`
+	ProgramChannels       []int  `json:"programChannels"`
+	LTCChannel            int    `json:"ltcChannel"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 }

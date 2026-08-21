@@ -12,9 +12,10 @@
 - [Architecture decision records](decisions/README.md) — durable decisions, their context, and consequences.
 - [Build plan](build/BUILD-PLAN.md) — the ordered implementation sequence that delivers the roadmap phases, with status tracking.
 - [Build log](build/BUILD-LOG.md) — the chronological session record of implementation work.
+- [Issue tracking standard](ISSUE-TRACKING.md) — the required issue format and Linear operating guide for agents and humans.
 - [Engineering lessons](build/LESSONS.md) — defects this project has shipped and caught, and the conventions that came out of them.
 
-Work is organised into parallel delivery tracks as well as numbered build steps. The track documents live alongside the build plan: [Track B](build/TRACK-B-nodes-and-projection.md) nodes and projection, [Track C](build/TRACK-C-audio-node.md) the audio node, [Track D](build/TRACK-D-resolume.md) Resolume control and timecode, [Track E](build/TRACK-E-show-authoring-and-assets.md) show authoring and assets, and [Track F](build/TRACK-F-resting-mode.md) resting mode and night-session control.
+Work is organised into parallel delivery tracks as well as numbered build steps. The track documents live alongside the build plan: [Track B](build/TRACK-B-nodes-and-projection.md) nodes and projection, [Track C](build/TRACK-C-audio-node.md) the audio node, [Track D](build/TRACK-D-resolume.md) Resolume control and timecode, [Track E](build/TRACK-E-show-authoring-and-assets.md) show authoring and assets, [Track F](build/TRACK-F-resting-mode.md) resting mode and night-session control, [Track G](build/TRACK-G-surface-parity.md) operator surface parity, and [Track H](build/TRACK-H-cues-and-playlists.md) the Cue and Playlist runtime.
 
 ## Bench captures
 

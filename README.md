@@ -26,6 +26,10 @@ Implementation began 2026-08-10. What exists is a working, tested, containerized
 
 That gap is deliberate and documented, not a backlog that got away. The project uses an explicit **evidence ladder** — L0 assumption → L1 source-verified → L2 bench → L3 integrated → L4 resilient — and no claim is written down at a level it has not earned. Each research record in [`docs/research/`](docs/research/README.md) carries its current rung and the specific experiment that would raise it.
 
+### Reporting an issue
+
+Found a bug or have a feature idea? Start with the [issue templates](https://github.com/ShowMeshSystems/showmesh/issues/new/choose), and search existing issues first. Report documentation problems in the [showmesh-docs issue tracker](https://github.com/ShowMeshSystems/showmesh-docs/issues/new/choose); report security vulnerabilities privately using [`SECURITY.md`](SECURITY.md). Never include secrets in a public issue. GitHub intake may be mirrored into private Linear for internal tracking, but private tracker details stay private.
+
 ### What it took to earn the first write
 
 Every remaining roadmap item that *does* something rather than *shows* something is a write operation, and [ADR-021](docs/decisions/ADR-021-read-api-authentication-posture.md) barred the first one until a superseding record settled authenticated identities, authorization by target and action, audit attribution, the MQTT control plane's own authorization, and a browser session model. That record is [ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md). It lifted the bar and deliberately added no write endpoint of its own; the next step spent it, on three.

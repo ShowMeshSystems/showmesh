@@ -1,0 +1,5 @@
+waitState ret: StatePlaying
+buffers seen at 4-channel sink: 30
+negotiated caps at sink: audio/x-raw, rate=(int)44100, format=(string)F64LE, channels=(int)4, layout=(string)interleaved, channel-mask=(bitmask)0x0000000000000000
+reached EOS: true
+RESULT e: PASS - interleave negotiated a 4-channel output from 4 mono branches and ran to completion; see caps above for actual channel assembly

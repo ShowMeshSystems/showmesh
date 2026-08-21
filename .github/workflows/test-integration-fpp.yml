@@ -68,11 +68,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
       # ubuntu-latest ships Docker (with Compose v2) already, usable
       # without sudo. `make test-integration-fpp` (scripts/test-integration-fpp.sh)
       # builds and starts bench/fpp-multisync's fpp-master itself — a real
@@ -81,4 +76,45 @@ jobs:
       # running it locally does; this job supplies no bespoke CI-only
       # config.
       - name: Integration tests (real fppd, bench container)
-        run: make test-integration-fpp
+        # This suite compiles the whole test/integration package, which
+        # reaches the agent's cgo audio engine, and it runs go test -race,
+        # which requires cgo. The engine needs GStreamer 1.26 and
+        # ubuntu-latest ships 1.24, so the suite runs inside Debian 13.
+        # Not a `container:` job: the script builds and starts the bench
+        # fppd through docker compose and reaches it on localhost, which
+        # needs the host socket and host networking, and GitHub's
+        # container: field cannot express --network. Workspace mounted at
+        # its own absolute path with TMPDIR inside it, so any bind mount
+        # the script hands the host daemon resolves the same on both sides.
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
+          docker run --rm \
+            --network host \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE":"$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE" \
+            -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
+            -e HOME=/tmp \
+            golang:1.25.0-trixie \
+            bash -euxo pipefail -c '
+              apt-get update -o Acquire::Retries=2
+              # The cgo build dependencies go in their own apt call and are
+              # verified afterwards. A single large install has been seen to
+              # exit 0 having silently not installed libgstreamer1.0-dev,
+              # which then fails much later as an unresolved pkg-config.
+              apt-get install -y --no-install-recommends \
+                pkg-config libgstreamer1.0-dev \
+                libgstreamer-plugins-base1.0-dev libltc-dev
+              pkg-config --modversion gstreamer-1.0
+              pkg-config --modversion ltc
+              pkg-config --atleast-version=1.26.0 gstreamer-1.0
+              apt-get install -y --no-install-recommends \
+                gstreamer1.0-tools gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+                docker-cli docker-compose curl jq
+              docker compose version
+              git config --global --add safe.directory "*"
+              make test-integration-fpp
+            '

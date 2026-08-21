@@ -461,6 +461,11 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 				Outcome: result.Outcome, OutcomeState: "collection_failed", OutcomeReason: result.Reason,
 			})
 			result.AttributionDegraded = dispatchDegraded || outcomeDegraded
+			// The command reached the node and only its confirmation is
+			// missing, so what was commanded is still recorded.
+			if h.deps.AudioSessions != nil && audioOutcomeShouldPersist(result.Outcome) {
+				h.persistAudioSessionDesiredState(bgCtx, in)
+			}
 			return result, nil, nil
 		}
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("await result: %w", err)
@@ -498,7 +503,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
 	})
 
-	if h.deps.AudioSessions != nil && audioOutcomeAccepted(outcome) {
+	if h.deps.AudioSessions != nil && audioOutcomeShouldPersist(outcome) {
 		h.persistAudioSessionDesiredState(bgCtx, in)
 	}
 
@@ -516,11 +521,15 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 // prior desired state (never replacing it outright — a pause or stop
 // command's own params carry only sessionId/invocationId/revision, and
 // overwriting with those would erase previously-applied media/playlist
-// state) and stores the merged result at in.Revision. Called only once
-// the dispatch's own outcome is a genuine accepted outcome (never
-// refused/failed/unconfirmable — see [audioOutcomeAccepted]); errors are
-// logged, never discarded silently.
-func (h *handlers) persistAudioSessionDesiredState(ctx context.Context, in audioDispatchInput) {
+// state) and stores the merged result at in.Revision. Called for any
+// outcome that means the command actually reached the node — including
+// unconfirmable — so desired state stays a durable record of what was
+// commanded, never only of what was confirmed (see
+// [audioOutcomeShouldPersist]). The write is bounded so a locked store
+// cannot block this detached-completion path forever.
+func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in audioDispatchInput) {
+	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
+	defer cancel()
 	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.SessionID)
 	existingJSON := ""
 	if err == nil {
@@ -560,14 +569,17 @@ func mergeAudioDesiredJSON(existingJSON string, newParams map[string]any) (strin
 	return string(b), nil
 }
 
-// audioOutcomeAccepted reports whether outcome is one of
-// [pkgaudio.Outcome]'s six non-failure members — the only outcomes this
-// file persists desired state for. refused/failed/unconfirmable, and any
-// value this coordinator does not recognize, are never persisted.
-func audioOutcomeAccepted(outcome string) bool {
+// audioOutcomeShouldPersist reports whether outcome means the command
+// reached the node and is worth recording as desired state. refused and
+// failed are this coordinator's own structural refusals, so nothing was
+// commanded. unconfirmable persists, because desired state records what
+// was commanded rather than only what was confirmed. An outcome this
+// coordinator does not recognise is never persisted.
+func audioOutcomeShouldPersist(outcome string) bool {
 	switch pkgaudio.Outcome(outcome) {
 	case pkgaudio.OutcomeStarted, pkgaudio.OutcomePosition, pkgaudio.OutcomeGain,
-		pkgaudio.OutcomeFadeComplete, pkgaudio.OutcomeStopped, pkgaudio.OutcomeCompleted:
+		pkgaudio.OutcomeFadeComplete, pkgaudio.OutcomeStopped, pkgaudio.OutcomeCompleted,
+		pkgaudio.OutcomeUnconfirmable:
 		return true
 	default:
 		return false

@@ -1,0 +1,5 @@
+waitState ret: StatePlaying
+t=0ms volume=0.9998192191123962
+t=250ms volume=0.6747398376464844
+t=750ms (post-ramp) volume=0.30000001192092896
+RESULT c: PASS - GstController ramp read back monotonically decreasing, landed at target gain, no 10x scale defect observed

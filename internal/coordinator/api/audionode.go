@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -211,6 +212,19 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-039/ADR-036: push the newly-written binding to id without
+	// waiting for its next hello. Best-effort: a node unreachable right
+	// now converges on its next successful push instead of failing this
+	// write, which already committed. Runs detached from the request
+	// context and on its own bounded timeout, matching
+	// pushAudioSettingsToAllNodes: a client disconnecting mid-request
+	// must not cancel a push whose write already committed.
+	go func() {
+		pushCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), audioConfigPushTimeout)
+		defer cancel()
+		audioconfigpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, id, h.logger)
+	}()
+
 	jsonWrite(w, mapAudioNodeConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AudioNodeConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
@@ -225,6 +239,7 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 		ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, ID: obj.ID, Revision: rev.Revision,
 		Payload: v1.ConfigAudioNode{
 			ProgramRoute: p.ProgramRoute, LTCRoute: p.LTCRoute,
+			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),

@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -44,6 +47,8 @@ type audioSettingsConfigResponse struct {
 type configAudioNode struct {
 	ProgramRoute          string `json:"programRoute"`
 	LTCRoute              string `json:"ltcRoute"`
+	ProgramChannels       []int  `json:"programChannels"`
+	LTCChannel            int    `json:"ltcChannel"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 }
@@ -320,6 +325,23 @@ func cmdAudioSettingsRevisions(args []string, stdout, stderr io.Writer, clock fu
 	return exitOK
 }
 
+// parseChannelList parses a comma-separated flag value into an ordered
+// []int, one whole number per element. It does not itself enforce
+// positivity or distinctness — the coordinator is the single source of
+// truth for those rules and reports its own refusal by name.
+func parseChannelList(csv string) ([]int, error) {
+	parts := strings.Split(csv, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a whole number", p)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
 // --- audio node ---
 
 func cmdAudioNode(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -351,17 +373,22 @@ func printAudioNodeUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio node <subcommand> [flags]
 
 Read or write the coordinator's audio.node configuration objects, one per
-node (ADR-018, ADR-039): which discovered output route carries program,
-which carries LTC, and the clock domain the operator declares them to
-share (never inferred — no software call proves two outputs share a
-hardware clock). Reads and writes both require config:write, admin only.
+node (ADR-018, ADR-039): which discovered output route carries program and
+which channels on it, which channel on that SAME route carries LTC, and
+the clock domain the operator declares them to share (never inferred — no
+software call proves two outputs share a hardware clock). Reads and
+writes both require config:write, admin only.
 
 "set" is refused with the node's own advertised routes named in the error
 unless BOTH --program-route and --ltc-route are already present in that
 node's own capability advertisement (audio.output.local / audio.output.ltc)
-— never accepted on the operator's claim alone. Advertise the node first
-(the agent must be running and have probed its audio hardware) before
-configuring it here.
+— never accepted on the operator's claim alone. --program-route and
+--ltc-route must also name the SAME route: program and LTC leave through
+one interface in one clock domain. --program-channels lists distinct,
+positive, 1-based indices (1,2 for reference stereo, 1 for mono);
+--ltc-channel is a positive 1-based index that must not appear in
+--program-channels. Advertise the node first (the agent must be running
+and have probed its audio hardware) before configuring it here.
 
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
@@ -462,19 +489,23 @@ func cmdAudioNodeGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node set", stderr)
-	var programRoute, ltcRoute, clockDomain, clockDomainProvenance string
+	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance string
+	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
-	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC (required)")
+	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC (required, must equal --program-route)")
+	fs.StringVar(&programChannels, "program-channels", "", "comma-separated, ordered, distinct 1-based channel indices carrying program audio, e.g. 1,2 (required)")
+	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (required)")
 	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: all four flags are required on every call and")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: all six flags are required on every call and")
 		_, _ = fmt.Fprintln(stderr, "this command never reads the node's current definition first. Refused")
 		_, _ = fmt.Fprintln(stderr, "unless the node has already advertised both routes in its own capability")
-		_, _ = fmt.Fprintln(stderr, "report — never accepted on the operator's claim alone.")
+		_, _ = fmt.Fprintln(stderr, "report — never accepted on the operator's claim alone. --program-route and")
+		_, _ = fmt.Fprintln(stderr, "--ltc-route must name the same route.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -489,8 +520,25 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitUsage
 	}
 	id := rest[0]
-	if programRoute == "" || ltcRoute == "" || clockDomain == "" || clockDomainProvenance == "" {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --ltc-route, --clock-domain, and --clock-domain-provenance are all required")
+	// --ltc-channel's presence, not its value, decides whether it was
+	// passed: fs.Visit walks only flags the operator actually set on this
+	// invocation, so "--ltc-channel 0" (a value the coordinator alone is
+	// the authority on rejecting, mirroring assets settings set's
+	// identical fs.Visit-over-zero-value pattern) is sent through rather
+	// than refused here as if it had been omitted.
+	ltcChannelSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "ltc-channel" {
+			ltcChannelSet = true
+		}
+	})
+	if programRoute == "" || ltcRoute == "" || programChannels == "" || !ltcChannelSet || clockDomain == "" || clockDomainProvenance == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --ltc-route, --program-channels, --ltc-channel, --clock-domain, and --clock-domain-provenance are all required")
+		return exitUsage
+	}
+	channels, err := parseChannelList(programChannels)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl audio node set: --program-channels: %v\n", err)
 		return exitUsage
 	}
 
@@ -503,6 +551,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 
 	body := configAudioNode{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
+		ProgramChannels: channels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 	}
 	var resp audioNodeConfigResponse
@@ -586,6 +635,8 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Node ID:                %s\n", resp.ID)
 	_, _ = fmt.Fprintf(w, "Program route:          %s\n", p.ProgramRoute)
 	_, _ = fmt.Fprintf(w, "LTC route:              %s\n", p.LTCRoute)
+	_, _ = fmt.Fprintf(w, "Program channels:       %v\n", p.ProgramChannels)
+	_, _ = fmt.Fprintf(w, "LTC channel:            %d\n", p.LTCChannel)
 	_, _ = fmt.Fprintf(w, "Clock domain:           %s\n", p.ClockDomain)
 	_, _ = fmt.Fprintf(w, "Clock domain provenance: %s\n", p.ClockDomainProvenance)
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)

@@ -18,6 +18,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/api"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
@@ -246,9 +247,24 @@ func Run() int {
 	// operator-declared audio.node configuration, read live on every poll).
 	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
+	// bm is assigned below, once broker.NewBrokerManager has built it —
+	// the identical "capture by reference in a closure" shape hub/notifyHub
+	// use just above, for the identical reason: onHello can fire the
+	// instant broker.NewBrokerManager begins connecting, before bm's own
+	// assignment below runs. ADR-039/ADR-036: this is the node-hello half
+	// of the audio.node/audio.settings config push, converging a node that
+	// was offline during a write; see internal/coordinator/audioconfigpush.
+	var bm *broker.BrokerManager
+	onHello := func(nodeID string) {
+		if bm == nil {
+			return
+		}
+		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+	}
 
-	bm, err := broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
+
+	bm, err = broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		_ = st.Close()

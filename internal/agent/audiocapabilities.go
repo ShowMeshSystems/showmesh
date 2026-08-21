@@ -17,6 +17,16 @@ var audioDiscoverer = audio.Discover
 // and runAudioReport both probe against.
 var audioEnumerator audio.Enumerator = audio.AlsaEnumerator{}
 
+// audioEngineAvailable reports whether this node's actual playback
+// engine (the real backend behind internal/agent/audio.Manager, bound to
+// a delivered audio.node configuration) can currently play something —
+// see [detectAudioCapabilities]'s gating of "audio.engine" on it. A
+// package-level var, matching audioDiscoverer's own injection
+// convention: the default reports unavailable, matching every Engine
+// this repository ships before agent.go overwrites it with the real
+// engine's own Available method.
+var audioEngineAvailable = func() (bool, string) { return false, "no playback engine is wired on this node" }
+
 // minLTCChannels mirrors [audio.MinLTCChannels]: the channel count both
 // detectAudioCapabilities and buildAudioPayload use to decide whether a
 // route is LTC-capable. Kept as this package's own name (matching every
@@ -26,11 +36,16 @@ var audioEnumerator audio.Enumerator = audio.AlsaEnumerator{}
 const minLTCChannels = audio.MinLTCChannels
 
 // detectAudioCapabilities probes this node's real ALSA/GStreamer state and
-// returns exactly the capability set that evidence supports — audio.engine,
-// audio.output.local, and audio.output.ltc, each independently and each
-// only from a real PLAYING transition. A node with no audio hardware —
-// every render node and the development laptop — returns an empty set,
-// not a fault.
+// returns exactly the capability set that evidence supports —
+// audio.output.local and audio.output.ltc from route probe evidence
+// (unconditional on the playback engine: the coordinator's own
+// audio.node placement validation reads these BEFORE a binding can ever
+// be delivered, so gating them on [audioEngineAvailable] would make a
+// node's own output routes unreachable to configure), plus audio.engine
+// ONLY when [audioEngineAvailable] also reports true — the actual
+// session engine, never merely "gst-launch-1.0 works on this box". A
+// node with no audio hardware — every render node and the development
+// laptop — returns an empty set, not a fault.
 //
 // This node never claims its own clock domain: no software call here
 // proves two outputs share a hardware clock, so ClockDomain/
@@ -42,7 +57,10 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 		return nil
 	}
 
-	set := capability.Set{{ID: "audio.engine", Version: 1}}
+	set := capability.Set{}
+	if ok, _ := audioEngineAvailable(); ok {
+		set = append(set, capability.Capability{ID: "audio.engine", Version: 1})
+	}
 
 	usable, ltc := splitUsableRoutes(d.Routes)
 

@@ -109,6 +109,17 @@ const (
 	SignalSessionAssetProbeReason observation.SignalID = "audio_session.readiness.reason"
 	SignalSessionFaultKind        observation.SignalID = "audio_session.fault.kind"
 	SignalSessionFaultReason      observation.SignalID = "audio_session.fault.reason"
+
+	// SignalSessionItemGapMs and SignalSessionItemGapReason are the
+	// measured interval between one playlist item's natural completion
+	// and its successor's confirmed start — a measurement, never a
+	// restatement of the requested transition. Both report
+	// [observation.StateNotCollected] with a stated reason, never zero,
+	// whenever the node itself could not measure a gap (a first item, a
+	// stopped session, a session that never advanced, or an advance whose
+	// predecessor did not complete naturally).
+	SignalSessionItemGapMs     observation.SignalID = "audio_session.item_gap_ms"
+	SignalSessionItemGapReason observation.SignalID = "audio_session.item_gap.reason"
 )
 
 // SessionSignalIDs is every audio_session.* signal this package ever
@@ -132,6 +143,8 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionAssetProbeReason,
 	SignalSessionFaultKind,
 	SignalSessionFaultReason,
+	SignalSessionItemGapMs,
+	SignalSessionItemGapReason,
 }
 
 // StateUsable and StateUnavailable are the two values SignalEngineState,

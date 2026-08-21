@@ -36,17 +36,32 @@ func (s *Session) effectiveGainLocked() pkgaudio.Gain {
 	return pkgaudio.Gain(1)
 }
 
-// clampToCeilingLocked applies s's ceiling, if any, to requested, and
-// reports the clamp so a caller can carry it as outcome evidence rather
+// clampToCeilingLocked applies s's own declared ceiling if it has one;
+// otherwise, for a background-role session, once a real
+// audio.settings.configure has been delivered
+// ([Settings.Configured]), applies its DefaultMaxBackgroundGain — the
+// operator-configured ceiling a background bed gets when it declares
+// none itself. Before any audio.settings has ever been delivered, or for
+// any other session role, a session with no declared ceiling stays
+// unclamped, matching this package's pre-existing behavior. Reports the
+// clamp either way so a caller can carry it as outcome evidence rather
 // than silently applying an unreported value. Caller holds s.mu.
 func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.CeilingResult, error) {
-	if s.desired.Ceiling == nil {
+	ceiling := s.desired.Ceiling
+	if ceiling == nil && s.desired.SourceRole != nil && *s.desired.SourceRole == pkgaudio.SourceRoleBackground {
+		settings := s.mgr.SettingsSnapshot()
+		if settings.Configured {
+			c := settings.DefaultMaxBackgroundGain
+			ceiling = &c
+		}
+	}
+	if ceiling == nil {
 		if err := requested.Validate(); err != nil {
 			return pkgaudio.CeilingResult{}, err
 		}
 		return pkgaudio.CeilingResult{Requested: requested, Effective: requested}, nil
 	}
-	return pkgaudio.ApplyCeiling(requested, *s.desired.Ceiling)
+	return pkgaudio.ApplyCeiling(requested, *ceiling)
 }
 
 // GainSet is audio.gain.set: it changes id's gain immediately, clamped
@@ -140,6 +155,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 	s.desired.Fade = &f
 	s.fadePending = true
 	s.fadeInvocation = invocation
+	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateInProgress
 	s.persistBestEffortLocked("state change")
 
@@ -174,6 +190,10 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 // Engine reports the gain reached, not before. Caller holds s.mu.
 func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
+		return
+	}
+	if s.fadeHandleNeverFaded {
+		s.resolveFadeInterruptedByRestartLocked()
 		return
 	}
 	obsCtx, cancel := boundedObserveContext(ctx)
@@ -213,6 +233,44 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	s.fadeInvocation = ""
 	s.fadeState = FadeStateComplete
 	s.persistBestEffortLocked("state change")
+}
+
+// resolveFadeInterruptedByRestartLocked answers a fade that survived a
+// restart onto a handle never driven through it. desired.Gain is left as
+// restored rather than read back from that handle. Caller holds s.mu.
+func (s *Session) resolveFadeInterruptedByRestartLocked() {
+	if s.fadeInvocation != "" {
+		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
+			Outcome: pkgaudio.OutcomeUnconfirmable,
+			Reason:  "fade was interrupted by a restart before it reached its target",
+		}))
+	}
+	s.fadePending = false
+	s.fadeInvocation = ""
+	s.fadeHandleNeverFaded = false
+	s.fadeState = FadeStateNone
+	s.persistBestEffortLocked("state change")
+}
+
+// resolveFadePendingStrandedLocked resolves a still-pending fade to
+// Unconfirmable with reason when the session leaves Playing for a reason
+// other than the fade's own completion — [Session.advanceLocked]'s two
+// no-successor-item branches, where a fade dispatched on the last item
+// would otherwise never reach a terminal outcome. Caller holds s.mu.
+func (s *Session) resolveFadePendingStrandedLocked(reason string) {
+	if !s.fadePending {
+		return
+	}
+	if s.fadeInvocation != "" {
+		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
+			Outcome: pkgaudio.OutcomeUnconfirmable,
+			Reason:  reason,
+		}))
+	}
+	s.fadePending = false
+	s.fadeInvocation = ""
+	s.fadeHandleNeverFaded = false
+	s.fadeState = FadeStateNone
 }
 
 // gainEpsilon bounds how far an engine's reported gain may sit from a

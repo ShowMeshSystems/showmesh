@@ -18,8 +18,15 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
     timeout-minutes: 15
     strategy:
+      # Both matrix legs run to completion. With the default fail-fast, a
+      # failure on one Go version cancels the other, so a run reports one
+      # failure when it could have reported two, and each hidden one costs
+      # a full round trip to discover.
+      fail-fast: false
       # Test both the minimum Go version this project claims to support
       # (go.mod) and the compiler the Dockerfile actually ships the
       # coordinator binary on, so the two never silently diverge. These are
@@ -30,6 +37,44 @@ jobs:
       matrix:
         go-version: ["1.25.0", "1.26.6"]
     steps:
+      # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26 or newer,
+      # so every job that compiles the agent's cgo backend runs on Debian 13
+      # instead. Debian 13 is also the platform the audio engine was measured
+      # green on; Debian 12's GLib 2.74 does not build it at all.
+      - name: Install the toolchain and the agent's C dependencies
+        run: |
+          set -eux
+          apt-get update -o Acquire::Retries=2
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            gstreamer1.0-tools gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libltc-dev
+          # go-gst calls GStreamer symbols added in 1.26 (GstIdStr and the
+          # static-string caps API), and go-glib calls GLib symbols added
+          # through 2.80. Assert both floors here rather than discovering
+          # them as a wall of undefined C symbols.
+          pkg-config --atleast-version=1.26.0 gstreamer-1.0
+          pkg-config --atleast-version=2.80 glib-2.0
+          pkg-config --modversion ltc
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
+          # Assert the elements the suites actually instantiate, because a
+          # missing decoder reports as a MediaFault rather than a skip.
+          # rawvideoparse and videotestsrc are the renderer's; wavparse and
+          # flacdec decode Track C's real audio fixtures; audiomixer carries
+          # the program bus; alsasink is the production output. ndisink is
+          # deliberately absent: ADR-010 forbids shipping the NDI runtime,
+          # so only the fakesink fallback runs here.
+          for element in rawvideoparse videotestsrc wavparse flacdec \
+                         audiomixer interleave alsasink; do
+            gst-inspect-1.0 "$element" > /dev/null
+          done
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
@@ -40,52 +85,57 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # Track B's renderer tests drive a real gst-launch-1.0. Without it the
-      # supervisor degrades the surface to "unsupported", which is correct
-      # behavior and not a passing test, so the suite fails on timeouts.
-      # ndisink is deliberately not installed: ADR-010 forbids shipping the
-      # NDI runtime, so NDI transport stays a bench concern and only the
-      # fakesink/queue fallback runs here.
-      - name: Install GStreamer (renderer and audio tests)
-        run: |
-          # fdsrc, queue and fakesink are core, and rawvideoparse and
-          # videotestsrc are in plugins-base (MEASURED on 1.24.2, where the
-          # rawparse plugin is no longer in plugins-bad). plugins-good adds
-          # wavparse and flacdec: Track C's real-decoder audio tests
-          # (internal/agent/audio) drive decodebin against real WAV/FLAC
-          # fixtures, and without them decodebin typefinds the container but
-          # has no element to decode it, which reports as MediaFault, not a
-          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
-          # jack, SDL2 and a 5 MB soundfont, which took this step from
-          # 3 seconds to over 300.
-          #
-          # The runner's default azure.archive.ubuntu.com mirror intermittently
-          # stops answering; apt then retries it per index file before falling
-          # back, so a high retry count makes the stall longer rather than
-          # shorter. Pin the mirrorlist to the canonical archive and keep
-          # retries low so a bad fetch fails over fast. apt sets no network
-          # timeout by default, and the timeout(1) wrapper is the outer bound
-          # so a stall fails with output instead of eating the job budget.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
-          fi
-          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
-            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
-          # shellcheck disable=SC2086
-          sudo timeout 300 apt-get update $APT_OPTS \
-            || sudo timeout 300 apt-get update $APT_OPTS
-          # shellcheck disable=SC2086
-          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-          gst-launch-1.0 --version
-          gst-inspect-1.0 rawvideoparse > /dev/null
-          gst-inspect-1.0 wavparse > /dev/null
-
       - name: Vet
         run: go vet ./...
 
+      - name: Test the audio engine (race detector)
+        # gstengine drives real GStreamer pipelines in real time; run it
+        # alone, before the rest of the suite claims the runner's other
+        # cores, so its timing bounds reflect this package rather than
+        # contention with internal/coordinator/api's own long race run.
+        #
+        # Every engine test is behind //go:build cgo, and `go test` on a
+        # package whose files are excluded prints "ok" and exits 0 having
+        # run nothing. Assert the precondition so a green tick here cannot
+        # mean an empty run.
+        run: |
+          set -eu
+          if [ "$(go env CGO_ENABLED)" != "1" ]; then
+            echo "CGO_ENABLED is not 1; every engine test would be excluded." >&2
+            exit 1
+          fi
+          go list -f '{{range .TestGoFiles}}{{.}}
+          {{end}}' ./internal/agent/audio/gstengine \
+            | grep -q '^engine_real_integration_test.go$' \
+            || { echo "the engine's cgo test files are not being built." >&2; exit 1; }
+          go test -race ./internal/agent/audio/gstengine/...
+
       - name: Test (race detector)
-        run: go test -race ./...
+        # Everything the step above did not run. grep -vx on the full
+        # import path, not a substring: an unanchored match would also
+        # exclude a future sibling like gstengineltc, which the step above
+        # would not pick up either, leaving it tested by neither step. The
+        # count check fails if the two steps ever stop partitioning the
+        # package list exactly.
+        run: |
+          set -eu
+          engine=github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine
+          rest="$(go list ./... | grep -vx "$engine")"
+          if [ "$(go list ./... | wc -l)" -ne "$(( $(echo "$rest" | wc -l) + 1 ))" ]; then
+            echo "the two test steps do not partition the package list." >&2
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          go test -race $rest
+
+      - name: Build with cgo (ADR-042 real agent backend)
+        # The agent's real GStreamer/libltc engine is a cgo build; without
+        # this step, nothing in CI proves `./...` links with cgo enabled,
+        # only that `go test -race` (which forces it on) happens not to
+        # fail. Explicit here rather than assumed from -race's own
+        # requirement, because -race enabling cgo as a side effect is not
+        # the same claim as this build gate.
+        run: CGO_ENABLED=1 go build ./...
 
       - name: Build CGo-free (ADR-012)
         # ADR-012 requires the coordinator build CGo-free so the image can
@@ -120,67 +170,57 @@ jobs:
     # distinguishable from a unit test failure at a glance, per the Step 2
     # round 2 Task E spec.
     #
-    # Raised from 10 when Track B landed: this job now installs GStreamer and
-    # runs render tests that drive real gst-launch-1.0 pipelines, where before
-    # they failed fast on the missing binary.
-    timeout-minutes: 20
+    # Raised from 10 when Track B landed: this job runs render tests that
+    # drive real gst-launch-1.0 pipelines, where before they failed fast on
+    # the missing binary. The Debian image below adds its own apt and module
+    # download on top of that.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # ubuntu-latest ships Docker already, usable without sudo. `make
-      # test-integration` starts the pinned eclipse-mosquitto broker itself
-      # (scripts/test-integration.sh), from the exact shipped
-      # deploy/mosquitto/mosquitto.conf, rather than a GitHub Actions
-      # `services:` container: a bespoke services-container broker would
-      # need its own bind-address/anonymous-access config to avoid the
-      # image's own deny-by-default behavior (see the script's comments),
-      # duplicating what test-integration.sh already does against the real
-      # shipped config — and testing that config, not a stand-in for it, is
-      # the point of this job.
-      # Same reason as the unit-test job above: Track B's render integration
-      # tests start a real gst-launch-1.0 child and assert on its pid.
-      - name: Install GStreamer (renderer and audio tests)
-        run: |
-          # fdsrc, queue and fakesink are core, and rawvideoparse and
-          # videotestsrc are in plugins-base (MEASURED on 1.24.2, where the
-          # rawparse plugin is no longer in plugins-bad). plugins-good adds
-          # wavparse and flacdec: Track C's real-decoder audio tests
-          # (internal/agent/audio) drive decodebin against real WAV/FLAC
-          # fixtures, and without them decodebin typefinds the container but
-          # has no element to decode it, which reports as MediaFault, not a
-          # skip. Do not add plugins-bad "to be safe": it drags in pipewire,
-          # jack, SDL2 and a 5 MB soundfont, which took this step from
-          # 3 seconds to over 300.
-          #
-          # The runner's default azure.archive.ubuntu.com mirror intermittently
-          # stops answering; apt then retries it per index file before falling
-          # back, so a high retry count makes the stall longer rather than
-          # shorter. Pin the mirrorlist to the canonical archive and keep
-          # retries low so a bad fetch fails over fast. apt sets no network
-          # timeout by default, and the timeout(1) wrapper is the outer bound
-          # so a stall fails with output instead of eating the job budget.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
-          fi
-          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
-            -o Acquire::https::Timeout=15 -o DPkg::Lock::Timeout=300"
-          # shellcheck disable=SC2086
-          sudo timeout 300 apt-get update $APT_OPTS \
-            || sudo timeout 300 apt-get update $APT_OPTS
-          # shellcheck disable=SC2086
-          sudo timeout 300 apt-get install -y --no-install-recommends $APT_OPTS \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-          gst-launch-1.0 --version
-          gst-inspect-1.0 rawvideoparse > /dev/null
-          gst-inspect-1.0 wavparse > /dev/null
-
       - name: Integration tests (real Mosquitto broker + real agent subprocess)
-        run: make test-integration
+        # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26, so the
+        # suite runs inside Debian 13 rather than on the runner. It cannot
+        # be a `container:` job: scripts/test-integration.sh starts the real
+        # pinned Mosquitto container itself (deliberately, so this job tests
+        # the shipped deploy/mosquitto config rather than a services:
+        # stand-in), which needs the host Docker socket and host networking,
+        # and GitHub's container: field cannot express --network.
+        #
+        # Two details make the nested Docker work. The workspace is mounted
+        # at the same absolute path inside and out, and TMPDIR points into
+        # it, so the seed-file bind mounts the script hands to the host
+        # daemon resolve to the same files on both sides. Host networking is
+        # what keeps the broker reachable on localhost, exactly as it is on
+        # a developer machine.
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
+          docker run --rm \
+            --network host \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE":"$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE" \
+            -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
+            -e HOME=/tmp \
+            golang:1.25.0-trixie \
+            bash -euxo pipefail -c '
+              apt-get update -o Acquire::Retries=2
+              apt-get install -y --no-install-recommends \
+                pkg-config gstreamer1.0-tools gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+                libltc-dev docker-cli
+              pkg-config --atleast-version=1.26.0 gstreamer-1.0
+              pkg-config --atleast-version=2.80 glib-2.0
+              # The workspace belongs to the runner user, not root, so git
+              # refuses it as dubiously owned and every -buildvcs stamp
+              # fails. Double quotes because this whole script is already
+              # inside a single-quoted argument.
+              git config --global --add safe.directory "*"
+              make test-integration
+            '
 
   integration-fppmqtt:
     runs-on: ubuntu-latest
@@ -248,8 +288,27 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    container:
+      image: debian:trixie
+    # Debian 13 for the same reason the test job uses it: golangci-lint type
+    # checks every package, and the agent's engine packages are cgo, so
+    # linting them at all needs GStreamer 1.26 and libltc present.
+    timeout-minutes: 15
     steps:
+      - name: Install the toolchain and the agent's C dependencies
+        run: |
+          set -eux
+          apt-get update -o Acquire::Retries=2
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
+          pkg-config --atleast-version=1.26.0 gstreamer-1.0
+          pkg-config --atleast-version=2.80 glib-2.0
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
@@ -316,8 +375,27 @@ jobs:
 
   vuln:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    container:
+      image: debian:trixie
+    # Debian 13 for the same reason the test job uses it: govulncheck loads
+    # every package, and the agent's engine packages are cgo, so scanning
+    # them at all needs GStreamer 1.26 and libltc present.
+    timeout-minutes: 15
     steps:
+      - name: Install the toolchain and the agent's C dependencies
+        run: |
+          set -eux
+          apt-get update -o Acquire::Retries=2
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
+          pkg-config --atleast-version=1.26.0 gstreamer-1.0
+          pkg-config --atleast-version=2.80 glib-2.0
+          # The workspace is checked out by the host runner and read inside
+          # the job container, so git refuses it as dubiously owned and any
+          # -buildvcs stamp fails as a typecheck error.
+          git config --global --add safe.directory '*'
+
       - uses: actions/checkout@v7
 
       # Pinned to the Dockerfile's golang tag, deliberately NOT
