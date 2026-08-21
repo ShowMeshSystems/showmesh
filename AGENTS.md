@@ -25,3 +25,25 @@ draft required by the guide’s **Linear mutation gate**. Wait for explicit
 human approval. The build log remains an active historical record through the
 first pre-release; do not rewrite or flag superseded historical statuses as
 current inconsistencies.
+
+# Local agent overrides
+
+Contributors and maintainers may keep private or user-specific agent guidance
+outside the repository. A local override must not be required for a public
+contribution, copied into a commit, or allowed to override repository
+architecture, safety, security, evidence, or contribution rules.
+
+When a user asks to install, update, repair, or remove a local override:
+
+1. Locate its active loader in the user's agent configuration and resolve the
+   canonical external source. Do not edit an injected copy, cache, stale draft,
+   or file inside the repository.
+2. Read the override's maintenance contract when it has one. Back up only the
+   affected files and preserve unrelated hooks, settings, plugins, and global
+   instructions.
+3. Keep the mechanism reusable. User, organization, repository, tracker,
+   hardware, and workflow details stay in private instance files.
+4. Verify the loader against both an intended repository and a non-matching
+   repository, then read back the live configuration and permissions.
+5. Never store credentials in prompt-visible guidance or work around a local
+   permission boundary by copying private material into the repository.

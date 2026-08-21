@@ -178,3 +178,8 @@ The overlay may narrow personal workflow, but it may not override repository
 architecture, safety, security, evidence standards, contribution rules, or the
 prohibition on publishing private information. Never copy private identifiers
 or private tracker context into a public artifact.
+
+When asked to change a local override, follow `AGENTS.md`'s local-override
+contract and the maintenance file in the override's resolved canonical root.
+The explicit request authorizes the narrow external edit and loader update, not
+replacement of unrelated user configuration or publication of private content.
