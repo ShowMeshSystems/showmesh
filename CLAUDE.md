@@ -129,6 +129,25 @@ For a task that changes repository files, local completion is not delivery.
   checks. If a requested merge is waiting only on required CI, use auto-merge
   when available and authorized.
 
+## Pull-request reporting
+
+Use `.github/pull_request_template.md` exactly. Keep the PR body as a compact
+handoff, not an investigation log.
+
+- State the outcome in two or three sentences and list no more than five
+  concrete changes.
+- Record only verification run against the final pushed commit. Include the
+  exact command and observed result; otherwise write `Not run` and why.
+- Keep verification, review, and acceptance evidence separate. A passing test
+  is not a completed review, and neither is hardware or deployment evidence.
+- Before marking merge-readiness items complete, run `make pr-ready-check`
+  against the final pushed commit and report its commit identifier.
+- Never include review-pass narration, investigation history, a defect diary,
+  or repeated design rationale. Link the owning ADR, research record, or build
+  log when that detail matters.
+- Add a PR comment only for a blocker, a decision, a failed check, or a direct
+  response to review feedback. Do not post a running work diary.
+
 ## Durable repository rules
 
 - The API is a public contract, not a UI implementation detail. Operator

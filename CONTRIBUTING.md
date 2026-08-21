@@ -97,6 +97,12 @@ Do not copy this repository's `docs/` tree into the public site. Verify human-fa
 
 There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. Those mechanisms are intentionally deferred until the first release process is defined.
 
+Use the repository's pull-request template and keep its verification, review,
+and acceptance sections distinct. Run `make pr-ready-check` after pushing the
+final commit and after GitHub checks finish; it verifies that the local commit
+matches the PR, every reported check passed, and GitHub reports a clean merge
+state. It does not lint the PR body, run tests, or perform a review.
+
 - One coherent change per PR. Name the ADRs and research records it is bound by or touches.
 - If it changes a wire type, update `api/openapi.yaml` — the conformance test runs in both directions and will fail otherwise.
 - If it changes an API payload consumed by the UI, regenerate the types (`make ui-gen-check` tells you) — CI fails on any diff.
