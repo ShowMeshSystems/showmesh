@@ -1,0 +1,60 @@
+name: Feature request
+description: Describe a user problem or outcome that ShowMesh should support.
+title: ""
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Focus on the problem and the outcome you need; you do not need to design the implementation. Do not include passwords, tokens, private keys, private Linear details, or other secrets.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What is difficult, missing, or unreliable today? Describe the person doing the work and the situation they are in.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should a user be able to do, see, or understand after this is addressed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Concrete use case
+      description: Give one realistic example, including the relevant component or integration when known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How do you handle this today? Write “None” if there is no workaround.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational impact
+      description: How often does this matter, who is affected, and what does it delay or prevent?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Privacy and security check
+      options:
+        - label: I removed passwords, tokens, private keys, private tracker details, and other secrets from this request.
+          required: true
+        - label: This request does not disclose a security vulnerability. If it does, I will use the private security reporting link instead.
+          required: true
