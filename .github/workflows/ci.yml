@@ -88,8 +88,45 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test the audio engine (race detector)
+        # gstengine drives real GStreamer pipelines in real time; run it
+        # alone, before the rest of the suite claims the runner's other
+        # cores, so its timing bounds reflect this package rather than
+        # contention with internal/coordinator/api's own long race run.
+        #
+        # Every engine test is behind //go:build cgo, and `go test` on a
+        # package whose files are excluded prints "ok" and exits 0 having
+        # run nothing. Assert the precondition so a green tick here cannot
+        # mean an empty run.
+        run: |
+          set -eu
+          if [ "$(go env CGO_ENABLED)" != "1" ]; then
+            echo "CGO_ENABLED is not 1; every engine test would be excluded." >&2
+            exit 1
+          fi
+          go list -f '{{range .TestGoFiles}}{{.}}
+          {{end}}' ./internal/agent/audio/gstengine \
+            | grep -q '^engine_real_integration_test.go$' \
+            || { echo "the engine's cgo test files are not being built." >&2; exit 1; }
+          go test -race ./internal/agent/audio/gstengine/...
+
       - name: Test (race detector)
-        run: go test -race ./...
+        # Everything the step above did not run. grep -vx on the full
+        # import path, not a substring: an unanchored match would also
+        # exclude a future sibling like gstengineltc, which the step above
+        # would not pick up either, leaving it tested by neither step. The
+        # count check fails if the two steps ever stop partitioning the
+        # package list exactly.
+        run: |
+          set -eu
+          engine=github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine
+          rest="$(go list ./... | grep -vx "$engine")"
+          if [ "$(go list ./... | wc -l)" -ne "$(( $(echo "$rest" | wc -l) + 1 ))" ]; then
+            echo "the two test steps do not partition the package list." >&2
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          go test -race $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
         # The agent's real GStreamer/libltc engine is a cgo build; without
