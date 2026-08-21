@@ -48,8 +48,8 @@ The initial repository must contain:
    - artifact and packaging flow;
    - security/credential posture;
    - current verification limits and the SM-14 real-host gate.
-3. A canonical `CLAUDE.md` with the execution rules below.
-4. An `AGENTS.md` that tells non-Claude agents to read and follow `CLAUDE.md` as the repository's canonical agent instructions.
+3. A canonical cross-agent `AGENTS.md` with the execution rules below.
+4. A short `CLAUDE.md` supplement for Claude-specific operation, with no private tracker dependency.
 5. `docs/upstream/showmesh/UPSTREAM.md` recording:
    - source repository URL;
    - exact ShowMesh source commit;
